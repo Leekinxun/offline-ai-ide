@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+backend/dist/
+frontend/dist/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Workspace (runtime data)
+workspace/
+
+# Team/task runtime data
+.team/
+.tasks/

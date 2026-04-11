@@ -1,0 +1,20 @@
+services:
+  ai-ide:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      # LLM API (OpenAI-compatible: vLLM / OpenAI / DeepSeek / etc.)
+      - VLLM_API_URL=http://host.docker.internal:8000/v1
+      - VLLM_API_KEY=
+      - MODEL_NAME=default
+      # Workspace
+      - WORKSPACE_DIR=/workspace
+      # Agent tuning (optional)
+      - MAX_AGENT_ITERATIONS=30
+      - AGENT_MAX_TOKENS=8192
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
