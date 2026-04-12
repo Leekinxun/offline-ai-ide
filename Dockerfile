@@ -75,6 +75,9 @@ COPY --from=backend-builder /build/backend/package.json .
 # Copy built frontend
 COPY --from=frontend-builder /build/frontend/dist ./static
 
+# Copy users config
+COPY users.json ./users.json
+
 # Create default workspace
 RUN mkdir -p /workspace
 
