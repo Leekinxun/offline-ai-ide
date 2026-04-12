@@ -1,0 +1,9 @@
+{
+  "allowedRoots": ["/workspace", "/Users", "/tmp", "/home"],
+  "users": [
+    { "username": "admin", "password": "admin123", "defaultWorkspace": "/workspace" },
+    {"username":"lijinxuan","password":"1qaz2wsx","defaultWorkspace":"/workspace/ljx"},
+    {"username": "songjianfei","password":"1qaz2wsx","defaultWorkspace":"/workspace/sjf"},
+    {"username":"zhanglu","password":"1qaz2wsx","defaultWorkspace":"/workspace/zl"}
+  ]
+}

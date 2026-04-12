@@ -1,8 +1,9 @@
 import { WebSocket } from "ws";
 import { wsSend } from "../agent/types.js";
 import { runAgentLoop } from "../agent/loop.js";
+import type { UserSession } from "../auth/sessionManager.js";
 
-export function handleChatWs(ws: WebSocket): void {
+export function handleChatWs(ws: WebSocket, session: UserSession): void {
   ws.on("message", async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
@@ -17,7 +18,7 @@ export function handleChatWs(ws: WebSocket): void {
         return;
       }
 
-      await runAgentLoop(ws, userMessage, context, history);
+      await runAgentLoop(ws, userMessage, session, context, history);
     } catch (e: any) {
       wsSend(ws, { type: "error", content: e.message || String(e) });
     }

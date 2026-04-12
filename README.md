@@ -1,0 +1,1 @@
+docker run -itd --name ai-ide -p 9798:3000 -v ./workspace:/workspace -e VLLM_API_URL=http://10.100.3.22:9800/v1 -e VLLM_API_KEY=EMPTY -e MODEL_NAME=minimax-m2.5 -e WORKSPACE_DIR=/workspace -e MAX_AGENT_ITERATIONS=30 -e AGENT_MAX_TOKENS=58192 ai-ide:v0.1

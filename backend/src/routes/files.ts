@@ -1,13 +1,13 @@
-import { Router } from "express";
+import { Router, Request } from "express";
 import fs from "fs";
 import path from "path";
-import { config } from "../config.js";
 import { safePath as safePathUtil } from "../utils/safePath.js";
+import type { UserSession } from "../auth/sessionManager.js";
 
 export const filesRouter = Router();
 
-function safePath(rel: string): string {
-  return safePathUtil(rel, config.workspaceDir);
+function getWorkspace(req: Request): string {
+  return ((req as any).userSession as UserSession).workspaceDir;
 }
 
 interface FileNode {
@@ -54,9 +54,13 @@ function buildTree(dirPath: string, relPrefix = ""): FileNode[] {
 }
 
 // GET /tree
-filesRouter.get("/tree", (_req, res) => {
-  fs.mkdirSync(config.workspaceDir, { recursive: true });
-  res.json(buildTree(config.workspaceDir));
+filesRouter.get("/tree", (req, res) => {
+  const workspaceDir = getWorkspace(req);
+  try { fs.mkdirSync(workspaceDir, { recursive: true }); } catch { /* ignore */ }
+  if (!fs.existsSync(workspaceDir)) {
+    return res.json([]);
+  }
+  res.json(buildTree(workspaceDir));
 });
 
 // GET /read?path=xxx
@@ -64,7 +68,7 @@ filesRouter.get("/read", (req, res) => {
   const relPath = req.query.path as string;
   if (!relPath) return res.status(400).json({ detail: "path required" });
   try {
-    const full = safePath(relPath);
+    const full = safePathUtil(relPath, getWorkspace(req));
     if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
       return res.status(404).json({ detail: "File not found" });
     }
@@ -80,7 +84,7 @@ filesRouter.post("/write", (req, res) => {
   const { path: relPath, content } = req.body;
   if (!relPath) return res.status(400).json({ detail: "path required" });
   try {
-    const full = safePath(relPath);
+    const full = safePathUtil(relPath, getWorkspace(req));
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
     res.json({ status: "ok" });
@@ -94,7 +98,7 @@ filesRouter.post("/create", (req, res) => {
   const { path: relPath, is_directory } = req.body;
   if (!relPath) return res.status(400).json({ detail: "path required" });
   try {
-    const full = safePath(relPath);
+    const full = safePathUtil(relPath, getWorkspace(req));
     if (fs.existsSync(full)) {
       return res.status(409).json({ detail: "Already exists" });
     }
@@ -115,7 +119,7 @@ filesRouter.delete("/delete", (req, res) => {
   const relPath = req.query.path as string;
   if (!relPath) return res.status(400).json({ detail: "path required" });
   try {
-    const full = safePath(relPath);
+    const full = safePathUtil(relPath, getWorkspace(req));
     if (!fs.existsSync(full)) {
       return res.status(404).json({ detail: "Not found" });
     }
@@ -131,8 +135,9 @@ filesRouter.post("/rename", (req, res) => {
   const { old_path, new_path } = req.body;
   if (!old_path || !new_path) return res.status(400).json({ detail: "paths required" });
   try {
-    const oldFull = safePath(old_path);
-    const newFull = safePath(new_path);
+    const wsDir = getWorkspace(req);
+    const oldFull = safePathUtil(old_path, wsDir);
+    const newFull = safePathUtil(new_path, wsDir);
     if (!fs.existsSync(oldFull)) {
       return res.status(404).json({ detail: "Source not found" });
     }

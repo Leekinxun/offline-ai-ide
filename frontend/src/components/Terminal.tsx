@@ -5,9 +5,10 @@ import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
   visible: boolean;
+  token: string;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ visible }) => {
+export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -58,7 +59,7 @@ export const Terminal: React.FC<TerminalProps> = ({ visible }) => {
 
     // Connect WebSocket
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/terminal`);
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/terminal?token=${encodeURIComponent(token)}`);
 
     ws.onopen = () => {
       xterm.focus();

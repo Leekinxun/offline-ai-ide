@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { ChatMessage, FileContext } from "../types";
 
-export function useChat() {
+export function useChat(token: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -27,7 +27,7 @@ export function useChat() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/chat`);
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}`);
 
     ws.onopen = () => {
       setConnected(true);
@@ -105,7 +105,7 @@ export function useChat() {
     };
 
     wsRef.current = ws;
-  }, [updateLastAssistant]);
+  }, [updateLastAssistant, token]);
 
   useEffect(() => {
     connect();

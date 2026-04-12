@@ -1,7 +1,7 @@
 import fs from "fs";
 import { WebSocket } from "ws";
 import { spawn, type ChildProcess } from "child_process";
-import { config } from "../config.js";
+import type { UserSession } from "../auth/sessionManager.js";
 
 // Try to load node-pty; it may fail on some platforms (e.g. macOS + Node 22)
 let pty: typeof import("node-pty") | null = null;
@@ -19,14 +19,14 @@ function getShell(): string {
   return "/bin/sh";
 }
 
-function spawnWithPty(ws: WebSocket): boolean {
+function spawnWithPty(ws: WebSocket, workspaceDir: string): boolean {
   if (!pty) return false;
   try {
     const shell = pty.spawn(getShell(), ["--login"], {
       name: "xterm-256color",
       cols: 80,
       rows: 24,
-      cwd: config.workspaceDir,
+      cwd: workspaceDir,
       env: {
         ...process.env,
         TERM: "xterm-256color",
@@ -58,14 +58,14 @@ function spawnWithPty(ws: WebSocket): boolean {
   }
 }
 
-function spawnWithChildProcess(ws: WebSocket): void {
+function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
   const shellPath = getShell();
 
   // Use Python's pty module to allocate a real PTY for the shell.
   // This gives us echo, line editing, and job control without node-pty.
   const pyScript = [
     "import pty, os, sys, select, signal",
-    `os.chdir(${JSON.stringify(config.workspaceDir)})`,
+    `os.chdir(${JSON.stringify(workspaceDir)})`,
     `os.environ["TERM"]="xterm-256color"`,
     `os.environ["COLORTERM"]="truecolor"`,
     "master, slave = pty.openpty()",
@@ -99,7 +99,7 @@ function spawnWithChildProcess(ws: WebSocket): void {
   ].join("\n");
 
   const proc: ChildProcess = spawn("python3", ["-u", "-c", pyScript], {
-    cwd: config.workspaceDir,
+    cwd: workspaceDir,
     env: {
       ...process.env,
       TERM: "xterm-256color",
@@ -132,13 +132,13 @@ function spawnWithChildProcess(ws: WebSocket): void {
   ws.on("close", () => { proc.kill(); });
 }
 
-export function handleTerminalWs(ws: WebSocket): void {
+export function handleTerminalWs(ws: WebSocket, session: UserSession): void {
   try {
-    fs.mkdirSync(config.workspaceDir, { recursive: true });
+    fs.mkdirSync(session.workspaceDir, { recursive: true });
 
     // Try node-pty first (full PTY support), fall back to child_process
-    if (!spawnWithPty(ws)) {
-      spawnWithChildProcess(ws);
+    if (!spawnWithPty(ws, session.workspaceDir)) {
+      spawnWithChildProcess(ws, session.workspaceDir);
     }
   } catch (e: any) {
     console.error("Terminal spawn failed:", e.message);

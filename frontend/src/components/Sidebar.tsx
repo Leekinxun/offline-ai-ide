@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { FileNode } from "../types";
 import { FileTree } from "./FileTree";
-import { FilePlus, FolderPlus, Trash2, Pencil } from "lucide-react";
+import {
+  FilePlus,
+  FolderPlus,
+  FolderOpen,
+  Trash2,
+  Pencil,
+  ChevronRight,
+  Folder,
+} from "lucide-react";
 
 interface SidebarProps {
   tree: FileNode[];
@@ -12,6 +20,9 @@ interface SidebarProps {
   onDeleteEntry: (path: string) => Promise<void>;
   onRenameEntry: (oldPath: string, newPath: string) => Promise<void>;
   onRefreshTree: () => void;
+  workspaceDir: string;
+  onChangeWorkspace: (path: string) => Promise<void>;
+  token: string;
   style?: React.CSSProperties;
 }
 
@@ -24,6 +35,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteEntry,
   onRenameEntry,
   onRefreshTree,
+  workspaceDir,
+  onChangeWorkspace,
+  token,
   style,
 }) => {
   const [dialog, setDialog] = useState<{
@@ -37,6 +51,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     x: number;
     y: number;
     node: FileNode;
+  } | null>(null);
+  const [folderBrowser, setFolderBrowser] = useState<{
+    currentPath: string;
+    entries: { name: string; path: string }[];
+    loading: boolean;
   } | null>(null);
   const dialogInputRef = useRef<HTMLInputElement>(null);
 
@@ -114,13 +133,78 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setDialog(null);
   }, [dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree]);
 
+  // --- Folder browser ---
+  const fetchDirectories = useCallback(
+    async (dir: string) => {
+      setFolderBrowser((prev) => ({
+        currentPath: dir,
+        entries: prev?.entries || [],
+        loading: true,
+      }));
+      try {
+        const res = await fetch(
+          `/api/auth/workspace/list?path=${encodeURIComponent(dir)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!res.ok) throw new Error("Failed to list directories");
+        const data = await res.json();
+        setFolderBrowser({
+          currentPath: dir,
+          entries: data.entries,
+          loading: false,
+        });
+      } catch {
+        setFolderBrowser((prev) =>
+          prev ? { ...prev, entries: [], loading: false } : null
+        );
+      }
+    },
+    [token]
+  );
+
+  const openFolderBrowser = useCallback(() => {
+    // Start from parent of current workspace
+    const parent = workspaceDir.split("/").slice(0, -1).join("/") || "/";
+    fetchDirectories(parent);
+  }, [workspaceDir, fetchDirectories]);
+
+  const handleFolderSelect = useCallback(
+    async (path: string) => {
+      setFolderBrowser(null);
+      await onChangeWorkspace(path);
+    },
+    [onChangeWorkspace]
+  );
+
+  const handleFolderNavigate = useCallback(
+    (path: string) => {
+      fetchDirectories(path);
+    },
+    [fetchDirectories]
+  );
+
+  const handleFolderUp = useCallback(() => {
+    if (!folderBrowser) return;
+    const parent = folderBrowser.currentPath.split("/").slice(0, -1).join("/") || "/";
+    fetchDirectories(parent);
+  }, [folderBrowser, fetchDirectories]);
+
   if (!visible) return null;
+
+  const workspaceName = workspaceDir.split("/").pop() || workspaceDir;
 
   return (
     <div className="sidebar" style={style}>
       <div className="sidebar-header">
         <span className="sidebar-title">Explorer</span>
         <div className="sidebar-actions">
+          <button
+            className="sidebar-action-btn"
+            title="Open Folder"
+            onClick={openFolderBrowser}
+          >
+            <FolderOpen size={15} />
+          </button>
           <button
             className="sidebar-action-btn"
             title="New File"
@@ -136,6 +220,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <FolderPlus size={15} />
           </button>
         </div>
+      </div>
+      <div className="sidebar-workspace-path" title={workspaceDir}>
+        {workspaceName}
       </div>
       <div className="file-tree">
         <FileTree
@@ -184,7 +271,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* Dialog */}
+      {/* Create/Rename Dialog */}
       {dialog && (
         <div className="dialog-overlay" onClick={() => setDialog(null)}>
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
@@ -217,6 +304,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={handleDialogSubmit}
               >
                 {dialog.type === "rename" ? "Rename" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Folder Browser Dialog */}
+      {folderBrowser && (
+        <div className="dialog-overlay" onClick={() => setFolderBrowser(null)}>
+          <div
+            className="dialog folder-browser"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="dialog-title">Open Folder</div>
+            <div className="folder-browser-breadcrumb">
+              <button
+                className="folder-browser-up"
+                onClick={handleFolderUp}
+                title="Go up"
+              >
+                ..
+              </button>
+              <span className="folder-browser-path">
+                {folderBrowser.currentPath}
+              </span>
+            </div>
+            <div className="folder-browser-list">
+              {folderBrowser.loading ? (
+                <div className="folder-browser-loading">Loading...</div>
+              ) : folderBrowser.entries.length === 0 ? (
+                <div className="folder-browser-empty">No subdirectories</div>
+              ) : (
+                folderBrowser.entries.map((entry) => (
+                  <div
+                    key={entry.path}
+                    className="folder-browser-item"
+                    onClick={() => handleFolderNavigate(entry.path)}
+                  >
+                    <Folder size={14} />
+                    <span>{entry.name}</span>
+                    <ChevronRight size={12} className="folder-browser-chevron" />
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="dialog-actions">
+              <button
+                className="dialog-btn"
+                onClick={() => setFolderBrowser(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="dialog-btn primary"
+                onClick={() => handleFolderSelect(folderBrowser.currentPath)}
+              >
+                Open This Folder
               </button>
             </div>
           </div>

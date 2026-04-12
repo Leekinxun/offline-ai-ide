@@ -6,18 +6,66 @@ import { Editor } from "./components/Editor";
 import { ChatPanel } from "./components/ChatPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
+import { LoginPage } from "./components/LoginPage";
 import { useFileSystem } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
+import { useAuth } from "./hooks/useAuth";
 import { FileNode, OpenFile, SelectionInfo, getLanguage } from "./types";
 import {
   PanelLeft,
   MessageSquare,
   TerminalSquare,
   Code2,
+  LogOut,
 } from "lucide-react";
 import "./App.css";
 
 export default function App() {
+  const auth = useAuth();
+
+  // Show loading while validating token
+  if (auth.loading) {
+    return (
+      <div className="login-page">
+        <div className="login-card" style={{ textAlign: "center", padding: 40 }}>
+          <Code2 size={32} style={{ color: "var(--accent)", marginBottom: 12 }} />
+          <div style={{ color: "var(--text-secondary)" }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login if not authenticated
+  if (!auth.token || !auth.user) {
+    return <LoginPage onLogin={auth.login} />;
+  }
+
+  return (
+    <AuthenticatedApp
+      token={auth.token}
+      username={auth.user.username}
+      workspaceDir={auth.user.workspaceDir}
+      onLogout={auth.logout}
+      onChangeWorkspace={auth.changeWorkspace}
+    />
+  );
+}
+
+interface AuthenticatedAppProps {
+  token: string;
+  username: string;
+  workspaceDir: string;
+  onLogout: () => void;
+  onChangeWorkspace: (path: string) => Promise<boolean>;
+}
+
+function AuthenticatedApp({
+  token,
+  username,
+  workspaceDir,
+  onLogout,
+  onChangeWorkspace,
+}: AuthenticatedAppProps) {
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -35,8 +83,8 @@ export default function App() {
   const draggingRef = useRef<"sidebar" | "chat" | null>(null);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
-  const fs = useFileSystem();
-  const chat = useChat();
+  const fs = useFileSystem(token);
+  const chat = useChat(token);
 
   // --- Resize drag handling ---
   const handleResizeStart = useCallback(
@@ -88,6 +136,13 @@ export default function App() {
   useEffect(() => {
     loadTree();
   }, [loadTree]);
+
+  // Reset state when workspace changes
+  useEffect(() => {
+    setOpenFiles([]);
+    setActiveFilePath(null);
+    loadTree();
+  }, [workspaceDir]);
 
   // --- Toast ---
   const showToast = useCallback((msg: string) => {
@@ -271,6 +326,19 @@ export default function App() {
     return () => disposable.dispose();
   });
 
+  // --- Handle workspace change ---
+  const handleChangeWorkspace = useCallback(
+    async (path: string) => {
+      const ok = await onChangeWorkspace(path);
+      if (ok) {
+        showToast("Workspace changed");
+      } else {
+        showToast("Failed to change workspace");
+      }
+    },
+    [onChangeWorkspace, showToast]
+  );
+
   // --- Global keyboard shortcuts ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -303,6 +371,7 @@ export default function App() {
           <span className="titlebar-logo">AI IDE</span>
         </div>
         <div className="titlebar-right">
+          <span className="user-badge">{username}</span>
           <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
             onClick={() => setSidebarVisible((v) => !v)}
@@ -324,6 +393,13 @@ export default function App() {
           >
             <MessageSquare size={17} />
           </button>
+          <button
+            className="titlebar-btn"
+            onClick={onLogout}
+            title="Logout"
+          >
+            <LogOut size={17} />
+          </button>
         </div>
       </div>
 
@@ -338,6 +414,9 @@ export default function App() {
           onDeleteEntry={handleDeleteEntry}
           onRenameEntry={handleRenameEntry}
           onRefreshTree={loadTree}
+          workspaceDir={workspaceDir}
+          onChangeWorkspace={handleChangeWorkspace}
+          token={token}
           style={sidebarVisible ? { width: sidebarWidth } : undefined}
         />
 
@@ -373,7 +452,11 @@ export default function App() {
               </div>
             )}
           </div>
-          <Terminal visible={terminalVisible} />
+          <Terminal
+            key={workspaceDir}
+            visible={terminalVisible}
+            token={token}
+          />
         </div>
 
         <div

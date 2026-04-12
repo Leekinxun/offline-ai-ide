@@ -20,11 +20,12 @@ function resolveWorkspaceDir(): string {
 
 export const config = {
   port: parseInt(process.env.PORT || "3000"),
-  workspaceDir: resolveWorkspaceDir(),
+  defaultWorkspaceDir: resolveWorkspaceDir(),
   vllmApiUrl: process.env.VLLM_API_URL || "http://host.docker.internal:8000/v1",
   vllmApiKey: process.env.VLLM_API_KEY || "",
   modelName: process.env.MODEL_NAME || "default",
   staticDir: process.env.STATIC_DIR || "static",
   maxAgentIterations: parseInt(process.env.MAX_AGENT_ITERATIONS || "30"),
   agentMaxTokens: parseInt(process.env.AGENT_MAX_TOKENS || "8192"),
+  usersConfigPath: process.env.USERS_CONFIG || "users.json",
 };

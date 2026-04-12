@@ -8,15 +8,8 @@ import {
 } from "./types.js";
 import { getAllTools, TOOL_DISPATCH } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
-import { TaskManager } from "./taskManager.js";
-import { MessageBus } from "./messageBus.js";
-import { TeammateManager } from "./teammateManager.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
-
-// Shared singletons (persistent across connections)
-const taskManager = new TaskManager(config.workspaceDir);
-const messageBus = new MessageBus(config.workspaceDir);
-const teammateManager = new TeammateManager(config.workspaceDir, messageBus, taskManager);
+import type { UserSession } from "../auth/sessionManager.js";
 
 async function callVllm(
   systemPrompt: string,
@@ -69,20 +62,21 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
 export async function runAgentLoop(
   ws: WebSocket,
   userMessage: string,
+  session: UserSession,
   context?: { path: string; content: string; language: string; selection?: string },
   history?: { role: string; content: string }[]
 ): Promise<void> {
   const todoManager = new TodoManager();
   const tools = getAllTools();
   const toolCtx = {
-    workspaceDir: config.workspaceDir,
+    workspaceDir: session.workspaceDir,
     vllmApiUrl: config.vllmApiUrl,
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
     todoManager,
-    taskManager,
-    messageBus,
-    teammateManager,
+    taskManager: session.taskManager,
+    messageBus: session.messageBus,
+    teammateManager: session.teammateManager,
   };
 
   // Build user content with file/selection context
@@ -113,7 +107,7 @@ export async function runAgentLoop(
   for (let i = 0; i < config.maxAgentIterations; i++) {
     if (ws.readyState !== WebSocket.OPEN) return;
 
-    const systemPrompt = buildSystemPrompt(config.workspaceDir, todoManager.render());
+    const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render());
 
     // Non-streaming call for tool-use rounds
     let resp: Response;
