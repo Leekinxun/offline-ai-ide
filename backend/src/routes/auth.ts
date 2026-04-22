@@ -33,7 +33,11 @@ authRouter.get("/me", (req, res) => {
   if (!session) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  res.json({ username: session.username, workspaceDir: session.workspaceDir });
+  res.json({
+    username: session.username,
+    workspaceDir: session.workspaceDir,
+    isAdmin: session.isAdmin,
+  });
 });
 
 // --- Workspace routes (protected) ---

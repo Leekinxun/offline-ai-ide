@@ -5,6 +5,7 @@ const TOKEN_KEY = "ai-ide-token";
 interface AuthUser {
   username: string;
   workspaceDir: string;
+  isAdmin: boolean;
 }
 
 export function useAuth() {
@@ -26,7 +27,11 @@ export function useAuth() {
       })
       .then((data) => {
         setToken(stored);
-        setUser({ username: data.username, workspaceDir: data.workspaceDir });
+        setUser({
+          username: data.username,
+          workspaceDir: data.workspaceDir,
+          isAdmin: Boolean(data.isAdmin),
+        });
       })
       .catch(() => {
         localStorage.removeItem(TOKEN_KEY);
@@ -50,7 +55,11 @@ export function useAuth() {
       const data = await res.json();
       localStorage.setItem(TOKEN_KEY, data.token);
       setToken(data.token);
-      setUser({ username: data.username, workspaceDir: data.workspaceDir });
+      setUser({
+        username: data.username,
+        workspaceDir: data.workspaceDir,
+        isAdmin: Boolean(data.isAdmin),
+      });
       return null; // no error
     } catch {
       return "Network error";

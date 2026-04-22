@@ -4,6 +4,7 @@ import {
   OpenAIMessage,
   OpenAIResponse,
   OpenAIToolCall,
+  ToolFileUpdate,
   wsSend,
 } from "./types.js";
 import { getAllTools, TOOL_DISPATCH } from "./tools.js";
@@ -177,10 +178,17 @@ export async function runAgentLoop(
 
         let result: string;
         let isError = false;
+        let fileUpdate: ToolFileUpdate | undefined;
         const handler = TOOL_DISPATCH[toolCall.function.name];
         if (handler) {
           try {
-            result = await handler(args, toolCtx);
+            const execution = await handler(args, toolCtx);
+            if (typeof execution === "string") {
+              result = execution;
+            } else {
+              result = execution.output;
+              fileUpdate = execution.fileUpdate;
+            }
           } catch (e: any) {
             result = `Error: ${e.message}`;
             isError = true;
@@ -189,6 +197,10 @@ export async function runAgentLoop(
           result = `Unknown tool: ${toolCall.function.name}`;
           isError = true;
         }
+        if (result.startsWith("Error:")) {
+          isError = true;
+          fileUpdate = undefined;
+        }
 
         wsSend(ws, {
           type: "tool_result",
@@ -196,6 +208,7 @@ export async function runAgentLoop(
           name: toolCall.function.name,
           result: result.slice(0, 5000),
           isError,
+          fileUpdate,
         });
 
         // Add tool result to message history

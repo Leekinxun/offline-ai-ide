@@ -1,7 +1,31 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { FileNode } from "../types";
 
 const API = "/api/files";
+
+function fallbackDownloadName(path: string, type: FileNode["type"]): string {
+  const baseName = path.split("/").pop() || "download";
+  return type === "directory" ? `${baseName}.zip` : baseName;
+}
+
+function getDownloadName(
+  contentDisposition: string | null,
+  fallback: string
+): string {
+  if (!contentDisposition) return fallback;
+
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return fallback;
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || fallback;
+}
 
 export function useFileSystem(token: string) {
   const authHeaders = useCallback(
@@ -65,5 +89,58 @@ export function useFileSystem(token: string) {
     if (!res.ok) throw new Error("Failed to rename");
   }, [authHeaders]);
 
-  return { fetchTree, readFile, writeFile, createEntry, deleteEntry, renameEntry };
+  const downloadEntry = useCallback(
+    async (path: string, type: FileNode["type"]) => {
+      const res = await fetch(`${API}/download?path=${encodeURIComponent(path)}`, {
+        headers: authHeaders(),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to download");
+      }
+
+      const filename = getDownloadName(
+        res.headers.get("Content-Disposition"),
+        fallbackDownloadName(path, type)
+      );
+      const blob = await res.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => {
+        window.URL.revokeObjectURL(objectUrl);
+      }, 0);
+
+      return filename;
+    },
+    [authHeaders]
+  );
+
+  return useMemo(
+    () => ({
+      fetchTree,
+      readFile,
+      writeFile,
+      createEntry,
+      deleteEntry,
+      renameEntry,
+      downloadEntry,
+    }),
+    [
+      fetchTree,
+      readFile,
+      writeFile,
+      createEntry,
+      deleteEntry,
+      renameEntry,
+      downloadEntry,
+    ]
+  );
 }

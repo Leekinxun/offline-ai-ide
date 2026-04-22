@@ -1,12 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ChatMessage, FileContext } from "../types";
+import { ChatMessage, FileContext, FileUpdate } from "../types";
 
-export function useChat(token: string) {
+export function useChat(
+  token: string,
+  onFileUpdate?: (update: FileUpdate) => void
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const onFileUpdateRef = useRef(onFileUpdate);
+
+  useEffect(() => {
+    onFileUpdateRef.current = onFileUpdate;
+  }, [onFileUpdate]);
 
   // Helper: update the last assistant message
   const updateLastAssistant = useCallback(
@@ -84,10 +92,18 @@ export function useChat(token: string) {
             ...msg,
             toolCalls: (msg.toolCalls || []).map((tc) =>
               tc.toolCallId === data.toolCallId
-                ? { ...tc, result: data.result, isError: data.isError }
+                ? {
+                    ...tc,
+                    result: data.result,
+                    isError: data.isError,
+                    fileUpdate: data.fileUpdate,
+                  }
                 : tc
             ),
           }));
+          if (data.fileUpdate && !data.isError) {
+            onFileUpdateRef.current?.(data.fileUpdate);
+          }
           break;
 
         case "done":

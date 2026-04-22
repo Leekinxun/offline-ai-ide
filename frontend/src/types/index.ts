@@ -13,12 +13,26 @@ export interface OpenFile {
   modified: boolean;
 }
 
+export interface FileSelectionRange {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+export interface FileUpdate {
+  path: string;
+  content: string;
+  selection?: FileSelectionRange;
+}
+
 export interface ToolCallStep {
   toolCallId: string;
   name: string;
   input: Record<string, unknown>;
   result?: string;
   isError?: boolean;
+  fileUpdate?: FileUpdate;
 }
 
 export interface ChatMessage {
@@ -40,6 +54,24 @@ export interface SelectionInfo {
   text: string;
   startLine: number;
   endLine: number;
+}
+
+export interface AdminUser {
+  username: string;
+  defaultWorkspace: string;
+  isAdmin: boolean;
+}
+
+export interface LlmSettings {
+  vllmApiUrl: string;
+  vllmApiKey: string;
+  modelName: string;
+}
+
+export interface AdminSettings {
+  users: AdminUser[];
+  allowedRoots: string[];
+  llm: LlmSettings;
 }
 
 export const LANGUAGE_MAP: Record<string, string> = {

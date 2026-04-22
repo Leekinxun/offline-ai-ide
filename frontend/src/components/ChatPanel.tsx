@@ -5,9 +5,38 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { ChatMessage, SelectionInfo } from "../types";
+import { ChatMessage, FileUpdate, SelectionInfo } from "../types";
 import { Send, Trash2, Copy, ArrowDownToLine, X, TextSelect, ChevronRight } from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to textarea fallback
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -19,6 +48,7 @@ interface ChatPanelProps {
   onSend: (message: string) => void;
   onClear: () => void;
   onApplyCode: (code: string) => void;
+  onNavigateToFileUpdate: (update: FileUpdate) => void;
   style?: React.CSSProperties;
 }
 
@@ -32,6 +62,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onSend,
   onClear,
   onApplyCode,
+  onNavigateToFileUpdate,
   style,
 }) => {
   const [input, setInput] = useState("");
@@ -128,6 +159,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             isLast={idx === messages.length - 1}
             isStreaming={isStreaming && idx === messages.length - 1}
             onApplyCode={onApplyCode}
+            onNavigateToFileUpdate={onNavigateToFileUpdate}
           />
         ))}
         <div ref={messagesEndRef} />
@@ -181,12 +213,14 @@ interface MessageItemProps {
   isLast: boolean;
   isStreaming: boolean;
   onApplyCode: (code: string) => void;
+  onNavigateToFileUpdate: (update: FileUpdate) => void;
 }
 
 const MessageItem: React.FC<MessageItemProps> = ({
   message,
   isStreaming,
   onApplyCode,
+  onNavigateToFileUpdate,
 }) => {
   const parts = useMemo(
     () => parseContent(message.content),
@@ -212,7 +246,11 @@ const MessageItem: React.FC<MessageItemProps> = ({
       {/* Tool call steps */}
       {hasToolCalls &&
         message.toolCalls!.map((step, i) => (
-          <ToolCallStep key={step.toolCallId || i} step={step} />
+          <ToolCallStep
+            key={step.toolCallId || i}
+            step={step}
+            onNavigateToFileUpdate={onNavigateToFileUpdate}
+          />
         ))}
 
       {/* Final content */}
@@ -272,8 +310,14 @@ interface CodeBlockProps {
 }
 
 const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, onApply }) => {
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(code);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle"
+  );
+
+  const handleCopy = useCallback(async () => {
+    const copied = await copyTextToClipboard(code);
+    setCopyState(copied ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 1600);
   }, [code]);
 
   return (
@@ -283,7 +327,11 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, onApply }) => {
         <div className="chat-code-actions">
           <button className="chat-code-btn" onClick={handleCopy} title="Copy">
             <Copy size={12} style={{ marginRight: 3 }} />
-            Copy
+            {copyState === "copied"
+              ? "Copied"
+              : copyState === "failed"
+              ? "Retry"
+              : "Copy"}
           </button>
           <button
             className="chat-code-btn"

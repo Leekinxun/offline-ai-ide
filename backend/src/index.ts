@@ -6,6 +6,7 @@ import path from "path";
 import { config } from "./config.js";
 import { filesRouter } from "./routes/files.js";
 import { authRouter } from "./routes/auth.js";
+import { adminRouter } from "./routes/admin.js";
 import { authMiddleware } from "./auth/middleware.js";
 import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
@@ -21,6 +22,7 @@ app.use("/api/auth", authRouter);
 
 // Protected API routes
 app.use("/api/files", authMiddleware, filesRouter);
+app.use("/api/admin", authMiddleware, adminRouter);
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });

@@ -1,0 +1,7 @@
+{
+  "llm": {
+    "vllmApiUrl": "http://10.100.3.22:9800/v1",
+    "vllmApiKey": "",
+    "modelName": "minimax-m2.5"
+  }
+}

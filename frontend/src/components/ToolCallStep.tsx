@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { ToolCallStep as ToolCallStepType } from "../types";
+import { FileUpdate, ToolCallStep as ToolCallStepType } from "../types";
 import {
   Terminal,
   FileText,
@@ -12,6 +12,7 @@ import {
   Users,
   MessageSquare,
   AlertCircle,
+  Crosshair,
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -50,13 +51,31 @@ function abbreviateInput(name: string, input: Record<string, unknown>): string {
 
 interface Props {
   step: ToolCallStepType;
+  onNavigateToFileUpdate?: (update: FileUpdate) => void;
 }
 
-export const ToolCallStep: React.FC<Props> = ({ step }) => {
+export const ToolCallStep: React.FC<Props> = ({
+  step,
+  onNavigateToFileUpdate,
+}) => {
   const [expanded, setExpanded] = useState(false);
   const isPending = step.result === undefined;
+  const canJumpToEdit =
+    step.name === "edit_file" &&
+    !!step.fileUpdate?.selection &&
+    !step.isError &&
+    !!onNavigateToFileUpdate;
 
   const toggle = useCallback(() => setExpanded((v) => !v), []);
+  const handleJump = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      if (step.fileUpdate && onNavigateToFileUpdate) {
+        onNavigateToFileUpdate(step.fileUpdate);
+      }
+    },
+    [onNavigateToFileUpdate, step.fileUpdate]
+  );
 
   return (
     <div className={`tool-call-step${step.isError ? " error" : ""}`}>
@@ -67,6 +86,16 @@ export const ToolCallStep: React.FC<Props> = ({ step }) => {
         <span className="tool-call-icon">{toolIcon(step.name)}</span>
         <span className="tool-call-name">{step.name}</span>
         <span className="tool-call-summary">{abbreviateInput(step.name, step.input)}</span>
+        {canJumpToEdit && (
+          <button
+            className="tool-call-jump-btn"
+            onClick={handleJump}
+            title="Jump to edited code"
+          >
+            <Crosshair size={12} />
+            Jump
+          </button>
+        )}
         {isPending && <Loader2 size={13} className="tool-call-spinner" />}
         {step.isError && <AlertCircle size={13} className="tool-call-error-icon" />}
       </div>

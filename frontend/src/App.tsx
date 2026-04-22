@@ -7,16 +7,25 @@ import { ChatPanel } from "./components/ChatPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
+import { SettingsModal } from "./components/SettingsModal";
 import { useFileSystem } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
-import { FileNode, OpenFile, SelectionInfo, getLanguage } from "./types";
+import {
+  FileNode,
+  FileSelectionRange,
+  FileUpdate,
+  OpenFile,
+  SelectionInfo,
+  getLanguage,
+} from "./types";
 import {
   PanelLeft,
   MessageSquare,
   TerminalSquare,
   Code2,
   LogOut,
+  Settings,
 } from "lucide-react";
 import "./App.css";
 
@@ -45,6 +54,7 @@ export default function App() {
       token={auth.token}
       username={auth.user.username}
       workspaceDir={auth.user.workspaceDir}
+      isAdmin={auth.user.isAdmin}
       onLogout={auth.logout}
       onChangeWorkspace={auth.changeWorkspace}
     />
@@ -55,14 +65,41 @@ interface AuthenticatedAppProps {
   token: string;
   username: string;
   workspaceDir: string;
+  isAdmin: boolean;
   onLogout: () => void;
   onChangeWorkspace: (path: string) => Promise<boolean>;
+}
+
+interface EditorNavigationTarget extends FileSelectionRange {
+  path: string;
+  requestId: number;
+}
+
+function isPathEqualOrDescendant(candidate: string, target: string): boolean {
+  return candidate === target || candidate.startsWith(`${target}/`);
+}
+
+function pruneNestedPaths(paths: string[]): string[] {
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean))).sort(
+    (left, right) => left.length - right.length || left.localeCompare(right)
+  );
+  const pruned: string[] = [];
+
+  for (const currentPath of uniquePaths) {
+    if (pruned.some((path) => isPathEqualOrDescendant(currentPath, path))) {
+      continue;
+    }
+    pruned.push(currentPath);
+  }
+
+  return pruned;
 }
 
 function AuthenticatedApp({
   token,
   username,
   workspaceDir,
+  isAdmin,
   onLogout,
   onChangeWorkspace,
 }: AuthenticatedAppProps) {
@@ -73,18 +110,21 @@ function AuthenticatedApp({
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [chatVisible, setChatVisible] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [chatWidth, setChatWidth] = useState(340);
+  const [editorNavigationTarget, setEditorNavigationTarget] =
+    useState<EditorNavigationTarget | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const draggingRef = useRef<"sidebar" | "chat" | null>(null);
+  const navigationRequestRef = useRef(0);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   const fs = useFileSystem(token);
-  const chat = useChat(token);
 
   // --- Resize drag handling ---
   const handleResizeStart = useCallback(
@@ -150,6 +190,61 @@ function AuthenticatedApp({
     setTimeout(() => setToast(null), 2500);
   }, []);
 
+  const applyFileUpdateToTabs = useCallback(
+    (update: FileUpdate, ensureOpen: boolean) => {
+      const name = update.path.split("/").pop() || update.path;
+      const nextFile: OpenFile = {
+        path: update.path,
+        name,
+        content: update.content,
+        language: getLanguage(name),
+        modified: false,
+      };
+
+      setOpenFiles((prev) => {
+        const existingIndex = prev.findIndex((file) => file.path === update.path);
+        if (existingIndex >= 0) {
+          return prev.map((file) => (file.path === update.path ? nextFile : file));
+        }
+        return ensureOpen ? [...prev, nextFile] : prev;
+      });
+    },
+    []
+  );
+
+  const handleAiFileUpdate = useCallback(
+    (update: FileUpdate) => {
+      applyFileUpdateToTabs(update, false);
+      void loadTree();
+    },
+    [applyFileUpdateToTabs, loadTree]
+  );
+
+  const handleNavigateToFileUpdate = useCallback(
+    (update: FileUpdate) => {
+      applyFileUpdateToTabs(update, true);
+      setActiveFilePath(update.path);
+      void loadTree();
+
+      if (!update.selection) return;
+      navigationRequestRef.current += 1;
+      setEditorNavigationTarget({
+        path: update.path,
+        requestId: navigationRequestRef.current,
+        ...update.selection,
+      });
+    },
+    [applyFileUpdateToTabs, loadTree]
+  );
+
+  const handleNavigationComplete = useCallback((requestId: number) => {
+    setEditorNavigationTarget((prev) =>
+      prev?.requestId === requestId ? null : prev
+    );
+  }, []);
+
+  const chat = useChat(token, handleAiFileUpdate);
+
   // --- File operations ---
   const openFile = useCallback(
     async (path: string) => {
@@ -177,6 +272,19 @@ function AuthenticatedApp({
       }
     },
     [openFiles, fs, showToast]
+  );
+
+  const handleNavigateToLocation = useCallback(
+    async (path: string, selection: FileSelectionRange) => {
+      await openFile(path);
+      navigationRequestRef.current += 1;
+      setEditorNavigationTarget({
+        path,
+        requestId: navigationRequestRef.current,
+        ...selection,
+      });
+    },
+    [openFile]
   );
 
   const closeTab = useCallback(
@@ -231,15 +339,72 @@ function AuthenticatedApp({
     [fs]
   );
 
+  const removeDeletedEntriesFromState = useCallback((deletedPaths: string[]) => {
+    setOpenFiles((prev) => {
+      const filtered = prev.filter(
+        (file) =>
+          !deletedPaths.some((deletedPath) =>
+            isPathEqualOrDescendant(file.path, deletedPath)
+          )
+      );
+
+      setActiveFilePath((previousPath) => {
+        if (
+          previousPath &&
+          deletedPaths.some((deletedPath) =>
+            isPathEqualOrDescendant(previousPath, deletedPath)
+          )
+        ) {
+          return filtered.length > 0 ? filtered[filtered.length - 1].path : null;
+        }
+        return previousPath;
+      });
+
+      return filtered;
+    });
+
+    setEditorNavigationTarget((prev) =>
+      prev &&
+      deletedPaths.some((deletedPath) =>
+        isPathEqualOrDescendant(prev.path, deletedPath)
+      )
+        ? null
+        : prev
+    );
+  }, []);
+
   const handleDeleteEntry = useCallback(
     async (path: string) => {
-      await fs.deleteEntry(path);
-      setOpenFiles((prev) => prev.filter((f) => f.path !== path));
-      if (activeFilePath === path) {
-        setActiveFilePath(null);
+      const deletedPaths: string[] = [];
+      try {
+        await fs.deleteEntry(path);
+        deletedPaths.push(path);
+      } finally {
+        if (deletedPaths.length > 0) {
+          removeDeletedEntriesFromState(deletedPaths);
+        }
       }
     },
-    [fs, activeFilePath]
+    [fs, removeDeletedEntriesFromState]
+  );
+
+  const handleDeleteEntries = useCallback(
+    async (paths: string[]) => {
+      const targets = pruneNestedPaths(paths);
+      const deletedPaths: string[] = [];
+
+      try {
+        for (const path of targets) {
+          await fs.deleteEntry(path);
+          deletedPaths.push(path);
+        }
+      } finally {
+        if (deletedPaths.length > 0) {
+          removeDeletedEntriesFromState(deletedPaths);
+        }
+      }
+    },
+    [fs, removeDeletedEntriesFromState]
   );
 
   const handleRenameEntry = useCallback(
@@ -262,6 +427,14 @@ function AuthenticatedApp({
       }
     },
     [fs, activeFilePath]
+  );
+
+  const handleDownloadEntry = useCallback(
+    async (path: string, type: FileNode["type"]) => {
+      const filename = await fs.downloadEntry(path, type);
+      showToast(`Downloaded ${filename}`);
+    },
+    [fs, showToast]
   );
 
   // --- Selection tracking ---
@@ -372,6 +545,15 @@ function AuthenticatedApp({
         </div>
         <div className="titlebar-right">
           <span className="user-badge">{username}</span>
+          {isAdmin && (
+            <button
+              className={`titlebar-btn${settingsVisible ? " active" : ""}`}
+              onClick={() => setSettingsVisible(true)}
+              title="Admin Settings"
+            >
+              <Settings size={17} />
+            </button>
+          )}
           <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
             onClick={() => setSidebarVisible((v) => !v)}
@@ -403,6 +585,16 @@ function AuthenticatedApp({
         </div>
       </div>
 
+      {isAdmin && (
+        <SettingsModal
+          token={token}
+          currentUsername={username}
+          visible={settingsVisible}
+          onClose={() => setSettingsVisible(false)}
+          onShowToast={showToast}
+        />
+      )}
+
       {/* Main Layout */}
       <div className="main-layout">
         <Sidebar
@@ -412,7 +604,9 @@ function AuthenticatedApp({
           onFileSelect={openFile}
           onCreateEntry={handleCreateEntry}
           onDeleteEntry={handleDeleteEntry}
+          onDeleteEntries={handleDeleteEntries}
           onRenameEntry={handleRenameEntry}
+          onDownloadEntry={handleDownloadEntry}
           onRefreshTree={loadTree}
           workspaceDir={workspaceDir}
           onChangeWorkspace={handleChangeWorkspace}
@@ -438,10 +632,18 @@ function AuthenticatedApp({
                 content={activeFile.content}
                 language={activeFile.language}
                 path={activeFile.path}
+                openFiles={openFiles}
                 onChange={handleEditorChange}
                 onSave={saveFile}
                 onSelectionChange={handleSelectionChange}
+                onNavigateToLocation={handleNavigateToLocation}
                 editorRef={editorRef}
+                navigationTarget={
+                  editorNavigationTarget?.path === activeFile.path
+                    ? editorNavigationTarget
+                    : null
+                }
+                onNavigationComplete={handleNavigationComplete}
               />
             ) : (
               <div className="editor-empty">
@@ -474,6 +676,7 @@ function AuthenticatedApp({
           onSend={handleChatSend}
           onClear={chat.clearMessages}
           onApplyCode={handleApplyCode}
+          onNavigateToFileUpdate={handleNavigateToFileUpdate}
           style={chatVisible ? { width: chatWidth } : undefined}
         />
       </div>

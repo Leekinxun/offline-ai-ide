@@ -2,7 +2,12 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 import { safePath } from "../utils/safePath.js";
-import { OpenAIToolDef, ToolContext } from "./types.js";
+import {
+  FileSelectionRange,
+  OpenAIToolDef,
+  ToolContext,
+  ToolFileUpdate,
+} from "./types.js";
 import { TodoManager } from "./todoManager.js";
 import { TaskManager } from "./taskManager.js";
 import { MessageBus } from "./messageBus.js";
@@ -10,6 +15,11 @@ import { TeammateManager } from "./teammateManager.js";
 import { runSubagent } from "./subagent.js";
 
 // ---- Tool handler type ----
+
+export interface ToolExecutionResult {
+  output: string;
+  fileUpdate?: ToolFileUpdate;
+}
 
 export type ToolHandler = (
   args: Record<string, unknown>,
@@ -19,11 +29,35 @@ export type ToolHandler = (
     messageBus: MessageBus;
     teammateManager: TeammateManager;
   }
-) => Promise<string>;
+) => Promise<string | ToolExecutionResult>;
 
 // ---- Core tool implementations ----
 
 const DANGEROUS_PATTERNS = ["rm -rf /", "sudo ", "shutdown", "reboot", "> /dev/"];
+
+function offsetToPosition(text: string, offset: number): { line: number; column: number } {
+  const safeOffset = Math.max(0, Math.min(offset, text.length));
+  const before = text.slice(0, safeOffset).split("\n");
+  return {
+    line: before.length,
+    column: before[before.length - 1].length + 1,
+  };
+}
+
+function createSelectionRange(
+  text: string,
+  startOffset: number,
+  endOffset: number
+): FileSelectionRange {
+  const start = offsetToPosition(text, startOffset);
+  const end = offsetToPosition(text, endOffset);
+  return {
+    startLine: start.line,
+    startColumn: start.column,
+    endLine: end.line,
+    endColumn: end.column,
+  };
+}
 
 async function runBash(command: string, cwd: string): Promise<string> {
   if (DANGEROUS_PATTERNS.some((d) => command.includes(d))) {
@@ -68,12 +102,18 @@ async function runWriteFile(
   filePath: string,
   content: string,
   cwd: string
-): Promise<string> {
+): Promise<string | ToolExecutionResult> {
   try {
     const full = safePath(filePath, cwd);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
-    return `Wrote ${content.length} bytes to ${filePath}`;
+    return {
+      output: `Wrote ${content.length} bytes to ${filePath}`,
+      fileUpdate: {
+        path: filePath,
+        content,
+      },
+    };
   } catch (e: any) {
     return `Error: ${e.message}`;
   }
@@ -84,15 +124,28 @@ async function runEditFile(
   oldText: string,
   newText: string,
   cwd: string
-): Promise<string> {
+): Promise<string | ToolExecutionResult> {
   try {
     const full = safePath(filePath, cwd);
     const content = fs.readFileSync(full, "utf-8");
-    if (!content.includes(oldText)) {
+    const matchOffset = content.indexOf(oldText);
+    if (matchOffset < 0) {
       return `Error: Text not found in ${filePath}`;
     }
-    fs.writeFileSync(full, content.replace(oldText, newText), "utf-8");
-    return `Edited ${filePath}`;
+    const updatedContent = content.replace(oldText, newText);
+    fs.writeFileSync(full, updatedContent, "utf-8");
+    return {
+      output: `Edited ${filePath}`,
+      fileUpdate: {
+        path: filePath,
+        content: updatedContent,
+        selection: createSelectionRange(
+          updatedContent,
+          matchOffset,
+          matchOffset + newText.length
+        ),
+      },
+    };
   } catch (e: any) {
     return `Error: ${e.message}`;
   }

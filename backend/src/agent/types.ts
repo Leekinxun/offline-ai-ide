@@ -40,12 +40,32 @@ export interface OpenAIResponse {
   choices: OpenAIChoice[];
 }
 
+export interface FileSelectionRange {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+export interface ToolFileUpdate {
+  path: string;
+  content: string;
+  selection?: FileSelectionRange;
+}
+
 // --- WebSocket message types (server -> client) ---
 
 export type WsServerMessage =
   | { type: "thinking"; content: string }
   | { type: "tool_call"; toolCallId: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; toolCallId: string; name: string; result: string; isError?: boolean }
+  | {
+      type: "tool_result";
+      toolCallId: string;
+      name: string;
+      result: string;
+      isError?: boolean;
+      fileUpdate?: ToolFileUpdate;
+    }
   | { type: "token"; content: string }
   | { type: "done" }
   | { type: "error"; content: string };

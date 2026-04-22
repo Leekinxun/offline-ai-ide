@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { FileNode } from "../types";
 import { FileTree } from "./FileTree";
 import {
@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Trash2,
   Pencil,
+  Download,
   ChevronRight,
   Folder,
 } from "lucide-react";
@@ -18,12 +19,34 @@ interface SidebarProps {
   onFileSelect: (path: string) => void;
   onCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
   onDeleteEntry: (path: string) => Promise<void>;
+  onDeleteEntries: (paths: string[]) => Promise<void>;
   onRenameEntry: (oldPath: string, newPath: string) => Promise<void>;
+  onDownloadEntry: (path: string, type: FileNode["type"]) => Promise<void>;
   onRefreshTree: () => void;
   workspaceDir: string;
   onChangeWorkspace: (path: string) => Promise<void>;
   token: string;
   style?: React.CSSProperties;
+}
+
+function isPathEqualOrDescendant(candidate: string, target: string): boolean {
+  return candidate === target || candidate.startsWith(`${target}/`);
+}
+
+function collectTreePaths(nodes: FileNode[]): Set<string> {
+  const paths = new Set<string>();
+
+  const visit = (entries: FileNode[]) => {
+    for (const node of entries) {
+      paths.add(node.path);
+      if (node.children) {
+        visit(node.children);
+      }
+    }
+  };
+
+  visit(nodes);
+  return paths;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -33,7 +56,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onFileSelect,
   onCreateEntry,
   onDeleteEntry,
+  onDeleteEntries,
   onRenameEntry,
+  onDownloadEntry,
   onRefreshTree,
   workspaceDir,
   onChangeWorkspace,
@@ -57,7 +82,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     entries: { name: string; path: string }[];
     loading: boolean;
   } | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const dialogInputRef = useRef<HTMLInputElement>(null);
+  const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
   useEffect(() => {
     if (dialog && dialogInputRef.current) {
@@ -66,10 +93,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [dialog]);
 
   useEffect(() => {
+    const availablePaths = collectTreePaths(tree);
+    setSelectedPaths((prev) => prev.filter((path) => availablePaths.has(path)));
+  }, [tree]);
+
+  useEffect(() => {
     const handleClick = () => setContextMenu(null);
     document.addEventListener("click", handleClick);
     return () => document.removeEventListener("click", handleClick);
   }, []);
+
+  useEffect(() => {
+    setSelectedPaths([]);
+  }, [workspaceDir]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
@@ -108,10 +144,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setContextMenu(null);
       if (confirm(`Delete "${node.name}"?`)) {
         await onDeleteEntry(node.path);
+        setSelectedPaths((prev) =>
+          prev.filter((path) => !isPathEqualOrDescendant(path, node.path))
+        );
         onRefreshTree();
       }
     },
     [onDeleteEntry, onRefreshTree]
+  );
+
+  const handleToggleSelection = useCallback((path: string, selected: boolean) => {
+    setSelectedPaths((prev) => {
+      if (selected) {
+        return prev.includes(path) ? prev : [...prev, path];
+      }
+      return prev.filter((item) => item !== path);
+    });
+  }, []);
+
+  const handleBatchDelete = useCallback(async () => {
+    if (selectedPaths.length === 0) return;
+
+    setContextMenu(null);
+    if (
+      !confirm(
+        `Delete ${selectedPaths.length} selected item${selectedPaths.length > 1 ? "s" : ""}?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await onDeleteEntries(selectedPaths);
+      setSelectedPaths([]);
+      onRefreshTree();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Batch delete failed");
+    }
+  }, [onDeleteEntries, onRefreshTree, selectedPaths]);
+
+  const handleDownload = useCallback(
+    async (path: string, type: FileNode["type"]) => {
+      setContextMenu(null);
+      try {
+        await onDownloadEntry(path, type);
+      } catch (e) {
+        alert(e instanceof Error ? e.message : "Download failed");
+      }
+    },
+    [onDownloadEntry]
   );
 
   const handleDialogSubmit = useCallback(async () => {
@@ -219,16 +300,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <FolderPlus size={15} />
           </button>
+          <button
+            className="sidebar-action-btn"
+            title={
+              selectedPaths.length > 0
+                ? `Delete ${selectedPaths.length} selected`
+                : "Delete Selected"
+            }
+            onClick={() => void handleBatchDelete()}
+            disabled={selectedPaths.length === 0}
+          >
+            <Trash2 size={15} />
+          </button>
         </div>
       </div>
       <div className="sidebar-workspace-path" title={workspaceDir}>
         {workspaceName}
       </div>
+      {selectedPaths.length > 0 && (
+        <div className="sidebar-selection-bar">
+          <span className="sidebar-selection-text">
+            {selectedPaths.length} selected
+          </span>
+          <div className="sidebar-selection-actions">
+            <button
+              className="sidebar-selection-btn danger"
+              onClick={() => void handleBatchDelete()}
+            >
+              Delete
+            </button>
+            <button
+              className="sidebar-selection-btn"
+              onClick={() => setSelectedPaths([])}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
       <div className="file-tree">
         <FileTree
           nodes={tree}
           activeFilePath={activeFilePath}
+          selectedPaths={selectedPathSet}
           onFileSelect={onFileSelect}
+          onToggleSelect={handleToggleSelection}
+          onDownload={handleDownload}
           onContextMenu={handleContextMenu}
         />
       </div>
@@ -256,6 +373,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="context-menu-separator" />
             </>
           )}
+          <button
+            className="context-menu-item"
+            onClick={() =>
+              void handleDownload(contextMenu.node.path, contextMenu.node.type)
+            }
+          >
+            <Download size={14} /> Download
+          </button>
           <button
             className="context-menu-item"
             onClick={() => handleRename(contextMenu.node)}

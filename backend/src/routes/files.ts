@@ -2,6 +2,7 @@ import { Router, Request } from "express";
 import fs from "fs";
 import path from "path";
 import { safePath as safePathUtil } from "../utils/safePath.js";
+import { createDirectoryZipStream } from "../utils/zipStream.js";
 import type { UserSession } from "../auth/sessionManager.js";
 
 export const filesRouter = Router();
@@ -53,6 +54,23 @@ function buildTree(dirPath: string, relPrefix = ""): FileNode[] {
   return entries;
 }
 
+function getDownloadName(relPath: string, isDirectory: boolean): string {
+  const baseName = path.basename(relPath) || "download";
+  return isDirectory ? `${baseName}.zip` : baseName;
+}
+
+function buildAttachmentHeader(filename: string): string {
+  const asciiFallback =
+    filename
+      .replace(/[^\x20-\x7e]/g, "_")
+      .replace(/["\\]/g, "_")
+      .trim() || "download";
+  const encoded = encodeURIComponent(filename)
+    .replace(/['()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/\*/g, "%2A");
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
 // GET /tree
 filesRouter.get("/tree", (req, res) => {
   const workspaceDir = getWorkspace(req);
@@ -74,6 +92,54 @@ filesRouter.get("/read", (req, res) => {
     }
     const content = fs.readFileSync(full, "utf-8");
     res.json({ path: relPath, content });
+  } catch (e: any) {
+    res.status(e.message === "Path traversal denied" ? 403 : 500).json({ detail: e.message });
+  }
+});
+
+// GET /download?path=xxx
+filesRouter.get("/download", (req, res) => {
+  const relPath = req.query.path as string;
+  if (!relPath) return res.status(400).json({ detail: "path required" });
+
+  try {
+    const fullPath = safePathUtil(relPath, getWorkspace(req));
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ detail: "Not found" });
+    }
+
+    const stat = fs.lstatSync(fullPath);
+    if (stat.isSymbolicLink()) {
+      return res.status(400).json({ detail: "Symbolic links are not supported" });
+    }
+
+    if (stat.isFile()) {
+      return res.download(fullPath, getDownloadName(relPath, false), (error) => {
+        if (!error || res.headersSent) return;
+        res.status(500).json({ detail: error.message });
+      });
+    }
+
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ detail: "Unsupported file type" });
+    }
+
+    const archiveName = getDownloadName(relPath, true);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", buildAttachmentHeader(archiveName));
+
+    const archiveRoot = path.basename(relPath) || "download";
+    const zipStream = createDirectoryZipStream(fullPath, archiveRoot);
+
+    zipStream.on("error", (error) => {
+      if (!res.headersSent) {
+        res.status(500).json({ detail: error.message });
+        return;
+      }
+      res.destroy(error);
+    });
+
+    return zipStream.pipe(res);
   } catch (e: any) {
     res.status(e.message === "Path traversal denied" ? 403 : 500).json({ detail: e.message });
   }

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { config } from "../config.js";
 import { execSync } from "child_process";
 import { TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { MessageBus } from "./messageBus.js";
@@ -148,9 +149,9 @@ export class TeammateManager {
   ): Promise<void> {
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${this.workspaceDir}. Use idle when done with current work.`;
     const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
-    const vllmUrl = process.env.VLLM_API_URL || "http://host.docker.internal:8000/v1";
-    const vllmApiKey = process.env.VLLM_API_KEY || "";
-    const model = process.env.MODEL_NAME || "default";
+    const vllmUrl = config.vllmApiUrl;
+    const vllmApiKey = config.vllmApiKey;
+    const model = config.modelName;
     const llmHeaders: Record<string, string> = { "Content-Type": "application/json" };
     if (vllmApiKey) {
       llmHeaders["Authorization"] = `Bearer ${vllmApiKey}`;
