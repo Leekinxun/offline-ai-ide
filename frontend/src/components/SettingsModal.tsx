@@ -26,11 +26,25 @@ interface CreateUserForm {
   isAdmin: boolean;
 }
 
+interface LlmFormState {
+  vllmApiUrl: string;
+  vllmApiKey: string;
+  modelName: string;
+  maxTokens: string;
+}
+
 const EMPTY_CREATE_USER_FORM: CreateUserForm = {
   username: "",
   password: "",
   defaultWorkspace: "",
   isAdmin: false,
+};
+
+const EMPTY_LLM_FORM: LlmFormState = {
+  vllmApiUrl: "",
+  vllmApiKey: "",
+  modelName: "",
+  maxTokens: "8192",
 };
 
 function buildDefaultWorkspace(username: string, allowedRoots: string[]): string {
@@ -58,11 +72,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [createForm, setCreateForm] = useState<CreateUserForm>(
     EMPTY_CREATE_USER_FORM
   );
-  const [llmForm, setLlmForm] = useState<LlmSettings>({
-    vllmApiUrl: "",
-    vllmApiKey: "",
-    modelName: "",
-  });
+  const [llmForm, setLlmForm] = useState<LlmFormState>(EMPTY_LLM_FORM);
   const [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null);
   const [nextPassword, setNextPassword] = useState("");
 
@@ -72,7 +82,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const data = await adminSettings.fetchSettings();
       setSettings(data);
-      setLlmForm(data.llm);
+      setLlmForm({
+        vllmApiUrl: data.llm.vllmApiUrl,
+        vllmApiKey: data.llm.vllmApiKey,
+        modelName: data.llm.modelName,
+        maxTokens: String(data.llm.maxTokens),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
@@ -168,10 +183,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     if (savingLlm) return;
 
+    const maxTokens = Number.parseInt(llmForm.maxTokens, 10);
+
     const payload: LlmSettings = {
       vllmApiUrl: llmForm.vllmApiUrl.trim(),
       vllmApiKey: llmForm.vllmApiKey,
       modelName: llmForm.modelName.trim(),
+      maxTokens,
     };
 
     if (!payload.vllmApiUrl || !payload.modelName) {
@@ -179,11 +197,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
+    if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+      setError("Max tokens must be a positive integer");
+      return;
+    }
+
     setSavingLlm(true);
     setError(null);
     try {
       const saved = await adminSettings.updateLlmSettings(payload);
-      setLlmForm(saved);
+      setLlmForm({
+        vllmApiUrl: saved.vllmApiUrl,
+        vllmApiKey: saved.vllmApiKey,
+        modelName: saved.modelName,
+        maxTokens: String(saved.maxTokens),
+      });
       setSettings((prev) => (prev ? { ...prev, llm: saved } : prev));
       onShowToast("LLM settings saved");
     } catch (e) {
@@ -410,9 +438,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </label>
 
+                  <label className="settings-field settings-field-wide">
+                    <span>Max Tokens</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={llmForm.maxTokens}
+                      onChange={(e) =>
+                        setLlmForm((prev) => ({
+                          ...prev,
+                          maxTokens: e.target.value,
+                        }))
+                      }
+                      placeholder="8192"
+                    />
+                  </label>
+
                   <div className="settings-form-footer">
                     <span className="settings-help-text">
                       API key can be empty if your endpoint does not require auth.
+                      Max tokens applies to new LLM requests, including subagents.
                     </span>
                     <button
                       className="dialog-btn primary"

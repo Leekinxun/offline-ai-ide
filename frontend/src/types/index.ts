@@ -20,6 +20,11 @@ export interface FileSelectionRange {
   endColumn: number;
 }
 
+export interface DefinitionLocation {
+  path: string;
+  selection: FileSelectionRange;
+}
+
 export interface FileUpdate {
   path: string;
   content: string;
@@ -66,6 +71,7 @@ export interface LlmSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  maxTokens: number;
 }
 
 export interface AdminSettings {

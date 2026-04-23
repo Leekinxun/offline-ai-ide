@@ -1,16 +1,16 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import MonacoEditor, { OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-import { FileSelectionRange, OpenFile, SelectionInfo } from "../types";
+import {
+  DefinitionLocation,
+  FileSelectionRange,
+  OpenFile,
+  SelectionInfo,
+} from "../types";
 
 interface NavigationTarget extends FileSelectionRange {
   path: string;
   requestId: number;
-}
-
-interface DefinitionLocation {
-  path: string;
-  selection: FileSelectionRange;
 }
 
 interface EditorProps {
@@ -25,6 +25,10 @@ interface EditorProps {
     path: string,
     selection: FileSelectionRange
   ) => Promise<void> | void;
+  onFindDefinition: (
+    symbol: string,
+    currentPath: string
+  ) => Promise<DefinitionLocation | null>;
   editorRef: React.MutableRefObject<monaco.editor.IStandaloneCodeEditor | null>;
   navigationTarget: NavigationTarget | null;
   onNavigationComplete: (requestId: number) => void;
@@ -37,9 +41,13 @@ function escapeRegExp(value: string): string {
 function buildDefinitionMatchers(symbol: string, language: string): RegExp[] {
   const escaped = escapeRegExp(symbol);
   const baseMatchers = [
-    new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`),
+    new RegExp(
+      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`
+    ),
     new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`),
-    new RegExp(`^\\s*(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`),
+    new RegExp(
+      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`
+    ),
     new RegExp(
       `^\\s*(?:(?:public|private|protected|internal|static|readonly|override|abstract|async|open|sealed|virtual|partial|final|synchronized|native)\\s+)*(?:[A-Za-z_][\\w<>,?.\\[\\]\\s]*\\s+)?${escaped}\\s*\\(`
     ),
@@ -157,10 +165,56 @@ export const Editor: React.FC<EditorProps> = ({
   onSave,
   onSelectionChange,
   onNavigateToLocation,
+  onFindDefinition,
   editorRef,
   navigationTarget,
   onNavigationComplete,
 }) => {
+  const onSaveRef = useRef(onSave);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+
+  onSaveRef.current = onSave;
+  onSelectionChangeRef.current = onSelectionChange;
+
+  const navigateToDefinition = useCallback(
+    async (
+      editor: monaco.editor.IStandaloneCodeEditor,
+      symbol: string,
+      position: monaco.Position
+    ) => {
+      let location = findDefinitionLocation(symbol, path, position, openFiles);
+      if (!location) {
+        try {
+          location = await onFindDefinition(symbol, path);
+        } catch (error) {
+          console.warn("Failed to resolve definition:", error);
+          return;
+        }
+      }
+
+      if (!location) return;
+
+      if (location.path === path) {
+        const selection = new monaco.Selection(
+          location.selection.startLine,
+          location.selection.startColumn,
+          location.selection.endLine,
+          location.selection.endColumn
+        );
+        editor.focus();
+        editor.setSelection(selection);
+        editor.revealRangeInCenter(selection);
+        return;
+      }
+
+      await onNavigateToLocation(location.path, location.selection);
+    },
+    [onFindDefinition, onNavigateToLocation, openFiles, path]
+  );
+
+  const navigateToDefinitionRef = useRef(navigateToDefinition);
+  navigateToDefinitionRef.current = navigateToDefinition;
+
   const handleMount: OnMount = useCallback(
     (editor) => {
       editorRef.current = editor;
@@ -170,7 +224,7 @@ export const Editor: React.FC<EditorProps> = ({
         id: "save-file",
         label: "Save File",
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-        run: () => onSave(),
+        run: () => onSaveRef.current(),
       });
 
       // Track selection changes
@@ -179,7 +233,7 @@ export const Editor: React.FC<EditorProps> = ({
         if (selection && !selection.isEmpty()) {
           const text = editor.getModel()?.getValueInRange(selection) || "";
           if (text.trim()) {
-            onSelectionChange({
+            onSelectionChangeRef.current({
               text,
               startLine: selection.startLineNumber,
               endLine: selection.endLineNumber,
@@ -187,7 +241,7 @@ export const Editor: React.FC<EditorProps> = ({
             return;
           }
         }
-        onSelectionChange(null);
+        onSelectionChangeRef.current(null);
       });
 
       editor.onMouseDown((event) => {
@@ -207,42 +261,19 @@ export const Editor: React.FC<EditorProps> = ({
         const word = model.getWordAtPosition(event.target.position);
         if (!word?.word) return;
 
-        const location = findDefinitionLocation(
-          word.word,
-          path,
-          event.target.position,
-          openFiles
-        );
-        if (!location) return;
-
         browserEvent.preventDefault();
         browserEvent.stopPropagation();
-
-        if (location.path === path) {
-          const selection = new monaco.Selection(
-            location.selection.startLine,
-            location.selection.startColumn,
-            location.selection.endLine,
-            location.selection.endColumn
-          );
-          editor.focus();
-          editor.setSelection(selection);
-          editor.revealRangeInCenter(selection);
-          return;
-        }
-
-        void onNavigateToLocation(location.path, location.selection);
+        void navigateToDefinitionRef.current(
+          editor,
+          word.word,
+          event.target.position
+        );
       });
 
       editor.focus();
     },
     [
       editorRef,
-      onNavigateToLocation,
-      onSave,
-      onSelectionChange,
-      openFiles,
-      path,
     ]
   );
 

@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { FileNode } from "../types";
+import { DefinitionLocation, FileNode } from "../types";
 
 const API = "/api/files";
 
@@ -50,6 +50,22 @@ export function useFileSystem(token: string) {
     const data = await res.json();
     return data.content;
   }, [authHeaders]);
+
+  const findDefinition = useCallback(
+    async (symbol: string, currentPath: string): Promise<DefinitionLocation | null> => {
+      const params = new URLSearchParams({
+        symbol,
+        currentPath,
+      });
+      const res = await fetch(`${API}/definition?${params.toString()}`, {
+        headers: authHeaders(),
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Failed to resolve definition");
+      return res.json();
+    },
+    [authHeaders]
+  );
 
   const writeFile = useCallback(async (path: string, content: string) => {
     const res = await fetch(`${API}/write`, {
@@ -127,6 +143,7 @@ export function useFileSystem(token: string) {
     () => ({
       fetchTree,
       readFile,
+      findDefinition,
       writeFile,
       createEntry,
       deleteEntry,
@@ -136,6 +153,7 @@ export function useFileSystem(token: string) {
     [
       fetchTree,
       readFile,
+      findDefinition,
       writeFile,
       createEntry,
       deleteEntry,

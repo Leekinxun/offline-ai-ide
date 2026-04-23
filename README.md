@@ -1,8 +1,8 @@
 # AI IDE
 
-> Current Version: `v0.3.0`
+> Current Version: `v0.3.1`
 >
-> Release Date: `2026-04-22`
+> Release Date: `2026-04-23`
 
 A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
 
@@ -15,6 +15,12 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 
 ## Release Notes
 
+### v0.3.1 · 2026-04-23
+
+- Extended **Ctrl/Cmd + left click** navigation with a workspace-aware definition lookup path, improving symbol jumps for Python, Vue, React, and other cross-file flows
+- Added **Max Tokens** to the in-app **Admin Settings** panel so administrators can manage request limits without editing environment variables
+- Fixed an editor regression where **Ctrl/Cmd + S** could save stale content because Monaco actions were holding outdated callbacks
+
 ### v0.3.0 · 2026-04-22
 
 - Added an in-app **Admin Settings** panel for creating users, deleting users, resetting passwords, and updating the LLM endpoint / API key / model without restarting the service
@@ -26,17 +32,17 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.3.0` is the first documented release in the README and covers the admin settings, file management, and editor usability improvements listed above.
+`v0.3.1` is the current documented release and adds workspace-aware symbol navigation, admin-managed max token settings, and an editor save fix on top of the `v0.3.0` feature set.
 
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
-- **Monaco Code Editor** — Full-featured editor with syntax highlighting, IntelliSense, multi-tab support, and Ctrl/Cmd-click symbol navigation across the current file and open tabs
+- **Monaco Code Editor** — Full-featured editor with syntax highlighting, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, and fixed Ctrl/Cmd+S save behavior
 - **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed
 - **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, and "Open Folder" (switch workspace at runtime)
-- **Admin Settings Panel** — Manage users, reset passwords, and update LLM URL / API key / model from the UI
+- **Admin Settings Panel** — Manage users, reset passwords, and update LLM URL / API key / model / max tokens from the UI
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, and work in parallel
 - **Task Board** — Create, assign, and track tasks across agents
@@ -131,7 +137,7 @@ In local development, admin-managed LLM settings are persisted to `app-settings.
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed LLM runtime settings such as URL, API key, and model |
+| `app-settings.json` | Stores admin-managed LLM runtime settings such as URL, API key, model, and max tokens |
 
 If you run with Docker and want admin changes to survive container recreation, persist these files with bind mounts or a volume-backed path.
 
@@ -169,7 +175,7 @@ If you edit `users.json` outside the app, restart the backend to reload it. Chan
 LLM runtime settings can be managed in two ways:
 
 - Preferred: use the admin **Settings** panel in the UI
-- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, and `MODEL_NAME` via environment variables
+- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, and `AGENT_MAX_TOKENS` via environment variables
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately.
 

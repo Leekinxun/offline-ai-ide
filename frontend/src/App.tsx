@@ -12,6 +12,7 @@ import { useFileSystem } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
 import {
+  DefinitionLocation,
   FileNode,
   FileSelectionRange,
   FileUpdate,
@@ -285,6 +286,13 @@ function AuthenticatedApp({
       });
     },
     [openFile]
+  );
+
+  const handleFindDefinition = useCallback(
+    async (symbol: string, currentPath: string): Promise<DefinitionLocation | null> => {
+      return fs.findDefinition(symbol, currentPath);
+    },
+    [fs]
   );
 
   const closeTab = useCallback(
@@ -637,6 +645,7 @@ function AuthenticatedApp({
                 onSave={saveFile}
                 onSelectionChange={handleSelectionChange}
                 onNavigateToLocation={handleNavigateToLocation}
+                onFindDefinition={handleFindDefinition}
                 editorRef={editorRef}
                 navigationTarget={
                   editorNavigationTarget?.path === activeFile.path
