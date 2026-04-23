@@ -3,41 +3,14 @@ import { config } from "../config.js";
 import {
   OpenAIMessage,
   OpenAIResponse,
-  OpenAIToolCall,
   ToolFileUpdate,
   wsSend,
 } from "./types.js";
+import { callChatCompletion } from "./llm.js";
 import { getAllTools, TOOL_DISPATCH } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
 import type { UserSession } from "../auth/sessionManager.js";
-
-async function callVllm(
-  systemPrompt: string,
-  messages: OpenAIMessage[],
-  tools: ReturnType<typeof getAllTools>,
-  stream: boolean = false
-): Promise<Response> {
-  const body: Record<string, unknown> = {
-    model: config.modelName,
-    messages: [{ role: "system", content: systemPrompt }, ...messages],
-    max_tokens: config.agentMaxTokens,
-    temperature: 0.3,
-    stream,
-  };
-  if (tools.length > 0) {
-    body.tools = tools;
-  }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.vllmApiKey) {
-    headers["Authorization"] = `Bearer ${config.vllmApiKey}`;
-  }
-  return fetch(`${config.vllmApiUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-}
 
 /**
  * Extract <think>...</think> blocks from LLM output.
@@ -113,7 +86,17 @@ export async function runAgentLoop(
     // Non-streaming call for tool-use rounds
     let resp: Response;
     try {
-      resp = await callVllm(systemPrompt, messages, tools, false);
+      resp = await callChatCompletion({
+        apiUrl: config.vllmApiUrl,
+        apiKey: config.vllmApiKey,
+        model: config.modelName,
+        systemPrompt,
+        messages,
+        tools,
+        maxTokens: config.agentMaxTokens,
+        temperature: 0.3,
+        stream: false,
+      });
     } catch (e: any) {
       wsSend(ws, { type: "error", content: `LLM request failed: ${e.message}` });
       return;

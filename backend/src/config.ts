@@ -6,10 +6,25 @@ interface LlmRuntimeSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  maxTokens: number;
 }
 
 interface PersistedAppSettings {
   llm?: Partial<LlmRuntimeSettings>;
+}
+
+function parsePositiveInteger(
+  value: unknown,
+  fallback: number
+): number {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parseInt(value, 10)
+        : Number.NaN;
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function resolveWorkspaceDir(): string {
@@ -69,7 +84,7 @@ const persistedAppSettings = loadPersistedAppSettings(appSettingsPath);
 const persistedLlmSettings = persistedAppSettings.llm || {};
 
 export const config = {
-  port: parseInt(process.env.PORT || "3000"),
+  port: parsePositiveInteger(process.env.PORT, 3000),
   defaultWorkspaceDir: resolveWorkspaceDir(),
   vllmApiUrl:
     persistedLlmSettings.vllmApiUrl ||
@@ -78,8 +93,11 @@ export const config = {
   vllmApiKey: persistedLlmSettings.vllmApiKey || process.env.VLLM_API_KEY || "",
   modelName: persistedLlmSettings.modelName || process.env.MODEL_NAME || "default",
   staticDir: process.env.STATIC_DIR || "static",
-  maxAgentIterations: parseInt(process.env.MAX_AGENT_ITERATIONS || "30"),
-  agentMaxTokens: parseInt(process.env.AGENT_MAX_TOKENS || "8192"),
+  maxAgentIterations: parsePositiveInteger(process.env.MAX_AGENT_ITERATIONS, 30),
+  agentMaxTokens: parsePositiveInteger(
+    persistedLlmSettings.maxTokens,
+    parsePositiveInteger(process.env.AGENT_MAX_TOKENS, 8192)
+  ),
   usersConfigPath: process.env.USERS_CONFIG || "users.json",
   appSettingsPath,
 };
@@ -89,6 +107,7 @@ export function getLlmSettings(): LlmRuntimeSettings {
     vllmApiUrl: config.vllmApiUrl,
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
+    maxTokens: config.agentMaxTokens,
   };
 }
 
@@ -96,6 +115,7 @@ export function updateLlmSettings(next: LlmRuntimeSettings): LlmRuntimeSettings 
   config.vllmApiUrl = next.vllmApiUrl;
   config.vllmApiKey = next.vllmApiKey;
   config.modelName = next.modelName;
+  config.agentMaxTokens = next.maxTokens;
 
   const payload: PersistedAppSettings = {
     llm: getLlmSettings(),

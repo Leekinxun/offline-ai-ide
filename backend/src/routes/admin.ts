@@ -25,6 +25,17 @@ function normalizeWorkspace(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizePositiveInteger(value: unknown): number | null {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parseInt(value, 10)
+        : Number.NaN;
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function isValidUsername(username: string): boolean {
   return /^[^\s/\\]+$/.test(username);
 }
@@ -111,9 +122,12 @@ adminRouter.put("/llm", (req, res) => {
     typeof req.body.vllmApiKey === "string" ? req.body.vllmApiKey : "";
   const modelName =
     typeof req.body.modelName === "string" ? req.body.modelName.trim() : "";
+  const maxTokens = normalizePositiveInteger(req.body.maxTokens);
 
-  if (!vllmApiUrl || !modelName) {
-    return res.status(400).json({ error: "vllmApiUrl and modelName are required" });
+  if (!vllmApiUrl || !modelName || maxTokens === null) {
+    return res.status(400).json({
+      error: "vllmApiUrl, modelName and a positive integer maxTokens are required",
+    });
   }
 
   try {
@@ -121,6 +135,7 @@ adminRouter.put("/llm", (req, res) => {
       vllmApiUrl,
       vllmApiKey,
       modelName,
+      maxTokens,
     });
     res.json({ llm });
   } catch (error: any) {

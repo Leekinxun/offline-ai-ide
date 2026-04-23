@@ -2,6 +2,7 @@ import { Router, Request } from "express";
 import fs from "fs";
 import path from "path";
 import { safePath as safePathUtil } from "../utils/safePath.js";
+import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
 import { createDirectoryZipStream } from "../utils/zipStream.js";
 import type { UserSession } from "../auth/sessionManager.js";
 
@@ -94,6 +95,25 @@ filesRouter.get("/read", (req, res) => {
     res.json({ path: relPath, content });
   } catch (e: any) {
     res.status(e.message === "Path traversal denied" ? 403 : 500).json({ detail: e.message });
+  }
+});
+
+// GET /definition?symbol=xxx&currentPath=yyy
+filesRouter.get("/definition", (req, res) => {
+  const symbol = typeof req.query.symbol === "string" ? req.query.symbol.trim() : "";
+  const currentPath =
+    typeof req.query.currentPath === "string" ? req.query.currentPath.trim() : undefined;
+
+  if (!symbol) return res.status(400).json({ detail: "symbol required" });
+
+  try {
+    const location = findDefinitionInWorkspace(getWorkspace(req), symbol, currentPath);
+    if (!location) {
+      return res.status(404).json({ detail: "Definition not found" });
+    }
+    return res.json(location);
+  } catch (e: any) {
+    return res.status(500).json({ detail: e.message });
   }
 });
 

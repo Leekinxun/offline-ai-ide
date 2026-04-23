@@ -1,8 +1,10 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { config } from "../config.js";
 import { safePath } from "../utils/safePath.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
+import { callChatCompletion } from "./llm.js";
 
 const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
   {
@@ -137,24 +139,18 @@ export async function runSubagent(
       : [...SUB_TOOLS_EXPLORE, ...SUB_TOOLS_WRITE];
 
   const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (vllmApiKey) {
-    headers["Authorization"] = `Bearer ${vllmApiKey}`;
-  }
 
   for (let i = 0; i < 30; i++) {
     let resp: Response;
     try {
-      resp = await fetch(`${vllmApiUrl}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: modelName,
-          messages,
-          tools,
-          max_tokens: 8000,
-          temperature: 0.3,
-        }),
+      resp = await callChatCompletion({
+        apiUrl: vllmApiUrl,
+        apiKey: vllmApiKey,
+        model: modelName,
+        messages,
+        tools,
+        maxTokens: config.agentMaxTokens,
+        temperature: 0.3,
       });
     } catch {
       return "(subagent: LLM request failed)";

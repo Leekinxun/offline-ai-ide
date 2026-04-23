@@ -6,6 +6,7 @@ import { TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } 
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
 import { safePath } from "../utils/safePath.js";
+import { callChatCompletion } from "./llm.js";
 
 const POLL_INTERVAL = 5000; // ms
 const IDLE_TIMEOUT = 60000; // ms
@@ -152,10 +153,6 @@ export class TeammateManager {
     const vllmUrl = config.vllmApiUrl;
     const vllmApiKey = config.vllmApiKey;
     const model = config.modelName;
-    const llmHeaders: Record<string, string> = { "Content-Type": "application/json" };
-    if (vllmApiKey) {
-      llmHeaders["Authorization"] = `Bearer ${vllmApiKey}`;
-    }
 
     // Work phase
     for (let round = 0; round < 50 && !control.abort; round++) {
@@ -172,10 +169,14 @@ export class TeammateManager {
 
       let resp: Response;
       try {
-        resp = await fetch(`${vllmUrl}/chat/completions`, {
-          method: "POST",
-          headers: llmHeaders,
-          body: JSON.stringify({ model, system: sysPrompt, messages, tools: TEAMMATE_TOOLS, max_tokens: 8000 }),
+        resp = await callChatCompletion({
+          apiUrl: vllmUrl,
+          apiKey: vllmApiKey,
+          model,
+          systemPrompt: sysPrompt,
+          messages,
+          tools: TEAMMATE_TOOLS,
+          maxTokens: config.agentMaxTokens,
         });
       } catch {
         this.setStatus(name, "shutdown");
