@@ -584,6 +584,98 @@ body {
 .editor-container {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+}
+
+.editor-workbench {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.editor-workbench-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+}
+
+.editor-workbench-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-workbench-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-workbench-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-workbench-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.editor-workbench-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.editor-workbench-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+.editor-workbench-pane > .editor-container {
+  flex: 1;
+}
+
+.editor-workbench-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border-light);
+}
+
+.editor-preview-pane {
+  background: linear-gradient(
+    180deg,
+    var(--elevated-surface-soft) 0%,
+    var(--elevated-surface-muted) 100%
+  );
+  overflow: auto;
+}
+
+.file-preview-surface {
+  min-height: 100%;
+  padding: 24px 28px 40px;
+  color: var(--text-primary);
 }
 
 .editor-navigation-highlight-line {
@@ -2405,6 +2497,31 @@ body {
   .chat-history-item-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .editor-workbench-toolbar {
+    justify-content: stretch;
+  }
+
+  .editor-workbench-segmented {
+    width: 100%;
+  }
+
+  .editor-workbench-btn {
+    flex: 1 1 0;
+  }
+
+  .editor-workbench-body.mode-split {
+    flex-direction: column;
+  }
+
+  .editor-workbench-body.mode-split .editor-workbench-divider {
+    width: auto;
+    height: 1px;
+  }
+
+  .file-preview-surface {
+    padding: 18px 16px 28px;
   }
 }
 

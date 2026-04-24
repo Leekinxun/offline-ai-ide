@@ -2,6 +2,7 @@ export const PLUGIN_PERMISSIONS = [
   "chat.render",
   "editor.setup",
   "editor.mount",
+  "editor.preview",
   "command.register",
   "ui.messages",
 ] as const;

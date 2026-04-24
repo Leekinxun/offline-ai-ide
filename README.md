@@ -22,7 +22,7 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ### v0.4.0 · 2026-04-24
 
 - Added a lightweight **plugin system** with builtin and external plugins, offline installation from the local `plugins/` directory, permissions/scopes, and an in-app plugin manager
-- Moved **Monaco highlighting** and **chat Markdown rendering** into builtin plugins so editor and renderer features can be maintained independently
+- Moved **Monaco highlighting** and **chat Markdown rendering** into builtin plugins, and shipped **Markdown file preview** as a real external sample plugin under `plugins/markdown-file-preview`
 - Added builtin **interface localization** with English / Simplified Chinese switching in Settings, plus dark-theme-aware Monaco editor theming
 - Added per-workspace **chat history persistence** under `.history/`, including history browsing, continue-chat support, LLM-generated conversation titles, and automatic pruning to the 5 most recent conversations
 
@@ -56,7 +56,7 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
 - **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, and fixed Ctrl/Cmd+S save behavior
-- **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, and an in-app plugin manager
+- **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
 - **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed
@@ -147,7 +147,10 @@ The frontend now supports a lightweight plugin architecture inspired by VS Code:
 - Builtin plugins ship inside the app bundle and can be enabled/disabled from Settings
 - External plugins are discovered from the local `plugins/` directory and installed fully offline
 - Plugins declare explicit permissions and derived scopes before activation
-- Existing editor highlighting and chat Markdown rendering are implemented as builtin plugins
+- Editor highlighting and chat Markdown rendering are implemented as builtin plugins
+- Markdown file preview ships as a working external sample plugin in `plugins/markdown-file-preview/`
+
+Open a Markdown file in the IDE to use the preview toolbar with `Edit`, `Preview`, and `Split` modes.
 
 See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest format, host APIs, permissions, and offline installation flow.
 

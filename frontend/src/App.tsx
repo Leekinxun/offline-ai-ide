@@ -31,6 +31,11 @@ import {
   Sun,
 } from "lucide-react";
 import { useI18n } from "./i18n";
+import {
+  getMatchingFilePreviewRenderer,
+  renderFilePreview,
+} from "./plugins/runtime";
+import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 
 export default function App() {
@@ -151,6 +156,9 @@ function AuthenticatedApp({
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [chatWidth, setChatWidth] = useState(340);
+  const [previewModes, setPreviewModes] = useState<Record<string, FilePreviewMode>>(
+    {}
+  );
   const [editorNavigationTarget, setEditorNavigationTarget] =
     useState<EditorNavigationTarget | null>(null);
   const [editorHighlightTarget, setEditorHighlightTarget] =
@@ -225,6 +233,7 @@ function AuthenticatedApp({
   useEffect(() => {
     setOpenFiles([]);
     setActiveFilePath(null);
+    setPreviewModes({});
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
     loadTree();
@@ -312,7 +321,7 @@ function AuthenticatedApp({
         const content = await fs.readFile(path);
         const name = path.split("/").pop() || path;
         const language = getLanguage(name);
-      const newFile: OpenFile = {
+        const newFile: OpenFile = {
           path,
           name,
           content,
@@ -352,6 +361,15 @@ function AuthenticatedApp({
     (path: string) => {
       setOpenFiles((prev) => {
         const filtered = prev.filter((f) => f.path !== path);
+        setPreviewModes((current) => {
+          if (!Object.prototype.hasOwnProperty.call(current, path)) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next[path];
+          return next;
+        });
         if (activeFilePath === path) {
           setActiveFilePath(
             filtered.length > 0 ? filtered[filtered.length - 1].path : null
@@ -408,6 +426,24 @@ function AuthenticatedApp({
             isPathEqualOrDescendant(file.path, deletedPath)
           )
       );
+
+      setPreviewModes((current) => {
+        const next = { ...current };
+        let changed = false;
+
+        for (const previewPath of Object.keys(next)) {
+          if (
+            deletedPaths.some((deletedPath) =>
+              isPathEqualOrDescendant(previewPath, deletedPath)
+            )
+          ) {
+            delete next[previewPath];
+            changed = true;
+          }
+        }
+
+        return changed ? next : current;
+      });
 
       setActiveFilePath((previousPath) => {
         if (
@@ -480,6 +516,15 @@ function AuthenticatedApp({
   const handleRenameEntry = useCallback(
     async (oldPath: string, newPath: string) => {
       await fs.renameEntry(oldPath, newPath);
+      setPreviewModes((current) => {
+        if (!Object.prototype.hasOwnProperty.call(current, oldPath)) {
+          return current;
+        }
+
+        const next = { ...current, [newPath]: current[oldPath] };
+        delete next[oldPath];
+        return next;
+      });
       setOpenFiles((prev) =>
         prev.map((f) =>
           f.path === oldPath
@@ -604,6 +649,41 @@ function AuthenticatedApp({
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
+  const activePreviewRenderer = activeFile
+    ? getMatchingFilePreviewRenderer({
+        path: activeFile.path,
+        content: activeFile.content,
+        language: activeFile.language,
+      })
+    : null;
+  const activePreviewMode =
+    activeFile && activePreviewRenderer
+      ? previewModes[activeFile.path] ||
+        activePreviewRenderer.defaultMode ||
+        "split"
+      : "edit";
+  const setActivePreviewMode = useCallback(
+    (mode: FilePreviewMode) => {
+      if (!activeFile) {
+        return;
+      }
+
+      setPreviewModes((current) => ({
+        ...current,
+        [activeFile.path]: mode,
+      }));
+    },
+    [activeFile]
+  );
+  const activePreviewContent =
+    activeFile && activePreviewRenderer
+      ? renderFilePreview(activePreviewRenderer, {
+          path: activeFile.path,
+          content: activeFile.content,
+          language: activeFile.language,
+          theme,
+        })
+      : null;
 
   return (
     <div className="app">
@@ -710,31 +790,111 @@ function AuthenticatedApp({
           />
           <div className="editor-main">
             {activeFile ? (
-              <Editor
-                content={activeFile.content}
-                language={activeFile.language}
-                path={activeFile.path}
-                theme={theme}
-                openFiles={openFiles}
-                onChange={handleEditorChange}
-                onSave={saveFile}
-                onSelectionChange={handleSelectionChange}
-                onNavigateToLocation={handleNavigateToLocation}
-                onFindDefinition={handleFindDefinition}
-                editorRef={editorRef}
-                navigationTarget={
-                  editorNavigationTarget?.path === activeFile.path
-                    ? editorNavigationTarget
-                    : null
-                }
-                highlightTarget={
-                  editorHighlightTarget?.path === activeFile.path
-                    ? editorHighlightTarget
-                    : null
-                }
-                onNavigationComplete={handleNavigationComplete}
-                onHighlightComplete={handleHighlightComplete}
-              />
+              activePreviewRenderer ? (
+                <div className="editor-workbench">
+                  <div className="editor-workbench-toolbar">
+                    <div className="editor-workbench-segmented">
+                      <button
+                        type="button"
+                        className={`editor-workbench-btn${
+                          activePreviewMode === "edit" ? " active" : ""
+                        }`}
+                        onClick={() => setActivePreviewMode("edit")}
+                        aria-pressed={activePreviewMode === "edit"}
+                      >
+                        {t("editor.modeEdit")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`editor-workbench-btn${
+                          activePreviewMode === "preview" ? " active" : ""
+                        }`}
+                        onClick={() => setActivePreviewMode("preview")}
+                        aria-pressed={activePreviewMode === "preview"}
+                      >
+                        {t("editor.modePreview")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`editor-workbench-btn${
+                          activePreviewMode === "split" ? " active" : ""
+                        }`}
+                        onClick={() => setActivePreviewMode("split")}
+                        aria-pressed={activePreviewMode === "split"}
+                      >
+                        {t("editor.modeSplit")}
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    className={`editor-workbench-body mode-${activePreviewMode}`}
+                  >
+                    {activePreviewMode !== "preview" && (
+                      <div className="editor-workbench-pane">
+                        <Editor
+                          content={activeFile.content}
+                          language={activeFile.language}
+                          path={activeFile.path}
+                          theme={theme}
+                          openFiles={openFiles}
+                          onChange={handleEditorChange}
+                          onSave={saveFile}
+                          onSelectionChange={handleSelectionChange}
+                          onNavigateToLocation={handleNavigateToLocation}
+                          onFindDefinition={handleFindDefinition}
+                          editorRef={editorRef}
+                          navigationTarget={
+                            editorNavigationTarget?.path === activeFile.path
+                              ? editorNavigationTarget
+                              : null
+                          }
+                          highlightTarget={
+                            editorHighlightTarget?.path === activeFile.path
+                              ? editorHighlightTarget
+                              : null
+                          }
+                          onNavigationComplete={handleNavigationComplete}
+                          onHighlightComplete={handleHighlightComplete}
+                        />
+                      </div>
+                    )}
+                    {activePreviewMode === "split" && (
+                      <div className="editor-workbench-divider" />
+                    )}
+                    {activePreviewMode !== "edit" && (
+                      <div className="editor-workbench-pane editor-preview-pane">
+                        {activePreviewContent}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <Editor
+                  content={activeFile.content}
+                  language={activeFile.language}
+                  path={activeFile.path}
+                  theme={theme}
+                  openFiles={openFiles}
+                  onChange={handleEditorChange}
+                  onSave={saveFile}
+                  onSelectionChange={handleSelectionChange}
+                  onNavigateToLocation={handleNavigateToLocation}
+                  onFindDefinition={handleFindDefinition}
+                  editorRef={editorRef}
+                  navigationTarget={
+                    editorNavigationTarget?.path === activeFile.path
+                      ? editorNavigationTarget
+                      : null
+                  }
+                  highlightTarget={
+                    editorHighlightTarget?.path === activeFile.path
+                      ? editorHighlightTarget
+                      : null
+                  }
+                  onNavigationComplete={handleNavigationComplete}
+                  onHighlightComplete={handleHighlightComplete}
+                />
+              )
             ) : (
               <div className="editor-empty">
                 <BrandMark size={54} className="editor-empty-brand" />

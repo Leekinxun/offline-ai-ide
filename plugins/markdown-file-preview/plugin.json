@@ -1,0 +1,9 @@
+{
+  "id": "example.markdown-file-preview",
+  "name": "Example Markdown File Preview",
+  "version": "1.0.0",
+  "permissions": ["editor.preview"],
+  "description": "Zero-build external plugin example that adds Markdown file preview support.",
+  "author": "AI IDE",
+  "entry": "index.js"
+}

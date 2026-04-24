@@ -535,10 +535,11 @@ export const Editor: React.FC<EditorProps> = ({
     () => () => {
       pluginCleanupRef.current?.();
       pluginCleanupRef.current = null;
+      editorRef.current = null;
       clearHighlights();
       clearSymbolHighlights();
     },
-    [clearHighlights, clearSymbolHighlights]
+    [clearHighlights, clearSymbolHighlights, editorRef]
   );
 
   useEffect(() => {

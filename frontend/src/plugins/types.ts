@@ -81,6 +81,27 @@ export type EditorMountHandler = (
   context: EditorMountContext
 ) => void | (() => void);
 
+export type FilePreviewMode = "edit" | "preview" | "split";
+
+export interface FilePreviewMatchContext {
+  path: string;
+  content: string;
+  language: string;
+}
+
+export interface FilePreviewRenderContext extends FilePreviewMatchContext {
+  React: typeof React;
+  theme: "light" | "dark";
+}
+
+export interface FilePreviewRenderer {
+  id: string;
+  priority?: number;
+  defaultMode?: FilePreviewMode;
+  matches: (context: FilePreviewMatchContext) => boolean;
+  render: (context: FilePreviewRenderContext) => React.ReactNode | null;
+}
+
 export interface LocaleMessageDictionary {
   [key: string]: string;
 }
@@ -112,6 +133,7 @@ export interface PluginActivationContext {
   editor: {
     registerSetup: (setup: EditorSetupHandler) => void;
     registerMountHandler: (handler: EditorMountHandler) => void;
+    registerPreviewRenderer: (renderer: FilePreviewRenderer) => void;
   };
   commands: {
     registerCommand: (command: PluginCommandDefinition) => void;

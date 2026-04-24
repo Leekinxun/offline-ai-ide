@@ -8,6 +8,9 @@ import type {
   EditorMountHandler,
   EditorSetupHandler,
   ExternalPluginManifest,
+  FilePreviewMatchContext,
+  FilePreviewRenderer,
+  FilePreviewRenderContext,
   LocaleBundle,
   LocaleMessageDictionary,
   PluginActivationContext,
@@ -36,8 +39,13 @@ interface RegisteredEditorMountHandler {
   handler: EditorMountHandler;
 }
 
+interface RegisteredFilePreviewRenderer extends FilePreviewRenderer {
+  pluginId: string;
+}
+
 const chatTextRenderers: RegisteredChatTextRenderer[] = [];
 const editorMountHandlers: RegisteredEditorMountHandler[] = [];
+const filePreviewRenderers: RegisteredFilePreviewRenderer[] = [];
 const registeredPluginCommands: RegisteredPluginCommand[] = [];
 const pluginLoadStates: PluginLoadState[] = [];
 const localeBundles = new Map<string, LocaleBundle>();
@@ -84,6 +92,27 @@ function registerEditorMountHandler(
   handler: EditorMountHandler
 ): void {
   editorMountHandlers.push({ pluginId, handler });
+}
+
+function registerFilePreviewRenderer(
+  pluginId: string,
+  renderer: FilePreviewRenderer
+): void {
+  if (!renderer.id.trim()) {
+    throw new Error("File preview renderers require a non-empty id");
+  }
+
+  filePreviewRenderers.push({
+    ...renderer,
+    id: renderer.id.trim(),
+    pluginId,
+  });
+  filePreviewRenderers.sort(
+    (left, right) =>
+      (right.priority ?? 0) - (left.priority ?? 0) ||
+      left.pluginId.localeCompare(right.pluginId) ||
+      left.id.localeCompare(right.id)
+  );
 }
 
 function ensurePermission(
@@ -208,6 +237,10 @@ function createActivationContext(
       registerMountHandler(handler) {
         ensurePermission(manifest, "editor.mount");
         registerEditorMountHandler(manifest.id, handler);
+      },
+      registerPreviewRenderer(renderer) {
+        ensurePermission(manifest, "editor.preview");
+        registerFilePreviewRenderer(manifest.id, renderer);
       },
     },
     commands: {
@@ -462,4 +495,35 @@ export function runEditorMountHandlers(
       }
     }
   };
+}
+
+export function getMatchingFilePreviewRenderer(
+  context: FilePreviewMatchContext
+): FilePreviewRenderer | null {
+  for (const renderer of filePreviewRenderers) {
+    try {
+      if (renderer.matches(context)) {
+        return renderer;
+      }
+    } catch (error) {
+      console.error(
+        `[plugin:${renderer.pluginId}] file preview renderer "${renderer.id}" match failed`,
+        error
+      );
+    }
+  }
+
+  return null;
+}
+
+export function renderFilePreview(
+  renderer: FilePreviewRenderer,
+  context: Omit<FilePreviewRenderContext, "React">
+): React.ReactNode | null {
+  try {
+    return renderer.render({ ...context, React });
+  } catch (error) {
+    console.error("[plugin-runtime] file preview renderer failed", error);
+    return null;
+  }
 }

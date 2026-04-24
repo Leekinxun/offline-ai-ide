@@ -15,6 +15,10 @@ The first phase keeps the surface area intentionally small and stable:
 - `editor.registerMountHandler(handler)`
   - Runs every time an editor instance is mounted
   - Intended for editor actions, commands, decorations, listeners
+- `editor.registerPreviewRenderer(renderer)`
+  - Runs when the host needs a file preview renderer for the active tab
+  - Intended for rendered file experiences such as Markdown preview, design previews, or custom read-only views
+  - When a renderer matches the current file, the editor toolbar exposes `Edit / Preview / Split` modes automatically
 - `chat.registerTextRenderer(renderer)`
   - Renders non-code message fragments in the chat panel
   - Higher `priority` wins, so custom renderers can override the builtin Markdown renderer
@@ -34,6 +38,17 @@ The existing capabilities were moved behind builtin plugins:
   - Renders chat text with `react-markdown` and `remark-gfm`
 
 Builtin plugin entry files live under `frontend/src/plugins/builtin/`.
+
+## Shipped external example plugins
+
+The repository also includes a real external plugin example under the project-root `plugins/`
+directory so developers can copy and modify it directly:
+
+- `plugins/markdown-file-preview/`
+  - Zero-build external plugin example
+  - Registers `editor.registerPreviewRenderer(...)`
+  - Adds Markdown file preview with `Edit / Preview / Split` modes
+  - Shows how to keep rendering logic and styling inside the plugin itself
 
 ## External plugin layout
 
@@ -94,6 +109,9 @@ Current permissions:
 - `editor.mount`
   - Scope: `editor`
   - Allows `api.editor.registerMountHandler(...)`
+- `editor.preview`
+  - Scope: `editor`
+  - Allows `api.editor.registerPreviewRenderer(...)`
 - `command.register`
   - Scope: `command`
   - Allows `api.commands.registerCommand(...)`
@@ -150,8 +168,29 @@ export default function activate(api) {
 - `api.chat.registerTextRenderer(renderer)`
 - `api.editor.registerSetup(handler)`
 - `api.editor.registerMountHandler(handler)`
+- `api.editor.registerPreviewRenderer(renderer)`
 - `api.commands.registerCommand(command)`
 - `api.ui.registerLocaleBundle(bundle)`
+
+Example file preview registration:
+
+```js
+api.editor.registerPreviewRenderer({
+  id: "acme.markdown-preview.renderer",
+  priority: 100,
+  defaultMode: "split",
+  matches({ path, language }) {
+    return language === "markdown" || path.endsWith(".md");
+  },
+  render({ React, content }) {
+    return React.createElement(
+      "div",
+      { className: "file-preview-surface" },
+      React.createElement("pre", null, content)
+    );
+  },
+});
+```
 
 Example command registration:
 
@@ -187,6 +226,7 @@ api.ui.registerLocaleBundle({
 3. The frontend requests `/api/plugins` and loads the plugin entry from `/api/plugins/assets/...`
 
 No package registry or network install step is required.
+The repository already ships a working reference plugin at `plugins/markdown-file-preview/`.
 
 ## Enable / disable plugins
 
@@ -207,3 +247,4 @@ Treat plugins as trusted code and only install plugins from sources you trust.
 A copyable external plugin template is included at:
 
 - `docs/plugins/example-plugin/`
+- `plugins/markdown-file-preview/`

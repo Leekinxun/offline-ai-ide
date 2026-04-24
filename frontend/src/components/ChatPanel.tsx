@@ -101,6 +101,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -124,6 +125,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      const nativeEvent = e.nativeEvent as KeyboardEvent & {
+        isComposing?: boolean;
+        keyCode?: number;
+      };
+
+      if (
+        isComposingRef.current ||
+        nativeEvent.isComposing ||
+        nativeEvent.keyCode === 229
+      ) {
+        return;
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -141,6 +155,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     },
     []
   );
+
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+  }, []);
+
+  const handleCompositionEnd = useCallback(() => {
+    isComposingRef.current = false;
+  }, []);
 
   if (!visible) return null;
 
@@ -325,6 +347,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             rows={1}
           />
           <button
