@@ -1,6 +1,12 @@
 import { Router, Request, Response } from "express";
 import { sessionManager, UserSession } from "../auth/sessionManager.js";
-import { getLlmSettings, updateLlmSettings } from "../config.js";
+import {
+  clearPluginOverride,
+  getLlmSettings,
+  getPluginOverrides,
+  setPluginEnabled,
+  updateLlmSettings,
+} from "../config.js";
 
 export const adminRouter = Router();
 
@@ -47,7 +53,60 @@ adminRouter.get("/settings", (req, res) => {
     users: sessionManager.listUsers(),
     allowedRoots: sessionManager.getAllowedRoots(),
     llm: getLlmSettings(),
+    plugins: {
+      overrides: getPluginOverrides(),
+    },
   });
+});
+
+adminRouter.put("/plugins/:pluginId", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const pluginId =
+    typeof req.params.pluginId === "string" ? req.params.pluginId.trim() : "";
+  const enabled = req.body.enabled;
+
+  if (!pluginId || typeof enabled !== "boolean") {
+    return res.status(400).json({
+      error: "pluginId and a boolean enabled flag are required",
+    });
+  }
+
+  try {
+    const overrides = setPluginEnabled(pluginId, enabled);
+    res.json({
+      status: "ok",
+      pluginId,
+      enabled,
+      overrides,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.delete("/plugins/:pluginId", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const pluginId =
+    typeof req.params.pluginId === "string" ? req.params.pluginId.trim() : "";
+
+  if (!pluginId) {
+    return res.status(400).json({
+      error: "pluginId is required",
+    });
+  }
+
+  try {
+    const overrides = clearPluginOverride(pluginId);
+    res.json({
+      status: "ok",
+      pluginId,
+      overrides,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 adminRouter.post("/users", (req, res) => {

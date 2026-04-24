@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Crosshair,
 } from "lucide-react";
+import { useI18n } from "../i18n";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
   bash: <Terminal size={13} />,
@@ -58,6 +59,7 @@ export const ToolCallStep: React.FC<Props> = ({
   step,
   onNavigateToFileUpdate,
 }) => {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const isPending = step.result === undefined;
   const canJumpToEdit =
@@ -90,10 +92,10 @@ export const ToolCallStep: React.FC<Props> = ({
           <button
             className="tool-call-jump-btn"
             onClick={handleJump}
-            title="Jump to edited code"
+            title={t("toolCall.jumpToEditedCode")}
           >
             <Crosshair size={12} />
-            Jump
+            {t("toolCall.jump")}
           </button>
         )}
         {isPending && <Loader2 size={13} className="tool-call-spinner" />}

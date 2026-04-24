@@ -56,6 +56,8 @@ export interface ToolFileUpdate {
 // --- WebSocket message types (server -> client) ---
 
 export type WsServerMessage =
+  | { type: "conversation"; conversationId: string; created: boolean }
+  | { type: "conversation_updated"; conversationId: string; title: string }
   | { type: "thinking"; content: string }
   | { type: "tool_call"; toolCallId: string; name: string; input: Record<string, unknown> }
   | {

@@ -8,6 +8,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { SettingsModal } from "./components/SettingsModal";
+import { BrandMark } from "./components/BrandMark";
 import { useFileSystem } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
@@ -24,22 +25,43 @@ import {
   PanelLeft,
   MessageSquare,
   TerminalSquare,
-  Code2,
   LogOut,
   Settings,
+  Moon,
+  Sun,
 } from "lucide-react";
+import { useI18n } from "./i18n";
 import "./App.css";
 
 export default function App() {
+  const { t } = useI18n();
   const auth = useAuth();
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("theme");
+    return (saved as "light" | "dark") || "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  }, []);
 
   // Show loading while validating token
   if (auth.loading) {
     return (
       <div className="login-page">
         <div className="login-card" style={{ textAlign: "center", padding: 40 }}>
-          <Code2 size={32} style={{ color: "var(--accent)", marginBottom: 12 }} />
-          <div style={{ color: "var(--text-secondary)" }}>Loading...</div>
+          <BrandMark
+            size={56}
+            title="AI IDE"
+            subtitle={t("app.loadingWorkspace")}
+            stacked
+            className="loading-brand"
+          />
         </div>
       </div>
     );
@@ -58,6 +80,8 @@ export default function App() {
       isAdmin={auth.user.isAdmin}
       onLogout={auth.logout}
       onChangeWorkspace={auth.changeWorkspace}
+      theme={theme}
+      onToggleTheme={toggleTheme}
     />
   );
 }
@@ -69,6 +93,8 @@ interface AuthenticatedAppProps {
   isAdmin: boolean;
   onLogout: () => void;
   onChangeWorkspace: (path: string) => Promise<boolean>;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
 }
 
 interface EditorNavigationTarget extends FileSelectionRange {
@@ -108,7 +134,10 @@ function AuthenticatedApp({
   isAdmin,
   onLogout,
   onChangeWorkspace,
+  theme,
+  onToggleTheme,
 }: AuthenticatedAppProps) {
+  const { t } = useI18n();
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -134,6 +163,12 @@ function AuthenticatedApp({
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   const fs = useFileSystem(token);
+
+  // --- Toast ---
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  }, []);
 
   // --- Resize drag handling ---
   const handleResizeStart = useCallback(
@@ -178,9 +213,9 @@ function AuthenticatedApp({
       const tree = await fs.fetchTree();
       setFileTree(tree);
     } catch {
-      showToast("Failed to load file tree");
+      showToast(t("app.failedToLoadFileTree"));
     }
-  }, [fs]);
+  }, [fs, showToast, t]);
 
   useEffect(() => {
     loadTree();
@@ -193,13 +228,7 @@ function AuthenticatedApp({
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
     loadTree();
-  }, [workspaceDir]);
-
-  // --- Toast ---
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2500);
-  }, []);
+  }, [loadTree, workspaceDir]);
 
   const applyFileUpdateToTabs = useCallback(
     (update: FileUpdate, ensureOpen: boolean) => {
@@ -268,7 +297,7 @@ function AuthenticatedApp({
     );
   }, []);
 
-  const chat = useChat(token, handleAiFileUpdate);
+  const chat = useChat(token, workspaceDir, handleAiFileUpdate);
 
   // --- File operations ---
   const openFile = useCallback(
@@ -283,7 +312,7 @@ function AuthenticatedApp({
         const content = await fs.readFile(path);
         const name = path.split("/").pop() || path;
         const language = getLanguage(name);
-        const newFile: OpenFile = {
+      const newFile: OpenFile = {
           path,
           name,
           content,
@@ -293,10 +322,10 @@ function AuthenticatedApp({
         setOpenFiles((prev) => [...prev, newFile]);
         setActiveFilePath(path);
       } catch {
-        showToast("Failed to open file");
+        showToast(t("app.failedToOpenFile"));
       }
     },
-    [openFiles, fs, showToast]
+    [openFiles, fs, showToast, t]
   );
 
   const handleNavigateToLocation = useCallback(
@@ -358,11 +387,11 @@ function AuthenticatedApp({
           f.path === activeFilePath ? { ...f, modified: false } : f
         )
       );
-      showToast("File saved");
+      showToast(t("app.fileSaved"));
     } catch {
-      showToast("Failed to save file");
+      showToast(t("app.failedToSaveFile"));
     }
-  }, [activeFilePath, openFiles, fs, showToast]);
+  }, [activeFilePath, openFiles, fs, showToast, t]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -473,9 +502,9 @@ function AuthenticatedApp({
   const handleDownloadEntry = useCallback(
     async (path: string, type: FileNode["type"]) => {
       const filename = await fs.downloadEntry(path, type);
-      showToast(`Downloaded ${filename}`);
+      showToast(t("app.downloaded", { filename }));
     },
-    [fs, showToast]
+    [fs, showToast, t]
   );
 
   // --- Selection tracking ---
@@ -490,7 +519,7 @@ function AuthenticatedApp({
   const handleApplyCode = useCallback(
     (code: string) => {
       if (!activeFilePath || !editorRef.current) {
-        showToast("No file open to apply code to");
+        showToast(t("app.noFileOpenToApply"));
         return;
       }
       const editor = editorRef.current;
@@ -508,9 +537,9 @@ function AuthenticatedApp({
           ]);
         }
       }
-      showToast("Code applied");
+      showToast(t("app.codeApplied"));
     },
-    [activeFilePath, showToast]
+    [activeFilePath, showToast, t]
   );
 
   // --- Chat: send with file + selection context ---
@@ -545,12 +574,12 @@ function AuthenticatedApp({
     async (path: string) => {
       const ok = await onChangeWorkspace(path);
       if (ok) {
-        showToast("Workspace changed");
+        showToast(t("app.workspaceChanged"));
       } else {
-        showToast("Failed to change workspace");
+        showToast(t("app.failedToChangeWorkspace"));
       }
     },
-    [onChangeWorkspace, showToast]
+    [onChangeWorkspace, showToast, t]
   );
 
   // --- Global keyboard shortcuts ---
@@ -581,60 +610,72 @@ function AuthenticatedApp({
       {/* Title Bar */}
       <div className="titlebar">
         <div className="titlebar-left">
-          <Code2 size={18} style={{ color: "var(--accent)" }} />
-          <span className="titlebar-logo">AI IDE</span>
+          <BrandMark
+            size={22}
+            title="AI IDE"
+            subtitle={t("app.offline")}
+            className="titlebar-brand"
+          />
         </div>
         <div className="titlebar-right">
           <span className="user-badge">{username}</span>
-          {isAdmin && (
-            <button
-              className={`titlebar-btn${settingsVisible ? " active" : ""}`}
-              onClick={() => setSettingsVisible(true)}
-              title="Admin Settings"
-            >
-              <Settings size={17} />
-            </button>
-          )}
+          <button
+            className={`titlebar-btn${settingsVisible ? " active" : ""}`}
+            onClick={() => setSettingsVisible(true)}
+            title={t("app.settings")}
+          >
+            <Settings size={17} />
+          </button>
+          <button
+            className="titlebar-btn"
+            onClick={onToggleTheme}
+            title={
+              theme === "light"
+                ? t("app.switchToDarkTheme")
+                : t("app.switchToLightTheme")
+            }
+          >
+            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+          </button>
           <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
             onClick={() => setSidebarVisible((v) => !v)}
-            title="Toggle Sidebar (Cmd+B)"
+            title={t("app.toggleSidebar")}
           >
             <PanelLeft size={17} />
           </button>
           <button
             className={`titlebar-btn${terminalVisible ? " active" : ""}`}
             onClick={() => setTerminalVisible((v) => !v)}
-            title="Toggle Terminal (Cmd+`)"
+            title={t("app.toggleTerminal")}
           >
             <TerminalSquare size={17} />
           </button>
           <button
             className={`titlebar-btn${chatVisible ? " active" : ""}`}
             onClick={() => setChatVisible((v) => !v)}
-            title="Toggle AI Chat (Cmd+J)"
+            title={t("app.toggleAiChat")}
           >
             <MessageSquare size={17} />
           </button>
           <button
             className="titlebar-btn"
             onClick={onLogout}
-            title="Logout"
+            title={t("app.logout")}
           >
             <LogOut size={17} />
           </button>
         </div>
       </div>
 
-      {isAdmin && (
-        <SettingsModal
-          token={token}
-          currentUsername={username}
-          visible={settingsVisible}
-          onClose={() => setSettingsVisible(false)}
-          onShowToast={showToast}
-        />
-      )}
+      <SettingsModal
+        token={token}
+        currentUsername={username}
+        isAdmin={isAdmin}
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+        onShowToast={showToast}
+      />
 
       {/* Main Layout */}
       <div className="main-layout">
@@ -673,6 +714,7 @@ function AuthenticatedApp({
                 content={activeFile.content}
                 language={activeFile.language}
                 path={activeFile.path}
+                theme={theme}
                 openFiles={openFiles}
                 onChange={handleEditorChange}
                 onSave={saveFile}
@@ -695,9 +737,9 @@ function AuthenticatedApp({
               />
             ) : (
               <div className="editor-empty">
-                <Code2 className="editor-empty-icon" size={48} />
+                <BrandMark size={54} className="editor-empty-brand" />
                 <span className="editor-empty-text">
-                  Open a file to start editing
+                  {t("app.openFileToStart")}
                 </span>
               </div>
             )}
@@ -716,13 +758,20 @@ function AuthenticatedApp({
 
         <ChatPanel
           messages={chat.messages}
+          currentConversationId={chat.currentConversationId}
+          conversations={chat.conversations}
           isStreaming={chat.isStreaming}
           connected={chat.connected}
           visible={chatVisible}
+          historyLoading={chat.historyLoading}
+          historyLoadingId={chat.historyLoadingId}
+          historyError={chat.historyError}
           selectionInfo={selectionInfo}
           activeFileName={activeFile?.name || null}
           onSend={handleChatSend}
           onClear={chat.clearMessages}
+          onLoadConversation={chat.loadConversation}
+          onRefreshConversations={chat.refreshConversations}
           onApplyCode={handleApplyCode}
           onNavigateToFileUpdate={handleNavigateToFileUpdate}
           style={chatVisible ? { width: chatWidth } : undefined}

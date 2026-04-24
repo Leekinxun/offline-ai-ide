@@ -2,9 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
-import { registerEditorTheme } from "./editor/theme";
-import { registerComponentLanguages } from "./editor/componentLanguages";
-import { registerSemanticTokensProviders } from "./editor/semanticTokens";
+import { I18nProvider } from "./i18n";
+import { initializePluginRuntime } from "./plugins/runtime";
 
 // Configure Monaco to use local bundle (offline support)
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
@@ -34,15 +33,18 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
-registerEditorTheme();
-registerComponentLanguages();
-registerSemanticTokensProviders();
-
-// Import app
 import App from "./App";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+async function bootstrap() {
+  await initializePluginRuntime();
+
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <I18nProvider>
+        <App />
+      </I18nProvider>
+    </React.StrictMode>
+  );
+}
+
+void bootstrap();

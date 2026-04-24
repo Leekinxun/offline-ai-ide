@@ -1,6 +1,10 @@
 # AI IDE
 
-> 当前版本：`v0.3.2`
+<p align="center">
+  <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
+</p>
+
+> 当前版本：`v0.4.0`
 >
 > 发布时间：`2026-04-24`
 
@@ -14,6 +18,13 @@
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.4.0 · 2026-04-24
+
+- 新增轻量级 **插件系统**，支持内置插件、外部插件、本地 `plugins/` 目录离线安装、权限/作用域声明，以及界面内的插件管理
+- 将 **Monaco 高亮** 和 **聊天 Markdown 渲染** 重构为内置插件，便于后续独立维护和扩展
+- 新增内置 **界面国际化插件**，可在设置中切换英文 / 简体中文，并补齐 Monaco 在暗色主题下的联动切换
+- 新增按工作区存储的 **历史对话持久化**，数据写入 `.history/`，支持查看历史、继续对话、模型自动生成标题，并自动只保留最近 5 个会话
 
 ### v0.3.2 · 2026-04-24
 
@@ -38,17 +49,19 @@
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.3.2` 是当前 README 记录的最新版本，包含更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化，以及编辑器回归样例文件。
+`v0.4.0` 是当前 README 记录的最新版本，在 `v0.3.x` 的基础上新增了插件系统、内置国际化、Monaco 暗色主题适配和历史对话持久化。
 
 ## 功能特性
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
 - **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页，以及 Ctrl/Cmd 点击符号跳转
+- **插件系统** — 提供类似 VS Code 的轻量插件模式，支持内置/外部插件、显式权限与作用域、本地 `plugins/` 离线安装，以及界面内插件管理
 - **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令
+- **历史对话持久化** — 每个工作区会在 `.history/` 下保存 `.jsonl` 会话文件，支持继续历史对话，并自动只保留最近 5 个会话
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda
 - **文件浏览器** — 树形文件管理，支持新建、重命名、下载、批量删除、文件夹 zip 下载，以及"打开文件夹"功能（运行时切换工作区）
-- **管理员设置页** — 可在界面中管理用户、重置密码，并配置 LLM 的 URL / API Key / Model / Max Tokens
+- **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens，并切换英文 / 简体中文界面语言
 - **多用户认证** — 登录页面支持用户名/密码认证，底层由 `users.json` 和内置管理员设置页共同管理；每个用户拥有独立会话（独立的工作区、终端、AI 上下文）
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作
 - **任务看板** — 创建、分配、跟踪跨智能体任务
@@ -121,10 +134,22 @@ npm run dev
 打开 http://localhost:5173（Vite 开发服务器会自动代理 API 请求到后端）。
 
 本地开发模式下，通过管理员设置页保存的 LLM 配置默认会写入项目根目录的 `app-settings.json`。
+`users.json` 也会默认从项目根目录自动检测；每个工作区的历史对话会保存在 `<workspace>/.history/` 下。
 
 ### 编辑器高亮样例
 
 如需快速做一次编辑器高亮回归检查，可以直接打开 [`docs/editor-samples/`](docs/editor-samples/README.md) 下的样例文件。当前样例覆盖 Python 语义绑定、TypeScript、React TSX 和 Vue `<script setup lang="ts">` 场景。
+
+### 插件系统
+
+前端现在支持一套轻量插件架构，设计目标是便于维护和离线扩展：
+
+- 内置插件随应用一起发布，可在设置中启用/禁用
+- 外部插件从本地 `plugins/` 目录发现并加载，无需联网安装
+- 插件在激活前必须声明显式权限，并自动推导展示作用域
+- 当前的编辑器高亮和聊天 Markdown 渲染都已经迁移为内置插件
+
+插件清单格式、宿主 API、权限模型和离线安装方式请参考 [`docs/plugins/README.md`](docs/plugins/README.md)。
 
 ## 配置说明
 
@@ -148,8 +173,10 @@ npm run dev
 |------|------|
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
 | `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens 等运行时设置 |
+| `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
 
 如果你使用 Docker 并希望这些设置在重建容器后仍然保留，建议通过挂载文件或卷的方式持久化这两个配置文件。
+本地开发时，`users.json` 和 `app-settings.json` 的默认位置都是项目根目录。
 
 ### 用户管理
 
@@ -189,6 +216,14 @@ LLM 运行时配置同样支持两种方式：
 
 通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。
 
+### 历史对话
+
+- 历史对话按工作区保存在 `.history/` 目录下
+- 每个会话对应一个 `.jsonl` 文件
+- 新会话会优先使用大模型自动生成一个简短标题
+- 聊天面板内可以直接查看历史列表并继续对话
+- 为避免无限增长，系统会自动只保留最近 5 个会话
+
 ## 项目架构
 
 ```
@@ -203,12 +238,17 @@ ai-ide/
 │       │   ├── messageBus.ts
 │       │   └── teammateManager.ts
 │       ├── auth/            # 会话管理与中间件
+│       ├── chat/            # 历史对话持久化与标题生成
 │       ├── routes/          # REST API（文件操作、认证）
+│       ├── plugins/         # 插件清单校验与注册表
 │       └── ws/              # WebSocket 处理（聊天、终端）
 ├── frontend/                # React + Vite 单页应用
 │   └── src/
 │       ├── components/      # Sidebar、Editor、ChatPanel、Terminal 等
+│       ├── i18n/            # 界面国际化 Provider 与文案包
+│       ├── plugins/         # 前端插件运行时与内置插件
 │       └── hooks/           # useAuth、useChat、useFileSystem
+├── plugins/                 # 支持离线安装的外部插件目录
 ├── users.json               # 用户凭证与允许路径配置
 ├── app-settings.json        # 管理员设置页持久化的 LLM 配置
 ├── Dockerfile               # 多阶段构建（Node + Conda + 开发工具）

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   KeyRound,
+  Languages,
   Save,
   Settings,
   Shield,
@@ -9,11 +10,14 @@ import {
   X,
 } from "lucide-react";
 import { useAdminSettings } from "../hooks/useAdminSettings";
+import { useI18n } from "../i18n";
 import { AdminSettings, AdminUser, LlmSettings } from "../types";
+import { PluginManagerPanel } from "./PluginManagerPanel";
 
 interface SettingsModalProps {
   token: string;
   currentUsername: string;
+  isAdmin: boolean;
   visible: boolean;
   onClose: () => void;
   onShowToast: (message: string) => void;
@@ -31,6 +35,7 @@ interface LlmFormState {
   vllmApiKey: string;
   modelName: string;
   maxTokens: string;
+  systemPrompt: string;
 }
 
 const EMPTY_CREATE_USER_FORM: CreateUserForm = {
@@ -45,6 +50,7 @@ const EMPTY_LLM_FORM: LlmFormState = {
   vllmApiKey: "",
   modelName: "",
   maxTokens: "8192",
+  systemPrompt: "",
 };
 
 function buildDefaultWorkspace(username: string, allowedRoots: string[]): string {
@@ -57,10 +63,12 @@ function buildDefaultWorkspace(username: string, allowedRoots: string[]): string
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   token,
   currentUsername,
+  isAdmin,
   visible,
   onClose,
   onShowToast,
 }) => {
+  const { locale, locales, setLocale, t } = useI18n();
   const adminSettings = useAdminSettings(token);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,23 +95,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiKey: data.llm.vllmApiKey,
         modelName: data.llm.modelName,
         maxTokens: String(data.llm.maxTokens),
+        systemPrompt: data.llm.systemPrompt || "",
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load settings");
+      setError(e instanceof Error ? e.message : t("settings.failedToLoadSettings"));
     } finally {
       setLoading(false);
     }
-  }, [adminSettings]);
+  }, [adminSettings, t]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !isAdmin) return;
     void loadSettings();
-  }, [visible, loadSettings]);
+  }, [visible, isAdmin, loadSettings]);
 
   const allowedRootsText = useMemo(() => {
-    if (!settings?.allowedRoots.length) return "No allowed roots configured";
+    if (!settings?.allowedRoots.length) {
+      return t("settings.noAllowedRootsConfigured");
+    }
     return settings.allowedRoots.join(" · ");
-  }, [settings]);
+  }, [settings, t]);
   const adminCount = useMemo(
     () => settings?.users.filter((user) => user.isAdmin).length || 0,
     [settings]
@@ -122,7 +133,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       buildDefaultWorkspace(username, settings.allowedRoots);
 
     if (!username || !password || !defaultWorkspace) {
-      setError("Username, password and default workspace are required");
+      setError(t("settings.usernamePasswordWorkspaceRequired"));
       return;
     }
 
@@ -137,9 +148,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       });
       setCreateForm(EMPTY_CREATE_USER_FORM);
       await loadSettings();
-      onShowToast(`User ${username} created`);
+      onShowToast(t("settings.userCreated", { username }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create user");
+      setError(e instanceof Error ? e.message : t("settings.failedToCreateUser"));
     } finally {
       setCreatingUser(false);
     }
@@ -147,16 +158,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleDeleteUser = async (user: AdminUser) => {
     if (deletingUsername) return;
-    if (!window.confirm(`Delete user "${user.username}"?`)) return;
+    if (!window.confirm(t("settings.confirmDeleteUser", { username: user.username }))) {
+      return;
+    }
 
     setDeletingUsername(user.username);
     setError(null);
     try {
       await adminSettings.deleteUser(user.username);
       await loadSettings();
-      onShowToast(`User ${user.username} deleted`);
+      onShowToast(t("settings.userDeleted", { username: user.username }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete user");
+      setError(e instanceof Error ? e.message : t("settings.failedToDeleteUser"));
     } finally {
       setDeletingUsername(null);
     }
@@ -169,11 +182,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setError(null);
     try {
       await adminSettings.updateUserPassword(passwordTarget.username, nextPassword);
-      onShowToast(`Password updated for ${passwordTarget.username}`);
+      onShowToast(
+        t("settings.passwordUpdatedFor", {
+          username: passwordTarget.username,
+        })
+      );
       setPasswordTarget(null);
       setNextPassword("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update password");
+      setError(e instanceof Error ? e.message : t("settings.failedToUpdatePassword"));
     } finally {
       setUpdatingPassword(false);
     }
@@ -190,15 +207,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       vllmApiKey: llmForm.vllmApiKey,
       modelName: llmForm.modelName.trim(),
       maxTokens,
+      systemPrompt: llmForm.systemPrompt.trim(),
     };
 
     if (!payload.vllmApiUrl || !payload.modelName) {
-      setError("LLM API URL and model name are required");
+      setError(t("settings.llmApiUrlAndModelRequired"));
       return;
     }
 
     if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
-      setError("Max tokens must be a positive integer");
+      setError(t("settings.maxTokensPositiveInteger"));
       return;
     }
 
@@ -211,11 +229,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiKey: saved.vllmApiKey,
         modelName: saved.modelName,
         maxTokens: String(saved.maxTokens),
+        systemPrompt: saved.systemPrompt || "",
       });
       setSettings((prev) => (prev ? { ...prev, llm: saved } : prev));
-      onShowToast("LLM settings saved");
+      onShowToast(t("settings.llmSettingsSaved"));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save LLM settings");
+      setError(e instanceof Error ? e.message : t("settings.failedToSaveLlmSettings"));
     } finally {
       setSavingLlm(false);
     }
@@ -228,7 +247,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="settings-modal-header">
             <div className="settings-modal-title">
               <Settings size={18} />
-              <span>Admin Settings</span>
+              <span>{t("settings.title")}</span>
             </div>
             <button className="settings-modal-close" onClick={onClose}>
               <X size={16} />
@@ -237,25 +256,67 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {error && <div className="settings-error-banner">{error}</div>}
 
-          {loading && !settings ? (
-            <div className="settings-loading">Loading settings...</div>
-          ) : (
-            <div className="settings-grid">
+          <div className="settings-grid">
+            <section className="settings-card">
+              <div className="settings-card-header">
+                <div className="settings-card-title">
+                  <Languages size={16} />
+                  <span>{t("settings.interface")}</span>
+                </div>
+                <span className="settings-card-meta">
+                  {t("settings.interfaceMeta")}
+                </span>
+              </div>
+
+              <div className="settings-form">
+                <label className="settings-field settings-field-wide">
+                  <span>{t("settings.language")}</span>
+                  <select
+                    className="settings-input"
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value)}
+                  >
+                    {locales.map((option) => (
+                      <option key={option.code} value={option.code}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="settings-help-text">{t("settings.languageHelp")}</div>
+              </div>
+            </section>
+
+            <PluginManagerPanel
+              visible={visible}
+              token={token}
+              isAdmin={isAdmin}
+              onShowToast={onShowToast}
+            />
+
+
+            {isAdmin && (
+              loading && !settings ? (
+                <section className="settings-card">
+                  <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
+                </section>
+              ) : (
+                <>
               <section className="settings-card">
                 <div className="settings-card-header">
                   <div className="settings-card-title">
                     <Shield size={16} />
-                    <span>User Management</span>
+                    <span>{t("settings.userManagement")}</span>
                   </div>
                   <span className="settings-card-meta">
-                    Allowed roots: {allowedRootsText}
+                    {t("settings.allowedRoots", { roots: allowedRootsText })}
                   </span>
                 </div>
 
                 <form className="settings-form" onSubmit={handleCreateUser}>
                   <div className="settings-form-row">
                     <label className="settings-field">
-                      <span>Username</span>
+                      <span>{t("settings.username")}</span>
                       <input
                         className="settings-input"
                         value={createForm.username}
@@ -269,7 +330,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       />
                     </label>
                     <label className="settings-field">
-                      <span>Password</span>
+                      <span>{t("settings.password")}</span>
                       <input
                         className="settings-input"
                         type="password"
@@ -280,14 +341,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             password: e.target.value,
                           }))
                         }
-                        placeholder="Initial password"
+                        placeholder={t("settings.initialPassword")}
                       />
                     </label>
                   </div>
 
                   <div className="settings-form-row">
                     <label className="settings-field settings-field-wide">
-                      <span>Default Workspace</span>
+                      <span>{t("settings.defaultWorkspace")}</span>
                       <input
                         className="settings-input"
                         value={createForm.defaultWorkspace}
@@ -319,7 +380,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }))
                         }
                       />
-                      <span>Create as administrator</span>
+                      <span>{t("settings.createAsAdministrator")}</span>
                     </label>
                     <button
                       className="dialog-btn primary"
@@ -327,7 +388,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       disabled={creatingUser}
                     >
                       <UserPlus size={14} />
-                      {creatingUser ? "Creating..." : "Add User"}
+                      {creatingUser ? t("settings.creating") : t("settings.addUser")}
                     </button>
                   </div>
                 </form>
@@ -339,10 +400,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div className="settings-user-name-row">
                           <span className="settings-user-name">{user.username}</span>
                           {user.isAdmin && (
-                            <span className="settings-role-badge">Admin</span>
+                            <span className="settings-role-badge">{t("settings.admin")}</span>
                           )}
                           {user.username === currentUsername && (
-                            <span className="settings-role-badge subtle">Current</span>
+                            <span className="settings-role-badge subtle">{t("settings.current")}</span>
                           )}
                         </div>
                         <div className="settings-user-path">
@@ -358,7 +419,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }}
                         >
                           <KeyRound size={14} />
-                          Change Password
+                          {t("settings.changePassword")}
                         </button>
                         <button
                           className="settings-inline-btn danger"
@@ -371,8 +432,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         >
                           <Trash2 size={14} />
                           {deletingUsername === user.username
-                            ? "Deleting..."
-                            : "Delete"}
+                            ? t("settings.deleting")
+                            : t("common.delete")}
                         </button>
                       </div>
                     </div>
@@ -384,16 +445,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="settings-card-header">
                   <div className="settings-card-title">
                     <Save size={16} />
-                    <span>LLM Configuration</span>
+                    <span>{t("settings.llmConfiguration")}</span>
                   </div>
                   <span className="settings-card-meta">
-                    Saved changes apply to new requests immediately
+                    {t("settings.llmMeta")}
                   </span>
                 </div>
 
                 <form className="settings-form" onSubmit={handleSaveLlm}>
                   <label className="settings-field settings-field-wide">
-                    <span>API URL</span>
+                    <span>{t("settings.apiUrl")}</span>
                     <input
                       className="settings-input"
                       value={llmForm.vllmApiUrl}
@@ -408,7 +469,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </label>
 
                   <label className="settings-field settings-field-wide">
-                    <span>API Key</span>
+                    <span>{t("settings.apiKey")}</span>
                     <input
                       className="settings-input"
                       type="password"
@@ -419,12 +480,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           vllmApiKey: e.target.value,
                         }))
                       }
-                      placeholder="Optional bearer token"
+                      placeholder={t("settings.optionalBearerToken")}
                     />
                   </label>
 
                   <label className="settings-field settings-field-wide">
-                    <span>Model Name</span>
+                    <span>{t("settings.modelName")}</span>
                     <input
                       className="settings-input"
                       value={llmForm.modelName}
@@ -439,7 +500,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </label>
 
                   <label className="settings-field settings-field-wide">
-                    <span>Max Tokens</span>
+                    <span>{t("settings.maxTokens")}</span>
                     <input
                       className="settings-input"
                       type="number"
@@ -456,10 +517,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </label>
 
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.systemPrompt")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={6}
+                      value={llmForm.systemPrompt}
+                      onChange={(e) =>
+                        setLlmForm((prev) => ({
+                          ...prev,
+                          systemPrompt: e.target.value,
+                        }))
+                      }
+                      placeholder={t("settings.customSystemPromptPlaceholder")}
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                  </label>
+
                   <div className="settings-form-footer">
                     <span className="settings-help-text">
-                      API key can be empty if your endpoint does not require auth.
-                      Max tokens applies to new LLM requests, including subagents.
+                      {t("settings.llmHelp")}
                     </span>
                     <button
                       className="dialog-btn primary"
@@ -467,13 +544,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       disabled={savingLlm}
                     >
                       <Save size={14} />
-                      {savingLlm ? "Saving..." : "Save LLM Settings"}
+                      {savingLlm ? t("settings.saving") : t("settings.saveLlmSettings")}
                     </button>
                   </div>
                 </form>
               </section>
-            </div>
-          )}
+                </>
+              )
+            )}
+          </div>
         </div>
       </div>
 
@@ -491,14 +570,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="dialog-title">
-              Change Password: {passwordTarget.username}
+              {t("settings.changePasswordFor", {
+                username: passwordTarget.username,
+              })}
             </div>
             <input
               className="dialog-input"
               type="password"
               value={nextPassword}
               onChange={(e) => setNextPassword(e.target.value)}
-              placeholder="Enter new password"
+              placeholder={t("settings.enterNewPassword")}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -515,14 +596,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }}
                 disabled={updatingPassword}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className="dialog-btn primary"
                 onClick={() => void handleUpdatePassword()}
                 disabled={!nextPassword || updatingPassword}
               >
-                {updatingPassword ? "Saving..." : "Update Password"}
+                {updatingPassword ? t("settings.saving") : t("settings.updatePassword")}
               </button>
             </div>
           </div>

@@ -1,13 +1,37 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ChatMessage, FileContext, FileUpdate } from "../types";
+import {
+  ChatMessage,
+  ConversationSummary,
+  FileContext,
+  FileUpdate,
+} from "../types";
+import { useI18n } from "../i18n";
+
+interface ConversationsResponse {
+  conversations?: ConversationSummary[];
+}
+
+interface ConversationDetailResponse {
+  id: string;
+  messages?: ChatMessage[];
+}
 
 export function useChat(
   token: string,
+  workspaceDir: string,
   onFileUpdate?: (update: FileUpdate) => void
 ) {
+  const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(
+    null
+  );
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
@@ -15,6 +39,37 @@ export function useChat(
   useEffect(() => {
     onFileUpdateRef.current = onFileUpdate;
   }, [onFileUpdate]);
+
+  const refreshConversations = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+
+    try {
+      const response = await fetch("/api/chat/conversations", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Failed to load conversations");
+      }
+
+      const payload = (await response.json()) as ConversationsResponse;
+      setConversations(
+        Array.isArray(payload.conversations) ? payload.conversations : []
+      );
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : t("chat.failedToLoadHistory")
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [token]);
 
   // Helper: update the last assistant message
   const updateLastAssistant = useCallback(
@@ -59,6 +114,15 @@ export function useChat(
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       switch (data.type) {
+        case "conversation":
+          setCurrentConversationId(data.conversationId);
+          void refreshConversations();
+          break;
+
+        case "conversation_updated":
+          void refreshConversations();
+          break;
+
         case "token":
           updateLastAssistant((msg) => ({
             ...msg,
@@ -108,6 +172,7 @@ export function useChat(
 
         case "done":
           setIsStreaming(false);
+          void refreshConversations();
           break;
 
         case "error":
@@ -116,12 +181,13 @@ export function useChat(
             content: msg.content || `Error: ${data.content}`,
           }));
           setIsStreaming(false);
+          void refreshConversations();
           break;
       }
     };
 
     wsRef.current = ws;
-  }, [updateLastAssistant, token]);
+  }, [refreshConversations, updateLastAssistant, token]);
 
   useEffect(() => {
     connect();
@@ -130,6 +196,13 @@ export function useChat(
       wsRef.current?.close();
     };
   }, [connect]);
+
+  useEffect(() => {
+    setMessages([]);
+    setCurrentConversationId(null);
+    setHistoryError(null);
+    void refreshConversations();
+  }, [refreshConversations, workspaceDir]);
 
   const sendMessage = useCallback(
     (content: string, context?: FileContext) => {
@@ -159,15 +232,66 @@ export function useChat(
           message: content,
           context,
           history,
+          conversationId: currentConversationId,
         })
       );
     },
-    [messages]
+    [currentConversationId, messages]
   );
 
   const clearMessages = useCallback(() => {
     setMessages([]);
+    setCurrentConversationId(null);
   }, []);
 
-  return { messages, sendMessage, clearMessages, isStreaming, connected };
+  const loadConversation = useCallback(
+    async (conversationId: string) => {
+      setHistoryLoadingId(conversationId);
+      setHistoryError(null);
+
+      try {
+        const response = await fetch(
+          `/api/chat/conversations/${encodeURIComponent(conversationId)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || "Failed to load conversation");
+        }
+
+        const payload = (await response.json()) as ConversationDetailResponse;
+        setMessages(Array.isArray(payload.messages) ? payload.messages : []);
+        setCurrentConversationId(payload.id || conversationId);
+      } catch (error) {
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : t("chat.failedToLoadConversation")
+        );
+      } finally {
+        setHistoryLoadingId(null);
+      }
+    },
+    [t, token]
+  );
+
+  return {
+    messages,
+    sendMessage,
+    clearMessages,
+    isStreaming,
+    connected,
+    currentConversationId,
+    conversations,
+    historyLoading,
+    historyLoadingId,
+    historyError,
+    refreshConversations,
+    loadConversation,
+  };
 }

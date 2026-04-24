@@ -5,9 +5,26 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { ChatMessage, FileUpdate, SelectionInfo } from "../types";
-import { Send, Trash2, Copy, ArrowDownToLine, X, TextSelect, ChevronRight } from "lucide-react";
+import {
+  ChatMessage,
+  ConversationSummary,
+  FileUpdate,
+  SelectionInfo,
+} from "../types";
+import {
+  Send,
+  Trash2,
+  Copy,
+  ArrowDownToLine,
+  TextSelect,
+  ChevronRight,
+  History,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
+import { useI18n } from "../i18n";
+import { renderChatTextPart } from "../plugins/runtime";
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
@@ -40,13 +57,20 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 
 interface ChatPanelProps {
   messages: ChatMessage[];
+  currentConversationId: string | null;
+  conversations: ConversationSummary[];
   isStreaming: boolean;
   connected: boolean;
   visible: boolean;
+  historyLoading: boolean;
+  historyLoadingId: string | null;
+  historyError: string | null;
   selectionInfo: SelectionInfo | null;
   activeFileName: string | null;
   onSend: (message: string) => void;
   onClear: () => void;
+  onLoadConversation: (conversationId: string) => Promise<void> | void;
+  onRefreshConversations: () => Promise<void> | void;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
   style?: React.CSSProperties;
@@ -54,24 +78,39 @@ interface ChatPanelProps {
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   messages,
+  currentConversationId,
+  conversations,
   isStreaming,
   connected,
   visible,
+  historyLoading,
+  historyLoadingId,
+  historyError,
   selectionInfo,
   activeFileName,
   onSend,
   onClear,
+  onLoadConversation,
+  onRefreshConversations,
   onApplyCode,
   onNavigateToFileUpdate,
   style,
 }) => {
+  const { locale, t } = useI18n();
   const [input, setInput] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!visible) {
+      setHistoryOpen(false);
+    }
+  }, [visible]);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
@@ -108,29 +147,125 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const selectionLineCount = selectionInfo
     ? selectionInfo.endLine - selectionInfo.startLine + 1
     : 0;
+  const lineLabel = t(selectionLineCount === 1 ? "chat.line" : "chat.lines");
+  const formatTimestamp = useCallback(
+    (value: number) =>
+      new Date(value).toLocaleString(locale === "zh-CN" ? "zh-CN" : "en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    [locale]
+  );
 
   return (
     <div className="chat-panel" style={style}>
       <div className="chat-header">
-        <span className="chat-header-title">AI Assistant</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="chat-header-main">
+          <span className="chat-header-title">{t("chat.title")}</span>
+          {currentConversationId && (
+            <span className="chat-conversation-pill">
+              {t("chat.continuingConversation")}
+            </span>
+          )}
+        </div>
+        <div className="chat-header-actions">
           <div className="chat-status">
             <span
               className={`chat-status-dot${connected ? " connected" : ""}`}
             />
-            {connected ? "Online" : "Offline"}
+            {connected ? t("chat.online") : t("chat.offline")}
           </div>
+          <button
+            className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
+            title={t("chat.history")}
+            onClick={() => setHistoryOpen((open) => !open)}
+            disabled={isStreaming}
+          >
+            <History size={14} />
+          </button>
           {messages.length > 0 && (
             <button
               className="sidebar-action-btn"
-              title="Clear chat"
+              title={t("chat.clearChat")}
               onClick={onClear}
+              disabled={isStreaming}
             >
               <Trash2 size={14} />
             </button>
           )}
         </div>
       </div>
+
+      {historyOpen && (
+        <div className="chat-history-panel">
+          <div className="chat-history-toolbar">
+            <button
+              className="chat-history-toolbar-btn primary"
+              onClick={() => {
+                onClear();
+                setHistoryOpen(false);
+              }}
+              disabled={isStreaming}
+            >
+              <Plus size={14} />
+              {t("chat.newConversation")}
+            </button>
+            <button
+              className="chat-history-toolbar-btn"
+              onClick={() => void onRefreshConversations()}
+              disabled={historyLoading}
+            >
+              <RefreshCw size={14} className={historyLoading ? "chat-spin" : ""} />
+              {t("chat.refreshHistory")}
+            </button>
+          </div>
+
+          {historyError && (
+            <div className="chat-history-message error">{historyError}</div>
+          )}
+
+          {conversations.length === 0 && !historyLoading ? (
+            <div className="chat-history-empty">{t("chat.noHistory")}</div>
+          ) : (
+            <div className="chat-history-list">
+              {conversations.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  className={`chat-history-item${
+                    conversation.id === currentConversationId ? " active" : ""
+                  }`}
+                  onClick={() => {
+                    void onLoadConversation(conversation.id);
+                    setHistoryOpen(false);
+                  }}
+                  disabled={historyLoadingId === conversation.id || isStreaming}
+                >
+                  <div className="chat-history-item-header">
+                    <span className="chat-history-item-title">
+                      {conversation.title || t("chat.untitledConversation")}
+                    </span>
+                    <span className="chat-history-item-time">
+                      {formatTimestamp(conversation.updatedAt)}
+                    </span>
+                  </div>
+                  {conversation.preview && (
+                    <div className="chat-history-item-preview">
+                      {conversation.preview}
+                    </div>
+                  )}
+                  <div className="chat-history-item-meta">
+                    {t("chat.messageCount", {
+                      count: conversation.messageCount,
+                    })}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="chat-messages">
         {messages.length === 0 && (
@@ -147,9 +282,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               lineHeight: 1.6,
             }}
           >
-            Ask me anything about your code.
+            {t("chat.emptyPrimary")}
             <br />
-            Select code in the editor to ask about it.
+            {t("chat.emptySecondary")}
           </div>
         )}
         {messages.map((msg, idx) => (
@@ -174,7 +309,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               {activeFileName} : L{selectionInfo.startLine}
               {selectionInfo.endLine !== selectionInfo.startLine &&
                 `-L${selectionInfo.endLine}`}{" "}
-              ({selectionLineCount} line{selectionLineCount > 1 ? "s" : ""})
+              ({selectionLineCount} {lineLabel})
             </span>
           </div>
         )}
@@ -184,8 +319,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             className="chat-input"
             placeholder={
               selectionInfo
-                ? "Ask about the selected code..."
-                : "Ask about your code..."
+                ? t("chat.askSelectedCode")
+                : t("chat.askYourCode")
             }
             value={input}
             onChange={handleInputChange}
@@ -196,7 +331,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             className="chat-send-btn"
             onClick={handleSend}
             disabled={!input.trim() || isStreaming || !connected}
-            title="Send (Enter)"
+            title={t("chat.sendShortcut")}
           >
             <Send size={16} />
           </button>
@@ -222,6 +357,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   onApplyCode,
   onNavigateToFileUpdate,
 }) => {
+  const { t } = useI18n();
   const parts = useMemo(
     () => parseContent(message.content),
     [message.content]
@@ -235,7 +371,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   return (
     <div className={`chat-message ${message.role}`}>
       <span className="chat-message-label">
-        {message.role === "user" ? "You" : "AI"}
+        {message.role === "user" ? t("chat.you") : t("chat.ai")}
       </span>
 
       {/* Thinking text (collapsible) */}
@@ -267,7 +403,9 @@ const MessageItem: React.FC<MessageItemProps> = ({
                 onApply={onApplyCode}
               />
             ) : (
-              <span key={i}>{part.content}</span>
+              <React.Fragment key={i}>
+                {renderChatTextPart(part.content, message)}
+              </React.Fragment>
             )
           )}
         </div>
@@ -277,6 +415,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
 };
 
 const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const preview = useMemo(() => {
     const first = content.split("\n")[0];
@@ -293,7 +432,7 @@ const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
           size={14}
           className={`chat-thinking-chevron${expanded ? " expanded" : ""}`}
         />
-        <span className="chat-thinking-label">Thinking</span>
+        <span className="chat-thinking-label">{t("chat.thinking")}</span>
         {!expanded && <span className="chat-thinking-preview">{preview}</span>}
       </div>
       {expanded && (
@@ -310,6 +449,7 @@ interface CodeBlockProps {
 }
 
 const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, onApply }) => {
+  const { t } = useI18n();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle"
   );
@@ -325,21 +465,21 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, onApply }) => {
       <div className="chat-code-header">
         <span>{language || "code"}</span>
         <div className="chat-code-actions">
-          <button className="chat-code-btn" onClick={handleCopy} title="Copy">
+          <button className="chat-code-btn" onClick={handleCopy} title={t("chat.copy")}>
             <Copy size={12} style={{ marginRight: 3 }} />
             {copyState === "copied"
-              ? "Copied"
+              ? t("chat.copied")
               : copyState === "failed"
-              ? "Retry"
-              : "Copy"}
+              ? t("chat.retry")
+              : t("chat.copy")}
           </button>
           <button
             className="chat-code-btn"
             onClick={() => onApply(code)}
-            title="Apply to editor"
+            title={t("chat.applyToEditor")}
           >
             <ArrowDownToLine size={12} style={{ marginRight: 3 }} />
-            Apply
+            {t("chat.apply")}
           </button>
         </div>
       </div>

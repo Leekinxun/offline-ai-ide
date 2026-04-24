@@ -1,0 +1,8 @@
+{
+  "id": "example.note-blocks",
+  "name": "Example Note Blocks",
+  "version": "1.0.0",
+  "permissions": ["chat.render", "editor.mount", "command.register"],
+  "description": "Example external plugin that customizes chat text rendering and editor actions.",
+  "entry": "index.js"
+}

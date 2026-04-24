@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Folder,
 } from "lucide-react";
+import { useI18n } from "../i18n";
 
 interface SidebarProps {
   tree: FileNode[];
@@ -65,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   token,
   style,
 }) => {
+  const { t } = useI18n();
   const [dialog, setDialog] = useState<{
     type: "file" | "folder" | "rename";
     parentPath?: string;
@@ -142,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleDelete = useCallback(
     async (node: FileNode) => {
       setContextMenu(null);
-      if (confirm(`Delete "${node.name}"?`)) {
+      if (confirm(t("sidebar.confirmDelete", { name: node.name }))) {
         await onDeleteEntry(node.path);
         setSelectedPaths((prev) =>
           prev.filter((path) => !isPathEqualOrDescendant(path, node.path))
@@ -150,7 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onRefreshTree();
       }
     },
-    [onDeleteEntry, onRefreshTree]
+    [onDeleteEntry, onRefreshTree, t]
   );
 
   const handleToggleSelection = useCallback((path: string, selected: boolean) => {
@@ -168,7 +170,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setContextMenu(null);
     if (
       !confirm(
-        `Delete ${selectedPaths.length} selected item${selectedPaths.length > 1 ? "s" : ""}?`
+        t("sidebar.confirmBatchDelete", {
+          count: selectedPaths.length,
+          suffix: selectedPaths.length > 1 ? "s" : "",
+        })
       )
     ) {
       return;
@@ -179,9 +184,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setSelectedPaths([]);
       onRefreshTree();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Batch delete failed");
+      alert(e instanceof Error ? e.message : t("sidebar.batchDeleteFailed"));
     }
-  }, [onDeleteEntries, onRefreshTree, selectedPaths]);
+  }, [onDeleteEntries, onRefreshTree, selectedPaths, t]);
 
   const handleDownload = useCallback(
     async (path: string, type: FileNode["type"]) => {
@@ -189,10 +194,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       try {
         await onDownloadEntry(path, type);
       } catch (e) {
-        alert(e instanceof Error ? e.message : "Download failed");
+        alert(e instanceof Error ? e.message : t("sidebar.downloadFailed"));
       }
     },
-    [onDownloadEntry]
+    [onDownloadEntry, t]
   );
 
   const handleDialogSubmit = useCallback(async () => {
@@ -209,10 +214,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
       onRefreshTree();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Operation failed");
+      alert(e instanceof Error ? e.message : t("sidebar.operationFailed"));
     }
     setDialog(null);
-  }, [dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree]);
+  }, [dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree, t]);
 
   // --- Folder browser ---
   const fetchDirectories = useCallback(
@@ -227,7 +232,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           `/api/auth/workspace/list?path=${encodeURIComponent(dir)}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
-        if (!res.ok) throw new Error("Failed to list directories");
+        if (!res.ok) throw new Error(t("sidebar.failedToListDirectories"));
         const data = await res.json();
         setFolderBrowser({
           currentPath: dir,
@@ -240,7 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         );
       }
     },
-    [token]
+    [t, token]
   );
 
   const openFolderBrowser = useCallback(() => {
@@ -277,25 +282,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <div className="sidebar" style={style}>
       <div className="sidebar-header">
-        <span className="sidebar-title">Explorer</span>
+        <span className="sidebar-title">{t("sidebar.explorer")}</span>
         <div className="sidebar-actions">
           <button
             className="sidebar-action-btn"
-            title="Open Folder"
+            title={t("sidebar.openFolder")}
             onClick={openFolderBrowser}
           >
             <FolderOpen size={15} />
           </button>
           <button
             className="sidebar-action-btn"
-            title="New File"
+            title={t("sidebar.newFile")}
             onClick={() => handleCreateFile()}
           >
             <FilePlus size={15} />
           </button>
           <button
             className="sidebar-action-btn"
-            title="New Folder"
+            title={t("sidebar.newFolder")}
             onClick={() => handleCreateFolder()}
           >
             <FolderPlus size={15} />
@@ -304,8 +309,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-action-btn"
             title={
               selectedPaths.length > 0
-                ? `Delete ${selectedPaths.length} selected`
-                : "Delete Selected"
+                ? t("sidebar.deleteSelectedCount", { count: selectedPaths.length })
+                : t("sidebar.deleteSelected")
             }
             onClick={() => void handleBatchDelete()}
             disabled={selectedPaths.length === 0}
@@ -320,20 +325,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {selectedPaths.length > 0 && (
         <div className="sidebar-selection-bar">
           <span className="sidebar-selection-text">
-            {selectedPaths.length} selected
+            {t("sidebar.selectedCount", { count: selectedPaths.length })}
           </span>
           <div className="sidebar-selection-actions">
             <button
               className="sidebar-selection-btn danger"
               onClick={() => void handleBatchDelete()}
             >
-              Delete
+              {t("common.delete")}
             </button>
             <button
               className="sidebar-selection-btn"
               onClick={() => setSelectedPaths([])}
             >
-              Clear
+              {t("common.clear")}
             </button>
           </div>
         </div>
@@ -362,13 +367,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="context-menu-item"
                 onClick={() => handleCreateFile(contextMenu.node.path)}
               >
-                <FilePlus size={14} /> New File
+                <FilePlus size={14} /> {t("sidebar.newFile")}
               </button>
               <button
                 className="context-menu-item"
                 onClick={() => handleCreateFolder(contextMenu.node.path)}
               >
-                <FolderPlus size={14} /> New Folder
+                <FolderPlus size={14} /> {t("sidebar.newFolder")}
               </button>
               <div className="context-menu-separator" />
             </>
@@ -379,19 +384,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
               void handleDownload(contextMenu.node.path, contextMenu.node.type)
             }
           >
-            <Download size={14} /> Download
+            <Download size={14} />{" "}
+            {contextMenu.node.type === "directory"
+              ? t("sidebar.downloadFolder")
+              : t("sidebar.downloadFile")}
           </button>
           <button
             className="context-menu-item"
             onClick={() => handleRename(contextMenu.node)}
           >
-            <Pencil size={14} /> Rename
+            <Pencil size={14} /> {t("common.rename")}
           </button>
           <button
             className="context-menu-item danger"
             onClick={() => handleDelete(contextMenu.node)}
           >
-            <Trash2 size={14} /> Delete
+            <Trash2 size={14} /> {t("common.delete")}
           </button>
         </div>
       )}
@@ -402,16 +410,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
             <div className="dialog-title">
               {dialog.type === "file"
-                ? "New File"
+                ? t("sidebar.dialogNewFile")
                 : dialog.type === "folder"
-                ? "New Folder"
-                : "Rename"}
+                ? t("sidebar.dialogNewFolder")
+                : t("sidebar.dialogRename")}
             </div>
             <input
               ref={dialogInputRef}
               className="dialog-input"
               placeholder={
-                dialog.type === "rename" ? "New name" : "Enter name..."
+                dialog.type === "rename"
+                  ? t("sidebar.newName")
+                  : t("sidebar.enterName")
               }
               value={dialogValue}
               onChange={(e) => setDialogValue(e.target.value)}
@@ -422,13 +432,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
             <div className="dialog-actions">
               <button className="dialog-btn" onClick={() => setDialog(null)}>
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className="dialog-btn primary"
                 onClick={handleDialogSubmit}
               >
-                {dialog.type === "rename" ? "Rename" : "Create"}
+                {dialog.type === "rename" ? t("common.rename") : t("common.create")}
               </button>
             </div>
           </div>
@@ -442,12 +452,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="dialog folder-browser"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="dialog-title">Open Folder</div>
+            <div className="dialog-title">{t("sidebar.openFolder")}</div>
             <div className="folder-browser-breadcrumb">
               <button
                 className="folder-browser-up"
                 onClick={handleFolderUp}
-                title="Go up"
+                title={t("sidebar.goUp")}
               >
                 ..
               </button>
@@ -457,9 +467,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="folder-browser-list">
               {folderBrowser.loading ? (
-                <div className="folder-browser-loading">Loading...</div>
+                <div className="folder-browser-loading">{t("common.loading")}</div>
               ) : folderBrowser.entries.length === 0 ? (
-                <div className="folder-browser-empty">No subdirectories</div>
+                <div className="folder-browser-empty">{t("sidebar.noSubdirectories")}</div>
               ) : (
                 folderBrowser.entries.map((entry) => (
                   <div
@@ -479,13 +489,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="dialog-btn"
                 onClick={() => setFolderBrowser(null)}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className="dialog-btn primary"
                 onClick={() => handleFolderSelect(folderBrowser.currentPath)}
               >
-                Open This Folder
+                {t("sidebar.openThisFolder")}
               </button>
             </div>
           </div>

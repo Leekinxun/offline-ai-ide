@@ -1,9 +1,14 @@
 import * as monaco from "monaco-editor";
 
-export const EDITOR_THEME_NAME = "offline-ai-light";
+export const EDITOR_THEME_LIGHT_NAME = "offline-ai-light";
+export const EDITOR_THEME_DARK_NAME = "offline-ai-dark";
+
+export function getEditorThemeName(theme: "light" | "dark"): string {
+  return theme === "dark" ? EDITOR_THEME_DARK_NAME : EDITOR_THEME_LIGHT_NAME;
+}
 
 export function registerEditorTheme(): void {
-  monaco.editor.defineTheme(EDITOR_THEME_NAME, {
+  monaco.editor.defineTheme(EDITOR_THEME_LIGHT_NAME, {
     base: "vs",
     inherit: true,
     rules: [
@@ -91,6 +96,97 @@ export function registerEditorTheme(): void {
       "scrollbarSlider.activeBackground": "#6C7B9566",
       "minimap.background": "#FBFBFD",
       "editorOverviewRuler.findMatchForeground": "#C9800099",
+    },
+  });
+
+  monaco.editor.defineTheme(EDITOR_THEME_DARK_NAME, {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "7F8EA3", fontStyle: "italic" },
+      { token: "keyword", foreground: "7AB7FF", fontStyle: "bold" },
+      { token: "operator", foreground: "C1CCDB" },
+      { token: "string", foreground: "67D4C7" },
+      { token: "string.escape", foreground: "8CC8FF" },
+      { token: "number", foreground: "F4C26B" },
+      { token: "regexp", foreground: "C9A6FF" },
+      { token: "type", foreground: "78D0E0" },
+      { token: "type.identifier", foreground: "78D0E0" },
+      { token: "typeParameter", foreground: "78D0E0" },
+      { token: "delimiter", foreground: "95A3B8" },
+      { token: "delimiter.bracket", foreground: "C7D0DD" },
+      { token: "predefined", foreground: "FFB27A" },
+      { token: "namespace", foreground: "C9A6FF" },
+      { token: "namespace.defaultLibrary", foreground: "C9A6FF", fontStyle: "italic" },
+      { token: "class", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "class.declaration", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "class.defaultLibrary", foreground: "78D0E0", fontStyle: "bold italic" },
+      { token: "interface", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "interface.declaration", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "enum", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "enum.declaration", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "type.declaration", foreground: "78D0E0", fontStyle: "bold" },
+      { token: "type.defaultLibrary", foreground: "78D0E0", fontStyle: "italic" },
+      { token: "typeParameter.declaration", foreground: "78D0E0", fontStyle: "italic" },
+      { token: "function", foreground: "F4B472" },
+      { token: "function.declaration", foreground: "F4B472", fontStyle: "bold" },
+      { token: "function.defaultLibrary", foreground: "F4B472", fontStyle: "italic" },
+      { token: "method", foreground: "F4B472" },
+      { token: "method.declaration", foreground: "F4B472", fontStyle: "bold" },
+      { token: "method.defaultLibrary", foreground: "F4B472", fontStyle: "italic" },
+      { token: "parameter", foreground: "8CC8FF" },
+      { token: "parameter.declaration", foreground: "8CC8FF", fontStyle: "bold" },
+      { token: "property", foreground: "67D4C7" },
+      { token: "property.declaration", foreground: "67D4C7", fontStyle: "bold" },
+      { token: "property.readonly", foreground: "FFB27A", fontStyle: "bold" },
+      { token: "enumMember", foreground: "FFB27A", fontStyle: "bold" },
+      { token: "enumMember.declaration", foreground: "FFB27A", fontStyle: "bold" },
+      { token: "variable", foreground: "D6DDE8" },
+      { token: "variable.declaration", foreground: "D6DDE8", fontStyle: "bold" },
+      { token: "variable.local", foreground: "D6DDE8" },
+      { token: "variable.defaultLibrary", foreground: "FFB27A", fontStyle: "italic" },
+      { token: "namespace.declaration", foreground: "C9A6FF", fontStyle: "bold" },
+      { token: "variable.readonly", foreground: "FFB27A", fontStyle: "bold" },
+      { token: "decorator", foreground: "C9A6FF" },
+      { token: "tag", foreground: "FF9B8F" },
+      { token: "attribute.name", foreground: "7AB7FF" },
+      { token: "attribute.value", foreground: "67D4C7" },
+      { token: "metatag", foreground: "F4B472" },
+      { token: "metatag.content", foreground: "C7D0DD" },
+    ],
+    colors: {
+      "editor.background": "#0D1420",
+      "editor.foreground": "#DCE4F2",
+      "editor.lineHighlightBackground": "#172336",
+      "editor.lineHighlightBorder": "#00000000",
+      "editor.selectionBackground": "#214B80",
+      "editor.inactiveSelectionBackground": "#193A63",
+      "editor.wordHighlightBackground": "#1F417280",
+      "editor.wordHighlightBorder": "#4B78B5",
+      "editor.wordHighlightStrongBackground": "#66421080",
+      "editor.wordHighlightStrongBorder": "#DAA44F",
+      "editor.findMatchBackground": "#7D5A1A",
+      "editor.findMatchBorder": "#F3BE61",
+      "editor.findMatchHighlightBackground": "#4F3C1480",
+      "editor.findMatchHighlightBorder": "#8E6D2A",
+      "editor.findRangeHighlightBackground": "#3B2E1266",
+      "editor.findRangeHighlightBorder": "#6C5520",
+      "editor.selectionHighlightBackground": "#23497C80",
+      "editor.selectionHighlightBorder": "#4F82C2",
+      "editorCursor.foreground": "#78B7FF",
+      "editorLineNumber.foreground": "#5F7089",
+      "editorLineNumber.activeForeground": "#9FB1CB",
+      "editorIndentGuide.background1": "#213148",
+      "editorIndentGuide.activeBackground1": "#3A577C",
+      "editorBracketMatch.background": "#213A5E",
+      "editorBracketMatch.border": "#5D8CCA",
+      "editorWhitespace.foreground": "#2D3C50",
+      "editorGutter.background": "#0D1420",
+      "scrollbarSlider.background": "#4A5E7C55",
+      "scrollbarSlider.hoverBackground": "#61789D66",
+      "scrollbarSlider.activeBackground": "#7F96BA77",
+      "minimap.background": "#0D1420",
+      "editorOverviewRuler.findMatchForeground": "#F3BE6199",
     },
   });
 }

@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { FileNode } from "../types";
 import { ChevronRight, Download, File, Folder } from "lucide-react";
+import { useI18n } from "../i18n";
 
 interface FileTreeProps {
   nodes: FileNode[];
@@ -63,6 +64,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   onContextMenu,
   depth,
 }) => {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(depth < 1);
 
   const handleClick = useCallback((event: React.MouseEvent) => {
@@ -104,7 +106,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onToggleSelect(node.path, e.target.checked);
           }}
           onClick={(e) => e.stopPropagation()}
-          title="Select for batch delete"
+          title={t("sidebar.selectForBatchDelete")}
         />
         {node.type === "directory" ? (
           <Folder className="tree-item-icon folder" size={15} />
@@ -114,7 +116,11 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
         <span className="tree-item-name">{node.name}</span>
         <button
           className="tree-item-action"
-          title={`Download ${node.type === "directory" ? "folder" : "file"}`}
+          title={
+            node.type === "directory"
+              ? t("sidebar.downloadFolder")
+              : t("sidebar.downloadFile")
+          }
           onClick={(e) => {
             e.stopPropagation();
             void onDownload(node.path, node.type);

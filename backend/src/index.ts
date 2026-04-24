@@ -7,6 +7,8 @@ import { config } from "./config.js";
 import { filesRouter } from "./routes/files.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
+import { chatRouter } from "./routes/chat.js";
+import { pluginsRouter } from "./routes/plugins.js";
 import { authMiddleware } from "./auth/middleware.js";
 import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
@@ -19,10 +21,12 @@ app.use(express.json({ limit: "10mb" }));
 
 // Auth routes (no middleware — login/logout must be public)
 app.use("/api/auth", authRouter);
+app.use("/api/plugins", pluginsRouter);
 
 // Protected API routes
 app.use("/api/files", authMiddleware, filesRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
+app.use("/api/chat", authMiddleware, chatRouter);
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });

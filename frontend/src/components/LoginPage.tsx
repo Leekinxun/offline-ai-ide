@@ -1,11 +1,13 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { Code2 } from "lucide-react";
+import { BrandMark } from "./BrandMark";
+import { useI18n } from "../i18n";
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<string | null>;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
+  const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -34,16 +36,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <div className="login-logo">
-          <Code2 size={32} />
-          <span>AI IDE</span>
-        </div>
+        <BrandMark
+          size={54}
+          title="AI IDE"
+          subtitle={t("login.privateWorkspace")}
+          stacked
+          className="login-logo"
+        />
         {error && <div className="login-error">{error}</div>}
         <input
           ref={inputRef}
           className="login-input"
           type="text"
-          placeholder="Username"
+          placeholder={t("login.username")}
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           autoComplete="username"
@@ -51,7 +56,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         <input
           className="login-input"
           type="password"
-          placeholder="Password"
+          placeholder={t("login.password")}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoComplete="current-password"
@@ -61,7 +66,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           type="submit"
           disabled={!username.trim() || !password.trim() || submitting}
         >
-          {submitting ? "Signing in..." : "Sign In"}
+          {submitting ? t("login.signingIn") : t("login.signIn")}
         </button>
       </form>
     </div>

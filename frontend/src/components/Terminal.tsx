@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { useI18n } from "../i18n";
 
 interface TerminalProps {
   visible: boolean;
@@ -9,11 +10,15 @@ interface TerminalProps {
 }
 
 export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const initialized = useRef(false);
+  const disconnectLabelRef = useRef(t("terminal.disconnected"));
+
+  disconnectLabelRef.current = t("terminal.disconnected");
 
   // Initialize xterm only when first visible and container exists
   useEffect(() => {
@@ -77,7 +82,7 @@ export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
     };
 
     ws.onclose = () => {
-      xterm.write("\r\n\x1b[90m[Terminal disconnected]\x1b[0m\r\n");
+      xterm.write(`\r\n\x1b[90m${disconnectLabelRef.current}\x1b[0m\r\n`);
     };
 
     xterm.onData((data) => {
@@ -124,7 +129,7 @@ export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
       style={visible ? undefined : { display: "none" }}
     >
       <div className="terminal-header">
-        <span className="terminal-header-title">Terminal</span>
+        <span className="terminal-header-title">{t("terminal.title")}</span>
       </div>
       <div className="terminal-body" ref={containerRef} />
     </div>

@@ -48,6 +48,14 @@ export interface ChatMessage {
   thinking?: string;
 }
 
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  preview: string;
+  updatedAt: number;
+  messageCount: number;
+}
+
 export interface FileContext {
   path: string;
   content: string;
@@ -72,12 +80,20 @@ export interface LlmSettings {
   vllmApiKey: string;
   modelName: string;
   maxTokens: number;
+  systemPrompt?: string;
+}
+
+export interface PluginOverrideSettings {
+  enabled: boolean;
 }
 
 export interface AdminSettings {
   users: AdminUser[];
   allowedRoots: string[];
   llm: LlmSettings;
+  plugins?: {
+    overrides: Record<string, PluginOverrideSettings>;
+  };
 }
 
 export const LANGUAGE_MAP: Record<string, string> = {

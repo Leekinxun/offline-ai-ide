@@ -1,4 +1,12 @@
+import { config } from "../config.js";
+
 export function buildSystemPrompt(workspaceDir: string, todoState: string): string {
+  const customPrompt = config.systemPrompt;
+
+  if (customPrompt && customPrompt.trim()) {
+    return customPrompt;
+  }
+
   return `You are an expert AI coding agent embedded in a Web IDE.
 Your workspace is at: ${workspaceDir}
 

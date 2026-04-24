@@ -4,6 +4,7 @@ import {
   OpenAIMessage,
   OpenAIResponse,
   ToolFileUpdate,
+  WsServerMessage,
   wsSend,
 } from "./types.js";
 import { callChatCompletion } from "./llm.js";
@@ -38,8 +39,14 @@ export async function runAgentLoop(
   userMessage: string,
   session: UserSession,
   context?: { path: string; content: string; language: string; selection?: string },
-  history?: { role: string; content: string }[]
+  history?: { role: string; content: string }[],
+  onEmit?: (message: WsServerMessage) => void
 ): Promise<void> {
+  const emit = (message: WsServerMessage) => {
+    onEmit?.(message);
+    wsSend(ws, message);
+  };
+
   const todoManager = new TodoManager();
   const tools = getAllTools();
   const toolCtx = {
@@ -98,13 +105,16 @@ export async function runAgentLoop(
         stream: false,
       });
     } catch (e: any) {
-      wsSend(ws, { type: "error", content: `LLM request failed: ${e.message}` });
+      emit({ type: "error", content: `LLM request failed: ${e.message}` });
       return;
     }
 
     if (!resp.ok) {
       const errText = await resp.text();
-      wsSend(ws, { type: "error", content: `vLLM error (${resp.status}): ${errText.slice(0, 300)}` });
+      emit({
+        type: "error",
+        content: `vLLM error (${resp.status}): ${errText.slice(0, 300)}`,
+      });
       return;
     }
 
@@ -112,13 +122,16 @@ export async function runAgentLoop(
     try {
       data = (await resp.json()) as OpenAIResponse;
     } catch (e: any) {
-      wsSend(ws, { type: "error", content: `Failed to parse LLM response: ${e.message}` });
+      emit({
+        type: "error",
+        content: `Failed to parse LLM response: ${e.message}`,
+      });
       return;
     }
 
     const choice = data.choices?.[0];
     if (!choice) {
-      wsSend(ws, { type: "error", content: "No response from LLM" });
+      emit({ type: "error", content: "No response from LLM" });
       return;
     }
 
@@ -142,17 +155,17 @@ export async function runAgentLoop(
       if (assistantMsg.content) {
         const { thinking, rest } = extractThinkTags(assistantMsg.content);
         if (thinking) {
-          wsSend(ws, { type: "thinking", content: thinking });
+          emit({ type: "thinking", content: thinking });
         }
         if (rest) {
-          wsSend(ws, { type: "thinking", content: rest });
+          emit({ type: "thinking", content: rest });
         }
       }
 
       // Execute each tool call
       for (const toolCall of assistantMsg.tool_calls) {
         const args = parseToolArgs(toolCall.function.arguments);
-        wsSend(ws, {
+        emit({
           type: "tool_call",
           toolCallId: toolCall.id,
           name: toolCall.function.name,
@@ -185,7 +198,7 @@ export async function runAgentLoop(
           fileUpdate = undefined;
         }
 
-        wsSend(ws, {
+        emit({
           type: "tool_result",
           toolCallId: toolCall.id,
           name: toolCall.function.name,
@@ -212,7 +225,7 @@ export async function runAgentLoop(
 
     // Send thinking content first
     if (thinking) {
-      wsSend(ws, { type: "thinking", content: thinking });
+      emit({ type: "thinking", content: thinking });
     }
 
     if (finalText) {
@@ -220,13 +233,13 @@ export async function runAgentLoop(
       const chunkSize = 8;
       for (let j = 0; j < finalText.length; j += chunkSize) {
         if (ws.readyState !== WebSocket.OPEN) return;
-        wsSend(ws, { type: "token", content: finalText.slice(j, j + chunkSize) });
+        emit({ type: "token", content: finalText.slice(j, j + chunkSize) });
       }
     }
-    wsSend(ws, { type: "done" });
+    emit({ type: "done" });
     return;
   }
 
   // Max iterations
-  wsSend(ws, { type: "error", content: "Agent loop exceeded maximum iterations" });
+  emit({ type: "error", content: "Agent loop exceeded maximum iterations" });
 }

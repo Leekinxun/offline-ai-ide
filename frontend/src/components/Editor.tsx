@@ -7,7 +7,9 @@ import {
   OpenFile,
   SelectionInfo,
 } from "../types";
-import { EDITOR_THEME_NAME } from "../editor/theme";
+import { getEditorThemeName } from "../editor/theme";
+import { useI18n } from "../i18n";
+import { runEditorMountHandlers } from "../plugins/runtime";
 
 interface NavigationTarget extends FileSelectionRange {
   path: string;
@@ -23,6 +25,7 @@ interface EditorProps {
   content: string;
   language: string;
   path: string;
+  theme: "light" | "dark";
   openFiles: Pick<OpenFile, "path" | "content" | "language">[];
   onChange: (value: string) => void;
   onSave: () => void;
@@ -199,6 +202,7 @@ export const Editor: React.FC<EditorProps> = ({
   content,
   language,
   path,
+  theme,
   openFiles,
   onChange,
   onSave,
@@ -216,6 +220,8 @@ export const Editor: React.FC<EditorProps> = ({
   const highlightDecorationIdsRef = useRef<string[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
   const symbolDecorationIdsRef = useRef<string[]>([]);
+  const pluginCleanupRef = useRef<(() => void) | null>(null);
+  const { locale, t } = useI18n();
 
   onSaveRef.current = onSave;
   onSelectionChangeRef.current = onSelectionChange;
@@ -441,11 +447,12 @@ export const Editor: React.FC<EditorProps> = ({
   const handleMount: OnMount = useCallback(
     (editor) => {
       editorRef.current = editor;
+      pluginCleanupRef.current?.();
 
       // Cmd/Ctrl + S to save
       editor.addAction({
         id: "save-file",
-        label: "Save File",
+        label: t("editor.saveFile"),
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
         run: () => onSaveRef.current(),
       });
@@ -508,20 +515,35 @@ export const Editor: React.FC<EditorProps> = ({
 
       editor.focus();
       updateSymbolHighlightsRef.current(editor);
+      pluginCleanupRef.current = runEditorMountHandlers({
+        editor,
+        monaco,
+        path,
+        language,
+      });
     },
     [
       clearSymbolHighlights,
       editorRef,
+      language,
+      path,
+      t,
     ]
   );
 
   useEffect(
     () => () => {
+      pluginCleanupRef.current?.();
+      pluginCleanupRef.current = null;
       clearHighlights();
       clearSymbolHighlights();
     },
     [clearHighlights, clearSymbolHighlights]
   );
+
+  useEffect(() => {
+    monaco.editor.setTheme(getEditorThemeName(theme));
+  }, [theme]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -552,14 +574,14 @@ export const Editor: React.FC<EditorProps> = ({
   return (
     <div className="editor-container">
       <MonacoEditor
-        key={path}
+        key={`${path}:${locale}`}
         height="100%"
         language={language}
         path={path}
         value={content}
         onChange={(val) => onChange(val ?? "")}
         onMount={handleMount}
-        theme={EDITOR_THEME_NAME}
+        theme={getEditorThemeName(theme)}
         options={{
           "semanticHighlighting.enabled": true,
           fontSize: 13,
