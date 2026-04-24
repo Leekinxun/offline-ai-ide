@@ -76,6 +76,11 @@ interface EditorNavigationTarget extends FileSelectionRange {
   requestId: number;
 }
 
+interface EditorHighlightTarget extends FileSelectionRange {
+  path: string;
+  requestId: number;
+}
+
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
 }
@@ -119,10 +124,13 @@ function AuthenticatedApp({
   const [chatWidth, setChatWidth] = useState(340);
   const [editorNavigationTarget, setEditorNavigationTarget] =
     useState<EditorNavigationTarget | null>(null);
+  const [editorHighlightTarget, setEditorHighlightTarget] =
+    useState<EditorHighlightTarget | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const draggingRef = useRef<"sidebar" | "chat" | null>(null);
   const navigationRequestRef = useRef(0);
+  const highlightRequestRef = useRef(0);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   const fs = useFileSystem(token);
@@ -182,6 +190,8 @@ function AuthenticatedApp({
   useEffect(() => {
     setOpenFiles([]);
     setActiveFilePath(null);
+    setEditorNavigationTarget(null);
+    setEditorHighlightTarget(null);
     loadTree();
   }, [workspaceDir]);
 
@@ -216,9 +226,17 @@ function AuthenticatedApp({
   const handleAiFileUpdate = useCallback(
     (update: FileUpdate) => {
       applyFileUpdateToTabs(update, false);
+      if (update.selection && activeFilePath === update.path) {
+        highlightRequestRef.current += 1;
+        setEditorHighlightTarget({
+          path: update.path,
+          requestId: highlightRequestRef.current,
+          ...update.selection,
+        });
+      }
       void loadTree();
     },
-    [applyFileUpdateToTabs, loadTree]
+    [activeFilePath, applyFileUpdateToTabs, loadTree]
   );
 
   const handleNavigateToFileUpdate = useCallback(
@@ -240,6 +258,12 @@ function AuthenticatedApp({
 
   const handleNavigationComplete = useCallback((requestId: number) => {
     setEditorNavigationTarget((prev) =>
+      prev?.requestId === requestId ? null : prev
+    );
+  }, []);
+
+  const handleHighlightComplete = useCallback((requestId: number) => {
+    setEditorHighlightTarget((prev) =>
       prev?.requestId === requestId ? null : prev
     );
   }, []);
@@ -372,6 +396,15 @@ function AuthenticatedApp({
     });
 
     setEditorNavigationTarget((prev) =>
+      prev &&
+      deletedPaths.some((deletedPath) =>
+        isPathEqualOrDescendant(prev.path, deletedPath)
+      )
+        ? null
+        : prev
+    );
+
+    setEditorHighlightTarget((prev) =>
       prev &&
       deletedPaths.some((deletedPath) =>
         isPathEqualOrDescendant(prev.path, deletedPath)
@@ -652,7 +685,13 @@ function AuthenticatedApp({
                     ? editorNavigationTarget
                     : null
                 }
+                highlightTarget={
+                  editorHighlightTarget?.path === activeFile.path
+                    ? editorHighlightTarget
+                    : null
+                }
                 onNavigationComplete={handleNavigationComplete}
+                onHighlightComplete={handleHighlightComplete}
               />
             ) : (
               <div className="editor-empty">

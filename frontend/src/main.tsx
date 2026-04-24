@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
+import { registerEditorTheme } from "./editor/theme";
+import { registerComponentLanguages } from "./editor/componentLanguages";
+import { registerSemanticTokensProviders } from "./editor/semanticTokens";
 
 // Configure Monaco to use local bundle (offline support)
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
@@ -16,7 +19,13 @@ self.MonacoEnvironment = {
     if (label === "json") return new jsonWorker();
     if (label === "css" || label === "scss" || label === "less")
       return new cssWorker();
-    if (label === "html" || label === "handlebars" || label === "razor")
+    if (
+      label === "html" ||
+      label === "handlebars" ||
+      label === "razor" ||
+      label === "vue" ||
+      label === "svelte"
+    )
       return new htmlWorker();
     if (label === "typescript" || label === "javascript")
       return new tsWorker();
@@ -25,6 +34,9 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+registerEditorTheme();
+registerComponentLanguages();
+registerSemanticTokensProviders();
 
 // Import app
 import App from "./App";

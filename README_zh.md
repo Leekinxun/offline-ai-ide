@@ -1,8 +1,8 @@
 # AI IDE
 
-> 当前版本：`v0.3.0`
+> 当前版本：`v0.3.2`
 >
-> 发布时间：`2026-04-22`
+> 发布时间：`2026-04-24`
 
 完全离线、可私有化部署的 Web AI 集成开发环境，集代码编辑器、集成终端、AI 编程助手和多智能体协作于一体，一个 Docker 容器即可运行。
 
@@ -15,6 +15,18 @@
 
 ## 版本更新
 
+### v0.3.2 · 2026-04-24
+
+- 扩展 **Python 语义高亮**，新增多行赋值目标、`with` 别名、`for` 目标变量、`lambda` 参数、推导式绑定、`global` / `nonlocal`、`except*` 别名等场景
+- 优化 **TypeScript / React / Vue** 的编辑器高亮体验，补充 Monaco 语义 token 和组件嵌入语法的主题映射
+- 新增手动回归样例目录 [`docs/editor-samples/`](docs/editor-samples/README.md)，可直接打开检查 Python、TypeScript、React、Vue 的高亮效果
+
+### v0.3.1 · 2026-04-23
+
+- 扩展 **Ctrl/Cmd + 鼠标左键跳转**，增加基于工作区的定义查找路径，提升 Python、Vue、React 等跨文件跳转命中率
+- 管理员设置页新增 **Max Tokens** 配置，可直接在界面中管理请求上限，无需手改环境变量
+- 修复编辑器 **Ctrl/Cmd + S** 可能保存旧内容的问题，原因是 Monaco 动作持有了过期回调
+
 ### v0.3.0 · 2026-04-22
 
 - 新增内置 **管理员设置页**，可直接在界面中新增用户、删除用户、重置密码，以及修改 LLM 的 URL / API Key / Model，且无需重启服务
@@ -26,17 +38,17 @@
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.3.0` 是 README 中首次正式记录的版本，包含管理员设置、文件管理和编辑器可用性增强等更新。
+`v0.3.2` 是当前 README 记录的最新版本，包含更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化，以及编辑器回归样例文件。
 
 ## 功能特性
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
-- **Monaco 代码编辑器** — 支持语法高亮、智能提示、多标签页，以及 Ctrl/Cmd 点击符号跳转
+- **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页，以及 Ctrl/Cmd 点击符号跳转
 - **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda
 - **文件浏览器** — 树形文件管理，支持新建、重命名、下载、批量删除、文件夹 zip 下载，以及"打开文件夹"功能（运行时切换工作区）
-- **管理员设置页** — 可在界面中管理用户、重置密码，并配置 LLM 的 URL / API Key / Model
+- **管理员设置页** — 可在界面中管理用户、重置密码，并配置 LLM 的 URL / API Key / Model / Max Tokens
 - **多用户认证** — 登录页面支持用户名/密码认证，底层由 `users.json` 和内置管理员设置页共同管理；每个用户拥有独立会话（独立的工作区、终端、AI 上下文）
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作
 - **任务看板** — 创建、分配、跟踪跨智能体任务
@@ -110,6 +122,10 @@ npm run dev
 
 本地开发模式下，通过管理员设置页保存的 LLM 配置默认会写入项目根目录的 `app-settings.json`。
 
+### 编辑器高亮样例
+
+如需快速做一次编辑器高亮回归检查，可以直接打开 [`docs/editor-samples/`](docs/editor-samples/README.md) 下的样例文件。当前样例覆盖 Python 语义绑定、TypeScript、React TSX 和 Vue `<script setup lang="ts">` 场景。
+
 ## 配置说明
 
 ### 环境变量
@@ -131,7 +147,7 @@ npm run dev
 | 文件 | 作用 |
 |------|------|
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
-| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model 等运行时设置 |
+| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens 等运行时设置 |
 
 如果你使用 Docker 并希望这些设置在重建容器后仍然保留，建议通过挂载文件或卷的方式持久化这两个配置文件。
 
@@ -169,7 +185,7 @@ npm run dev
 LLM 运行时配置同样支持两种方式：
 
 - 推荐：通过管理员设置页直接修改
-- 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME` 指定
+- 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME`、`AGENT_MAX_TOKENS` 指定
 
 通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。
 

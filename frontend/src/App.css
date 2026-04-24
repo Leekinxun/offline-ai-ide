@@ -472,6 +472,38 @@ body {
   overflow: hidden;
 }
 
+.editor-navigation-highlight-line {
+  background: linear-gradient(90deg, rgba(255, 149, 0, 0.08), rgba(255, 149, 0, 0.02));
+}
+
+.editor-navigation-highlight-range {
+  background: rgba(255, 149, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 149, 0, 0.55);
+  border-radius: 3px;
+}
+
+.editor-ai-highlight-line {
+  background: linear-gradient(90deg, rgba(52, 199, 89, 0.08), rgba(52, 199, 89, 0.02));
+}
+
+.editor-ai-highlight-range {
+  background: rgba(52, 199, 89, 0.18);
+  border-bottom: 1px solid rgba(52, 199, 89, 0.5);
+  border-radius: 3px;
+}
+
+.editor-symbol-highlight {
+  background: rgba(0, 122, 255, 0.1);
+  border-bottom: 1px solid rgba(0, 122, 255, 0.18);
+  border-radius: 3px;
+}
+
+.editor-symbol-highlight-current {
+  background: rgba(0, 122, 255, 0.2);
+  border-bottom: 1px solid rgba(0, 122, 255, 0.5);
+  border-radius: 3px;
+}
+
 .editor-empty {
   flex: 1;
   display: flex;

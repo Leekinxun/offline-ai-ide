@@ -7,8 +7,14 @@ import {
   OpenFile,
   SelectionInfo,
 } from "../types";
+import { EDITOR_THEME_NAME } from "../editor/theme";
 
 interface NavigationTarget extends FileSelectionRange {
+  path: string;
+  requestId: number;
+}
+
+interface HighlightTarget extends FileSelectionRange {
   path: string;
   requestId: number;
 }
@@ -31,7 +37,9 @@ interface EditorProps {
   ) => Promise<DefinitionLocation | null>;
   editorRef: React.MutableRefObject<monaco.editor.IStandaloneCodeEditor | null>;
   navigationTarget: NavigationTarget | null;
+  highlightTarget: HighlightTarget | null;
   onNavigationComplete: (requestId: number) => void;
+  onHighlightComplete: (requestId: number) => void;
 }
 
 function escapeRegExp(value: string): string {
@@ -156,6 +164,37 @@ function findDefinitionLocation(
   return null;
 }
 
+function createHighlightRange(
+  selection: FileSelectionRange
+): monaco.Range {
+  const endLine = Math.max(selection.endLine, selection.startLine);
+  const endColumn =
+    selection.endLine === selection.startLine &&
+    selection.endColumn <= selection.startColumn
+      ? selection.startColumn + 1
+      : Math.max(selection.endColumn, 1);
+
+  return new monaco.Range(
+    selection.startLine,
+    Math.max(selection.startColumn, 1),
+    endLine,
+    endColumn
+  );
+}
+
+function isIdentifierLike(value: string): boolean {
+  return /^[A-Za-z_$][\w$]*$/.test(value);
+}
+
+function rangesMatch(left: monaco.IRange, right: monaco.IRange): boolean {
+  return (
+    left.startLineNumber === right.startLineNumber &&
+    left.startColumn === right.startColumn &&
+    left.endLineNumber === right.endLineNumber &&
+    left.endColumn === right.endColumn
+  );
+}
+
 export const Editor: React.FC<EditorProps> = ({
   content,
   language,
@@ -168,13 +207,194 @@ export const Editor: React.FC<EditorProps> = ({
   onFindDefinition,
   editorRef,
   navigationTarget,
+  highlightTarget,
   onNavigationComplete,
+  onHighlightComplete,
 }) => {
   const onSaveRef = useRef(onSave);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const highlightDecorationIdsRef = useRef<string[]>([]);
+  const highlightTimerRef = useRef<number | null>(null);
+  const symbolDecorationIdsRef = useRef<string[]>([]);
 
   onSaveRef.current = onSave;
   onSelectionChangeRef.current = onSelectionChange;
+
+  const clearHighlights = useCallback(() => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+
+    const editor = editorRef.current;
+    if (!editor || highlightDecorationIdsRef.current.length === 0) return;
+
+    highlightDecorationIdsRef.current = editor.deltaDecorations(
+      highlightDecorationIdsRef.current,
+      []
+    );
+  }, [editorRef]);
+
+  const clearSymbolHighlights = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || symbolDecorationIdsRef.current.length === 0) return;
+
+    symbolDecorationIdsRef.current = editor.deltaDecorations(
+      symbolDecorationIdsRef.current,
+      []
+    );
+  }, [editorRef]);
+
+  const applyHighlight = useCallback(
+    (
+      editor: monaco.editor.IStandaloneCodeEditor,
+      selection: FileSelectionRange,
+      source: "navigation" | "ai"
+    ) => {
+      clearHighlights();
+
+      const lineClassName =
+        source === "ai"
+          ? "editor-ai-highlight-line"
+          : "editor-navigation-highlight-line";
+      const inlineClassName =
+        source === "ai"
+          ? "editor-ai-highlight-range"
+          : "editor-navigation-highlight-range";
+      const overviewColor = source === "ai" ? "#34c75955" : "#ff950055";
+
+      highlightDecorationIdsRef.current = editor.deltaDecorations([], [
+        {
+          range: new monaco.Range(selection.startLine, 1, selection.endLine, 1),
+          options: {
+            isWholeLine: true,
+            className: lineClassName,
+            overviewRuler: {
+              color: overviewColor,
+              position: monaco.editor.OverviewRulerLane.Full,
+            },
+          },
+        },
+        {
+          range: createHighlightRange(selection),
+          options: {
+            inlineClassName,
+          },
+        },
+      ]);
+
+      highlightTimerRef.current = window.setTimeout(() => {
+        const activeEditor = editorRef.current;
+        if (activeEditor && highlightDecorationIdsRef.current.length > 0) {
+          highlightDecorationIdsRef.current = activeEditor.deltaDecorations(
+            highlightDecorationIdsRef.current,
+            []
+          );
+        }
+        highlightTimerRef.current = null;
+      }, source === "ai" ? 2600 : 1800);
+    },
+    [clearHighlights, editorRef]
+  );
+
+  const updateSymbolHighlights = useCallback(
+    (editor: monaco.editor.IStandaloneCodeEditor) => {
+      const model = editor.getModel();
+      if (!model) {
+        clearSymbolHighlights();
+        return;
+      }
+
+      const selection = editor.getSelection();
+      let targetText = "";
+      let activeRange: monaco.Range | null = null;
+
+      if (
+        selection &&
+        !selection.isEmpty() &&
+        selection.startLineNumber === selection.endLineNumber
+      ) {
+        const selectedText = model.getValueInRange(selection);
+        if (selectedText.length <= 64 && isIdentifierLike(selectedText)) {
+          targetText = selectedText;
+          activeRange = new monaco.Range(
+            selection.startLineNumber,
+            selection.startColumn,
+            selection.endLineNumber,
+            selection.endColumn
+          );
+        }
+      }
+
+      if (!targetText) {
+        const position = editor.getPosition();
+        if (!position) {
+          clearSymbolHighlights();
+          return;
+        }
+
+        const word = model.getWordAtPosition(position);
+        if (!word || word.word.length < 2 || !isIdentifierLike(word.word)) {
+          clearSymbolHighlights();
+          return;
+        }
+
+        targetText = word.word;
+        activeRange = new monaco.Range(
+          position.lineNumber,
+          word.startColumn,
+          position.lineNumber,
+          word.endColumn
+        );
+      }
+
+      const rawMatches = model.findMatches(
+        targetText,
+        false,
+        false,
+        true,
+        null,
+        false,
+        250
+      );
+      const matches = rawMatches.filter((match) => {
+        const wordAtPosition = model.getWordAtPosition({
+          lineNumber: match.range.startLineNumber,
+          column: match.range.startColumn,
+        });
+
+        return (
+          wordAtPosition?.word === targetText &&
+          wordAtPosition.startColumn === match.range.startColumn &&
+          wordAtPosition.endColumn === match.range.endColumn
+        );
+      });
+
+      if (matches.length <= 1 || !activeRange) {
+        clearSymbolHighlights();
+        return;
+      }
+
+      symbolDecorationIdsRef.current = editor.deltaDecorations(
+        symbolDecorationIdsRef.current,
+        matches.map((match) => ({
+          range: match.range,
+          options: rangesMatch(match.range, activeRange)
+            ? {
+                inlineClassName: "editor-symbol-highlight-current",
+                overviewRuler: {
+                  color: "#007aff44",
+                  position: monaco.editor.OverviewRulerLane.Center,
+                },
+              }
+            : {
+                inlineClassName: "editor-symbol-highlight",
+              },
+        }))
+      );
+    },
+    [clearSymbolHighlights]
+  );
 
   const navigateToDefinition = useCallback(
     async (
@@ -204,16 +424,19 @@ export const Editor: React.FC<EditorProps> = ({
         editor.focus();
         editor.setSelection(selection);
         editor.revealRangeInCenter(selection);
+        applyHighlight(editor, location.selection, "navigation");
         return;
       }
 
       await onNavigateToLocation(location.path, location.selection);
     },
-    [onFindDefinition, onNavigateToLocation, openFiles, path]
+    [applyHighlight, onFindDefinition, onNavigateToLocation, openFiles, path]
   );
 
   const navigateToDefinitionRef = useRef(navigateToDefinition);
   navigateToDefinitionRef.current = navigateToDefinition;
+  const updateSymbolHighlightsRef = useRef(updateSymbolHighlights);
+  updateSymbolHighlightsRef.current = updateSymbolHighlights;
 
   const handleMount: OnMount = useCallback(
     (editor) => {
@@ -242,6 +465,11 @@ export const Editor: React.FC<EditorProps> = ({
           }
         }
         onSelectionChangeRef.current(null);
+        updateSymbolHighlightsRef.current(editor);
+      });
+
+      editor.onDidChangeModelContent(() => {
+        updateSymbolHighlightsRef.current(editor);
       });
 
       editor.onMouseDown((event) => {
@@ -270,11 +498,29 @@ export const Editor: React.FC<EditorProps> = ({
         );
       });
 
+      editor.onDidBlurEditorText(() => {
+        clearSymbolHighlights();
+      });
+
+      editor.onDidFocusEditorText(() => {
+        updateSymbolHighlightsRef.current(editor);
+      });
+
       editor.focus();
+      updateSymbolHighlightsRef.current(editor);
     },
     [
+      clearSymbolHighlights,
       editorRef,
     ]
+  );
+
+  useEffect(
+    () => () => {
+      clearHighlights();
+      clearSymbolHighlights();
+    },
+    [clearHighlights, clearSymbolHighlights]
   );
 
   useEffect(() => {
@@ -291,8 +537,17 @@ export const Editor: React.FC<EditorProps> = ({
     editor.focus();
     editor.setSelection(selection);
     editor.revealRangeInCenter(selection);
+    applyHighlight(editor, navigationTarget, "navigation");
     onNavigationComplete(navigationTarget.requestId);
-  }, [editorRef, navigationTarget, onNavigationComplete, path]);
+  }, [applyHighlight, editorRef, navigationTarget, onNavigationComplete, path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !highlightTarget || highlightTarget.path !== path) return;
+
+    applyHighlight(editor, highlightTarget, "ai");
+    onHighlightComplete(highlightTarget.requestId);
+  }, [applyHighlight, editorRef, highlightTarget, onHighlightComplete, path]);
 
   return (
     <div className="editor-container">
@@ -304,8 +559,9 @@ export const Editor: React.FC<EditorProps> = ({
         value={content}
         onChange={(val) => onChange(val ?? "")}
         onMount={handleMount}
-        theme="vs"
+        theme={EDITOR_THEME_NAME}
         options={{
+          "semanticHighlighting.enabled": true,
           fontSize: 13,
           fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
           fontLigatures: true,
@@ -318,6 +574,8 @@ export const Editor: React.FC<EditorProps> = ({
           smoothScrolling: true,
           padding: { top: 12 },
           bracketPairColorization: { enabled: true },
+          selectionHighlight: false,
+          occurrencesHighlight: "off",
           automaticLayout: true,
           wordWrap: "on",
           tabSize: 2,

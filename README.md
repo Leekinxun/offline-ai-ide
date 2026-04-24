@@ -1,8 +1,8 @@
 # AI IDE
 
-> Current Version: `v0.3.1`
+> Current Version: `v0.3.2`
 >
-> Release Date: `2026-04-23`
+> Release Date: `2026-04-24`
 
 A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
 
@@ -14,6 +14,12 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.3.2 · 2026-04-24
+
+- Expanded **Python semantic highlighting** with multi-line assignment targets, `with` aliases, `for` targets, `lambda` parameters, comprehension bindings, `global` / `nonlocal`, and `except*` aliases
+- Refined **TypeScript / React / Vue** editor highlighting by expanding Monaco token theme coverage for semantic token types and embedded component syntax
+- Added manual editor regression samples under [`docs/editor-samples/`](docs/editor-samples/README.md) for Python, TypeScript, React, and Vue
 
 ### v0.3.1 · 2026-04-23
 
@@ -32,13 +38,13 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.3.1` is the current documented release and adds workspace-aware symbol navigation, admin-managed max token settings, and an editor save fix on top of the `v0.3.0` feature set.
+`v0.3.2` is the current documented release and adds deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, and editor regression samples on top of the `v0.3.1` feature set.
 
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
-- **Monaco Code Editor** — Full-featured editor with syntax highlighting, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, and fixed Ctrl/Cmd+S save behavior
+- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, and fixed Ctrl/Cmd+S save behavior
 - **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed
 - **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, and "Open Folder" (switch workspace at runtime)
@@ -115,6 +121,10 @@ npm run dev
 Open http://localhost:5173 (Vite dev server proxies API requests to the backend).
 
 In local development, admin-managed LLM settings are persisted to `app-settings.json` at the project root by default.
+
+### Editor Highlighting Samples
+
+Open the files under [`docs/editor-samples/`](docs/editor-samples/README.md) in the IDE when you want a quick manual regression pass for editor highlighting. The sample set currently covers Python semantic bindings, TypeScript semantics, React TSX, and Vue `<script setup lang="ts">` flows.
 
 ## Configuration
 

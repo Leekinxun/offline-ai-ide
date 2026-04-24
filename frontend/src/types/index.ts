@@ -82,8 +82,12 @@ export interface AdminSettings {
 
 export const LANGUAGE_MAP: Record<string, string> = {
   ".js": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
   ".jsx": "javascript",
   ".ts": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
   ".tsx": "typescript",
   ".py": "python",
   ".json": "json",
@@ -111,8 +115,8 @@ export const LANGUAGE_MAP: Record<string, string> = {
   ".ini": "ini",
   ".env": "plaintext",
   ".txt": "plaintext",
-  ".vue": "html",
-  ".svelte": "html",
+  ".vue": "vue",
+  ".svelte": "svelte",
   ".dockerfile": "dockerfile",
   ".r": "r",
   ".swift": "swift",
