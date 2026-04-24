@@ -75,11 +75,14 @@ COPY --from=backend-builder /build/backend/package.json .
 # Copy built frontend
 COPY --from=frontend-builder /build/frontend/dist ./static
 
+# Copy shipped external plugins so Docker images work out of the box
+COPY plugins ./plugins
+
 # Copy users config
 COPY users.json ./users.json
 
-# Create default workspace
-RUN mkdir -p /workspace
+# Create default workspace and plugin directory
+RUN mkdir -p /workspace /app/plugins
 
 EXPOSE 3000
 

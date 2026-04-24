@@ -5,6 +5,7 @@ services:
       - "3000:3000"
     volumes:
       - ./workspace:/workspace
+      - ./plugins:/app/plugins
     environment:
       # LLM API (OpenAI-compatible: vLLM / OpenAI / DeepSeek / etc.)
       - VLLM_API_URL=http://host.docker.internal:8000/v1

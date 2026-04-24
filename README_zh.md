@@ -77,6 +77,7 @@ docker build -t ai-ide .
 docker run -d --name ai-ide \
   -p 3000:3000 \
   -v ./workspace:/workspace \
+  -v ./plugins:/app/plugins \
   -v ./users.json:/app/users.json \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
@@ -104,6 +105,7 @@ services:
       - "3000:3000"
     volumes:
       - ./workspace:/workspace
+      - ./plugins:/app/plugins
       - ./users.json:/app/users.json  # 可选：覆盖用户配置
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
@@ -151,6 +153,7 @@ npm run dev
 - Markdown 文件预览作为可直接复制修改的外部示例插件放在 `plugins/markdown-file-preview/`
 
 直接在 IDE 中打开 Markdown 文件，即可通过顶部的 `编辑 / 预览 / 分栏` 切换按钮使用预览能力。
+现在 Docker 镜像也会默认打包仓库里的 `plugins/` 目录，仓库内提供的 `docker-compose.yml` 还会把本地 `./plugins` 挂载到 `/app/plugins`，因此外部插件开箱即用。
 
 插件清单格式、宿主 API、权限模型和离线安装方式请参考 [`docs/plugins/README.md`](docs/plugins/README.md)。
 

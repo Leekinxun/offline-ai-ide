@@ -77,6 +77,7 @@ docker build -t ai-ide .
 docker run -d --name ai-ide \
   -p 3000:3000 \
   -v ./workspace:/workspace \
+  -v ./plugins:/app/plugins \
   -v ./users.json:/app/users.json \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
@@ -104,6 +105,7 @@ services:
       - "3000:3000"
     volumes:
       - ./workspace:/workspace
+      - ./plugins:/app/plugins
       - ./users.json:/app/users.json  # optional: override user config
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
@@ -151,6 +153,7 @@ The frontend now supports a lightweight plugin architecture inspired by VS Code:
 - Markdown file preview ships as a working external sample plugin in `plugins/markdown-file-preview/`
 
 Open a Markdown file in the IDE to use the preview toolbar with `Edit`, `Preview`, and `Split` modes.
+Docker images now also include the shipped `plugins/` directory by default, and the provided `docker-compose.yml` mounts local `./plugins` to `/app/plugins` so external plugins work out of the box.
 
 See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest format, host APIs, permissions, and offline installation flow.
 
