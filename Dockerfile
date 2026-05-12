@@ -63,6 +63,10 @@ ENV PATH="/opt/conda/bin:$PATH"
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
+# Install Python tooling in the default Conda environment used by the web terminal
+RUN /opt/conda/bin/python -m pip install --no-cache-dir ruff && \
+    /opt/conda/bin/ruff --version
+
 # Initialize conda for bash so terminal users get conda ready
 RUN conda init bash && \
     echo "conda activate base" >> /root/.bashrc

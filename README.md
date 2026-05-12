@@ -67,7 +67,7 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
 - **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports interruptible steering/follow-up messages mid-run, and honors team read-only roles
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
-- **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed
+- **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed, auto-activates the `base` environment, and includes `ruff` out of the box
 - **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt from the UI, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
