@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
 </p>
 
-> 当前版本：`v0.4.0`
+> 当前版本：`v0.5.0`
 >
-> 发布时间：`2026-04-24`
+> 发布时间：`2026-05-12`
 
 完全离线、可私有化部署的 Web AI 集成开发环境，集代码编辑器、集成终端、AI 编程助手和多智能体协作于一体，一个 Docker 容器即可运行。
 
@@ -18,6 +18,14 @@
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.5.0 · 2026-05-12
+
+- 新增 **可打断的 Agent Steering** 与 follow-up 队列：用户可在 AI 运行期间继续追加纠正或补充消息；智能体会在每次工具执行完成后立即检查 steering 队列，一旦发现新消息就中断剩余工具，并在保留已有工具执行结果上下文的前提下开始下一轮 turn
+- 管理员 **设置页** 新增 **最大 Agent 迭代轮数** 配置，不再需要通过硬编码环境变量来控制内层循环上限
+- 新增 **工作区自动刷新**，编辑器与文件树会在文件变化后自动同步；同时左侧文件树新增手动 **刷新按钮**，并将多选交互优化为 **按需进入**，不再默认一直展示复选框
+- 新增实用型 **团队协作 MVP**：支持团队创建/加入/切换、带角色的邀请码、`owner/admin/member/viewer` 权限模型、在线状态、文件认领、共享工作区同步、角色管理、所有者转移、移除成员和主动离队
+- 新增 **协作安全保存**：对 `viewer` 角色强制只读、保存前认领冲突提醒、保存时版本校验、远端修改来源标记（`team_member`、`external`、`assistant_tool`、`unknown`），以及支持按块 / 按 hunk 合并和一键 **全部采用远端** / **全部保留本地** 的冲突处理弹窗
 
 ### v0.4.0 · 2026-04-24
 
@@ -49,20 +57,21 @@
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.4.0` 是当前 README 记录的最新版本，在 `v0.3.x` 的基础上新增了插件系统、内置国际化、Monaco 暗色主题适配和历史对话持久化。
+`v0.5.0` 是当前 README 记录的最新版本，在 `v0.4.x` 的基础上新增了可打断的 steering、可配置的 agent 循环上限、更智能的文件刷新流程，以及带冲突安全保存的团队协作能力。
 
 ## 功能特性
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
-- **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页，以及 Ctrl/Cmd 点击符号跳转
+- **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、Ctrl/Cmd 点击符号跳转、协作提示，以及带版本感知的更安全保存流程
 - **插件系统** — 提供类似 VS Code 的轻量插件模式，支持内置/外部插件、显式权限与作用域、本地 `plugins/` 离线安装、界面内插件管理，以及仓库内自带的 Markdown 预览示例插件
-- **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令
+- **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令；支持运行中追加 follow-up / steering 消息打断当前工具流，并会自动遵守团队只读角色权限
 - **历史对话持久化** — 每个工作区会在 `.history/` 下保存 `.jsonl` 会话文件，支持继续历史对话，并自动只保留最近 5 个会话
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda
-- **文件浏览器** — 树形文件管理，支持新建、重命名、下载、批量删除、文件夹 zip 下载，以及"打开文件夹"功能（运行时切换工作区）
-- **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens，并切换英文 / 简体中文界面语言
+- **文件浏览器** — 树形文件管理，支持新建、重命名、下载、批量删除、文件夹 zip 下载、文件变化自动刷新、手动刷新按钮、改进后的多选交互，以及"打开文件夹"功能（运行时切换工作区）
+- **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens / Max Agent Iterations / System Prompt，并切换英文 / 简体中文界面语言
 - **多用户认证** — 登录页面支持用户名/密码认证，底层由 `users.json` 和内置管理员设置页共同管理；每个用户拥有独立会话（独立的工作区、终端、AI 上下文）
+- **团队协作** — 支持在共享工作区内创建/加入团队、按 `owner/admin/member/viewer` 邀请成员、查看在线状态与活跃文件、认领文件、查看协作活动，并通过冲突安全保存流程降低多人编辑冲突
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作
 - **任务看板** — 创建、分配、跟踪跨智能体任务
 - **Docker 就绪** — 多阶段构建，预装 Node.js、Python、Conda、Git 及常用开发工具
@@ -157,6 +166,19 @@ npm run dev
 
 插件清单格式、宿主 API、权限模型和离线安装方式请参考 [`docs/plugins/README.md`](docs/plugins/README.md)。
 
+### 团队协作
+
+当前版本新增了一套以“低摩擦协作”为目标的团队工作流，优先解决多人共享工作区中的可见性、权限控制和保存冲突问题，而不是一开始就引入高复杂度的 CRDT/OT 实时同编：
+
+- 创建、加入、切换绑定到共享工作区的团队
+- 生成带默认角色的邀请码
+- 支持 `owner`、`admin`、`member`、`viewer` 四种权限角色
+- 跟踪成员在线状态、活跃文件和轻量协作活动
+- 通过软认领（soft claim）降低多人同时修改同一文件的冲突概率
+- 对 `viewer` 角色在编辑器和 AI 文件写入能力上统一执行只读限制
+- 当队友创建、重命名、删除或保存文件时，自动广播文件树与文件内容刷新
+- 通过版本校验、认领冲突提醒、修改来源标记，以及按块/批量合并的 diff 弹窗来保护保存流程
+
 ## 配置说明
 
 ### 环境变量
@@ -170,6 +192,7 @@ npm run dev
 | `PORT` | `3000` | 服务端口 |
 | `MAX_AGENT_ITERATIONS` | `30` | 每次 AI 回复的最大工具调用轮数 |
 | `AGENT_MAX_TOKENS` | `8192` | 每次 AI 回复的最大 Token 数 |
+| `SYSTEM_PROMPT` | *（空）* | AI 智能体默认 System Prompt 覆盖项 |
 | `USERS_CONFIG` | *（自动检测）* | `users.json` 文件路径 |
 | `APP_SETTINGS_CONFIG` | *（自动检测）* | 管理员设置页写入的 `app-settings.json` 路径 |
 
@@ -178,8 +201,9 @@ npm run dev
 | 文件 | 作用 |
 |------|------|
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
-| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens 等运行时设置 |
+| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens、Max Agent Iterations、System Prompt 等运行时设置 |
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
+| `<workspace>/.team/teams.json` | 存储团队成员、角色、邀请码、在线状态、文件认领和协作活动等团队数据 |
 
 如果你使用 Docker 并希望这些设置在重建容器后仍然保留，建议通过挂载文件或卷的方式持久化这两个配置文件。
 本地开发时，`users.json` 和 `app-settings.json` 的默认位置都是项目根目录。
@@ -218,7 +242,7 @@ npm run dev
 LLM 运行时配置同样支持两种方式：
 
 - 推荐：通过管理员设置页直接修改
-- 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME`、`AGENT_MAX_TOKENS` 指定
+- 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME`、`AGENT_MAX_TOKENS`、`MAX_AGENT_ITERATIONS`、`SYSTEM_PROMPT` 指定
 
 通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。
 
@@ -237,7 +261,7 @@ ai-ide/
 ├── backend/                 # Express + WebSocket 服务端
 │   └── src/
 │       ├── agent/           # AI 智能体循环、工具、提示词、任务系统
-│       │   ├── loop.ts      # LLM 调用循环及工具执行
+│       │   ├── loop.ts      # 双层 LLM 循环，支持工具执行与 steering 打断
 │       │   ├── tools.ts     # 智能体工具（bash、文件读写、任务、队友）
 │       │   ├── systemPrompt.ts
 │       │   ├── taskManager.ts
@@ -245,15 +269,18 @@ ai-ide/
 │       │   └── teammateManager.ts
 │       ├── auth/            # 会话管理与中间件
 │       ├── chat/            # 历史对话持久化与标题生成
-│       ├── routes/          # REST API（文件操作、认证）
+│       ├── files/           # 协作/冲突提示使用的文件变更元数据
+│       ├── routes/          # REST API（文件、认证、管理员、团队）
+│       ├── team/            # 团队成员、角色、邀请码、认领、在线状态、活动流
 │       ├── plugins/         # 插件清单校验与注册表
-│       └── ws/              # WebSocket 处理（聊天、终端）
+│       └── ws/              # WebSocket 处理（聊天、终端、团队）
 ├── frontend/                # React + Vite 单页应用
 │   └── src/
 │       ├── components/      # Sidebar、Editor、ChatPanel、Terminal 等
 │       ├── i18n/            # 界面国际化 Provider 与文案包
+│       ├── utils/           # 冲突 diff/merge 辅助工具
 │       ├── plugins/         # 前端插件运行时与内置插件
-│       └── hooks/           # useAuth、useChat、useFileSystem
+│       └── hooks/           # useAuth、useChat、useFileSystem、useTeam
 ├── plugins/                 # 支持离线安装的外部插件目录
 ├── users.json               # 用户凭证与允许路径配置
 ├── app-settings.json        # 管理员设置页持久化的 LLM 配置
@@ -278,9 +305,11 @@ AI 助手可以：
 
 - **读取 / 编写 / 编辑文件** — 直接操作工作区内的文件
 - **执行 Shell 命令** — 通过集成终端运行命令
+- **实时接收 Steering** — 用户追加的 follow-up 消息可在单个工具执行完成后立即打断当前流程，并在保留已有工具结果上下文的前提下进入下一轮 turn
 - **管理任务** — 创建、更新、跟踪任务看板
 - **生成队友** — 创建具有特定角色的自主 AI 子智能体
 - **协作** — 智能体之间通过消息总线通信，可主动认领任务
+- **遵守团队权限** — 当当前团队角色为只读时，文件写入类工具会自动受限
 
 ### 智能体工具列表
 
