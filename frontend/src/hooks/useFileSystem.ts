@@ -42,14 +42,97 @@ export function useFileSystem(token: string) {
     return res.json();
   }, [authHeaders]);
 
+  const fetchChanges = useCallback(
+    async (
+      since: number
+    ): Promise<{ changed: boolean; latestMtime: number }> => {
+      const params = new URLSearchParams({
+        since: String(since),
+      });
+      const res = await fetch(`${API}/changes?${params.toString()}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to check file changes");
+      return res.json();
+    },
+    [authHeaders]
+  );
+
+  const readFileWithMeta = useCallback(
+    async (
+      path: string
+    ): Promise<{
+      content: string;
+      version: string;
+      updatedAt: number;
+      source?: "team_member" | "external" | "assistant_tool" | "unknown";
+      actor?: string;
+    }> => {
+      const res = await fetch(`${API}/read?path=${encodeURIComponent(path)}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to read file");
+      const data = await res.json();
+      return {
+        content: data.content,
+        version: data.version,
+        updatedAt: data.updatedAt,
+        ...(typeof data.source === "string" ? { source: data.source } : {}),
+        ...(typeof data.actor === "string" ? { actor: data.actor } : {}),
+      };
+    },
+    [authHeaders]
+  );
+
   const readFile = useCallback(async (path: string): Promise<string> => {
-    const res = await fetch(`${API}/read?path=${encodeURIComponent(path)}`, {
-      headers: authHeaders(),
-    });
-    if (!res.ok) throw new Error("Failed to read file");
-    const data = await res.json();
+    const data = await readFileWithMeta(path);
     return data.content;
-  }, [authHeaders]);
+  }, [readFileWithMeta]);
+
+  const writeFile = useCallback(
+    async (
+      path: string,
+      content: string,
+      force = false,
+      expectedVersion?: string
+    ): Promise<{ version: string; updatedAt: number }> => {
+      const res = await fetch(`${API}/write`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path, content, force, expectedVersion }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const error = new Error(data.detail || "Failed to save file") as Error & {
+          code?: string;
+          claim?: { path: string; username: string; updatedAt: number };
+          current?: {
+            content: string;
+            version: string;
+            updatedAt: number;
+            source?: "team_member" | "external" | "assistant_tool" | "unknown";
+            actor?: string;
+          };
+        };
+        if (typeof data.code === "string") {
+          error.code = data.code;
+        }
+        if (data.claim && typeof data.claim === "object") {
+          error.claim = data.claim;
+        }
+        if (data.current && typeof data.current === "object") {
+          error.current = data.current;
+        }
+        throw error;
+      }
+      const data = await res.json();
+      return {
+        version: data.version,
+        updatedAt: data.updatedAt,
+      };
+    },
+    [authHeaders]
+  );
 
   const findDefinition = useCallback(
     async (symbol: string, currentPath: string): Promise<DefinitionLocation | null> => {
@@ -67,14 +150,6 @@ export function useFileSystem(token: string) {
     [authHeaders]
   );
 
-  const writeFile = useCallback(async (path: string, content: string) => {
-    const res = await fetch(`${API}/write`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ path, content }),
-    });
-    if (!res.ok) throw new Error("Failed to save file");
-  }, [authHeaders]);
 
   const createEntry = useCallback(async (path: string, isDirectory: boolean) => {
     const res = await fetch(`${API}/create`, {
@@ -142,6 +217,8 @@ export function useFileSystem(token: string) {
   return useMemo(
     () => ({
       fetchTree,
+      fetchChanges,
+      readFileWithMeta,
       readFile,
       findDefinition,
       writeFile,
@@ -152,6 +229,8 @@ export function useFileSystem(token: string) {
     }),
     [
       fetchTree,
+      fetchChanges,
+      readFileWithMeta,
       readFile,
       findDefinition,
       writeFile,

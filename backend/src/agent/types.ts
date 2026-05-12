@@ -58,19 +58,26 @@ export interface ToolFileUpdate {
 export type WsServerMessage =
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
-  | { type: "thinking"; content: string }
-  | { type: "tool_call"; toolCallId: string; name: string; input: Record<string, unknown> }
+  | { type: "thinking"; requestId: string; content: string }
+  | {
+      type: "tool_call";
+      requestId: string;
+      toolCallId: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
   | {
       type: "tool_result";
+      requestId: string;
       toolCallId: string;
       name: string;
       result: string;
       isError?: boolean;
       fileUpdate?: ToolFileUpdate;
     }
-  | { type: "token"; content: string }
-  | { type: "done" }
-  | { type: "error"; content: string };
+  | { type: "token"; requestId: string; content: string }
+  | { type: "done"; requestId: string; interrupted?: boolean }
+  | { type: "error"; requestId?: string; content: string };
 
 // --- Tool context ---
 
@@ -79,6 +86,7 @@ export interface ToolContext {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  actorName?: string;
 }
 
 // --- Todo types ---

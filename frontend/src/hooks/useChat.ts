@@ -23,7 +23,7 @@ export function useChat(
 ) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [activeRequestIds, setActiveRequestIds] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(
     null
@@ -71,20 +71,43 @@ export function useChat(
     }
   }, [token]);
 
-  // Helper: update the last assistant message
-  const updateLastAssistant = useCallback(
-    (updater: (msg: ChatMessage) => ChatMessage) => {
+  const updateAssistantByRequestId = useCallback(
+    (
+      requestId: string | undefined,
+      updater: (msg: ChatMessage) => ChatMessage
+    ) => {
       setMessages((prev) => {
         const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last && last.role === "assistant") {
-          updated[updated.length - 1] = updater(last);
+        if (requestId) {
+          for (let index = updated.length - 1; index >= 0; index -= 1) {
+            const candidate = updated[index];
+            if (
+              candidate.role === "assistant" &&
+              candidate.requestId === requestId
+            ) {
+              updated[index] = updater(candidate);
+              return updated;
+            }
+          }
+        }
+
+        for (let index = updated.length - 1; index >= 0; index -= 1) {
+          const candidate = updated[index];
+          if (candidate.role === "assistant") {
+            updated[index] = updater(candidate);
+            return updated;
+          }
         }
         return updated;
       });
     },
     []
   );
+
+  const finishRequest = useCallback((requestId?: string) => {
+    if (!requestId) return;
+    setActiveRequestIds((prev) => prev.filter((value) => value !== requestId));
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -124,21 +147,21 @@ export function useChat(
           break;
 
         case "token":
-          updateLastAssistant((msg) => ({
+          updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             content: msg.content + data.content,
           }));
           break;
 
         case "thinking":
-          updateLastAssistant((msg) => ({
+          updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             thinking: (msg.thinking || "") + data.content,
           }));
           break;
 
         case "tool_call":
-          updateLastAssistant((msg) => ({
+          updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             toolCalls: [
               ...(msg.toolCalls || []),
@@ -152,7 +175,7 @@ export function useChat(
           break;
 
         case "tool_result":
-          updateLastAssistant((msg) => ({
+          updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             toolCalls: (msg.toolCalls || []).map((tc) =>
               tc.toolCallId === data.toolCallId
@@ -171,23 +194,23 @@ export function useChat(
           break;
 
         case "done":
-          setIsStreaming(false);
+          finishRequest(data.requestId);
           void refreshConversations();
           break;
 
         case "error":
-          updateLastAssistant((msg) => ({
+          updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             content: msg.content || `Error: ${data.content}`,
           }));
-          setIsStreaming(false);
+          finishRequest(data.requestId);
           void refreshConversations();
           break;
       }
     };
 
     wsRef.current = ws;
-  }, [refreshConversations, updateLastAssistant, token]);
+  }, [finishRequest, refreshConversations, updateAssistantByRequestId, token]);
 
   useEffect(() => {
     connect();
@@ -201,26 +224,32 @@ export function useChat(
     setMessages([]);
     setCurrentConversationId(null);
     setHistoryError(null);
+    setActiveRequestIds([]);
     void refreshConversations();
   }, [refreshConversations, workspaceDir]);
 
   const sendMessage = useCallback(
     (content: string, context?: FileContext) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const requestId = createRequestId();
 
       const userMsg: ChatMessage = {
+        requestId,
         role: "user",
         content,
         timestamp: Date.now(),
       };
       const assistantMsg: ChatMessage = {
+        requestId,
         role: "assistant",
         content: "",
         timestamp: Date.now(),
       };
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setIsStreaming(true);
+      setActiveRequestIds((prev) =>
+        prev.includes(requestId) ? prev : [...prev, requestId]
+      );
 
       const history = messages.slice(-10).map((m) => ({
         role: m.role,
@@ -229,6 +258,7 @@ export function useChat(
 
       wsRef.current.send(
         JSON.stringify({
+          requestId,
           message: content,
           context,
           history,
@@ -242,6 +272,7 @@ export function useChat(
   const clearMessages = useCallback(() => {
     setMessages([]);
     setCurrentConversationId(null);
+    setActiveRequestIds([]);
   }, []);
 
   const loadConversation = useCallback(
@@ -284,7 +315,8 @@ export function useChat(
     messages,
     sendMessage,
     clearMessages,
-    isStreaming,
+    isStreaming: activeRequestIds.length > 0,
+    activeRequestIds,
     connected,
     currentConversationId,
     conversations,
@@ -294,4 +326,8 @@ export function useChat(
     refreshConversations,
     loadConversation,
   };
+}
+
+function createRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }

@@ -35,6 +35,7 @@ interface LlmFormState {
   vllmApiKey: string;
   modelName: string;
   maxTokens: string;
+  maxAgentIterations: string;
   systemPrompt: string;
 }
 
@@ -50,6 +51,7 @@ const EMPTY_LLM_FORM: LlmFormState = {
   vllmApiKey: "",
   modelName: "",
   maxTokens: "8192",
+  maxAgentIterations: "30",
   systemPrompt: "",
 };
 
@@ -95,6 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiKey: data.llm.vllmApiKey,
         modelName: data.llm.modelName,
         maxTokens: String(data.llm.maxTokens),
+        maxAgentIterations: String(data.llm.maxAgentIterations),
         systemPrompt: data.llm.systemPrompt || "",
       });
     } catch (e) {
@@ -201,12 +204,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (savingLlm) return;
 
     const maxTokens = Number.parseInt(llmForm.maxTokens, 10);
+    const maxAgentIterations = Number.parseInt(
+      llmForm.maxAgentIterations,
+      10
+    );
 
     const payload: LlmSettings = {
       vllmApiUrl: llmForm.vllmApiUrl.trim(),
       vllmApiKey: llmForm.vllmApiKey,
       modelName: llmForm.modelName.trim(),
       maxTokens,
+      maxAgentIterations,
       systemPrompt: llmForm.systemPrompt.trim(),
     };
 
@@ -215,7 +223,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
-    if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+    if (
+      !Number.isInteger(maxTokens) ||
+      maxTokens <= 0 ||
+      !Number.isInteger(maxAgentIterations) ||
+      maxAgentIterations <= 0
+    ) {
       setError(t("settings.maxTokensPositiveInteger"));
       return;
     }
@@ -229,6 +242,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiKey: saved.vllmApiKey,
         modelName: saved.modelName,
         maxTokens: String(saved.maxTokens),
+        maxAgentIterations: String(saved.maxAgentIterations),
         systemPrompt: saved.systemPrompt || "",
       });
       setSettings((prev) => (prev ? { ...prev, llm: saved } : prev));
@@ -514,6 +528,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         }))
                       }
                       placeholder="8192"
+                    />
+                  </label>
+
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.maxAgentIterations")}</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={llmForm.maxAgentIterations}
+                      onChange={(e) =>
+                        setLlmForm((prev) => ({
+                          ...prev,
+                          maxAgentIterations: e.target.value,
+                        }))
+                      }
+                      placeholder="30"
                     />
                   </label>
 

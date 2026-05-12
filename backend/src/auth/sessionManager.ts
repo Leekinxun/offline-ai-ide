@@ -5,6 +5,7 @@ import { TaskManager } from "../agent/taskManager.js";
 import { MessageBus } from "../agent/messageBus.js";
 import { TeammateManager } from "../agent/teammateManager.js";
 import { config } from "../config.js";
+import { setActiveTeamId } from "../team/sessionBridge.js";
 
 interface UserConfig {
   username: string;
@@ -304,6 +305,7 @@ class SessionManager {
     session.taskManager = singletons.taskManager;
     session.messageBus = singletons.messageBus;
     session.teammateManager = singletons.teammateManager;
+    setActiveTeamId(session, null);
 
     return { workspaceDir: resolved };
   }

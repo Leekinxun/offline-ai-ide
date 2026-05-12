@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as monaco from "monaco-editor";
+import { DiffEditor } from "@monaco-editor/react";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { Editor } from "./components/Editor";
@@ -9,9 +10,11 @@ import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { SettingsModal } from "./components/SettingsModal";
 import { BrandMark } from "./components/BrandMark";
+import { TeamPanel } from "./components/TeamPanel";
 import { useFileSystem } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
+import { useTeam } from "./hooks/useTeam";
 import {
   DefinitionLocation,
   FileNode,
@@ -19,6 +22,7 @@ import {
   FileUpdate,
   OpenFile,
   SelectionInfo,
+  TeamRole,
   getLanguage,
 } from "./types";
 import {
@@ -29,6 +33,7 @@ import {
   Settings,
   Moon,
   Sun,
+  Users,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -37,6 +42,13 @@ import {
 } from "./plugins/runtime";
 import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
+import { getEditorThemeName } from "./editor/theme";
+import {
+  applyHunkSelections,
+  buildConflictHunks,
+  countRemoteSelections,
+  formatLineRange,
+} from "./utils/conflicts";
 
 export default function App() {
   const { t } = useI18n();
@@ -132,6 +144,45 @@ function pruneNestedPaths(paths: string[]): string[] {
   return pruned;
 }
 
+function collectVisiblePaths(nodes: FileNode[]): Set<string> {
+  const paths = new Set<string>();
+  const visit = (entries: FileNode[]) => {
+    for (const node of entries) {
+      paths.add(node.path);
+      if (node.children) {
+        visit(node.children);
+      }
+    }
+  };
+  visit(nodes);
+  return paths;
+}
+
+function isReadOnlyTeamRole(role: TeamRole | null | undefined): boolean {
+  return role === "viewer";
+}
+
+function buildClearedRemoteState(): Pick<
+  OpenFile,
+  | "remoteUpdated"
+  | "remoteContent"
+  | "remoteVersion"
+  | "remoteUpdatedAt"
+  | "remoteConflictReason"
+  | "remoteConflictSource"
+  | "remoteConflictActor"
+> {
+  return {
+    remoteUpdated: false,
+    remoteContent: undefined,
+    remoteVersion: undefined,
+    remoteUpdatedAt: undefined,
+    remoteConflictReason: undefined,
+    remoteConflictSource: undefined,
+    remoteConflictActor: undefined,
+  };
+}
+
 function AuthenticatedApp({
   token,
   username,
@@ -150,7 +201,12 @@ function AuthenticatedApp({
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [chatVisible, setChatVisible] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(false);
+  const [teamVisible, setTeamVisible] = useState(true);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
+  const [mergeSelections, setMergeSelections] = useState<Record<string, "local" | "remote">>(
+    {}
+  );
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
@@ -163,6 +219,8 @@ function AuthenticatedApp({
     useState<EditorNavigationTarget | null>(null);
   const [editorHighlightTarget, setEditorHighlightTarget] =
     useState<EditorHighlightTarget | null>(null);
+  const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
+  const lastWorkspaceMtimeRef = useRef(0);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const draggingRef = useRef<"sidebar" | "chat" | null>(null);
@@ -220,6 +278,21 @@ function AuthenticatedApp({
     try {
       const tree = await fs.fetchTree();
       setFileTree(tree);
+      const visiblePaths = collectVisiblePaths(tree);
+      setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
+      setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
+      setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
+      setPreviewModes((prev) => {
+        const next: Record<string, FilePreviewMode> = {};
+        for (const [path, mode] of Object.entries(prev)) {
+          if (visiblePaths.has(path)) {
+            next[path] = mode;
+          }
+        }
+        return next;
+      });
+      lastWorkspaceMtimeRef.current = Date.now();
+      setTreeRefreshNonce((prev) => prev + 1);
     } catch {
       showToast(t("app.failedToLoadFileTree"));
     }
@@ -248,6 +321,9 @@ function AuthenticatedApp({
         content: update.content,
         language: getLanguage(name),
         modified: false,
+        version: undefined,
+        updatedAt: undefined,
+        ...buildClearedRemoteState(),
       };
 
       setOpenFiles((prev) => {
@@ -273,8 +349,28 @@ function AuthenticatedApp({
         });
       }
       void loadTree();
+      void (async () => {
+        try {
+          const next = await fs.readFileWithMeta(update.path);
+          setOpenFiles((prev) =>
+            prev.map((file) =>
+              file.path === update.path
+                ? {
+                  ...file,
+                  content: next.content,
+                  version: next.version,
+                  updatedAt: next.updatedAt,
+                  ...buildClearedRemoteState(),
+                }
+              : file
+            )
+          );
+        } catch {
+          // best effort only
+        }
+      })();
     },
-    [activeFilePath, applyFileUpdateToTabs, loadTree]
+    [activeFilePath, applyFileUpdateToTabs, fs, loadTree]
   );
 
   const handleNavigateToFileUpdate = useCallback(
@@ -282,6 +378,26 @@ function AuthenticatedApp({
       applyFileUpdateToTabs(update, true);
       setActiveFilePath(update.path);
       void loadTree();
+      void (async () => {
+        try {
+          const next = await fs.readFileWithMeta(update.path);
+          setOpenFiles((prev) =>
+            prev.map((file) =>
+              file.path === update.path
+                ? {
+                  ...file,
+                  content: next.content,
+                  version: next.version,
+                  updatedAt: next.updatedAt,
+                  ...buildClearedRemoteState(),
+                }
+              : file
+            )
+          );
+        } catch {
+          // best effort only
+        }
+      })();
 
       if (!update.selection) return;
       navigationRequestRef.current += 1;
@@ -291,7 +407,7 @@ function AuthenticatedApp({
         ...update.selection,
       });
     },
-    [applyFileUpdateToTabs, loadTree]
+    [applyFileUpdateToTabs, fs, loadTree]
   );
 
   const handleNavigationComplete = useCallback((requestId: number) => {
@@ -307,6 +423,266 @@ function AuthenticatedApp({
   }, []);
 
   const chat = useChat(token, workspaceDir, handleAiFileUpdate);
+  const team = useTeam(token, workspaceDir, (nextWorkspace) => {
+    if (nextWorkspace !== workspaceDir) {
+      void onChangeWorkspace(nextWorkspace);
+    }
+  });
+  const readOnlyWorkspace = isReadOnlyTeamRole(team.activeTeam?.role);
+  const activeClaim =
+    activeFilePath && team.activeTeam
+      ? team.activeTeam.claims.find((claim) => claim.path === activeFilePath) || null
+      : null;
+  const activeCollaborators =
+    activeFilePath && team.activeTeam
+      ? team.activeTeam.presence.filter(
+          (entry) =>
+            entry.online &&
+            entry.username !== username &&
+            entry.activeFilePath === activeFilePath
+        )
+      : [];
+
+  const inferConflictSource = useCallback(
+    (
+      path: string,
+      options?: {
+        preferredActor?: string;
+        knownRemoteUpdatedAt?: number;
+      }
+    ): { source: "team_member" | "external" | "unknown"; actor?: string } => {
+      const preferredActor = options?.preferredActor?.trim();
+      if (preferredActor && preferredActor !== username) {
+        return { source: "team_member", actor: preferredActor };
+      }
+
+      const activeTeam = team.activeTeam;
+      if (!activeTeam) {
+        return { source: "external", actor: undefined };
+      }
+
+      const matchingClaim = activeTeam.claims.find(
+        (claim) => claim.path === path && claim.username !== username
+      );
+      if (matchingClaim) {
+        return { source: "team_member", actor: matchingClaim.username };
+      }
+
+      const matchingPresence = activeTeam.presence.find(
+        (entry) =>
+          entry.online &&
+          entry.username !== username &&
+          entry.activeFilePath === path
+      );
+      if (matchingPresence) {
+        return { source: "team_member", actor: matchingPresence.username };
+      }
+
+      const matchingActivity = activeTeam.activity.find((entry) => {
+        const payloadPath =
+          entry.payload && typeof entry.payload.path === "string"
+            ? entry.payload.path
+            : undefined;
+        return (
+          entry.type === "file_saved" &&
+          entry.username !== username &&
+          payloadPath === path &&
+          (typeof options?.knownRemoteUpdatedAt !== "number" ||
+            Math.abs(entry.createdAt - options.knownRemoteUpdatedAt) < 10_000)
+        );
+      });
+      if (matchingActivity) {
+        return { source: "team_member", actor: matchingActivity.username };
+      }
+
+      const hasOtherOnlineMembers = activeTeam.presence.some(
+        (entry) => entry.online && entry.username !== username
+      );
+      if (hasOtherOnlineMembers) {
+        return { source: "unknown", actor: undefined };
+      }
+
+      return { source: "external", actor: undefined };
+    },
+    [team.activeTeam, username]
+  );
+
+  const getConflictSourceMessage = useCallback(
+    (file: OpenFile): string | null => {
+      if (file.remoteConflictSource === "team_member") {
+        return file.remoteConflictActor
+          ? t("app.conflictSourceTeamMember", {
+              username: file.remoteConflictActor,
+            })
+          : t("app.conflictSourceTeamMemberUnknown");
+      }
+      if (file.remoteConflictSource === "external") {
+        return t("app.conflictSourceExternal");
+      }
+      if (file.remoteConflictSource === "assistant_tool") {
+        return t("app.conflictSourceAssistantTool", {
+          actor: file.remoteConflictActor ? ` (${file.remoteConflictActor})` : "",
+        });
+      }
+      if (file.remoteConflictSource === "unknown") {
+        return t("app.conflictSourceUnknown");
+      }
+      return null;
+    },
+    [t]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollWorkspaceChanges = async () => {
+      try {
+        const result = await fs.fetchChanges(lastWorkspaceMtimeRef.current);
+        if (cancelled) {
+          return;
+        }
+
+        if (result.changed) {
+          lastWorkspaceMtimeRef.current = result.latestMtime;
+          const currentActivePath = activeFilePath;
+          const currentOpenFiles = openFiles;
+          await loadTree();
+
+          if (currentActivePath) {
+            try {
+              const next = await fs.readFileWithMeta(currentActivePath);
+              if (cancelled) {
+                return;
+              }
+              setOpenFiles((prev) =>
+                prev.map((file) =>
+                  file.path === currentActivePath && !file.modified
+                    ? {
+                        ...file,
+                        content: next.content,
+                        version: next.version,
+                        updatedAt: next.updatedAt,
+                        ...buildClearedRemoteState(),
+                      }
+                    : file.path === currentActivePath &&
+                        file.modified &&
+                        file.content !== next.content
+                      ? (() => {
+                          if (file.remoteContent === next.content) {
+                            return file;
+                          }
+                          const sourceInfo =
+                            next.source === "team_member" ||
+                            next.source === "assistant_tool" ||
+                            next.source === "external" ||
+                            next.source === "unknown"
+                              ? {
+                                  source: next.source,
+                                  actor: next.actor,
+                                }
+                              : inferConflictSource(currentActivePath, {
+                                  knownRemoteUpdatedAt: next.updatedAt,
+                                });
+                          return {
+                            ...file,
+                            remoteUpdated: true,
+                            remoteContent: next.content,
+                            remoteVersion: next.version,
+                            remoteUpdatedAt: next.updatedAt,
+                            remoteConflictReason: "background",
+                            remoteConflictSource: sourceInfo.source,
+                            remoteConflictActor: sourceInfo.actor,
+                          };
+                        })()
+                    : file
+                )
+              );
+            } catch {
+              // ignore missing active file during polling
+            }
+          }
+
+          for (const file of currentOpenFiles) {
+            if (file.path === currentActivePath) {
+              continue;
+            }
+            try {
+              const next = await fs.readFileWithMeta(file.path);
+              if (cancelled) {
+                return;
+              }
+              setOpenFiles((prev) =>
+                prev.map((entry) =>
+                  entry.path === file.path && !entry.modified
+                    ? {
+                        ...entry,
+                        content: next.content,
+                        version: next.version,
+                        updatedAt: next.updatedAt,
+                        ...buildClearedRemoteState(),
+                      }
+                    : entry.path === file.path &&
+                        entry.modified &&
+                        entry.content !== next.content
+                      ? entry.remoteContent === next.content
+                        ? {
+                            ...entry,
+                          }
+                        : (() => {
+                            const sourceInfo =
+                              next.source === "team_member" ||
+                              next.source === "assistant_tool" ||
+                              next.source === "external" ||
+                              next.source === "unknown"
+                                ? {
+                                    source: next.source,
+                                    actor: next.actor,
+                                  }
+                                : inferConflictSource(file.path, {
+                                    knownRemoteUpdatedAt: next.updatedAt,
+                                  });
+                            return {
+                              ...entry,
+                              remoteUpdated: true,
+                              remoteContent: next.content,
+                              remoteVersion: next.version,
+                              remoteUpdatedAt: next.updatedAt,
+                              remoteConflictReason: "background",
+                              remoteConflictSource: sourceInfo.source,
+                              remoteConflictActor: sourceInfo.actor,
+                            };
+                          })()
+                    : entry
+                )
+              );
+            } catch {
+              // ignore deleted file during polling; tree refresh handles visibility
+            }
+          }
+        } else {
+          lastWorkspaceMtimeRef.current = Math.max(
+            lastWorkspaceMtimeRef.current,
+            result.latestMtime
+          );
+        }
+      } catch {
+        // best effort polling only
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(pollWorkspaceChanges, 1500);
+        }
+      }
+    };
+
+    timer = window.setTimeout(pollWorkspaceChanges, 1500);
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeFilePath, fs, inferConflictSource, loadTree, openFiles]);
 
   // --- File operations ---
   const openFile = useCallback(
@@ -318,15 +694,18 @@ function AuthenticatedApp({
       }
 
       try {
-        const content = await fs.readFile(path);
+        const next = await fs.readFileWithMeta(path);
         const name = path.split("/").pop() || path;
         const language = getLanguage(name);
         const newFile: OpenFile = {
           path,
           name,
-          content,
+          content: next.content,
           language,
           modified: false,
+          version: next.version,
+          updatedAt: next.updatedAt,
+          ...buildClearedRemoteState(),
         };
         setOpenFiles((prev) => [...prev, newFile]);
         setActiveFilePath(path);
@@ -383,6 +762,7 @@ function AuthenticatedApp({
 
   const handleEditorChange = useCallback(
     (value: string) => {
+      if (readOnlyWorkspace) return;
       if (!activeFilePath) return;
       setOpenFiles((prev) =>
         prev.map((f) =>
@@ -392,24 +772,138 @@ function AuthenticatedApp({
         )
       );
     },
-    [activeFilePath]
+    [activeFilePath, readOnlyWorkspace]
   );
 
   const saveFile = useCallback(async () => {
+    if (readOnlyWorkspace) {
+      showToast(t("team.readOnlySaveBlocked"));
+      return;
+    }
     const file = openFiles.find((f) => f.path === activeFilePath);
     if (!file) return;
+    if (activeClaim && activeClaim.username !== username) {
+      const confirmed = window.confirm(
+        t("team.claimConflictConfirm", {
+          username: activeClaim.username,
+        })
+      );
+      if (!confirmed) {
+        showToast(t("team.claimConflictCancelled"));
+        return;
+      }
+    }
     try {
-      await fs.writeFile(file.path, file.content);
+      const result = await fs.writeFile(
+        file.path,
+        file.content,
+        Boolean(activeClaim && activeClaim.username !== username),
+        file.version
+      );
       setOpenFiles((prev) =>
         prev.map((f) =>
-          f.path === activeFilePath ? { ...f, modified: false } : f
+          f.path === activeFilePath
+            ? {
+                ...f,
+                modified: false,
+                version: result.version,
+                updatedAt: result.updatedAt,
+                ...buildClearedRemoteState(),
+              }
+            : f
         )
       );
       showToast(t("app.fileSaved"));
-    } catch {
+    } catch (error) {
+      const claimError = error as Error & {
+        code?: string;
+        claim?: { username: string };
+        current?: {
+          content: string;
+          version: string;
+          updatedAt: number;
+          source?: "team_member" | "external" | "assistant_tool" | "unknown";
+          actor?: string;
+        };
+      };
+      if (claimError.code === "FILE_VERSION_CONFLICT" && claimError.current) {
+        const sourceInfo =
+          claimError.current.source === "team_member" ||
+          claimError.current.source === "assistant_tool" ||
+          claimError.current.source === "external" ||
+          claimError.current.source === "unknown"
+            ? {
+                source: claimError.current.source,
+                actor: claimError.current.actor,
+              }
+            : inferConflictSource(file.path, {
+                knownRemoteUpdatedAt: claimError.current?.updatedAt,
+              });
+        setOpenFiles((prev) =>
+          prev.map((entry) =>
+            entry.path === file.path
+              ? {
+                  ...entry,
+                  remoteUpdated: true,
+                  remoteContent: claimError.current?.content ?? entry.remoteContent,
+                  remoteVersion: claimError.current?.version ?? entry.remoteVersion,
+                  remoteUpdatedAt: claimError.current?.updatedAt ?? entry.remoteUpdatedAt,
+                  remoteConflictReason: "save",
+                  remoteConflictSource: sourceInfo.source,
+                  remoteConflictActor: sourceInfo.actor,
+                }
+              : entry
+          )
+        );
+        setDiffViewerPath(file.path);
+        showToast(t("app.remoteConflictTitle"));
+        return;
+      }
+      if (claimError.code === "TEAM_CLAIM_CONFLICT" && claimError.claim?.username) {
+        const confirmed = window.confirm(
+          t("team.claimConflictConfirm", {
+            username: claimError.claim.username,
+          })
+        );
+        if (!confirmed) {
+          showToast(t("team.claimConflictCancelled"));
+          return;
+        }
+        try {
+          const result = await fs.writeFile(file.path, file.content, true, file.version);
+          setOpenFiles((prev) =>
+            prev.map((f) =>
+              f.path === activeFilePath
+                ? {
+                    ...f,
+                    modified: false,
+                    version: result.version,
+                    updatedAt: result.updatedAt,
+                    ...buildClearedRemoteState(),
+                  }
+                : f
+            )
+          );
+          showToast(t("app.fileSaved"));
+          return;
+        } catch {
+          showToast(t("app.failedToSaveFile"));
+          return;
+        }
+      }
       showToast(t("app.failedToSaveFile"));
     }
-  }, [activeFilePath, openFiles, fs, showToast, t]);
+  }, [
+    activeClaim,
+    activeFilePath,
+    fs,
+    inferConflictSource,
+    openFiles,
+    readOnlyWorkspace,
+    showToast,
+    t,
+    username,
+  ]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -563,6 +1057,10 @@ function AuthenticatedApp({
   // --- Chat: apply code to editor ---
   const handleApplyCode = useCallback(
     (code: string) => {
+      if (readOnlyWorkspace) {
+        showToast(t("team.readOnlyApplyBlocked"));
+        return;
+      }
       if (!activeFilePath || !editorRef.current) {
         showToast(t("app.noFileOpenToApply"));
         return;
@@ -584,8 +1082,73 @@ function AuthenticatedApp({
       }
       showToast(t("app.codeApplied"));
     },
-    [activeFilePath, showToast, t]
+    [activeFilePath, readOnlyWorkspace, showToast, t]
   );
+
+  const handleReloadRemoteVersion = useCallback(() => {
+    if (!activeFilePath) return;
+    setOpenFiles((prev) =>
+      prev.map((file) =>
+        file.path === activeFilePath
+          ? {
+              ...file,
+              content: file.remoteContent ?? file.content,
+              modified: false,
+              version: file.remoteVersion ?? file.version,
+              updatedAt: file.remoteUpdatedAt ?? file.updatedAt,
+              ...buildClearedRemoteState(),
+            }
+          : file
+      )
+    );
+    setDiffViewerPath(null);
+    setMergeSelections({});
+    showToast(t("app.remoteVersionLoaded"));
+  }, [activeFilePath, showToast, t]);
+
+  const handleKeepLocalVersion = useCallback(() => {
+    if (!activeFilePath) return;
+    setOpenFiles((prev) =>
+      prev.map((file) =>
+        file.path === activeFilePath
+          ? {
+              ...file,
+              remoteUpdated: false,
+            }
+          : file
+      )
+    );
+    setDiffViewerPath(null);
+    setMergeSelections({});
+    showToast(t("app.localVersionKept"));
+  }, [activeFilePath, showToast, t]);
+
+  const handleForceSaveAfterVersionConflict = useCallback(async () => {
+    if (!activeFilePath) return;
+    const file = openFiles.find((entry) => entry.path === activeFilePath);
+    if (!file) return;
+    try {
+      const result = await fs.writeFile(file.path, file.content, true);
+      setOpenFiles((prev) =>
+        prev.map((entry) =>
+          entry.path === activeFilePath
+            ? {
+                ...entry,
+                modified: false,
+                version: result.version,
+                updatedAt: result.updatedAt,
+                ...buildClearedRemoteState(),
+              }
+            : entry
+        )
+      );
+      setDiffViewerPath(null);
+      setMergeSelections({});
+      showToast(t("app.fileSaved"));
+    } catch {
+      showToast(t("app.failedToSaveFile"));
+    }
+  }, [activeFilePath, fs, openFiles, showToast, t]);
 
   // --- Chat: send with file + selection context ---
   const handleChatSend = useCallback(
@@ -610,9 +1173,24 @@ function AuthenticatedApp({
     if (!editor) return;
     const disposable = editor.onDidChangeCursorPosition((e) => {
       setCursorPos({ line: e.position.lineNumber, column: e.position.column });
+      team.sendPresence({
+        activeFilePath,
+        cursorLine: e.position.lineNumber,
+        cursorColumn: e.position.column,
+        activity: activeFilePath ? "editing" : "idle",
+      });
     });
     return () => disposable.dispose();
-  });
+  }, [activeFilePath, team]);
+
+  useEffect(() => {
+    team.sendPresence({
+      activeFilePath,
+      cursorLine: cursorPos.line,
+      cursorColumn: cursorPos.column,
+      activity: activeFilePath ? "viewing" : "idle",
+    });
+  }, [activeFilePath, cursorPos.column, cursorPos.line, team]);
 
   // --- Handle workspace change ---
   const handleChangeWorkspace = useCallback(
@@ -684,6 +1262,78 @@ function AuthenticatedApp({
           theme,
         })
       : null;
+  const activeConflictFile =
+    activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
+  const diffViewerFile =
+    diffViewerPath ? openFiles.find((file) => file.path === diffViewerPath) || null : null;
+  const conflictSourceMessage = diffViewerFile ? getConflictSourceMessage(diffViewerFile) : null;
+  const conflictHunks = useMemo(
+    () =>
+      diffViewerFile?.remoteContent !== undefined
+        ? buildConflictHunks(diffViewerFile.content, diffViewerFile.remoteContent)
+        : [],
+    [diffViewerFile?.content, diffViewerFile?.remoteContent]
+  );
+  const activeConflictSourceMessage = activeConflictFile
+    ? getConflictSourceMessage(activeConflictFile)
+    : null;
+
+  useEffect(() => {
+    if (!diffViewerFile || diffViewerFile.remoteContent === undefined) {
+      setMergeSelections({});
+      return;
+    }
+
+    setMergeSelections((current) => {
+      const next: Record<string, "local" | "remote"> = {};
+      for (const hunk of conflictHunks) {
+        next[hunk.id] = current[hunk.id] || "local";
+      }
+      return next;
+    });
+  }, [conflictHunks, diffViewerFile]);
+
+  const mergedConflictContent =
+    diffViewerFile && diffViewerFile.remoteContent !== undefined
+      ? applyHunkSelections(diffViewerFile.content, conflictHunks, mergeSelections)
+      : null;
+  const remoteSelectedCount = countRemoteSelections(conflictHunks, mergeSelections);
+  const handleUseAllRemoteBlocks = useCallback(() => {
+    setMergeSelections(
+      Object.fromEntries(
+        conflictHunks.map((hunk) => [hunk.id, "remote" as const])
+      )
+    );
+  }, [conflictHunks]);
+
+  const handleKeepAllLocalBlocks = useCallback(() => {
+    setMergeSelections(
+      Object.fromEntries(
+        conflictHunks.map((hunk) => [hunk.id, "local" as const])
+      )
+    );
+  }, [conflictHunks]);
+
+  const handleApplyMergedResult = useCallback(() => {
+    if (!diffViewerFile || mergedConflictContent === null) return;
+    setOpenFiles((prev) =>
+      prev.map((file) =>
+        file.path === diffViewerFile.path
+          ? {
+              ...file,
+              content: mergedConflictContent,
+              modified: true,
+              version: diffViewerFile.remoteVersion ?? file.version,
+              updatedAt: diffViewerFile.remoteUpdatedAt ?? file.updatedAt,
+              ...buildClearedRemoteState(),
+            }
+          : file
+      )
+    );
+    setDiffViewerPath(null);
+    setMergeSelections({});
+    showToast(t("app.mergeApplied"));
+  }, [diffViewerFile, mergedConflictContent, showToast, t]);
 
   return (
     <div className="app">
@@ -716,6 +1366,13 @@ function AuthenticatedApp({
             }
           >
             {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+          </button>
+          <button
+            className={`titlebar-btn${teamVisible ? " active" : ""}`}
+            onClick={() => setTeamVisible((v) => !v)}
+            title={t("team.title")}
+          >
+            <Users size={17} />
           </button>
           <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
@@ -773,6 +1430,7 @@ function AuthenticatedApp({
           workspaceDir={workspaceDir}
           onChangeWorkspace={handleChangeWorkspace}
           token={token}
+          activeTeam={team.activeTeam}
           style={sidebarVisible ? { width: sidebarWidth } : undefined}
         />
 
@@ -789,6 +1447,74 @@ function AuthenticatedApp({
             onCloseTab={closeTab}
           />
           <div className="editor-main">
+            {activeConflictFile && (
+              <div className="editor-conflict-banner">
+                <div className="editor-conflict-copy">
+                  <strong>{t("app.remoteConflictTitle")}</strong>
+                  <span>
+                    {activeConflictFile.remoteConflictReason === "save"
+                      ? t("app.saveVersionConflictMessage")
+                      : t("app.remoteConflictMessage")}
+                  </span>
+                  {activeConflictSourceMessage && (
+                    <span className="editor-conflict-source">
+                      {activeConflictSourceMessage}
+                    </span>
+                  )}
+                </div>
+                <div className="editor-conflict-actions">
+                  <button
+                    className="editor-conflict-btn"
+                    onClick={() => setDiffViewerPath(activeConflictFile.path)}
+                  >
+                    {t("app.viewDiff")}
+                  </button>
+                  <button
+                    className="editor-conflict-btn"
+                    onClick={handleKeepLocalVersion}
+                  >
+                    {t("app.keepLocalVersion")}
+                  </button>
+                  <button
+                    className="editor-conflict-btn primary"
+                    onClick={handleReloadRemoteVersion}
+                  >
+                    {t("app.loadRemoteVersion")}
+                  </button>
+                  {activeConflictFile.remoteConflictReason === "save" && (
+                    <button
+                      className="editor-conflict-btn danger"
+                      onClick={() => void handleForceSaveAfterVersionConflict()}
+                    >
+                      {t("app.overwriteRemoteVersion")}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {!activeConflictFile &&
+              ((activeClaim && activeClaim.username !== username) ||
+                activeCollaborators.length > 0) &&
+              activeFilePath && (
+                <div className="editor-collaboration-banner">
+                  <div className="editor-conflict-copy">
+                    <strong>{t("team.collaborationNoticeTitle")}</strong>
+                    <span>
+                      {activeClaim && activeClaim.username !== username
+                        ? t("team.collaborationClaimNotice", {
+                            username: activeClaim.username,
+                          })
+                        : activeCollaborators.length > 0
+                          ? t("team.collaborationPresenceNotice", {
+                              usernames: activeCollaborators
+                                .map((entry) => entry.username)
+                                .join(", "),
+                            })
+                          : t("team.unclaimed")}
+                    </span>
+                  </div>
+                </div>
+              )}
             {activeFile ? (
               activePreviewRenderer ? (
                 <div className="editor-workbench">
@@ -836,7 +1562,9 @@ function AuthenticatedApp({
                           language={activeFile.language}
                           path={activeFile.path}
                           theme={theme}
+                          readOnly={readOnlyWorkspace}
                           openFiles={openFiles}
+                          refreshNonce={treeRefreshNonce}
                           onChange={handleEditorChange}
                           onSave={saveFile}
                           onSelectionChange={handleSelectionChange}
@@ -874,7 +1602,9 @@ function AuthenticatedApp({
                   language={activeFile.language}
                   path={activeFile.path}
                   theme={theme}
+                  readOnly={readOnlyWorkspace}
                   openFiles={openFiles}
+                  refreshNonce={treeRefreshNonce}
                   onChange={handleEditorChange}
                   onSave={saveFile}
                   onSelectionChange={handleSelectionChange}
@@ -908,8 +1638,129 @@ function AuthenticatedApp({
             key={workspaceDir}
             visible={terminalVisible}
             token={token}
+            disabled={readOnlyWorkspace}
+            disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
           />
         </div>
+
+        {teamVisible && (
+          <div className="team-sidebar">
+            <TeamPanel
+              teams={team.teams}
+              activeTeam={team.activeTeam}
+              currentUsername={username}
+              connected={team.connected}
+              loading={team.loading}
+              error={team.error}
+              activeFilePath={activeFilePath}
+              onRefresh={team.refresh}
+              onCreateTeam={async (name) => {
+                try {
+                  await team.createTeam(name);
+                  showToast(t("team.createdToast", { name }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onJoinTeam={async (code) => {
+                try {
+                  const joined = await team.joinTeam(code);
+                  showToast(t("team.joinedToast", { name: joined.name }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onSwitchTeam={async (teamId) => {
+                try {
+                  const switched = await team.switchTeam(teamId);
+                  showToast(t("team.switchedToast", { name: switched.name }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onCreateInvite={async (teamId, role: TeamRole) => {
+                try {
+                  const invite = await team.createInvite(teamId, role);
+                  showToast(t("team.inviteCreatedToast", { code: invite.code }));
+                  return invite.code;
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onUpdateMemberRole={async (memberUsername, role) => {
+                if (!team.activeTeam) return;
+                try {
+                  await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
+                  showToast(
+                    t("team.roleUpdatedToast", {
+                      username: memberUsername,
+                      role,
+                    })
+                  );
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onTransferOwnership={async (memberUsername) => {
+                if (!team.activeTeam) return;
+                const confirmed = window.confirm(
+                  t("team.transferOwnerConfirm", { username: memberUsername })
+                );
+                if (!confirmed) return;
+                try {
+                  await team.transferOwnership(team.activeTeam.id, memberUsername);
+                  showToast(t("team.ownerTransferredToast", { username: memberUsername }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onRemoveMember={async (memberUsername) => {
+                if (!team.activeTeam) return;
+                const confirmed = window.confirm(
+                  t("team.removeMemberConfirm", { username: memberUsername })
+                );
+                if (!confirmed) return;
+                try {
+                  await team.removeMember(team.activeTeam.id, memberUsername);
+                  showToast(t("team.memberRemovedToast", { username: memberUsername }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onLeaveTeam={async () => {
+                if (!team.activeTeam) return;
+                const leavingTeamName = team.activeTeam.name;
+                const confirmed = window.confirm(
+                  t("team.leaveTeamConfirm", { name: leavingTeamName })
+                );
+                if (!confirmed) return;
+                try {
+                  await team.leaveTeam(team.activeTeam.id);
+                  showToast(t("team.leftTeamToast", { name: leavingTeamName }));
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                  throw error;
+                }
+              }}
+              onToggleClaim={async (path, claimed) => {
+                if (!team.activeTeam) return;
+                await team.setClaim(team.activeTeam.id, path, claimed);
+                showToast(
+                  claimed
+                    ? t("team.claimedToast", { path })
+                    : t("team.releasedToast", { path })
+                );
+              }}
+            />
+          </div>
+        )}
 
         <div
           className={`resize-handle${!chatVisible ? " hidden" : ""}${draggingRef.current === "chat" ? " dragging" : ""}`}
@@ -921,6 +1772,7 @@ function AuthenticatedApp({
           currentConversationId={chat.currentConversationId}
           conversations={chat.conversations}
           isStreaming={chat.isStreaming}
+          activeRequestIds={chat.activeRequestIds}
           connected={chat.connected}
           visible={chatVisible}
           historyLoading={chat.historyLoading}
@@ -947,10 +1799,180 @@ function AuthenticatedApp({
         }
         cursorPosition={cursorPos}
         connected={chat.connected}
+        teamName={team.activeTeam?.name || null}
+        teamOnlineCount={team.activeTeam?.onlineCount}
+        teamRole={team.activeTeam?.role || null}
+        readOnlyWorkspace={readOnlyWorkspace}
       />
 
       {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
+
+      {diffViewerFile && diffViewerFile.remoteContent !== undefined && (
+        <div
+          className="settings-modal-overlay"
+          onClick={() => {
+            setDiffViewerPath(null);
+            setMergeSelections({});
+          }}
+        >
+          <div
+            className="settings-modal diff-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div className="settings-modal-title">
+                <h2>{t("app.diffViewerTitle")}</h2>
+              </div>
+              <button
+                className="settings-modal-close"
+                onClick={() => {
+                  setDiffViewerPath(null);
+                  setMergeSelections({});
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="diff-modal-meta">
+              <span>{diffViewerFile.path}</span>
+              {conflictSourceMessage && (
+                <span className="diff-modal-source">{conflictSourceMessage}</span>
+              )}
+            </div>
+            <div className="diff-modal-body">
+              <DiffEditor
+                height="100%"
+                original={diffViewerFile.remoteContent}
+                modified={diffViewerFile.content}
+                language={diffViewerFile.language}
+                theme={getEditorThemeName(theme)}
+                options={{
+                  readOnly: true,
+                  renderSideBySide: true,
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  automaticLayout: true,
+                }}
+              />
+            </div>
+            <div className="diff-merge-panel">
+              <div className="diff-merge-header">
+                <div>
+                  <strong>{t("app.mergeConflictBlocks")}</strong>
+                  <p>{t("app.mergeConflictBlocksHint")}</p>
+                </div>
+                <div className="diff-merge-summary">
+                  <span className="diff-merge-count">
+                    {t("app.mergeRemoteSelectedCount", {
+                      count: remoteSelectedCount,
+                      total: conflictHunks.length,
+                    })}
+                  </span>
+                  {conflictHunks.length > 0 && (
+                    <div className="diff-merge-bulk-actions">
+                      <button className="dialog-btn" onClick={handleKeepAllLocalBlocks}>
+                        {t("app.mergeKeepAllLocal")}
+                      </button>
+                      <button className="dialog-btn" onClick={handleUseAllRemoteBlocks}>
+                        {t("app.mergeUseAllRemote")}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {conflictHunks.length === 0 ? (
+                <div className="diff-merge-empty">{t("app.mergeNoBlocks")}</div>
+              ) : (
+                <div className="diff-merge-list">
+                  {conflictHunks.map((hunk, index) => {
+                    const selection = mergeSelections[hunk.id] || "local";
+                    return (
+                      <div key={hunk.id} className="diff-hunk-card">
+                        <div className="diff-hunk-head">
+                          <span className="diff-hunk-index">#{index + 1}</span>
+                          <span className="diff-hunk-selection">
+                            {selection === "remote"
+                              ? t("app.mergeBlockRemote")
+                              : t("app.mergeBlockLocal")}
+                          </span>
+                        </div>
+                        <div className="diff-hunk-columns">
+                          <div className="diff-hunk-side">
+                            <div className="diff-hunk-label">
+                              {t("app.mergeLocalSnippet", {
+                                range: formatLineRange(hunk.localStart, hunk.localEnd),
+                              })}
+                            </div>
+                            <pre className="diff-hunk-code">
+                              {hunk.localLines.join("\n") || " "}
+                            </pre>
+                            <button
+                              className={`dialog-btn${
+                                selection === "local" ? " primary" : ""
+                              }`}
+                              onClick={() =>
+                                setMergeSelections((prev) => ({
+                                  ...prev,
+                                  [hunk.id]: "local",
+                                }))
+                              }
+                            >
+                              {t("app.mergeKeepLocalBlock")}
+                            </button>
+                          </div>
+                          <div className="diff-hunk-side">
+                            <div className="diff-hunk-label">
+                              {t("app.mergeRemoteSnippet", {
+                                range: formatLineRange(hunk.remoteStart, hunk.remoteEnd),
+                              })}
+                            </div>
+                            <pre className="diff-hunk-code">
+                              {hunk.remoteLines.join("\n") || " "}
+                            </pre>
+                            <button
+                              className={`dialog-btn${
+                                selection === "remote" ? " primary" : ""
+                              }`}
+                              onClick={() =>
+                                setMergeSelections((prev) => ({
+                                  ...prev,
+                                  [hunk.id]: "remote",
+                                }))
+                              }
+                            >
+                              {t("app.mergeUseRemoteBlock")}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="dialog-actions diff-modal-actions">
+              <button className="dialog-btn primary" onClick={handleApplyMergedResult}>
+                {t("app.mergeApplyResult")}
+              </button>
+              <button className="dialog-btn" onClick={handleKeepLocalVersion}>
+                {t("app.keepLocalVersion")}
+              </button>
+              <button className="dialog-btn" onClick={handleReloadRemoteVersion}>
+                {t("app.loadRemoteVersion")}
+              </button>
+              {diffViewerFile.remoteConflictReason === "save" && (
+                <button
+                  className="dialog-btn primary"
+                  onClick={() => void handleForceSaveAfterVersionConflict()}
+                >
+                  {t("app.overwriteRemoteVersion")}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

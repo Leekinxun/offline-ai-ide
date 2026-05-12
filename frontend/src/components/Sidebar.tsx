@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FileNode } from "../types";
+import { FileNode, TeamDetails } from "../types";
 import { FileTree } from "./FileTree";
 import {
   FilePlus,
   FolderPlus,
   FolderOpen,
+  RefreshCw,
   Trash2,
   Pencil,
   Download,
   ChevronRight,
   Folder,
+  CheckSquare,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 
@@ -27,6 +29,7 @@ interface SidebarProps {
   workspaceDir: string;
   onChangeWorkspace: (path: string) => Promise<void>;
   token: string;
+  activeTeam?: TeamDetails | null;
   style?: React.CSSProperties;
 }
 
@@ -64,9 +67,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workspaceDir,
   onChangeWorkspace,
   token,
+  activeTeam,
   style,
 }) => {
   const { t } = useI18n();
+  const canEditWorkspace = activeTeam?.role !== "viewer";
   const [dialog, setDialog] = useState<{
     type: "file" | "folder" | "rename";
     parentPath?: string;
@@ -85,6 +90,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     loading: boolean;
   } | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
@@ -107,42 +113,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   useEffect(() => {
     setSelectedPaths([]);
+    setMultiSelectEnabled(false);
   }, [workspaceDir]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
       e.preventDefault();
+      if (selectedPathSet.size > 0 && !selectedPathSet.has(node.path)) {
+        setSelectedPaths([node.path]);
+      }
       setContextMenu({ x: e.clientX, y: e.clientY, node });
     },
-    []
+    [selectedPathSet]
   );
 
   const handleCreateFile = useCallback(
     (parentPath: string = "") => {
+      if (!canEditWorkspace) return;
       setDialog({ type: "file", parentPath });
       setDialogValue("");
       setContextMenu(null);
     },
-    []
+    [canEditWorkspace]
   );
 
   const handleCreateFolder = useCallback(
     (parentPath: string = "") => {
+      if (!canEditWorkspace) return;
       setDialog({ type: "folder", parentPath });
       setDialogValue("");
       setContextMenu(null);
     },
-    []
+    [canEditWorkspace]
   );
 
   const handleRename = useCallback((node: FileNode) => {
+    if (!canEditWorkspace) return;
     setDialog({ type: "rename", oldPath: node.path, oldName: node.name });
     setDialogValue(node.name);
     setContextMenu(null);
-  }, []);
+  }, [canEditWorkspace]);
 
   const handleDelete = useCallback(
     async (node: FileNode) => {
+      if (!canEditWorkspace) return;
       setContextMenu(null);
       if (confirm(t("sidebar.confirmDelete", { name: node.name }))) {
         await onDeleteEntry(node.path);
@@ -152,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onRefreshTree();
       }
     },
-    [onDeleteEntry, onRefreshTree, t]
+    [canEditWorkspace, onDeleteEntry, onRefreshTree, t]
   );
 
   const handleToggleSelection = useCallback((path: string, selected: boolean) => {
@@ -164,7 +178,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
   }, []);
 
+  const handleToggleMultiSelect = useCallback(() => {
+    setMultiSelectEnabled((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSelectedPaths([]);
+      }
+      return next;
+    });
+  }, []);
+
   const handleBatchDelete = useCallback(async () => {
+    if (!canEditWorkspace) return;
     if (selectedPaths.length === 0) return;
 
     setContextMenu(null);
@@ -186,7 +211,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     } catch (e) {
       alert(e instanceof Error ? e.message : t("sidebar.batchDeleteFailed"));
     }
-  }, [onDeleteEntries, onRefreshTree, selectedPaths, t]);
+  }, [canEditWorkspace, onDeleteEntries, onRefreshTree, selectedPaths, t]);
 
   const handleDownload = useCallback(
     async (path: string, type: FileNode["type"]) => {
@@ -201,6 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const handleDialogSubmit = useCallback(async () => {
+    if (!canEditWorkspace) return;
     if (!dialog || !dialogValue.trim()) return;
     try {
       if (dialog.type === "rename" && dialog.oldPath) {
@@ -217,7 +243,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       alert(e instanceof Error ? e.message : t("sidebar.operationFailed"));
     }
     setDialog(null);
-  }, [dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree, t]);
+  }, [canEditWorkspace, dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree, t]);
 
   // --- Folder browser ---
   const fetchDirectories = useCallback(
@@ -295,6 +321,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-action-btn"
             title={t("sidebar.newFile")}
             onClick={() => handleCreateFile()}
+            disabled={!canEditWorkspace}
           >
             <FilePlus size={15} />
           </button>
@@ -302,8 +329,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-action-btn"
             title={t("sidebar.newFolder")}
             onClick={() => handleCreateFolder()}
+            disabled={!canEditWorkspace}
           >
             <FolderPlus size={15} />
+          </button>
+          <button
+            className="sidebar-action-btn"
+            title={t("common.refresh")}
+            onClick={onRefreshTree}
+          >
+            <RefreshCw size={15} />
+          </button>
+          <button
+            className={`sidebar-action-btn${multiSelectEnabled ? " active" : ""}`}
+            title={t("sidebar.toggleMultiSelect")}
+            onClick={handleToggleMultiSelect}
+          >
+            <CheckSquare size={15} />
           </button>
           <button
             className="sidebar-action-btn"
@@ -313,7 +355,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : t("sidebar.deleteSelected")
             }
             onClick={() => void handleBatchDelete()}
-            disabled={selectedPaths.length === 0}
+            disabled={!canEditWorkspace || selectedPaths.length === 0}
           >
             <Trash2 size={15} />
           </button>
@@ -331,6 +373,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               className="sidebar-selection-btn danger"
               onClick={() => void handleBatchDelete()}
+              disabled={!canEditWorkspace}
             >
               {t("common.delete")}
             </button>
@@ -348,12 +391,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           nodes={tree}
           activeFilePath={activeFilePath}
           selectedPaths={selectedPathSet}
+          multiSelectEnabled={multiSelectEnabled}
+          canEditWorkspace={canEditWorkspace}
+          claims={activeTeam?.claims}
+          presence={activeTeam?.presence}
           onFileSelect={onFileSelect}
           onToggleSelect={handleToggleSelection}
           onDownload={handleDownload}
           onContextMenu={handleContextMenu}
         />
       </div>
+      {!canEditWorkspace && (
+        <div className="sidebar-readonly-banner">{t("team.readOnlyHint")}</div>
+      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -361,17 +411,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              handleToggleSelection(
+                contextMenu.node.path,
+                !selectedPathSet.has(contextMenu.node.path)
+              );
+              setMultiSelectEnabled(true);
+              setContextMenu(null);
+            }}
+          >
+            <CheckSquare size={14} />{" "}
+            {selectedPathSet.has(contextMenu.node.path)
+              ? t("sidebar.unselectItem")
+              : t("sidebar.selectItem")}
+          </button>
+          <div className="context-menu-separator" />
           {contextMenu.node.type === "directory" && (
             <>
               <button
                 className="context-menu-item"
                 onClick={() => handleCreateFile(contextMenu.node.path)}
+                disabled={!canEditWorkspace}
               >
                 <FilePlus size={14} /> {t("sidebar.newFile")}
               </button>
               <button
                 className="context-menu-item"
                 onClick={() => handleCreateFolder(contextMenu.node.path)}
+                disabled={!canEditWorkspace}
               >
                 <FolderPlus size={14} /> {t("sidebar.newFolder")}
               </button>
@@ -392,12 +461,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             className="context-menu-item"
             onClick={() => handleRename(contextMenu.node)}
+            disabled={!canEditWorkspace}
           >
             <Pencil size={14} /> {t("common.rename")}
           </button>
           <button
             className="context-menu-item danger"
             onClick={() => handleDelete(contextMenu.node)}
+            disabled={!canEditWorkspace}
           >
             <Trash2 size={14} /> {t("common.delete")}
           </button>

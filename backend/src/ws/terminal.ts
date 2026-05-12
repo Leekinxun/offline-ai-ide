@@ -2,6 +2,7 @@ import fs from "fs";
 import { WebSocket } from "ws";
 import { spawn, type ChildProcess } from "child_process";
 import type { UserSession } from "../auth/sessionManager.js";
+import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 
 // Try to load node-pty; it may fail on some platforms (e.g. macOS + Node 22)
 let pty: typeof import("node-pty") | null = null;
@@ -134,6 +135,14 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
 
 export function handleTerminalWs(ws: WebSocket, session: UserSession): void {
   try {
+    if (!canWriteActiveWorkspace(session)) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(`\r\n\x1b[31mTerminal disabled: active team role is read-only\x1b[0m\r\n`);
+        ws.close();
+      }
+      return;
+    }
+
     fs.mkdirSync(session.workspaceDir, { recursive: true });
 
     // Try node-pty first (full PTY support), fall back to child_process

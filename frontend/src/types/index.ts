@@ -11,6 +11,15 @@ export interface OpenFile {
   content: string;
   language: string;
   modified: boolean;
+  version?: string;
+  updatedAt?: number;
+  remoteUpdated?: boolean;
+  remoteContent?: string;
+  remoteVersion?: string;
+  remoteUpdatedAt?: number;
+  remoteConflictReason?: "background" | "save";
+  remoteConflictSource?: "team_member" | "external" | "assistant_tool" | "unknown";
+  remoteConflictActor?: string;
 }
 
 export interface FileSelectionRange {
@@ -41,6 +50,7 @@ export interface ToolCallStep {
 }
 
 export interface ChatMessage {
+  requestId?: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
@@ -80,6 +90,7 @@ export interface LlmSettings {
   vllmApiKey: string;
   modelName: string;
   maxTokens: number;
+  maxAgentIterations: number;
   systemPrompt?: string;
 }
 
@@ -94,6 +105,76 @@ export interface AdminSettings {
   plugins?: {
     overrides: Record<string, PluginOverrideSettings>;
   };
+}
+
+export type TeamRole = "owner" | "admin" | "member" | "viewer";
+
+export interface TeamMember {
+  username: string;
+  role: TeamRole;
+  joinedAt: number;
+}
+
+export interface TeamInvite {
+  code: string;
+  role: TeamRole;
+  createdBy: string;
+  createdAt: number;
+  usedBy?: string;
+  usedAt?: number;
+}
+
+export interface TeamClaim {
+  path: string;
+  username: string;
+  updatedAt: number;
+}
+
+export interface TeamPresence {
+  username: string;
+  online: boolean;
+  activeFilePath?: string;
+  cursorLine?: number;
+  cursorColumn?: number;
+  activity?: string;
+  updatedAt: number;
+}
+
+export interface TeamActivity {
+  id: string;
+  type:
+    | "team_created"
+    | "member_joined"
+    | "member_left"
+    | "member_removed"
+    | "member_role_updated"
+    | "ownership_transferred"
+    | "invite_created"
+    | "file_saved"
+    | "entry_created"
+    | "entry_deleted"
+    | "entry_renamed"
+    | "claim_updated";
+  username: string;
+  createdAt: number;
+  payload?: Record<string, unknown>;
+}
+
+export interface TeamSummary {
+  id: string;
+  name: string;
+  workspaceDir: string;
+  memberCount: number;
+  onlineCount: number;
+  role: TeamRole | null;
+}
+
+export interface TeamDetails extends TeamSummary {
+  members: TeamMember[];
+  invites: TeamInvite[];
+  claims: TeamClaim[];
+  presence: TeamPresence[];
+  activity: TeamActivity[];
 }
 
 export const LANGUAGE_MAP: Record<string, string> = {

@@ -13,6 +13,7 @@ import { TaskManager } from "./taskManager.js";
 import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { runSubagent } from "./subagent.js";
+import { recordKnownFileMutation } from "../files/mutationRegistry.js";
 
 // ---- Tool handler type ----
 
@@ -101,12 +102,22 @@ async function runReadFile(
 async function runWriteFile(
   filePath: string,
   content: string,
-  cwd: string
+  cwd: string,
+  actorName?: string
 ): Promise<string | ToolExecutionResult> {
   try {
     const full = safePath(filePath, cwd);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
+    const stat = fs.statSync(full);
+    recordKnownFileMutation({
+      workspaceDir: cwd,
+      path: filePath,
+      source: "assistant_tool",
+      actor: actorName,
+      mtimeMs: stat.mtimeMs,
+      content,
+    });
     return {
       output: `Wrote ${content.length} bytes to ${filePath}`,
       fileUpdate: {
@@ -123,7 +134,8 @@ async function runEditFile(
   filePath: string,
   oldText: string,
   newText: string,
-  cwd: string
+  cwd: string,
+  actorName?: string
 ): Promise<string | ToolExecutionResult> {
   try {
     const full = safePath(filePath, cwd);
@@ -134,6 +146,15 @@ async function runEditFile(
     }
     const updatedContent = content.replace(oldText, newText);
     fs.writeFileSync(full, updatedContent, "utf-8");
+    const stat = fs.statSync(full);
+    recordKnownFileMutation({
+      workspaceDir: cwd,
+      path: filePath,
+      source: "assistant_tool",
+      actor: actorName,
+      mtimeMs: stat.mtimeMs,
+      content: updatedContent,
+    });
     return {
       output: `Edited ${filePath}`,
       fileUpdate: {
@@ -161,10 +182,21 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir),
 
   write_file: async (args, ctx) =>
-    runWriteFile(args.path as string, args.content as string, ctx.workspaceDir),
+    runWriteFile(
+      args.path as string,
+      args.content as string,
+      ctx.workspaceDir,
+      ctx.actorName
+    ),
 
   edit_file: async (args, ctx) =>
-    runEditFile(args.path as string, args.old_text as string, args.new_text as string, ctx.workspaceDir),
+    runEditFile(
+      args.path as string,
+      args.old_text as string,
+      args.new_text as string,
+      ctx.workspaceDir,
+      ctx.actorName
+    ),
 
   TodoWrite: async (args, ctx) =>
     ctx.todoManager.update(args.items as unknown[]),
@@ -469,6 +501,12 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
   },
 ];
 
-export function getAllTools(): OpenAIToolDef[] {
-  return [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
+const READ_ONLY_TOOL_NAMES = new Set(["read_file", "TodoWrite"]);
+
+export function getAllTools(options?: { readOnly?: boolean }): OpenAIToolDef[] {
+  const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
+  if (!options?.readOnly) {
+    return allTools;
+  }
+  return allTools.filter((tool) => READ_ONLY_TOOL_NAMES.has(tool.function.name));
 }

@@ -9,10 +9,12 @@ import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
 import { pluginsRouter } from "./routes/plugins.js";
+import { teamRouter } from "./routes/team.js";
 import { authMiddleware } from "./auth/middleware.js";
 import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
 import { handleTerminalWs } from "./ws/terminal.js";
+import { handleTeamWs } from "./ws/team.js";
 import { UserSession } from "./auth/sessionManager.js";
 
 const app = express();
@@ -27,6 +29,7 @@ app.use("/api/plugins", pluginsRouter);
 app.use("/api/files", authMiddleware, filesRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/chat", authMiddleware, chatRouter);
+app.use("/api/team", authMiddleware, teamRouter);
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
@@ -67,6 +70,8 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
     handleChatWs(ws, session);
   } else if (url.startsWith("/ws/terminal")) {
     handleTerminalWs(ws, session);
+  } else if (url.startsWith("/ws/team")) {
+    handleTeamWs(ws, session);
   } else {
     ws.close();
   }

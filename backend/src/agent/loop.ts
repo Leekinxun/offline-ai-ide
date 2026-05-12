@@ -12,6 +12,8 @@ import { getAllTools, TOOL_DISPATCH } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
 import type { UserSession } from "../auth/sessionManager.js";
+import type { PersistedChatMessage } from "../chat/history.js";
+import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 
 /**
  * Extract <think>...</think> blocks from LLM output.
@@ -36,24 +38,35 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
 
 export async function runAgentLoop(
   ws: WebSocket,
-  userMessage: string,
+  initialUserMessage: string,
+  requestId: string,
   session: UserSession,
   context?: { path: string; content: string; language: string; selection?: string },
   history?: { role: string; content: string }[],
-  onEmit?: (message: WsServerMessage) => void
-): Promise<void> {
+  onEmit?: (message: WsServerMessage) => void,
+  consumePendingUserMessages?: () => PendingUserTurn[],
+  onUserTurnStart?: (turn: PendingUserTurn) => Promise<void> | void,
+  onAssistantTurnComplete?: (
+    message: PersistedChatMessage,
+    requestId: string
+  ) => Promise<void> | void
+): Promise<PersistedChatMessage[]> {
   const emit = (message: WsServerMessage) => {
     onEmit?.(message);
     wsSend(ws, message);
   };
 
+  const persistedAssistantMessages: PersistedChatMessage[] = [];
+
   const todoManager = new TodoManager();
-  const tools = getAllTools();
+  const readOnlyWorkspace = !canWriteActiveWorkspace(session);
+  const tools = getAllTools({ readOnly: readOnlyWorkspace });
   const toolCtx = {
     workspaceDir: session.workspaceDir,
     vllmApiUrl: config.vllmApiUrl,
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
+    actorName: session.username,
     todoManager,
     taskManager: session.taskManager,
     messageBus: session.messageBus,
@@ -61,185 +74,352 @@ export async function runAgentLoop(
   };
 
   // Build user content with file/selection context
-  let userContent: string;
-  if (context?.selection) {
-    userContent =
-      `File: \`${context.path}\` (${context.language || "plaintext"})\n` +
-      `User has selected the following code:\n\`\`\`${context.language || ""}\n${context.selection}\n\`\`\`\n\n` +
-      userMessage;
-  } else if (context?.content) {
-    userContent =
-      `Current file: \`${context.path}\` (${context.language || "plaintext"})\n` +
-      `\`\`\`${context.language || ""}\n${context.content}\n\`\`\`\n\n` +
-      userMessage;
-  } else {
-    userContent = userMessage;
-  }
-
   // Build message history
   const messages: OpenAIMessage[] = [
     ...(history || []).slice(-10).map((h) => ({
       role: h.role as "user" | "assistant",
       content: h.content,
     })),
-    { role: "user" as const, content: userContent },
   ];
 
-  for (let i = 0; i < config.maxAgentIterations; i++) {
-    if (ws.readyState !== WebSocket.OPEN) return;
-
-    const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render());
-
-    // Non-streaming call for tool-use rounds
-    let resp: Response;
-    try {
-      resp = await callChatCompletion({
-        apiUrl: config.vllmApiUrl,
-        apiKey: config.vllmApiKey,
-        model: config.modelName,
-        systemPrompt,
-        messages,
-        tools,
-        maxTokens: config.agentMaxTokens,
-        temperature: 0.3,
-        stream: false,
-      });
-    } catch (e: any) {
-      emit({ type: "error", content: `LLM request failed: ${e.message}` });
-      return;
-    }
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      emit({
-        type: "error",
-        content: `vLLM error (${resp.status}): ${errText.slice(0, 300)}`,
-      });
-      return;
-    }
-
-    let data: OpenAIResponse;
-    try {
-      data = (await resp.json()) as OpenAIResponse;
-    } catch (e: any) {
-      emit({
-        type: "error",
-        content: `Failed to parse LLM response: ${e.message}`,
-      });
-      return;
-    }
-
-    const choice = data.choices?.[0];
-    if (!choice) {
-      emit({ type: "error", content: "No response from LLM" });
-      return;
-    }
-
-    const assistantMsg = choice.message;
-    const finishReason = choice.finish_reason;
-
-    // Push assistant message to history
+  const appendUserTurn = (turn: PendingUserTurn) => {
     messages.push({
-      role: "assistant",
-      content: assistantMsg.content,
-      tool_calls: assistantMsg.tool_calls,
+      role: "user",
+      content: buildUserContent(turn.message, turn.context),
     });
+  };
 
-    // Check for tool calls
-    if (
-      finishReason === "tool_calls" &&
-      assistantMsg.tool_calls &&
-      assistantMsg.tool_calls.length > 0
-    ) {
-      // Send any reasoning text (parse <think> tags)
-      if (assistantMsg.content) {
-        const { thinking, rest } = extractThinkTags(assistantMsg.content);
-        if (thinking) {
-          emit({ type: "thinking", content: thinking });
-        }
-        if (rest) {
-          emit({ type: "thinking", content: rest });
-        }
+  appendUserTurn({
+    requestId,
+    message: initialUserMessage,
+    context,
+  });
+
+  let pendingTurns: PendingUserTurn[] = consumePendingUserMessages?.() || [];
+  let currentRequestId = requestId;
+
+  outer: while (true) {
+    const currentAssistantMessage: PersistedChatMessage = {
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+    };
+    persistedAssistantMessages.push(currentAssistantMessage);
+
+    for (let i = 0; i < config.maxAgentIterations; i++) {
+      if (ws.readyState !== WebSocket.OPEN) return persistedAssistantMessages;
+
+      const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
+        readOnlyWorkspace,
+      });
+
+      // Non-streaming call for tool-use rounds
+      let resp: Response;
+      try {
+        resp = await callChatCompletion({
+          apiUrl: config.vllmApiUrl,
+          apiKey: config.vllmApiKey,
+          model: config.modelName,
+          systemPrompt,
+          messages,
+          tools,
+          maxTokens: config.agentMaxTokens,
+          temperature: 0.3,
+          stream: false,
+        });
+      } catch (e: any) {
+        emit({
+          type: "error",
+          requestId: currentRequestId,
+          content: `LLM request failed: ${e.message}`,
+        });
+        await flushAssistantTurn(
+          currentAssistantMessage,
+          currentRequestId,
+          onAssistantTurnComplete
+        );
+        return persistedAssistantMessages;
       }
 
-      // Execute each tool call
-      for (const toolCall of assistantMsg.tool_calls) {
-        const args = parseToolArgs(toolCall.function.arguments);
+      if (!resp.ok) {
+        const errText = await resp.text();
         emit({
-          type: "tool_call",
-          toolCallId: toolCall.id,
-          name: toolCall.function.name,
-          input: args,
+          type: "error",
+          requestId: currentRequestId,
+          content: `vLLM error (${resp.status}): ${errText.slice(0, 300)}`,
         });
+        await flushAssistantTurn(
+          currentAssistantMessage,
+          currentRequestId,
+          onAssistantTurnComplete
+        );
+        return persistedAssistantMessages;
+      }
 
-        let result: string;
-        let isError = false;
-        let fileUpdate: ToolFileUpdate | undefined;
-        const handler = TOOL_DISPATCH[toolCall.function.name];
-        if (handler) {
-          try {
-            const execution = await handler(args, toolCtx);
-            if (typeof execution === "string") {
-              result = execution;
-            } else {
-              result = execution.output;
-              fileUpdate = execution.fileUpdate;
+      let data: OpenAIResponse;
+      try {
+        data = (await resp.json()) as OpenAIResponse;
+      } catch (e: any) {
+        emit({
+          type: "error",
+          requestId: currentRequestId,
+          content: `Failed to parse LLM response: ${e.message}`,
+        });
+        await flushAssistantTurn(
+          currentAssistantMessage,
+          currentRequestId,
+          onAssistantTurnComplete
+        );
+        return persistedAssistantMessages;
+      }
+
+      const choice = data.choices?.[0];
+      if (!choice) {
+        emit({ type: "error", requestId: currentRequestId, content: "No response from LLM" });
+        await flushAssistantTurn(
+          currentAssistantMessage,
+          currentRequestId,
+          onAssistantTurnComplete
+        );
+        return persistedAssistantMessages;
+      }
+
+      const assistantMsg = choice.message;
+      const finishReason = choice.finish_reason;
+
+      // Push assistant message to history
+      messages.push({
+        role: "assistant",
+        content: assistantMsg.content,
+        tool_calls: assistantMsg.tool_calls,
+      });
+
+      // Check for tool calls
+      if (
+        finishReason === "tool_calls" &&
+        assistantMsg.tool_calls &&
+        assistantMsg.tool_calls.length > 0
+      ) {
+        // Send any reasoning text (parse <think> tags)
+        if (assistantMsg.content) {
+          const { thinking, rest } = extractThinkTags(assistantMsg.content);
+          if (thinking) {
+            currentAssistantMessage.thinking = `${
+              currentAssistantMessage.thinking || ""
+            }${thinking}`;
+            emit({ type: "thinking", requestId: currentRequestId, content: thinking });
+          }
+          if (rest) {
+            currentAssistantMessage.thinking = `${
+              currentAssistantMessage.thinking || ""
+            }${rest}`;
+            emit({ type: "thinking", requestId: currentRequestId, content: rest });
+          }
+        }
+
+        // Execute each tool call
+        const executedToolCalls: typeof assistantMsg.tool_calls = [];
+        for (const toolCall of assistantMsg.tool_calls) {
+          executedToolCalls.push(toolCall);
+          const args = parseToolArgs(toolCall.function.arguments);
+          emit({
+            type: "tool_call",
+            requestId: currentRequestId,
+            toolCallId: toolCall.id,
+            name: toolCall.function.name,
+            input: args,
+          });
+
+          let result: string;
+          let isError = false;
+          let fileUpdate: ToolFileUpdate | undefined;
+          const handler = TOOL_DISPATCH[toolCall.function.name];
+          if (handler) {
+            try {
+              const execution = await handler(args, toolCtx);
+              if (typeof execution === "string") {
+                result = execution;
+              } else {
+                result = execution.output;
+                fileUpdate = execution.fileUpdate;
+              }
+            } catch (e: any) {
+              result = `Error: ${e.message}`;
+              isError = true;
             }
-          } catch (e: any) {
-            result = `Error: ${e.message}`;
+          } else {
+            result = `Unknown tool: ${toolCall.function.name}`;
             isError = true;
           }
-        } else {
-          result = `Unknown tool: ${toolCall.function.name}`;
-          isError = true;
-        }
-        if (result.startsWith("Error:")) {
-          isError = true;
-          fileUpdate = undefined;
+          if (result.startsWith("Error:")) {
+            isError = true;
+            fileUpdate = undefined;
+          }
+
+          currentAssistantMessage.toolCalls = [
+            ...(currentAssistantMessage.toolCalls || []).filter(
+              (step) => step.toolCallId !== toolCall.id
+            ),
+            {
+              toolCallId: toolCall.id,
+              name: toolCall.function.name,
+              input: args,
+              result: result.slice(0, 5000),
+              isError,
+              fileUpdate,
+            },
+          ];
+
+          emit({
+            type: "tool_result",
+            requestId: currentRequestId,
+            toolCallId: toolCall.id,
+            name: toolCall.function.name,
+            result: result.slice(0, 5000),
+            isError,
+            fileUpdate,
+          });
+
+          // Add tool result to message history
+          messages.push({
+            role: "tool",
+            content: result.slice(0, 50000),
+            tool_call_id: toolCall.id,
+          });
+
+          const steeringTurns = consumePendingUserMessages?.() || [];
+          if (steeringTurns.length > 0) {
+            const lastMessage = messages[messages.length - executedToolCalls.length - 1];
+            if (lastMessage && lastMessage.role === "assistant") {
+              lastMessage.tool_calls = executedToolCalls;
+            }
+            pendingTurns = [...pendingTurns, ...steeringTurns];
+            emit({ type: "done", requestId: currentRequestId, interrupted: true });
+            await flushAssistantTurn(
+              currentAssistantMessage,
+              currentRequestId,
+              onAssistantTurnComplete
+            );
+            const nextTurn = pendingTurns.shift();
+            if (!nextTurn) {
+              return persistedAssistantMessages;
+            }
+            currentRequestId = nextTurn.requestId;
+            await onUserTurnStart?.(nextTurn);
+            appendUserTurn(nextTurn);
+            continue outer;
+          }
         }
 
-        emit({
-          type: "tool_result",
-          toolCallId: toolCall.id,
-          name: toolCall.function.name,
-          result: result.slice(0, 5000),
-          isError,
-          fileUpdate,
-        });
-
-        // Add tool result to message history
-        messages.push({
-          role: "tool",
-          content: result.slice(0, 50000),
-          tool_call_id: toolCall.id,
-        });
+        // Continue to next iteration
+        continue;
       }
 
-      // Continue to next iteration
-      continue;
-    }
+      // No tool calls — this is the final text response
+      const rawText = assistantMsg.content || "";
+      const { thinking, rest: finalText } = extractThinkTags(rawText);
 
-    // No tool calls — this is the final text response
-    const rawText = assistantMsg.content || "";
-    const { thinking, rest: finalText } = extractThinkTags(rawText);
-
-    // Send thinking content first
-    if (thinking) {
-      emit({ type: "thinking", content: thinking });
-    }
-
-    if (finalText) {
-      // Send as tokens in chunks for typewriter effect
-      const chunkSize = 8;
-      for (let j = 0; j < finalText.length; j += chunkSize) {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        emit({ type: "token", content: finalText.slice(j, j + chunkSize) });
+      // Send thinking content first
+      if (thinking) {
+        currentAssistantMessage.thinking = `${
+          currentAssistantMessage.thinking || ""
+        }${thinking}`;
+        emit({ type: "thinking", requestId: currentRequestId, content: thinking });
       }
+
+      if (finalText) {
+        currentAssistantMessage.content = finalText;
+        // Send as tokens in chunks for typewriter effect
+        const chunkSize = 8;
+        for (let j = 0; j < finalText.length; j += chunkSize) {
+          if (ws.readyState !== WebSocket.OPEN) return persistedAssistantMessages;
+          emit({
+            type: "token",
+            requestId: currentRequestId,
+            content: finalText.slice(j, j + chunkSize),
+          });
+        }
+      }
+
+      emit({ type: "done", requestId: currentRequestId });
+      await flushAssistantTurn(
+        currentAssistantMessage,
+        currentRequestId,
+        onAssistantTurnComplete
+      );
+
+      pendingTurns = [...pendingTurns, ...(consumePendingUserMessages?.() || [])];
+      const nextTurn = pendingTurns.shift();
+      if (!nextTurn) {
+        return persistedAssistantMessages;
+      }
+
+      currentRequestId = nextTurn.requestId;
+      await onUserTurnStart?.(nextTurn);
+      appendUserTurn(nextTurn);
+      continue outer;
     }
-    emit({ type: "done" });
+
+    // Max iterations
+    emit({
+      type: "error",
+      requestId: currentRequestId,
+      content: "Agent loop exceeded maximum iterations",
+    });
+    await flushAssistantTurn(
+      currentAssistantMessage,
+      currentRequestId,
+      onAssistantTurnComplete
+    );
+    return persistedAssistantMessages;
+  }
+
+  return persistedAssistantMessages;
+}
+
+interface PendingUserTurn {
+  requestId: string;
+  message: string;
+  context?: { path: string; content: string; language: string; selection?: string };
+  conversationId?: string;
+}
+
+function buildUserContent(
+  userMessage: string,
+  context?: { path: string; content: string; language: string; selection?: string }
+): string {
+  if (context?.selection) {
+    return (
+      `File: \`${context.path}\` (${context.language || "plaintext"})\n` +
+      `User has selected the following code:\n\`\`\`${context.language || ""}\n${context.selection}\n\`\`\`\n\n` +
+      userMessage
+    );
+  }
+  if (context?.content) {
+    return (
+      `Current file: \`${context.path}\` (${context.language || "plaintext"})\n` +
+      `\`\`\`${context.language || ""}\n${context.content}\n\`\`\`\n\n` +
+      userMessage
+    );
+  }
+  return userMessage;
+}
+
+async function flushAssistantTurn(
+  message: PersistedChatMessage,
+  requestId: string,
+  onAssistantTurnComplete?: (
+    message: PersistedChatMessage,
+    requestId: string
+  ) => Promise<void> | void
+): Promise<void> {
+  if (
+    !message.content &&
+    !message.thinking &&
+    (!message.toolCalls || message.toolCalls.length === 0)
+  ) {
     return;
   }
 
-  // Max iterations
-  emit({ type: "error", content: "Agent loop exceeded maximum iterations" });
+  await onAssistantTurnComplete?.(message, requestId);
 }

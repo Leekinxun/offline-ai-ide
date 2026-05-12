@@ -7,6 +7,7 @@ interface LlmRuntimeSettings {
   vllmApiKey: string;
   modelName: string;
   maxTokens: number;
+  maxAgentIterations: number;
   systemPrompt?: string;
 }
 
@@ -152,6 +153,7 @@ export function getLlmSettings(): LlmRuntimeSettings {
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
     maxTokens: config.agentMaxTokens,
+    maxAgentIterations: config.maxAgentIterations,
     systemPrompt: config.systemPrompt,
   };
 }
@@ -234,6 +236,7 @@ export function updateLlmSettings(next: LlmRuntimeSettings): LlmRuntimeSettings 
   config.vllmApiKey = next.vllmApiKey;
   config.modelName = next.modelName;
   config.agentMaxTokens = next.maxTokens;
+  config.maxAgentIterations = next.maxAgentIterations;
   config.systemPrompt = next.systemPrompt || "";
 
   persistedAppSettings = {

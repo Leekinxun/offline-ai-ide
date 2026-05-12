@@ -26,6 +26,7 @@ export const TabBar: React.FC<TabBarProps> = ({
           onClick={() => onSelectTab(file.path)}
         >
           {file.modified && <span className="tab-modified" />}
+          {file.remoteUpdated && <span className="tab-remote-updated" />}
           <span className="tab-name">{file.name}</span>
           <button
             className="tab-close"

@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
 </p>
 
-> Current Version: `v0.4.0`
+> Current Version: `v0.5.0`
 >
-> Release Date: `2026-04-24`
+> Release Date: `2026-05-12`
 
 A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,14 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.5.0 · 2026-05-12
+
+- Added **interruptible agent steering** with a follow-up queue: users can append corrective instructions while the AI is running, the agent checks for steering immediately after each tool result, interrupts the remaining tool batch, and starts the next turn with prior tool results preserved in context
+- Added a **configurable max agent iteration limit** in the in-app **Settings** panel so administrators no longer need to hardcode the inner-loop limit in environment variables
+- Added **workspace auto-refresh** for editor/file changes, plus a manual **Refresh** button in the file tree and a cleaner **on-demand multi-select** flow instead of always-visible checkboxes
+- Added a practical **team collaboration MVP** with team create/join/switch flows, invite codes with selectable roles, owner/admin/member/viewer permissions, presence, file claims, shared workspace sync, role management, owner transfer, remove-member, and leave-team actions
+- Added **collaboration-safe saving** with read-only viewer enforcement, claim conflict warnings, save-time version validation, remote change source labels (`team_member`, `external`, `assistant_tool`, `unknown`), and a conflict dialog that supports block/hunk merges plus one-click **Use All Remote** / **Keep All Local** actions
 
 ### v0.4.0 · 2026-04-24
 
@@ -49,20 +57,21 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.4.0` is the current documented release and adds the plugin system, builtin localization, dark-theme Monaco improvements, and persisted chat history on top of the `v0.3.x` feature set.
+`v0.5.0` is the current documented release and adds interruptible steering, configurable agent loop limits, smarter file refresh flows, and team collaboration with conflict-aware saving on top of the `v0.4.x` feature set.
 
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
-- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, and fixed Ctrl/Cmd+S save behavior
+- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
-- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace
+- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports interruptible steering/follow-up messages mid-run, and honors team read-only roles
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed
-- **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, and "Open Folder" (switch workspace at runtime)
-- **Admin Settings Panel** — Manage users, reset passwords, update LLM URL / API key / model / max tokens from the UI, and switch interface language between English and Simplified Chinese
+- **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
+- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt from the UI, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
+- **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, and work in parallel
 - **Task Board** — Create, assign, and track tasks across agents
 - **Docker Ready** — Multi-stage Dockerfile with Node.js, Python, Conda, Git, and common dev tools pre-installed
@@ -157,6 +166,19 @@ Docker images now also include the shipped `plugins/` directory by default, and 
 
 See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest format, host APIs, permissions, and offline installation flow.
 
+### Team Collaboration
+
+The IDE now includes a practical shared-team workflow focused on low-friction coordination before full CRDT/OT co-editing:
+
+- Create, join, and switch teams bound to a shared workspace
+- Generate invite codes with a selected default role
+- Support `owner`, `admin`, `member`, and `viewer` permissions
+- Track online presence, active file, and lightweight collaboration activity
+- Use soft file claims to reduce collisions before editing
+- Enforce read-only access for viewers across editor and AI-assisted file writes
+- Broadcast file-tree and file-content refreshes when teammates create, rename, delete, or save files
+- Protect saves with version validation, claim conflict warnings, conflict-source labeling, and a diff/merge dialog with per-block and bulk resolution actions
+
 ## Configuration
 
 ### Environment Variables
@@ -170,6 +192,7 @@ See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest f
 | `PORT` | `3000` | Server port |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens per AI response |
+| `SYSTEM_PROMPT` | *(empty)* | Optional default system prompt override for the AI agent |
 | `USERS_CONFIG` | *(auto-detect)* | Path to `users.json` |
 | `APP_SETTINGS_CONFIG` | *(auto-detect)* | Path to `app-settings.json` for admin-managed LLM settings |
 
@@ -178,8 +201,9 @@ See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest f
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed LLM runtime settings such as URL, API key, model, and max tokens |
+| `app-settings.json` | Stores admin-managed LLM runtime settings such as URL, API key, model, max tokens, max agent iterations, and system prompt |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
+| `<workspace>/.team/teams.json` | Stores team membership, roles, invites, presence, claims, and activity for shared collaboration |
 
 If you run with Docker and want admin changes to survive container recreation, persist these files with bind mounts or a volume-backed path.
 For local development, the default `users.json` and `app-settings.json` locations are the project root.
@@ -218,7 +242,7 @@ If you edit `users.json` outside the app, restart the backend to reload it. Chan
 LLM runtime settings can be managed in two ways:
 
 - Preferred: use the admin **Settings** panel in the UI
-- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, and `AGENT_MAX_TOKENS` via environment variables
+- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, `AGENT_MAX_TOKENS`, `MAX_AGENT_ITERATIONS`, and `SYSTEM_PROMPT` via environment variables
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately.
 
@@ -237,7 +261,7 @@ ai-ide/
 ├── backend/                 # Express + WebSocket server
 │   └── src/
 │       ├── agent/           # AI agent loop, tools, prompt, task system
-│       │   ├── loop.ts      # LLM call loop with tool execution
+│       │   ├── loop.ts      # Two-level LLM loop with tool execution + steering interruption
 │       │   ├── tools.ts     # Agent tools (bash, file I/O, tasks, teammates)
 │       │   ├── systemPrompt.ts
 │       │   ├── taskManager.ts
@@ -245,15 +269,18 @@ ai-ide/
 │       │   └── teammateManager.ts
 │       ├── auth/            # Session management & middleware
 │       ├── chat/            # Conversation history persistence & title generation
-│       ├── routes/          # REST API (files, auth)
+│       ├── files/           # File mutation metadata for collaboration/conflict reporting
+│       ├── routes/          # REST API (files, auth, admin, team)
+│       ├── team/            # Team membership, roles, invites, claims, presence, activity
 │       ├── plugins/         # Plugin manifest validation & registry
-│       └── ws/              # WebSocket handlers (chat, terminal)
+│       └── ws/              # WebSocket handlers (chat, terminal, team)
 ├── frontend/                # React + Vite SPA
 │   └── src/
 │       ├── components/      # Sidebar, Editor, ChatPanel, Terminal, etc.
 │       ├── i18n/            # UI localization provider and message bundles
+│       ├── utils/           # Conflict diff/merge helpers
 │       ├── plugins/         # Frontend plugin runtime and builtin plugins
-│       └── hooks/           # useAuth, useChat, useFileSystem
+│       └── hooks/           # useAuth, useChat, useFileSystem, useTeam
 ├── plugins/                 # Offline-installable external plugins
 ├── users.json               # User credentials & allowed paths
 ├── app-settings.json        # Persisted admin-managed LLM settings
@@ -278,9 +305,11 @@ The AI assistant can:
 
 - **Read / write / edit files** in your workspace
 - **Run shell commands** via the integrated terminal
+- **Accept real-time steering** — follow-up user messages can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context
 - **Manage tasks** — create, update, and track a task board
 - **Spawn teammates** — create autonomous sub-agents with specific roles
 - **Collaborate** — agents communicate via a message bus and can claim tasks
+- **Respect team permissions** — file-writing tools are automatically restricted when the active team role is read-only
 
 ### Agent Tools
 

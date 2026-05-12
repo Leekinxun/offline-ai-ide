@@ -60,6 +60,7 @@ interface ChatPanelProps {
   currentConversationId: string | null;
   conversations: ConversationSummary[];
   isStreaming: boolean;
+  activeRequestIds?: string[];
   connected: boolean;
   visible: boolean;
   historyLoading: boolean;
@@ -81,6 +82,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   currentConversationId,
   conversations,
   isStreaming,
+  activeRequestIds,
   connected,
   visible,
   historyLoading,
@@ -115,13 +117,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || !connected) return;
     onSend(trimmed);
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "38px";
     }
-  }, [input, isStreaming, onSend]);
+  }, [connected, input, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -311,10 +313,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         )}
         {messages.map((msg, idx) => (
           <MessageItem
-            key={idx}
+            key={`${msg.requestId || "msg"}-${idx}`}
             message={msg}
             isLast={idx === messages.length - 1}
-            isStreaming={isStreaming && idx === messages.length - 1}
+            isStreaming={
+              msg.role === "assistant" &&
+              !!msg.requestId &&
+              (activeRequestIds || []).includes(msg.requestId)
+            }
             onApplyCode={onApplyCode}
             onNavigateToFileUpdate={onNavigateToFileUpdate}
           />
@@ -354,7 +360,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           <button
             className="chat-send-btn"
             onClick={handleSend}
-            disabled={!input.trim() || isStreaming || !connected}
+            disabled={!input.trim() || !connected}
             title={t("chat.sendShortcut")}
           >
             <Send size={16} />

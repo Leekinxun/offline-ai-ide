@@ -26,7 +26,9 @@ interface EditorProps {
   language: string;
   path: string;
   theme: "light" | "dark";
+  readOnly?: boolean;
   openFiles: Pick<OpenFile, "path" | "content" | "language">[];
+  refreshNonce?: number;
   onChange: (value: string) => void;
   onSave: () => void;
   onSelectionChange: (selection: SelectionInfo | null) => void;
@@ -203,7 +205,9 @@ export const Editor: React.FC<EditorProps> = ({
   language,
   path,
   theme,
+  readOnly = false,
   openFiles,
+  refreshNonce,
   onChange,
   onSave,
   onSelectionChange,
@@ -217,6 +221,7 @@ export const Editor: React.FC<EditorProps> = ({
 }) => {
   const onSaveRef = useRef(onSave);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const suppressChangeRef = useRef(false);
   const highlightDecorationIdsRef = useRef<string[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
   const symbolDecorationIdsRef = useRef<string[]>([]);
@@ -476,6 +481,13 @@ export const Editor: React.FC<EditorProps> = ({
       });
 
       editor.onDidChangeModelContent(() => {
+        if (suppressChangeRef.current) {
+          suppressChangeRef.current = false;
+          updateSymbolHighlightsRef.current(editor);
+          return;
+        }
+
+        onChange(editor.getValue());
         updateSymbolHighlightsRef.current(editor);
       });
 
@@ -548,6 +560,35 @@ export const Editor: React.FC<EditorProps> = ({
 
   useEffect(() => {
     const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    if (model.getValue() === content) return;
+
+    const currentSelection = editor.getSelection();
+    const currentScrollTop = editor.getScrollTop();
+    const currentScrollLeft = editor.getScrollLeft();
+    suppressChangeRef.current = true;
+
+    model.pushEditOperations(
+      [],
+      [
+        {
+          range: model.getFullModelRange(),
+          text: content,
+        },
+      ],
+      () => null
+    );
+
+    if (currentSelection) {
+      editor.setSelection(currentSelection);
+    }
+    editor.setScrollTop(currentScrollTop);
+    editor.setScrollLeft(currentScrollLeft);
+  }, [content, path, refreshNonce, editorRef]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
     if (!editor || !navigationTarget || navigationTarget.path !== path) return;
 
     const selection = new monaco.Selection(
@@ -580,11 +621,11 @@ export const Editor: React.FC<EditorProps> = ({
         language={language}
         path={path}
         value={content}
-        onChange={(val) => onChange(val ?? "")}
         onMount={handleMount}
         theme={getEditorThemeName(theme)}
         options={{
           "semanticHighlighting.enabled": true,
+          readOnly,
           fontSize: 13,
           fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
           fontLigatures: true,

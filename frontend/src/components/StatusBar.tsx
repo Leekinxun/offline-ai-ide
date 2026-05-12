@@ -5,12 +5,20 @@ interface StatusBarProps {
   activeFile: { path: string; language: string } | null;
   cursorPosition: { line: number; column: number };
   connected: boolean;
+  teamName?: string | null;
+  teamOnlineCount?: number;
+  teamRole?: string | null;
+  readOnlyWorkspace?: boolean;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
   activeFile,
   cursorPosition,
   connected,
+  teamName,
+  teamOnlineCount,
+  teamRole,
+  readOnlyWorkspace,
 }) => {
   const { t } = useI18n();
   return (
@@ -29,6 +37,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         )}
       </div>
       <div className="statusbar-right">
+        {teamName && (
+          <span>
+            {teamName}
+            {typeof teamOnlineCount === "number" ? ` · ${teamOnlineCount}` : ""}
+            {teamRole ? ` · ${teamRole}` : ""}
+          </span>
+        )}
+        {readOnlyWorkspace && <span>{t("team.readOnlyBadge")}</span>}
         {activeFile && <span>{activeFile.language.toUpperCase()}</span>}
         <span>UTF-8</span>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>

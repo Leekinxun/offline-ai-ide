@@ -7,9 +7,16 @@ import { useI18n } from "../i18n";
 interface TerminalProps {
   visible: boolean;
   token: string;
+  disabled?: boolean;
+  disabledReason?: string | null;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
+export const Terminal: React.FC<TerminalProps> = ({
+  visible,
+  token,
+  disabled = false,
+  disabledReason,
+}) => {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -22,6 +29,7 @@ export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
 
   // Initialize xterm only when first visible and container exists
   useEffect(() => {
+    if (disabled) return;
     if (!visible || initialized.current || !containerRef.current) return;
     initialized.current = true;
 
@@ -110,17 +118,18 @@ export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
       xterm.dispose();
       initialized.current = false;
     };
-  }, [visible]);
+  }, [disabled, visible]);
 
   // Re-fit when toggled back to visible
   useEffect(() => {
+    if (disabled) return;
     if (visible && fitAddonRef.current && xtermRef.current) {
       setTimeout(() => {
         fitAddonRef.current?.fit();
         xtermRef.current?.focus();
       }, 100);
     }
-  }, [visible]);
+  }, [disabled, visible]);
 
   // Always render DOM so ref exists; toggle with display
   return (
@@ -131,7 +140,13 @@ export const Terminal: React.FC<TerminalProps> = ({ visible, token }) => {
       <div className="terminal-header">
         <span className="terminal-header-title">{t("terminal.title")}</span>
       </div>
-      <div className="terminal-body" ref={containerRef} />
+      {disabled ? (
+        <div className="terminal-disabled">
+          {disabledReason || t("terminal.readOnlyDisabled")}
+        </div>
+      ) : (
+        <div className="terminal-body" ref={containerRef} />
+      )}
     </div>
   );
 };

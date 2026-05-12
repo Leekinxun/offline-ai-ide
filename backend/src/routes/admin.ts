@@ -182,10 +182,14 @@ adminRouter.put("/llm", (req, res) => {
   const modelName =
     typeof req.body.modelName === "string" ? req.body.modelName.trim() : "";
   const maxTokens = normalizePositiveInteger(req.body.maxTokens);
+  const maxAgentIterations = normalizePositiveInteger(req.body.maxAgentIterations);
+  const systemPrompt =
+    typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : "";
 
-  if (!vllmApiUrl || !modelName || maxTokens === null) {
+  if (!vllmApiUrl || !modelName || maxTokens === null || maxAgentIterations === null) {
     return res.status(400).json({
-      error: "vllmApiUrl, modelName and a positive integer maxTokens are required",
+      error:
+        "vllmApiUrl, modelName, positive integer maxTokens and positive integer maxAgentIterations are required",
     });
   }
 
@@ -195,6 +199,8 @@ adminRouter.put("/llm", (req, res) => {
       vllmApiKey,
       modelName,
       maxTokens,
+      maxAgentIterations,
+      systemPrompt,
     });
     res.json({ llm });
   } catch (error: any) {
