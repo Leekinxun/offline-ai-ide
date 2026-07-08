@@ -3,7 +3,9 @@ import { FileNode, TeamDetails } from "../types";
 import { FileTree } from "./FileTree";
 import {
   FilePlus,
+  FileUp,
   FolderPlus,
+  FolderUp,
   FolderOpen,
   RefreshCw,
   Trash2,
@@ -25,12 +27,21 @@ interface SidebarProps {
   onDeleteEntries: (paths: string[]) => Promise<void>;
   onRenameEntry: (oldPath: string, newPath: string) => Promise<void>;
   onDownloadEntry: (path: string, type: FileNode["type"]) => Promise<void>;
+  onUploadEntries: (
+    files: UploadedFileInput[],
+    overwrite?: boolean
+  ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
   workspaceDir: string;
   onChangeWorkspace: (path: string) => Promise<void>;
   token: string;
   activeTeam?: TeamDetails | null;
   style?: React.CSSProperties;
+}
+
+interface UploadedFileInput {
+  path: string;
+  file: File;
 }
 
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
@@ -63,6 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteEntries,
   onRenameEntry,
   onDownloadEntry,
+  onUploadEntries,
   onRefreshTree,
   workspaceDir,
   onChangeWorkspace,
@@ -92,6 +104,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const dialogInputRef = useRef<HTMLInputElement>(null);
+  const fileUploadInputRef = useRef<HTMLInputElement>(null);
+  const folderUploadInputRef = useRef<HTMLInputElement>(null);
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
   useEffect(() => {
@@ -115,6 +129,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSelectedPaths([]);
     setMultiSelectEnabled(false);
   }, [workspaceDir]);
+
+  useEffect(() => {
+    folderUploadInputRef.current?.setAttribute("webkitdirectory", "");
+    folderUploadInputRef.current?.setAttribute("directory", "");
+  }, []);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
@@ -225,6 +244,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [onDownloadEntry, t]
   );
 
+  const handleUploadFiles = useCallback(
+    async (fileList: FileList | null, preserveRelativePath: boolean) => {
+      if (!canEditWorkspace || !fileList || fileList.length === 0) return;
+
+      try {
+        const files = Array.from(fileList).map((file) => ({
+            path:
+              preserveRelativePath && file.webkitRelativePath
+                ? file.webkitRelativePath
+                : file.name,
+            file,
+          }));
+
+        try {
+          await onUploadEntries(files);
+          onRefreshTree();
+        } catch (e) {
+          const uploadError = e as Error & { code?: string; conflicts?: string[] };
+          if (uploadError.code !== "UPLOAD_CONFLICT") {
+            throw e;
+          }
+
+          const conflicts = uploadError.conflicts || [];
+          const confirmed = confirm(
+            t("sidebar.confirmUploadOverwrite", {
+              count: conflicts.length,
+              sample: conflicts.slice(0, 3).join(", "),
+            })
+          );
+          if (!confirmed) return;
+
+          await onUploadEntries(files, true);
+          onRefreshTree();
+        }
+      } catch (e) {
+        alert(e instanceof Error ? e.message : t("sidebar.uploadFailed"));
+      } finally {
+        if (fileUploadInputRef.current) {
+          fileUploadInputRef.current.value = "";
+        }
+        if (folderUploadInputRef.current) {
+          folderUploadInputRef.current.value = "";
+        }
+      }
+    },
+    [canEditWorkspace, onRefreshTree, onUploadEntries, t]
+  );
+
   const handleDialogSubmit = useCallback(async () => {
     if (!canEditWorkspace) return;
     if (!dialog || !dialogValue.trim()) return;
@@ -310,12 +377,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="sidebar-header">
         <span className="sidebar-title">{t("sidebar.explorer")}</span>
         <div className="sidebar-actions">
+          <input
+            ref={fileUploadInputRef}
+            className="sidebar-hidden-file-input"
+            type="file"
+            multiple
+            onChange={(e) => void handleUploadFiles(e.target.files, false)}
+          />
+          <input
+            ref={folderUploadInputRef}
+            className="sidebar-hidden-file-input"
+            type="file"
+            multiple
+            onChange={(e) => void handleUploadFiles(e.target.files, true)}
+          />
           <button
             className="sidebar-action-btn"
             title={t("sidebar.openFolder")}
             onClick={openFolderBrowser}
           >
             <FolderOpen size={15} />
+          </button>
+          <button
+            className="sidebar-action-btn"
+            title={t("sidebar.uploadFiles")}
+            onClick={() => fileUploadInputRef.current?.click()}
+            disabled={!canEditWorkspace}
+          >
+            <FileUp size={15} />
+          </button>
+          <button
+            className="sidebar-action-btn"
+            title={t("sidebar.uploadFolder")}
+            onClick={() => folderUploadInputRef.current?.click()}
+            disabled={!canEditWorkspace}
+          >
+            <FolderUp size={15} />
           </button>
           <button
             className="sidebar-action-btn"

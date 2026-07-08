@@ -3,6 +3,11 @@ import { DefinitionLocation, FileNode } from "../types";
 
 const API = "/api/files";
 
+export interface UploadFilePayload {
+  path: string;
+  file: File;
+}
+
 function fallbackDownloadName(path: string, type: FileNode["type"]): string {
   const baseName = path.split("/").pop() || "download";
   return type === "directory" ? `${baseName}.zip` : baseName;
@@ -214,6 +219,51 @@ export function useFileSystem(token: string) {
     [authHeaders]
   );
 
+  const uploadEntries = useCallback(
+    async (
+      files: UploadFilePayload[],
+      options?: { targetPath?: string; overwrite?: boolean }
+    ): Promise<{ uploaded: number; overwritten: number }> => {
+      const formData = new FormData();
+      formData.append("targetPath", options?.targetPath || "");
+      formData.append("overwrite", String(Boolean(options?.overwrite)));
+      for (const file of files) {
+        formData.append("files", file.file, file.file.name);
+        formData.append("paths", file.path);
+      }
+
+      const res = await fetch(`${API}/upload`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const error = new Error(data.detail || "Failed to upload") as Error & {
+          code?: string;
+          conflicts?: string[];
+        };
+        if (typeof data.code === "string") {
+          error.code = data.code;
+        }
+        if (Array.isArray(data.conflicts)) {
+          error.conflicts = data.conflicts.filter(
+            (item: unknown): item is string => typeof item === "string"
+          );
+        }
+        throw error;
+      }
+
+      const data = await res.json();
+      return {
+        uploaded: data.uploaded,
+        overwritten: data.overwritten,
+      };
+    },
+    [authHeaders]
+  );
+
   return useMemo(
     () => ({
       fetchTree,
@@ -226,6 +276,7 @@ export function useFileSystem(token: string) {
       deleteEntry,
       renameEntry,
       downloadEntry,
+      uploadEntries,
     }),
     [
       fetchTree,
@@ -238,6 +289,7 @@ export function useFileSystem(token: string) {
       deleteEntry,
       renameEntry,
       downloadEntry,
+      uploadEntries,
     ]
   );
 }

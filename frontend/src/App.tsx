@@ -50,12 +50,39 @@ import {
   formatLineRange,
 } from "./utils/conflicts";
 
+const EDITOR_FONT_OPTIONS = [
+  {
+    label: "SF Mono",
+    family: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
+  },
+  {
+    label: "JetBrains Mono",
+    family: "'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', monospace",
+  },
+  {
+    label: "Fira Code",
+    family: "'Fira Code', 'SF Mono', 'Menlo', 'Monaco', monospace",
+  },
+  {
+    label: "Cascadia Code",
+    family: "'Cascadia Code', 'SF Mono', 'Menlo', 'Monaco', monospace",
+  },
+  {
+    label: "Monaco",
+    family: "'Monaco', 'Menlo', 'Courier New', monospace",
+  },
+];
+
 export default function App() {
   const { t } = useI18n();
   const auth = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
     return (saved as "light" | "dark") || "light";
+  });
+  const [editorFont, setEditorFont] = useState(() => {
+    const saved = localStorage.getItem("editorFont");
+    return saved || EDITOR_FONT_OPTIONS[0].family;
   });
 
   useEffect(() => {
@@ -65,6 +92,11 @@ export default function App() {
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  }, []);
+
+  const changeEditorFont = useCallback((fontFamily: string) => {
+    setEditorFont(fontFamily);
+    localStorage.setItem("editorFont", fontFamily);
   }, []);
 
   // Show loading while validating token
@@ -99,6 +131,9 @@ export default function App() {
       onChangeWorkspace={auth.changeWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
+      editorFont={editorFont}
+      editorFontOptions={EDITOR_FONT_OPTIONS}
+      onEditorFontChange={changeEditorFont}
     />
   );
 }
@@ -112,6 +147,9 @@ interface AuthenticatedAppProps {
   onChangeWorkspace: (path: string) => Promise<boolean>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  editorFont: string;
+  editorFontOptions: typeof EDITOR_FONT_OPTIONS;
+  onEditorFontChange: (fontFamily: string) => void;
 }
 
 interface EditorNavigationTarget extends FileSelectionRange {
@@ -192,6 +230,9 @@ function AuthenticatedApp({
   onChangeWorkspace,
   theme,
   onToggleTheme,
+  editorFont,
+  editorFontOptions,
+  onEditorFontChange,
 }: AuthenticatedAppProps) {
   const { t } = useI18n();
   // --- State ---
@@ -226,6 +267,9 @@ function AuthenticatedApp({
   const draggingRef = useRef<"sidebar" | "chat" | null>(null);
   const navigationRequestRef = useRef(0);
   const highlightRequestRef = useRef(0);
+  const editorViewStatesRef = useRef<
+    Record<string, monaco.editor.ICodeEditorViewState | null>
+  >({});
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   const fs = useFileSystem(token);
@@ -235,6 +279,13 @@ function AuthenticatedApp({
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  const handleEditorViewStateChange = useCallback(
+    (path: string, viewState: monaco.editor.ICodeEditorViewState | null) => {
+      editorViewStatesRef.current[path] = viewState;
+    },
+    []
+  );
 
   // --- Resize drag handling ---
   const handleResizeStart = useCallback(
@@ -307,6 +358,7 @@ function AuthenticatedApp({
     setOpenFiles([]);
     setActiveFilePath(null);
     setPreviewModes({});
+    editorViewStatesRef.current = {};
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
     loadTree();
@@ -1046,6 +1098,18 @@ function AuthenticatedApp({
     [fs, showToast, t]
   );
 
+  const handleUploadEntries = useCallback(
+    async (
+      files: { path: string; file: File }[],
+      overwrite = false
+    ) => {
+      const result = await fs.uploadEntries(files, { overwrite });
+      showToast(t("app.uploaded", { count: result.uploaded }));
+      return result;
+    },
+    [fs, showToast, t]
+  );
+
   // --- Selection tracking ---
   const handleSelectionChange = useCallback(
     (selection: SelectionInfo | null) => {
@@ -1410,6 +1474,9 @@ function AuthenticatedApp({
         currentUsername={username}
         isAdmin={isAdmin}
         visible={settingsVisible}
+        editorFont={editorFont}
+        editorFontOptions={editorFontOptions}
+        onEditorFontChange={onEditorFontChange}
         onClose={() => setSettingsVisible(false)}
         onShowToast={showToast}
       />
@@ -1426,6 +1493,7 @@ function AuthenticatedApp({
           onDeleteEntries={handleDeleteEntries}
           onRenameEntry={handleRenameEntry}
           onDownloadEntry={handleDownloadEntry}
+          onUploadEntries={handleUploadEntries}
           onRefreshTree={loadTree}
           workspaceDir={workspaceDir}
           onChangeWorkspace={handleChangeWorkspace}
@@ -1562,9 +1630,14 @@ function AuthenticatedApp({
                           language={activeFile.language}
                           path={activeFile.path}
                           theme={theme}
+                          fontFamily={editorFont}
                           readOnly={readOnlyWorkspace}
                           openFiles={openFiles}
                           refreshNonce={treeRefreshNonce}
+                          viewState={
+                            editorViewStatesRef.current[activeFile.path] || null
+                          }
+                          onViewStateChange={handleEditorViewStateChange}
                           onChange={handleEditorChange}
                           onSave={saveFile}
                           onSelectionChange={handleSelectionChange}
@@ -1602,9 +1675,12 @@ function AuthenticatedApp({
                   language={activeFile.language}
                   path={activeFile.path}
                   theme={theme}
+                  fontFamily={editorFont}
                   readOnly={readOnlyWorkspace}
                   openFiles={openFiles}
                   refreshNonce={treeRefreshNonce}
+                  viewState={editorViewStatesRef.current[activeFile.path] || null}
+                  onViewStateChange={handleEditorViewStateChange}
                   onChange={handleEditorChange}
                   onSave={saveFile}
                   onSelectionChange={handleSelectionChange}

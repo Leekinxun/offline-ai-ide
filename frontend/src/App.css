@@ -298,6 +298,10 @@ body {
   gap: 2px;
 }
 
+.sidebar-hidden-file-input {
+  display: none;
+}
+
 .sidebar-action-btn {
   display: flex;
   align-items: center;

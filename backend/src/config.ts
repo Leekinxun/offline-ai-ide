@@ -15,6 +15,10 @@ interface PluginOverrideSettings {
   enabled: boolean;
 }
 
+interface AppRuntimeSettings {
+  uploadMaxFileSizeMb: number;
+}
+
 interface PersistedPluginSettings {
   overrides?: Record<string, Partial<PluginOverrideSettings>>;
 }
@@ -22,6 +26,7 @@ interface PersistedPluginSettings {
 interface PersistedAppSettings {
   llm?: Partial<LlmRuntimeSettings>;
   plugins?: PersistedPluginSettings;
+  app?: Partial<AppRuntimeSettings>;
 }
 
 function parsePositiveInteger(
@@ -116,6 +121,7 @@ function loadPersistedAppSettings(configPath: string): PersistedAppSettings {
 const appSettingsPath = resolveAppSettingsPath();
 let persistedAppSettings = loadPersistedAppSettings(appSettingsPath);
 const persistedLlmSettings = persistedAppSettings.llm || {};
+const persistedRuntimeSettings = persistedAppSettings.app || {};
 
 function savePersistedAppSettings(): void {
   fs.mkdirSync(path.dirname(config.appSettingsPath), { recursive: true });
@@ -144,8 +150,32 @@ export const config = {
   ),
   usersConfigPath: process.env.USERS_CONFIG || "users.json",
   pluginsDir: resolvePluginsDir(),
+  uploadMaxFileSizeMb: parsePositiveInteger(
+    persistedRuntimeSettings.uploadMaxFileSizeMb,
+    parsePositiveInteger(process.env.UPLOAD_MAX_FILE_SIZE_MB, 250)
+  ),
   appSettingsPath,
 };
+
+export function getAppSettings(): AppRuntimeSettings {
+  return {
+    uploadMaxFileSizeMb: config.uploadMaxFileSizeMb,
+  };
+}
+
+export function updateAppSettings(
+  next: AppRuntimeSettings
+): AppRuntimeSettings {
+  config.uploadMaxFileSizeMb = next.uploadMaxFileSizeMb;
+
+  persistedAppSettings = {
+    ...persistedAppSettings,
+    app: getAppSettings(),
+  };
+  savePersistedAppSettings();
+
+  return getAppSettings();
+}
 
 export function getLlmSettings(): LlmRuntimeSettings {
   return {

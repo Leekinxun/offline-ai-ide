@@ -2,9 +2,11 @@ import { Router, Request, Response } from "express";
 import { sessionManager, UserSession } from "../auth/sessionManager.js";
 import {
   clearPluginOverride,
+  getAppSettings,
   getLlmSettings,
   getPluginOverrides,
   setPluginEnabled,
+  updateAppSettings,
   updateLlmSettings,
 } from "../config.js";
 
@@ -53,10 +55,32 @@ adminRouter.get("/settings", (req, res) => {
     users: sessionManager.listUsers(),
     allowedRoots: sessionManager.getAllowedRoots(),
     llm: getLlmSettings(),
+    app: getAppSettings(),
     plugins: {
       overrides: getPluginOverrides(),
     },
   });
+});
+
+adminRouter.put("/app", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const uploadMaxFileSizeMb = normalizePositiveInteger(
+    req.body.uploadMaxFileSizeMb
+  );
+
+  if (uploadMaxFileSizeMb === null) {
+    return res.status(400).json({
+      error: "uploadMaxFileSizeMb must be a positive integer",
+    });
+  }
+
+  try {
+    const app = updateAppSettings({ uploadMaxFileSizeMb });
+    res.json({ app });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 adminRouter.put("/plugins/:pluginId", (req, res) => {

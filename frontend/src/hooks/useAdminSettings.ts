@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { AdminSettings, LlmSettings } from "../types";
+import { AdminSettings, AppSettings, LlmSettings } from "../types";
 
 const API = "/api/admin";
 
@@ -93,6 +93,23 @@ export function useAdminSettings(token: string) {
     [authHeaders]
   );
 
+  const updateAppSettings = useCallback(
+    async (settings: AppSettings) => {
+      const res = await fetch(`${API}/app`, {
+        method: "PUT",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to save app settings");
+      }
+      const data = await res.json();
+      return data.app as AppSettings;
+    },
+    [authHeaders]
+  );
+
   return useMemo(
     () => ({
       fetchSettings,
@@ -100,6 +117,7 @@ export function useAdminSettings(token: string) {
       updateUserPassword,
       deleteUser,
       updateLlmSettings,
+      updateAppSettings,
     }),
     [
       fetchSettings,
@@ -107,6 +125,7 @@ export function useAdminSettings(token: string) {
       updateUserPassword,
       deleteUser,
       updateLlmSettings,
+      updateAppSettings,
     ]
   );
 }

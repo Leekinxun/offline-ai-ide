@@ -1,5 +1,6 @@
 import { Router, Request } from "express";
 import fs from "fs";
+import multer from "multer";
 import path from "path";
 import { safePath as safePathUtil } from "../utils/safePath.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
@@ -16,8 +17,19 @@ import {
   lookupKnownFileMutation,
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
+import { config } from "../config.js";
 
 export const filesRouter = Router();
+
+function createUploadMiddleware() {
+  return multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: config.uploadMaxFileSizeMb * 1024 * 1024,
+      files: 2000,
+    },
+  });
+}
 
 function getWorkspace(req: Request): string {
   return ((req as any).userSession as UserSession).workspaceDir;
@@ -61,6 +73,53 @@ interface FileNode {
   path: string;
   type: "file" | "directory";
   children?: FileNode[];
+}
+
+function normalizeUploadPath(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part.length > 0)
+    .join("/");
+
+  if (
+    !normalized ||
+    path.isAbsolute(normalized) ||
+    normalized.split("/").some((part) => part === "." || part === "..")
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function getFormFieldValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  return typeof value === "string" ? [value] : [];
+}
+
+function joinUploadTarget(targetPath: unknown, filePath: unknown): string | null {
+  const fileRelPath = normalizeUploadPath(filePath);
+  if (!fileRelPath) {
+    return null;
+  }
+
+  if (typeof targetPath !== "string" || !targetPath.trim()) {
+    return fileRelPath;
+  }
+
+  const targetRelPath = normalizeUploadPath(targetPath);
+  if (!targetRelPath) {
+    return null;
+  }
+
+  return `${targetRelPath}/${fileRelPath}`;
 }
 
 function buildTree(dirPath: string, relPrefix = ""): FileNode[] {
@@ -512,6 +571,104 @@ filesRouter.post("/create", (req, res) => {
     res.json({ status: "ok" });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
+  }
+});
+
+// POST /upload multipart/form-data { targetPath, overwrite, files[], paths[] }
+filesRouter.post("/upload", (req, res, next) => {
+  if (!requireWorkspaceWrite(req, res)) return;
+
+  createUploadMiddleware().array("files")(req, res, (error) => {
+    if (error) {
+      const message =
+        error instanceof multer.MulterError
+          ? error.message
+          : error instanceof Error
+          ? error.message
+          : "Upload failed";
+      return res.status(400).json({ detail: message });
+    }
+    next();
+  });
+}, (req, res) => {
+  const { targetPath } = req.body;
+  const overwrite =
+    req.body.overwrite === true ||
+    req.body.overwrite === "true" ||
+    req.body.overwrite === "1";
+  const files = Array.isArray(req.files)
+    ? (req.files as Express.Multer.File[])
+    : [];
+  const requestedPaths = getFormFieldValues(req.body.paths);
+
+  if (files.length === 0) {
+    return res.status(400).json({ detail: "files required" });
+  }
+
+  try {
+    const session = (req as any).userSession as UserSession;
+    const workspaceDir = getWorkspace(req);
+    const prepared = files.map((file, index) => {
+      const relPath = joinUploadTarget(
+        targetPath,
+        requestedPaths[index] || file.originalname
+      );
+      if (!relPath) {
+        throw new Error("Invalid upload path");
+      }
+
+      return {
+        relPath,
+        fullPath: safePathUtil(relPath, workspaceDir),
+        content: file.buffer,
+      };
+    });
+
+    const conflicts = prepared
+      .filter((file) => fs.existsSync(file.fullPath))
+      .map((file) => file.relPath);
+
+    if (conflicts.length > 0 && !overwrite) {
+      return res.status(409).json({
+        detail: "Upload target already exists",
+        code: "UPLOAD_CONFLICT",
+        conflicts,
+      });
+    }
+
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    for (const file of prepared) {
+      fs.mkdirSync(path.dirname(file.fullPath), { recursive: true });
+      fs.writeFileSync(file.fullPath, file.content);
+
+      const stat = fs.statSync(file.fullPath);
+      recordKnownFileMutation({
+        workspaceDir,
+        path: file.relPath,
+        source: "user",
+        actor: session.username,
+        mtimeMs: stat.mtimeMs,
+        version: buildFileVersion(file.content.toString("base64")),
+      });
+    }
+
+    maybeRecordTeamActivity(req, {
+      type: "entry_created",
+      payload: {
+        path: typeof targetPath === "string" && targetPath.trim() ? targetPath.trim() : "",
+        uploadedCount: prepared.length,
+        overwrittenCount: conflicts.length,
+      },
+    });
+
+    res.json({
+      status: "ok",
+      uploaded: prepared.length,
+      overwritten: conflicts.length,
+    });
+  } catch (e: any) {
+    const status = e.message === "Path traversal denied" ? 403 : 500;
+    res.status(status).json({ detail: e.message });
   }
 });
 

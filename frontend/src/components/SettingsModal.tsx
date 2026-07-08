@@ -6,6 +6,7 @@ import {
   Settings,
   Shield,
   Trash2,
+  Type,
   UserPlus,
   X,
 } from "lucide-react";
@@ -19,8 +20,16 @@ interface SettingsModalProps {
   currentUsername: string;
   isAdmin: boolean;
   visible: boolean;
+  editorFont: string;
+  editorFontOptions: EditorFontOption[];
+  onEditorFontChange: (fontFamily: string) => void;
   onClose: () => void;
   onShowToast: (message: string) => void;
+}
+
+interface EditorFontOption {
+  label: string;
+  family: string;
 }
 
 interface CreateUserForm {
@@ -39,6 +48,10 @@ interface LlmFormState {
   systemPrompt: string;
 }
 
+interface AppFormState {
+  uploadMaxFileSizeMb: string;
+}
+
 const EMPTY_CREATE_USER_FORM: CreateUserForm = {
   username: "",
   password: "",
@@ -55,6 +68,10 @@ const EMPTY_LLM_FORM: LlmFormState = {
   systemPrompt: "",
 };
 
+const EMPTY_APP_FORM: AppFormState = {
+  uploadMaxFileSizeMb: "250",
+};
+
 function buildDefaultWorkspace(username: string, allowedRoots: string[]): string {
   const trimmedUsername = username.trim();
   if (!trimmedUsername || allowedRoots.length === 0) return "";
@@ -67,6 +84,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   currentUsername,
   isAdmin,
   visible,
+  editorFont,
+  editorFontOptions,
+  onEditorFontChange,
   onClose,
   onShowToast,
 }) => {
@@ -75,6 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingLlm, setSavingLlm] = useState(false);
+  const [savingApp, setSavingApp] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
@@ -83,6 +104,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     EMPTY_CREATE_USER_FORM
   );
   const [llmForm, setLlmForm] = useState<LlmFormState>(EMPTY_LLM_FORM);
+  const [appForm, setAppForm] = useState<AppFormState>(EMPTY_APP_FORM);
   const [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null);
   const [nextPassword, setNextPassword] = useState("");
 
@@ -99,6 +121,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         maxTokens: String(data.llm.maxTokens),
         maxAgentIterations: String(data.llm.maxAgentIterations),
         systemPrompt: data.llm.systemPrompt || "",
+      });
+      setAppForm({
+        uploadMaxFileSizeMb: String(data.app?.uploadMaxFileSizeMb || 250),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToLoadSettings"));
@@ -254,6 +279,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleSaveApp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (savingApp) return;
+
+    const uploadMaxFileSizeMb = Number.parseInt(
+      appForm.uploadMaxFileSizeMb,
+      10
+    );
+
+    if (!Number.isInteger(uploadMaxFileSizeMb) || uploadMaxFileSizeMb <= 0) {
+      setError(t("settings.uploadMaxFileSizePositiveInteger"));
+      return;
+    }
+
+    setSavingApp(true);
+    setError(null);
+    try {
+      const saved = await adminSettings.updateAppSettings({
+        uploadMaxFileSizeMb,
+      });
+      setAppForm({
+        uploadMaxFileSizeMb: String(saved.uploadMaxFileSizeMb),
+      });
+      setSettings((prev) => (prev ? { ...prev, app: saved } : prev));
+      onShowToast(t("settings.appSettingsSaved"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToSaveAppSettings"));
+    } finally {
+      setSavingApp(false);
+    }
+  };
+
   return (
     <>
       <div className="settings-modal-overlay" onClick={onClose}>
@@ -292,6 +349,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     {locales.map((option) => (
                       <option key={option.code} value={option.code}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="settings-field settings-field-wide">
+                  <span>{t("settings.editorFont")}</span>
+                  <select
+                    className="settings-input"
+                    value={editorFont}
+                    onChange={(e) => onEditorFontChange(e.target.value)}
+                  >
+                    {editorFontOptions.map((option) => (
+                      <option key={option.family} value={option.family}>
                         {option.label}
                       </option>
                     ))}
@@ -453,6 +524,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   ))}
                 </div>
+              </section>
+
+              <section className="settings-card">
+                <div className="settings-card-header">
+                  <div className="settings-card-title">
+                    <Type size={16} />
+                    <span>{t("settings.appConfiguration")}</span>
+                  </div>
+                  <span className="settings-card-meta">
+                    {t("settings.appMeta")}
+                  </span>
+                </div>
+
+                <form className="settings-form" onSubmit={handleSaveApp}>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.uploadMaxFileSizeMb")}</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={appForm.uploadMaxFileSizeMb}
+                      onChange={(e) =>
+                        setAppForm((prev) => ({
+                          ...prev,
+                          uploadMaxFileSizeMb: e.target.value,
+                        }))
+                      }
+                      placeholder="250"
+                    />
+                  </label>
+
+                  <div className="settings-form-footer">
+                    <span className="settings-help-text">
+                      {t("settings.uploadMaxFileSizeHelp")}
+                    </span>
+                    <button
+                      className="dialog-btn primary"
+                      type="submit"
+                      disabled={savingApp}
+                    >
+                      <Save size={14} />
+                      {savingApp ? t("settings.saving") : t("settings.saveAppSettings")}
+                    </button>
+                  </div>
+                </form>
               </section>
 
               <section className="settings-card">

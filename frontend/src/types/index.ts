@@ -98,10 +98,15 @@ export interface PluginOverrideSettings {
   enabled: boolean;
 }
 
+export interface AppSettings {
+  uploadMaxFileSizeMb: number;
+}
+
 export interface AdminSettings {
   users: AdminUser[];
   allowedRoots: string[];
   llm: LlmSettings;
+  app: AppSettings;
   plugins?: {
     overrides: Record<string, PluginOverrideSettings>;
   };

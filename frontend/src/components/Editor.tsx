@@ -26,9 +26,15 @@ interface EditorProps {
   language: string;
   path: string;
   theme: "light" | "dark";
+  fontFamily: string;
   readOnly?: boolean;
   openFiles: Pick<OpenFile, "path" | "content" | "language">[];
   refreshNonce?: number;
+  viewState?: monaco.editor.ICodeEditorViewState | null;
+  onViewStateChange?: (
+    path: string,
+    viewState: monaco.editor.ICodeEditorViewState | null
+  ) => void;
   onChange: (value: string) => void;
   onSave: () => void;
   onSelectionChange: (selection: SelectionInfo | null) => void;
@@ -205,9 +211,12 @@ export const Editor: React.FC<EditorProps> = ({
   language,
   path,
   theme,
+  fontFamily,
   readOnly = false,
   openFiles,
   refreshNonce,
+  viewState,
+  onViewStateChange,
   onChange,
   onSave,
   onSelectionChange,
@@ -230,6 +239,13 @@ export const Editor: React.FC<EditorProps> = ({
 
   onSaveRef.current = onSave;
   onSelectionChangeRef.current = onSelectionChange;
+
+  const saveCurrentViewState = useCallback(
+    (editor: monaco.editor.IStandaloneCodeEditor) => {
+      onViewStateChange?.(path, editor.saveViewState());
+    },
+    [onViewStateChange, path]
+  );
 
   const clearHighlights = useCallback(() => {
     if (highlightTimerRef.current !== null) {
@@ -477,7 +493,12 @@ export const Editor: React.FC<EditorProps> = ({
           }
         }
         onSelectionChangeRef.current(null);
+        saveCurrentViewState(editor);
         updateSymbolHighlightsRef.current(editor);
+      });
+
+      editor.onDidScrollChange(() => {
+        saveCurrentViewState(editor);
       });
 
       editor.onDidChangeModelContent(() => {
@@ -488,6 +509,7 @@ export const Editor: React.FC<EditorProps> = ({
         }
 
         onChange(editor.getValue());
+        saveCurrentViewState(editor);
         updateSymbolHighlightsRef.current(editor);
       });
 
@@ -526,6 +548,9 @@ export const Editor: React.FC<EditorProps> = ({
       });
 
       editor.focus();
+      if (viewState && !navigationTarget) {
+        editor.restoreViewState(viewState);
+      }
       updateSymbolHighlightsRef.current(editor);
       pluginCleanupRef.current = runEditorMountHandlers({
         editor,
@@ -538,20 +563,27 @@ export const Editor: React.FC<EditorProps> = ({
       clearSymbolHighlights,
       editorRef,
       language,
+      navigationTarget,
       path,
+      saveCurrentViewState,
       t,
+      viewState,
     ]
   );
 
   useEffect(
     () => () => {
+      const editor = editorRef.current;
+      if (editor) {
+        saveCurrentViewState(editor);
+      }
       pluginCleanupRef.current?.();
       pluginCleanupRef.current = null;
       editorRef.current = null;
       clearHighlights();
       clearSymbolHighlights();
     },
-    [clearHighlights, clearSymbolHighlights, editorRef]
+    [clearHighlights, clearSymbolHighlights, editorRef, saveCurrentViewState]
   );
 
   useEffect(() => {
@@ -627,7 +659,7 @@ export const Editor: React.FC<EditorProps> = ({
           "semanticHighlighting.enabled": true,
           readOnly,
           fontSize: 13,
-          fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
+          fontFamily,
           fontLigatures: true,
           lineHeight: 20,
           minimap: { enabled: false },
