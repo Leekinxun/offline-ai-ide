@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
 </p>
 
-> 当前版本：`v0.5.0`
+> 当前版本：`v0.5.1`
 >
-> 发布时间：`2026-05-12`
+> 发布时间：`2026-07-09`
 
 完全离线、可私有化部署的 Web AI 集成开发环境，集代码编辑器、集成终端、AI 编程助手和多智能体协作于一体，一个 Docker 容器即可运行。
 
@@ -18,6 +18,15 @@
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.5.1 · 2026-07-09
+
+- 新增文件浏览器里的 **文件 / 文件夹上传**，改为 multipart 表单上传，并支持覆盖冲突确认，不再依赖不稳定的大体积 base64 载荷
+- 新增管理员可配置的 **上传单文件大小上限**；管理员可在 **Settings** 中调整，环境变量回退项为 `UPLOAD_MAX_FILE_SIZE_MB`
+- 新增 **编辑器字体选择**，用户可在 **Settings** 中选择更舒服的代码字体，并按浏览器会话持久化
+- 新增按文件保存的 **编辑器视图状态恢复**，重新打开之前的文件时会回到上次离开的光标和滚动位置
+- 新增 AI **停止当前任务** 和 **纠偏当前任务** 控制，用户可在 AI 执行工具期间打断或修正运行方向
+- 将已有的 **Markdown 渲染**、浅色/深色主题切换、自定义系统提示词作为一等用户功能补充到文档中
 
 ### v0.5.0 · 2026-05-12
 
@@ -57,19 +66,21 @@
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.5.0` 是当前 README 记录的最新版本，在 `v0.4.x` 的基础上新增了可打断的 steering、可配置的 agent 循环上限、更智能的文件刷新流程，以及带冲突安全保存的团队协作能力。
+`v0.5.1` 是当前 README 记录的最新版本，在 `v0.5.0` 团队协作能力基础上，补充了上传、管理员上传大小限制、编辑器字体偏好、按文件恢复编辑位置、AI 停止/纠偏控制、Markdown 渲染、主题切换和自定义系统提示词等功能说明。
 
 ## 功能特性
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
-- **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、Ctrl/Cmd 点击符号跳转、协作提示，以及带版本感知的更安全保存流程
+- **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、编辑器字体选择、按文件恢复光标/滚动位置、Ctrl/Cmd 点击符号跳转、协作提示，以及带版本感知的更安全保存流程
+- **Markdown 渲染** — AI 对话内容通过内置插件渲染 Markdown，Markdown 文件可通过仓库自带的外部预览插件查看
+- **浅色 / 深色主题** — 用户可从标题栏切换界面主题；主题偏好会保存在本地，并与 Monaco 编辑器主题同步
 - **插件系统** — 提供类似 VS Code 的轻量插件模式，支持内置/外部插件、显式权限与作用域、本地 `plugins/` 离线安装、界面内插件管理，以及仓库内自带的 Markdown 预览示例插件
-- **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令；支持运行中追加 follow-up / steering 消息打断当前工具流，并会自动遵守团队只读角色权限
+- **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令；支持通过停止和纠偏控制在运行中打断或追加 follow-up / steering 消息，并会自动遵守团队只读角色权限
 - **历史对话持久化** — 每个工作区会在 `.history/` 下保存 `.jsonl` 会话文件，支持继续历史对话，并自动只保留最近 5 个会话
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda，默认自动激活 `base` 环境，并内置 `ruff`
-- **文件浏览器** — 树形文件管理，支持新建、重命名、下载、批量删除、文件夹 zip 下载、文件变化自动刷新、手动刷新按钮、改进后的多选交互，以及"打开文件夹"功能（运行时切换工作区）
-- **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens / Max Agent Iterations / System Prompt，并切换英文 / 简体中文界面语言
+- **文件浏览器** — 树形文件管理，支持新建、重命名、文件/文件夹上传、下载、批量删除、文件夹 zip 下载、文件变化自动刷新、手动刷新按钮、改进后的多选交互，以及"打开文件夹"功能（运行时切换工作区）
+- **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens / Max Agent Iterations / System Prompt / 上传大小限制，并切换英文 / 简体中文界面语言
 - **多用户认证** — 登录页面支持用户名/密码认证，底层由 `users.json` 和内置管理员设置页共同管理；每个用户拥有独立会话（独立的工作区、终端、AI 上下文）
 - **团队协作** — 支持在共享工作区内创建/加入团队、按 `owner/admin/member/viewer` 邀请成员、查看在线状态与活跃文件、认领文件、查看协作活动，并通过冲突安全保存流程降低多人编辑冲突
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作
@@ -123,6 +134,7 @@ services:
       - WORKSPACE_DIR=/workspace
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
+      - UPLOAD_MAX_FILE_SIZE_MB=250
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -193,6 +205,7 @@ npm run dev
 | `MAX_AGENT_ITERATIONS` | `30` | 每次 AI 回复的最大工具调用轮数 |
 | `AGENT_MAX_TOKENS` | `8192` | 每次 AI 回复的最大 Token 数 |
 | `SYSTEM_PROMPT` | *（空）* | AI 智能体默认 System Prompt 覆盖项 |
+| `UPLOAD_MAX_FILE_SIZE_MB` | `250` | 单个上传文件大小上限，单位 MB；可由管理员设置页覆盖 |
 | `USERS_CONFIG` | *（自动检测）* | `users.json` 文件路径 |
 | `APP_SETTINGS_CONFIG` | *（自动检测）* | 管理员设置页写入的 `app-settings.json` 路径 |
 
@@ -201,7 +214,7 @@ npm run dev
 | 文件 | 作用 |
 |------|------|
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
-| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens、Max Agent Iterations、System Prompt 等运行时设置 |
+| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens、Max Agent Iterations、System Prompt、插件覆盖项、上传大小限制等运行时设置 |
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
 | `<workspace>/.team/teams.json` | 存储团队成员、角色、邀请码、在线状态、文件认领和协作活动等团队数据 |
 
@@ -244,7 +257,21 @@ LLM 运行时配置同样支持两种方式：
 - 推荐：通过管理员设置页直接修改
 - 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME`、`AGENT_MAX_TOKENS`、`MAX_AGENT_ITERATIONS`、`SYSTEM_PROMPT` 指定
 
-通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。
+通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。系统提示词也属于运行时配置，管理员可以不重建镜像就定制 AI 助手行为。
+
+### 上传
+
+- 用户可从文件浏览器上传单个文件或整个文件夹
+- 上传采用 multipart 表单数据，不再把大文件转成 base64 JSON 载荷
+- 文件夹上传会保留所选文件夹下的相对路径
+- 如果上传内容与现有文件冲突，界面会提示是否覆盖
+- 管理员可在 **Settings** 中配置单文件上传大小上限；环境变量回退项为 `UPLOAD_MAX_FILE_SIZE_MB`
+
+### 编辑器偏好
+
+- 用户可在 **Settings** 中切换内置编辑器字体预设
+- 字体偏好会通过 `localStorage` 保存在当前浏览器
+- 每个打开的文件都会记录 Monaco 视图状态，回到之前的标签页时会恢复上次的光标和滚动位置
 
 ### 历史对话
 
@@ -305,7 +332,8 @@ AI 助手可以：
 
 - **读取 / 编写 / 编辑文件** — 直接操作工作区内的文件
 - **执行 Shell 命令** — 通过集成终端运行命令
-- **实时接收 Steering** — 用户追加的 follow-up 消息可在单个工具执行完成后立即打断当前流程，并在保留已有工具结果上下文的前提下进入下一轮 turn
+- **停止当前运行** — Stop 控制会中止当前 LLM / 工具循环，并将本次运行标记为用户停止
+- **实时接收 Steering** — 用户追加的 follow-up 消息和纠偏控制可在单个工具执行完成后立即打断当前流程，并在保留已有工具结果上下文的前提下进入下一轮 turn
 - **管理任务** — 创建、更新、跟踪任务看板
 - **生成队友** — 创建具有特定角色的自主 AI 子智能体
 - **协作** — 智能体之间通过消息总线通信，可主动认领任务

@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
 </p>
 
-> Current Version: `v0.5.0`
+> Current Version: `v0.5.1`
 >
-> Release Date: `2026-05-12`
+> Release Date: `2026-07-09`
 
 A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,15 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.5.1 · 2026-07-09
+
+- Added direct **file and folder upload** from the file explorer using multipart form uploads, including overwrite conflict handling without base64 payloads
+- Added an admin-managed **upload max file size** setting; admins can change the per-file upload limit from **Settings**, with `UPLOAD_MAX_FILE_SIZE_MB` available as the environment fallback
+- Added selectable **editor fonts** in **Settings**, persisted per browser session so users can choose a more comfortable coding font
+- Added per-file **editor view-state restore** so reopening a previously opened tab returns to the last cursor/scroll position
+- Added explicit AI **Stop** and **Correct current run** controls so users can interrupt an active run or steer it while tools are executing
+- Documented the existing **Markdown rendering**, light/dark theme switching, and custom system prompt settings as first-class user-facing features
 
 ### v0.5.0 · 2026-05-12
 
@@ -57,19 +66,21 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.5.0` is the current documented release and adds interruptible steering, configurable agent loop limits, smarter file refresh flows, and team collaboration with conflict-aware saving on top of the `v0.4.x` feature set.
+`v0.5.1` is the current documented release and adds upload handling, admin upload limits, editor font preferences, per-file editor position restore, explicit AI stop/correction controls, Markdown rendering, theme switching, and custom system prompts on top of the `v0.5.0` collaboration feature set.
 
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
-- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
+- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
+- **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
+- **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
-- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports interruptible steering/follow-up messages mid-run, and honors team read-only roles
+- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed, auto-activates the `base` environment, and includes `ruff` out of the box
-- **File Explorer** — Tree-view file browser with create, rename, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
-- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt from the UI, and switch interface language between English and Simplified Chinese
+- **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
+- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt / upload size limit from the UI, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, and work in parallel
@@ -123,6 +134,7 @@ services:
       - WORKSPACE_DIR=/workspace
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
+      - UPLOAD_MAX_FILE_SIZE_MB=250
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -193,6 +205,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens per AI response |
 | `SYSTEM_PROMPT` | *(empty)* | Optional default system prompt override for the AI agent |
+| `UPLOAD_MAX_FILE_SIZE_MB` | `250` | Per-file upload limit in MB; can be overridden from admin Settings |
 | `USERS_CONFIG` | *(auto-detect)* | Path to `users.json` |
 | `APP_SETTINGS_CONFIG` | *(auto-detect)* | Path to `app-settings.json` for admin-managed LLM settings |
 
@@ -201,7 +214,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed LLM runtime settings such as URL, API key, model, max tokens, max agent iterations, and system prompt |
+| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max tokens, max agent iterations, system prompt, plugin overrides, and upload size limits |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
 | `<workspace>/.team/teams.json` | Stores team membership, roles, invites, presence, claims, and activity for shared collaboration |
 
@@ -244,7 +257,21 @@ LLM runtime settings can be managed in two ways:
 - Preferred: use the admin **Settings** panel in the UI
 - Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, `AGENT_MAX_TOKENS`, `MAX_AGENT_ITERATIONS`, and `SYSTEM_PROMPT` via environment variables
 
-When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately.
+When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately. The system prompt is included in this runtime configuration, so admins can customize the assistant behavior without rebuilding the image.
+
+### Uploads
+
+- Users can upload individual files or entire folders from the file explorer
+- Uploads use multipart form data rather than base64 payloads, which avoids large in-memory JSON bodies
+- Folder uploads preserve relative paths below the selected folder
+- If uploaded files conflict with existing files, the UI prompts for overwrite confirmation
+- Admins can set the per-file upload limit from **Settings**; the environment fallback is `UPLOAD_MAX_FILE_SIZE_MB`
+
+### Editor Preferences
+
+- Users can switch between the bundled editor font presets in **Settings**
+- The selected font is stored in the current browser via `localStorage`
+- Each open file remembers its Monaco view state, so returning to a previous tab restores the last cursor and scroll position
 
 ### Conversation History
 
@@ -305,7 +332,8 @@ The AI assistant can:
 
 - **Read / write / edit files** in your workspace
 - **Run shell commands** via the integrated terminal
-- **Accept real-time steering** — follow-up user messages can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context
+- **Stop active runs** — the Stop control aborts the current LLM/tool loop and reports the run as user-stopped
+- **Accept real-time steering** — follow-up user messages and the Correct control can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context
 - **Manage tasks** — create, update, and track a task board
 - **Spawn teammates** — create autonomous sub-agents with specific roles
 - **Collaborate** — agents communicate via a message bus and can claim tasks
