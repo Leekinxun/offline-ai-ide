@@ -1231,7 +1231,8 @@ body {
   color: var(--text-tertiary);
 }
 
-.chat-send-btn {
+.chat-send-btn,
+.chat-stop-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1246,11 +1247,24 @@ body {
   transition: all var(--transition);
 }
 
+.chat-send-btn {
+  background: var(--accent);
+}
+
+.chat-stop-btn {
+  background: var(--danger);
+}
+
 .chat-send-btn:hover {
   background: var(--accent-hover);
 }
 
-.chat-send-btn:disabled {
+.chat-stop-btn:hover {
+  background: #d70015;
+}
+
+.chat-send-btn:disabled,
+.chat-stop-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

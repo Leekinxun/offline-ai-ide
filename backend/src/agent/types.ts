@@ -58,6 +58,8 @@ export interface ToolFileUpdate {
 export type WsServerMessage =
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
+  | { type: "stopped"; requestId?: string; content?: string }
+  | { type: "steering"; requestId: string; content: string }
   | { type: "thinking"; requestId: string; content: string }
   | {
       type: "tool_call";

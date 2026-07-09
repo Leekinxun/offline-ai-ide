@@ -49,7 +49,8 @@ export async function runAgentLoop(
   onAssistantTurnComplete?: (
     message: PersistedChatMessage,
     requestId: string
-  ) => Promise<void> | void
+  ) => Promise<void> | void,
+  control?: AgentLoopControl
 ): Promise<PersistedChatMessage[]> {
   const emit = (message: WsServerMessage) => {
     onEmit?.(message);
@@ -98,6 +99,47 @@ export async function runAgentLoop(
   let pendingTurns: PendingUserTurn[] = consumePendingUserMessages?.() || [];
   let currentRequestId = requestId;
 
+  const stopCurrentTurn = async (
+    currentAssistantMessage: PersistedChatMessage
+  ) => {
+    emit({
+      type: "stopped",
+      requestId: currentRequestId,
+      content: "Stopped by user",
+    });
+    emit({ type: "done", requestId: currentRequestId, interrupted: true });
+    await flushAssistantTurn(
+      currentAssistantMessage,
+      currentRequestId,
+      onAssistantTurnComplete
+    );
+  };
+
+  const consumeSteeringTurns = async (
+    currentAssistantMessage: PersistedChatMessage
+  ): Promise<boolean> => {
+    const steeringTurns = consumePendingUserMessages?.() || [];
+    if (steeringTurns.length === 0) {
+      return false;
+    }
+
+    pendingTurns = [...pendingTurns, ...steeringTurns];
+    emit({ type: "done", requestId: currentRequestId, interrupted: true });
+    await flushAssistantTurn(
+      currentAssistantMessage,
+      currentRequestId,
+      onAssistantTurnComplete
+    );
+    const nextTurn = pendingTurns.shift();
+    if (!nextTurn) {
+      return false;
+    }
+    currentRequestId = nextTurn.requestId;
+    await onUserTurnStart?.(nextTurn);
+    appendUserTurn(nextTurn);
+    return true;
+  };
+
   outer: while (true) {
     const currentAssistantMessage: PersistedChatMessage = {
       role: "assistant",
@@ -108,6 +150,13 @@ export async function runAgentLoop(
 
     for (let i = 0; i < config.maxAgentIterations; i++) {
       if (ws.readyState !== WebSocket.OPEN) return persistedAssistantMessages;
+      if (control?.isStopped()) {
+        await stopCurrentTurn(currentAssistantMessage);
+        return persistedAssistantMessages;
+      }
+      if (await consumeSteeringTurns(currentAssistantMessage)) {
+        continue outer;
+      }
 
       const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
         readOnlyWorkspace,
@@ -126,8 +175,13 @@ export async function runAgentLoop(
           maxTokens: config.agentMaxTokens,
           temperature: 0.3,
           stream: false,
+          signal: control?.createAbortSignal(),
         });
       } catch (e: any) {
+        if (control?.isStopped() || e?.name === "AbortError") {
+          await stopCurrentTurn(currentAssistantMessage);
+          return persistedAssistantMessages;
+        }
         emit({
           type: "error",
           requestId: currentRequestId,
@@ -138,6 +192,11 @@ export async function runAgentLoop(
           currentRequestId,
           onAssistantTurnComplete
         );
+        return persistedAssistantMessages;
+      }
+
+      if (control?.isStopped()) {
+        await stopCurrentTurn(currentAssistantMessage);
         return persistedAssistantMessages;
       }
 
@@ -220,6 +279,10 @@ export async function runAgentLoop(
         // Execute each tool call
         const executedToolCalls: typeof assistantMsg.tool_calls = [];
         for (const toolCall of assistantMsg.tool_calls) {
+          if (control?.isStopped()) {
+            await stopCurrentTurn(currentAssistantMessage);
+            return persistedAssistantMessages;
+          }
           executedToolCalls.push(toolCall);
           const args = parseToolArgs(toolCall.function.arguments);
           emit({
@@ -287,26 +350,12 @@ export async function runAgentLoop(
             tool_call_id: toolCall.id,
           });
 
-          const steeringTurns = consumePendingUserMessages?.() || [];
-          if (steeringTurns.length > 0) {
-            const lastMessage = messages[messages.length - executedToolCalls.length - 1];
-            if (lastMessage && lastMessage.role === "assistant") {
-              lastMessage.tool_calls = executedToolCalls;
-            }
-            pendingTurns = [...pendingTurns, ...steeringTurns];
-            emit({ type: "done", requestId: currentRequestId, interrupted: true });
-            await flushAssistantTurn(
-              currentAssistantMessage,
-              currentRequestId,
-              onAssistantTurnComplete
-            );
-            const nextTurn = pendingTurns.shift();
-            if (!nextTurn) {
-              return persistedAssistantMessages;
-            }
-            currentRequestId = nextTurn.requestId;
-            await onUserTurnStart?.(nextTurn);
-            appendUserTurn(nextTurn);
+          const lastMessage = messages[messages.length - executedToolCalls.length - 1];
+          if (lastMessage && lastMessage.role === "assistant") {
+            lastMessage.tool_calls = executedToolCalls;
+          }
+
+          if (await consumeSteeringTurns(currentAssistantMessage)) {
             continue outer;
           }
         }
@@ -333,6 +382,10 @@ export async function runAgentLoop(
         const chunkSize = 8;
         for (let j = 0; j < finalText.length; j += chunkSize) {
           if (ws.readyState !== WebSocket.OPEN) return persistedAssistantMessages;
+          if (control?.isStopped()) {
+            await stopCurrentTurn(currentAssistantMessage);
+            return persistedAssistantMessages;
+          }
           emit({
             type: "token",
             requestId: currentRequestId,
@@ -382,6 +435,11 @@ interface PendingUserTurn {
   message: string;
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId?: string;
+}
+
+export interface AgentLoopControl {
+  isStopped: () => boolean;
+  createAbortSignal: () => AbortSignal | undefined;
 }
 
 function buildUserContent(

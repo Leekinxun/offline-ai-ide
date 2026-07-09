@@ -1231,6 +1231,22 @@ function AuthenticatedApp({
     [chat, openFiles, activeFilePath, selectionInfo]
   );
 
+  const handleChatSteer = useCallback(
+    (message: string) => {
+      const activeFile = openFiles.find((f) => f.path === activeFilePath);
+      const context = activeFile
+        ? {
+            path: activeFile.path,
+            content: activeFile.content,
+            language: activeFile.language,
+            selection: selectionInfo?.text,
+          }
+        : undefined;
+      chat.sendSteering(message, context);
+    },
+    [chat, openFiles, activeFilePath, selectionInfo]
+  );
+
   // --- Track cursor position ---
   useEffect(() => {
     const editor = editorRef.current;
@@ -1857,6 +1873,8 @@ function AuthenticatedApp({
           selectionInfo={selectionInfo}
           activeFileName={activeFile?.name || null}
           onSend={handleChatSend}
+          onSteer={handleChatSteer}
+          onStop={chat.stopCurrentRun}
           onClear={chat.clearMessages}
           onLoadConversation={chat.loadConversation}
           onRefreshConversations={chat.refreshConversations}

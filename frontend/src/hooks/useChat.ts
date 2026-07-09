@@ -198,6 +198,22 @@ export function useChat(
           void refreshConversations();
           break;
 
+        case "stopped":
+          if (data.requestId) {
+            updateAssistantByRequestId(data.requestId, (msg) => ({
+              ...msg,
+              content: msg.content || data.content || t("chat.stopped"),
+            }));
+            finishRequest(data.requestId);
+          } else {
+            setActiveRequestIds([]);
+          }
+          void refreshConversations();
+          break;
+
+        case "steering":
+          break;
+
         case "error":
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
@@ -269,6 +285,60 @@ export function useChat(
     [currentConversationId, messages]
   );
 
+  const sendSteering = useCallback(
+    (content: string, context?: FileContext) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const requestId = createRequestId();
+
+      const userMsg: ChatMessage = {
+        requestId,
+        role: "user",
+        content,
+        timestamp: Date.now(),
+      };
+      const assistantMsg: ChatMessage = {
+        requestId,
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+      };
+
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setActiveRequestIds((prev) =>
+        prev.includes(requestId) ? prev : [...prev, requestId]
+      );
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "steer",
+          requestId,
+          message: content,
+          context,
+          conversationId: currentConversationId,
+        })
+      );
+    },
+    [currentConversationId]
+  );
+
+  const stopCurrentRun = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const latestRequestId = activeRequestIds[activeRequestIds.length - 1];
+    wsRef.current.send(
+      JSON.stringify({
+        type: "stop",
+        requestId: latestRequestId,
+      })
+    );
+    setActiveRequestIds([]);
+    if (latestRequestId) {
+      updateAssistantByRequestId(latestRequestId, (msg) => ({
+        ...msg,
+        content: msg.content || t("chat.stopping"),
+      }));
+    }
+  }, [activeRequestIds, t, updateAssistantByRequestId]);
+
   const clearMessages = useCallback(() => {
     setMessages([]);
     setCurrentConversationId(null);
@@ -314,6 +384,8 @@ export function useChat(
   return {
     messages,
     sendMessage,
+    sendSteering,
+    stopCurrentRun,
     clearMessages,
     isStreaming: activeRequestIds.length > 0,
     activeRequestIds,

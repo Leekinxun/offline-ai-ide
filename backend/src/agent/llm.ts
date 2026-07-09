@@ -10,6 +10,7 @@ export interface ChatCompletionOptions {
   maxTokens: number;
   temperature?: number;
   stream?: boolean;
+  signal?: AbortSignal;
 }
 
 function buildHeaders(apiKey?: string): Record<string, string> {
@@ -52,5 +53,6 @@ export async function callChatCompletion(
     method: "POST",
     headers,
     body: JSON.stringify(buildRequestBody(options)),
+    signal: options.signal,
   });
 }

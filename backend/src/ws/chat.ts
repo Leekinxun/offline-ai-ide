@@ -14,11 +14,25 @@ import { generateConversationTitle } from "../chat/title.js";
 
 export function handleChatWs(ws: WebSocket, session: UserSession): void {
   const steeringQueue: PendingUserMessage[] = [];
+  const controlState = createRunControlState();
   let activeRun: Promise<void> | null = null;
 
   ws.on("message", async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
+      if (data.type === "stop") {
+        const requestId =
+          typeof data.requestId === "string" ? data.requestId.trim() : "";
+        controlState.stop(requestId || undefined);
+        steeringQueue.splice(0, steeringQueue.length);
+        wsSend(ws, {
+          type: "stopped",
+          ...(requestId ? { requestId } : {}),
+          content: "Stopping current AI run...",
+        });
+        return;
+      }
+
       const userMessage: string = data.message || "";
       const context = data.context as
         | { path: string; content: string; language: string; selection?: string }
@@ -83,14 +97,24 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
 
       if (activeRun) {
         steeringQueue.push(pendingMessage);
+        wsSend(ws, {
+          type: "steering",
+          requestId: pendingMessage.requestId,
+          content:
+            data.type === "steer"
+              ? "Correction queued for the current run"
+              : "Message queued for the current run",
+        });
         return;
       }
 
+      controlState.reset();
       activeRun = processConversationQueue(
         ws,
         session,
         pendingMessage,
-        steeringQueue
+        steeringQueue,
+        controlState
       ).finally(() => {
         activeRun = null;
       });
@@ -112,7 +136,8 @@ async function processConversationQueue(
   ws: WebSocket,
   session: UserSession,
   initialTurn: PendingUserMessage,
-  steeringQueue: PendingUserMessage[]
+  steeringQueue: PendingUserMessage[],
+  controlState: RunControlState
 ): Promise<void> {
   let activeConversationId = initialTurn.conversationId;
 
@@ -138,12 +163,22 @@ async function processConversationQueue(
         activeConversationId,
         assistantEntry
       );
+    },
+    {
+      isStopped: () => controlState.stopped,
+      createAbortSignal: () => controlState.createAbortSignal(),
     }
   );
 
+  if (controlState.stopped) {
+    controlState.reset();
+    return;
+  }
+
   const nextTurn = steeringQueue.shift();
   if (nextTurn) {
-    await processConversationQueue(ws, session, nextTurn, steeringQueue);
+    controlState.reset();
+    await processConversationQueue(ws, session, nextTurn, steeringQueue, controlState);
   }
 }
 
@@ -199,4 +234,38 @@ function drainConversationQueue(
 
 function createTurnRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+interface RunControlState {
+  stopped: boolean;
+  requestId?: string;
+  stop: (requestId?: string) => void;
+  reset: () => void;
+  createAbortSignal: () => AbortSignal | undefined;
+}
+
+function createRunControlState(): RunControlState {
+  let activeAbortController: AbortController | null = null;
+
+  return {
+    stopped: false,
+    requestId: undefined,
+    stop(requestId?: string) {
+      this.stopped = true;
+      this.requestId = requestId;
+      activeAbortController?.abort();
+    },
+    reset() {
+      this.stopped = false;
+      this.requestId = undefined;
+      activeAbortController = null;
+    },
+    createAbortSignal() {
+      activeAbortController = new AbortController();
+      if (this.stopped) {
+        activeAbortController.abort();
+      }
+      return activeAbortController.signal;
+    },
+  };
 }

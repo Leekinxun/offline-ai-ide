@@ -21,6 +21,7 @@ import {
   History,
   Plus,
   RefreshCw,
+  Square,
 } from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
@@ -69,6 +70,8 @@ interface ChatPanelProps {
   selectionInfo: SelectionInfo | null;
   activeFileName: string | null;
   onSend: (message: string) => void;
+  onSteer: (message: string) => void;
+  onStop: () => void;
   onClear: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
   onRefreshConversations: () => Promise<void> | void;
@@ -91,6 +94,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   selectionInfo,
   activeFileName,
   onSend,
+  onSteer,
+  onStop,
   onClear,
   onLoadConversation,
   onRefreshConversations,
@@ -118,12 +123,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed || !connected) return;
-    onSend(trimmed);
+    if (isStreaming) {
+      onSteer(trimmed);
+    } else {
+      onSend(trimmed);
+    }
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "38px";
     }
-  }, [connected, input, onSend]);
+  }, [connected, input, isStreaming, onSend, onSteer]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -361,9 +370,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             className="chat-send-btn"
             onClick={handleSend}
             disabled={!input.trim() || !connected}
-            title={t("chat.sendShortcut")}
+            title={isStreaming ? t("chat.correct") : t("chat.sendShortcut")}
           >
             <Send size={16} />
+          </button>
+          <button
+            className="chat-stop-btn"
+            onClick={onStop}
+            disabled={!isStreaming || !connected}
+            title={t("chat.stop")}
+          >
+            <Square size={14} />
           </button>
         </div>
       </div>
