@@ -29,6 +29,14 @@ teamRouter.get("/state", (req, res) => {
   });
 });
 
+teamRouter.get("/agents", (req, res) => {
+  const session = getSession(req);
+  res.json({
+    agents: session.teammateManager.listDetails(),
+    updatedAt: Date.now(),
+  });
+});
+
 teamRouter.post("/create", (req, res) => {
   const session = getSession(req);
   const teamName =

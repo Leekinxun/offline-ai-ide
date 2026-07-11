@@ -1,11 +1,18 @@
 import { useCallback, useMemo } from "react";
-import { DefinitionLocation, FileNode } from "../types";
+import { DefinitionLocation, FileNode, GitStatus } from "../types";
 
 const API = "/api/files";
 
 export interface UploadFilePayload {
   path: string;
   file: File;
+}
+
+export interface WorkspaceSearchResult {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
 }
 
 function fallbackDownloadName(path: string, type: FileNode["type"]): string {
@@ -59,6 +66,25 @@ export function useFileSystem(token: string) {
       });
       if (!res.ok) throw new Error("Failed to check file changes");
       return res.json();
+    },
+    [authHeaders]
+  );
+
+  const fetchGitStatus = useCallback(async (): Promise<GitStatus> => {
+    const res = await fetch(`${API}/git-status`, { headers: authHeaders() });
+    if (!res.ok) throw new Error("Failed to load git status");
+    return res.json();
+  }, [authHeaders]);
+
+  const searchWorkspace = useCallback(
+    async (query: string): Promise<WorkspaceSearchResult[]> => {
+      const params = new URLSearchParams({ query });
+      const res = await fetch(`${API}/search?${params.toString()}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to search workspace");
+      const data = await res.json();
+      return Array.isArray(data.results) ? data.results : [];
     },
     [authHeaders]
   );
@@ -268,6 +294,8 @@ export function useFileSystem(token: string) {
     () => ({
       fetchTree,
       fetchChanges,
+      fetchGitStatus,
+      searchWorkspace,
       readFileWithMeta,
       readFile,
       findDefinition,
@@ -281,6 +309,8 @@ export function useFileSystem(token: string) {
     [
       fetchTree,
       fetchChanges,
+      fetchGitStatus,
+      searchWorkspace,
       readFileWithMeta,
       readFile,
       findDefinition,

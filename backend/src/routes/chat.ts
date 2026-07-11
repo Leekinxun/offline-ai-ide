@@ -25,9 +25,15 @@ chatRouter.get("/conversations", (req, res) => {
 
 chatRouter.get("/conversations/:id", (req, res) => {
   try {
+    const summary = listConversationSummaries(getSessionWorkspace(req)).find(
+      (conversation) => conversation.id === req.params.id
+    );
     res.json({
       id: req.params.id,
       messages: readConversationMessages(getSessionWorkspace(req), req.params.id),
+      ...(summary
+        ? { mode: summary.mode, status: summary.status, summary: summary.summary }
+        : {}),
     });
   } catch (error) {
     const message =

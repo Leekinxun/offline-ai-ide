@@ -503,10 +503,14 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
 
 const READ_ONLY_TOOL_NAMES = new Set(["read_file", "TodoWrite"]);
 
-export function getAllTools(options?: { readOnly?: boolean }): OpenAIToolDef[] {
+export function getAllTools(options?: { readOnly?: boolean; mode?: "ask" | "code" | "review" | "plan" }): OpenAIToolDef[] {
   const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
-  if (!options?.readOnly) {
+  if (!options?.readOnly && options?.mode !== "ask" && options?.mode !== "review" && options?.mode !== "plan") {
     return allTools;
   }
-  return allTools.filter((tool) => READ_ONLY_TOOL_NAMES.has(tool.function.name));
+  return allTools.filter((tool) =>
+    READ_ONLY_TOOL_NAMES.has(tool.function.name) ||
+    (options?.mode === "review" && tool.function.name === "bash") ||
+    (options?.mode === "plan" && ["task_create", "task_get", "task_list"].includes(tool.function.name))
+  );
 }

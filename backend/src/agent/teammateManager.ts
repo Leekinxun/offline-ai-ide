@@ -112,10 +112,17 @@ export class TeammateManager {
     return this.config.members.find((m) => m.name === name);
   }
 
-  private setStatus(name: string, status: TeamMember["status"]): void {
+  private setStatus(name: string, status: TeamMember["status"], currentTask?: string): void {
     const member = this.findMember(name);
     if (member) {
       member.status = status;
+      member.updatedAt = Date.now();
+      if (currentTask !== undefined) {
+        member.currentTask = currentTask;
+      }
+      if (status === "shutdown") {
+        member.currentTask = undefined;
+      }
       this.saveConfig();
     }
   }
@@ -126,8 +133,18 @@ export class TeammateManager {
       if (member.status === "working") return `Error: '${name}' is currently working`;
       member.status = "working";
       member.role = role;
+      member.currentTask = prompt.slice(0, 180);
+      member.startedAt = Date.now();
+      member.updatedAt = Date.now();
     } else {
-      member = { name, role, status: "working" };
+      member = {
+        name,
+        role,
+        status: "working",
+        currentTask: prompt.slice(0, 180),
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
       this.config.members.push(member);
     }
     this.saveConfig();
@@ -148,6 +165,7 @@ export class TeammateManager {
     prompt: string,
     control: { abort: boolean }
   ): Promise<void> {
+    this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work");
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${this.workspaceDir}. Use idle when done with current work.`;
     const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
     const vllmUrl = config.vllmApiUrl;
@@ -211,7 +229,7 @@ export class TeammateManager {
     }
 
     // Idle phase: poll for messages and unclaimed tasks
-    this.setStatus(name, "idle");
+    this.setStatus(name, "idle", "Waiting for messages or unclaimed tasks");
     const pollStart = Date.now();
 
     await new Promise<void>((resolve) => {
@@ -237,7 +255,7 @@ export class TeammateManager {
             messages.push({ role: "user", content: JSON.stringify(msg) });
           }
           clearInterval(interval);
-          this.setStatus(name, "working");
+          this.setStatus(name, "working", "Processing a new team message");
           // Restart work loop
           this.runTeammateLoop(name, role, "", { ...control }).catch(() => {
             this.setStatus(name, "shutdown");
@@ -256,7 +274,7 @@ export class TeammateManager {
             content: `<auto-claimed>Task #${task.id}: ${task.subject}\n${task.description || ""}</auto-claimed>`,
           });
           clearInterval(interval);
-          this.setStatus(name, "working");
+          this.setStatus(name, "working", `Working on task #${task.id}: ${task.subject}`);
           this.runTeammateLoop(name, role, "", { ...control }).catch(() => {
             this.setStatus(name, "shutdown");
           });
@@ -273,6 +291,10 @@ export class TeammateManager {
       lines.push(`  ${m.name} (${m.role}): ${m.status}`);
     }
     return lines.join("\n");
+  }
+
+  listDetails(): TeamMember[] {
+    return this.config.members.map((member) => ({ ...member }));
   }
 
   memberNames(): string[] {

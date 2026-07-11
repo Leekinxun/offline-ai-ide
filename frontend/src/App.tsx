@@ -1,17 +1,19 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import * as monaco from "monaco-editor";
-import { DiffEditor } from "@monaco-editor/react";
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type * as monaco from "monaco-editor";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
-import { Editor } from "./components/Editor";
 import { ChatPanel } from "./components/ChatPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
-import { SettingsModal } from "./components/SettingsModal";
 import { BrandMark } from "./components/BrandMark";
-import { TeamPanel } from "./components/TeamPanel";
+import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
+import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
+import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
+import { GitPanel } from "./components/GitPanel";
+import { AgentBoard } from "./components/AgentBoard";
 import { useFileSystem } from "./hooks/useFileSystem";
+import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
@@ -34,6 +36,12 @@ import {
   Moon,
   Sun,
   Users,
+  Search,
+  Command,
+  Maximize2,
+  Minimize2,
+  GitBranch,
+  Bot,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -42,13 +50,26 @@ import {
 } from "./plugins/runtime";
 import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
-import { getEditorThemeName } from "./editor/theme";
+import { getEditorThemeName } from "./editor/themeNames";
 import {
   applyHunkSelections,
   buildConflictHunks,
   countRemoteSelections,
   formatLineRange,
 } from "./utils/conflicts";
+
+const SettingsModal = lazy(() =>
+  import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
+);
+const Editor = lazy(() =>
+  import("./components/Editor").then((module) => ({ default: module.Editor }))
+);
+const TeamPanel = lazy(() =>
+  import("./components/TeamPanel").then((module) => ({ default: module.TeamPanel }))
+);
+const DiffEditor = lazy(() =>
+  import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
+);
 
 const EDITOR_FONT_OPTIONS = [
   {
@@ -241,8 +262,15 @@ function AuthenticatedApp({
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [chatVisible, setChatVisible] = useState(true);
+  const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [teamVisible, setTeamVisible] = useState(true);
+  const [focusMode, setFocusMode] = useState(false);
+  const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode>("commands");
+  const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
+  const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
+  const [gitVisible, setGitVisible] = useState(false);
+  const [agentsVisible, setAgentsVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
   const [mergeSelections, setMergeSelections] = useState<Record<string, "local" | "remote">>(
@@ -272,6 +300,7 @@ function AuthenticatedApp({
   >({});
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+  const layoutBeforeFocusRef = useRef({ sidebar: true, chat: true, team: true });
   const fs = useFileSystem(token);
 
   // --- Toast ---
@@ -279,6 +308,59 @@ function AuthenticatedApp({
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  const toggleFocusMode = useCallback(() => {
+    setFocusMode((current) => {
+      if (current) {
+        setSidebarVisible(layoutBeforeFocusRef.current.sidebar);
+        setChatVisible(layoutBeforeFocusRef.current.chat);
+        setTeamVisible(layoutBeforeFocusRef.current.team);
+      } else {
+        layoutBeforeFocusRef.current = {
+          sidebar: sidebarVisible,
+          chat: chatVisible,
+          team: teamVisible,
+        };
+        setSidebarVisible(false);
+        setChatVisible(false);
+        setTeamVisible(false);
+      }
+      return !current;
+    });
+  }, [chatVisible, sidebarVisible, teamVisible]);
+
+  const openCommandPalette = useCallback((mode: CommandPaletteMode) => {
+    setCommandPaletteMode(mode);
+    setCommandPaletteVisible(true);
+  }, []);
+
+  const focusChat = useCallback(() => {
+    setChatVisible(true);
+    setChatFocusNonce((value) => value + 1);
+  }, []);
+
+  const runPaletteCommand = useCallback(
+    (command: string) => {
+      switch (command) {
+        case "focus":
+          toggleFocusMode();
+          break;
+        case "explorer":
+          setSidebarVisible((value) => !value);
+          break;
+        case "terminal":
+          setTerminalVisible((value) => !value);
+          break;
+        case "chat":
+          setChatVisible((value) => !value);
+          break;
+        default:
+          break;
+      }
+    },
+    [toggleFocusMode]
+  );
+
 
   const handleEditorViewStateChange = useCallback(
     (path: string, viewState: monaco.editor.ICodeEditorViewState | null) => {
@@ -781,6 +863,18 @@ function AuthenticatedApp({
     [openFile]
   );
 
+  const openSearchResult = useCallback(
+    (result: WorkspaceSearchResult) => {
+      void handleNavigateToLocation(result.path, {
+        startLine: result.line,
+        startColumn: result.column,
+        endLine: result.line,
+        endColumn: result.column + 1,
+      });
+    },
+    [handleNavigateToLocation]
+  );
+
   const handleFindDefinition = useCallback(
     async (symbol: string, currentPath: string): Promise<DefinitionLocation | null> => {
       return fs.findDefinition(symbol, currentPath);
@@ -1247,6 +1341,16 @@ function AuthenticatedApp({
     [chat, openFiles, activeFilePath, selectionInfo]
   );
 
+  const handleGitReview = useCallback(() => {
+    chat.setAgentMode("review");
+    focusChat();
+    chat.sendMessage(
+      "Review the current Git changes. Identify correctness issues, regressions, missing tests, and give findings ordered by severity.",
+      undefined,
+      "review"
+    );
+  }, [chat, focusChat]);
+
   // --- Track cursor position ---
   useEffect(() => {
     const editor = editorRef.current;
@@ -1288,6 +1392,17 @@ function AuthenticatedApp({
   // --- Global keyboard shortcuts ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const isShortcut = e.metaKey || e.ctrlKey;
+      if (isShortcut && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        openCommandPalette(e.shiftKey ? "commands" : "files");
+        return;
+      }
+      if (isShortcut && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setWorkspaceSearchVisible(true);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
         e.preventDefault();
         setSidebarVisible((v) => !v);
@@ -1300,10 +1415,14 @@ function AuthenticatedApp({
         e.preventDefault();
         setTerminalVisible((v) => !v);
       }
+      if (isShortcut && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        toggleFocusMode();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [openCommandPalette, toggleFocusMode]);
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
@@ -1357,6 +1476,7 @@ function AuthenticatedApp({
   const activeConflictSourceMessage = activeConflictFile
     ? getConflictSourceMessage(activeConflictFile)
     : null;
+  const workspaceLabel = workspaceDir.split(/[\\/]/).filter(Boolean).pop() || workspaceDir;
 
   useEffect(() => {
     if (!diffViewerFile || diffViewerFile.remoteContent === undefined) {
@@ -1426,9 +1546,37 @@ function AuthenticatedApp({
             subtitle={t("app.offline")}
             className="titlebar-brand"
           />
+          <div className="workspace-breadcrumb" title={workspaceDir}>
+            <span className="workspace-breadcrumb-label">{t("app.workspace")}</span>
+            <strong>{workspaceLabel}</strong>
+          </div>
+        </div>
+        <div className="titlebar-command-bar">
+          <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("files")}>
+            <Search size={14} />
+            <span>{t("command.quickOpen")}</span>
+            <kbd>⌘P</kbd>
+          </button>
+          <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("commands")}>
+            <Command size={14} />
+            <span>{t("command.commandPalette")}</span>
+            <kbd>⌘⇧P</kbd>
+          </button>
+          <button type="button" className="titlebar-command-btn" onClick={() => setWorkspaceSearchVisible(true)}>
+            <Search size={14} />
+            <span>{t("search.title")}</span>
+            <kbd>⌘⇧F</kbd>
+          </button>
         </div>
         <div className="titlebar-right">
           <span className="user-badge">{username}</span>
+          <button
+            className={`titlebar-btn${focusMode ? " active" : ""}`}
+            onClick={toggleFocusMode}
+            title={t(focusMode ? "app.exitFocusMode" : "app.focusMode")}
+          >
+            {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+          </button>
           <button
             className={`titlebar-btn${settingsVisible ? " active" : ""}`}
             onClick={() => setSettingsVisible(true)}
@@ -1453,6 +1601,20 @@ function AuthenticatedApp({
             title={t("team.title")}
           >
             <Users size={17} />
+          </button>
+          <button
+            className={`titlebar-btn${gitVisible ? " active" : ""}`}
+            onClick={() => setGitVisible((value) => !value)}
+            title={t("git.title")}
+          >
+            <GitBranch size={17} />
+          </button>
+          <button
+            className={`titlebar-btn${agentsVisible ? " active" : ""}`}
+            onClick={() => setAgentsVisible((value) => !value)}
+            title={t("agents.title")}
+          >
+            <Bot size={17} />
           </button>
           <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
@@ -1485,17 +1647,19 @@ function AuthenticatedApp({
         </div>
       </div>
 
-      <SettingsModal
-        token={token}
-        currentUsername={username}
-        isAdmin={isAdmin}
-        visible={settingsVisible}
-        editorFont={editorFont}
-        editorFontOptions={editorFontOptions}
-        onEditorFontChange={onEditorFontChange}
-        onClose={() => setSettingsVisible(false)}
-        onShowToast={showToast}
-      />
+      <Suspense fallback={null}>
+        <SettingsModal
+          token={token}
+          currentUsername={username}
+          isAdmin={isAdmin}
+          visible={settingsVisible}
+          editorFont={editorFont}
+          editorFontOptions={editorFontOptions}
+          onEditorFontChange={onEditorFontChange}
+          onClose={() => setSettingsVisible(false)}
+          onShowToast={showToast}
+        />
+      </Suspense>
 
       {/* Main Layout */}
       <div className="main-layout">
@@ -1599,6 +1763,7 @@ function AuthenticatedApp({
                   </div>
                 </div>
               )}
+            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
             {activeFile ? (
               activePreviewRenderer ? (
                 <div className="editor-workbench">
@@ -1718,13 +1883,17 @@ function AuthenticatedApp({
                 />
               )
             ) : (
-              <div className="editor-empty">
-                <BrandMark size={54} className="editor-empty-brand" />
-                <span className="editor-empty-text">
-                  {t("app.openFileToStart")}
-                </span>
-              </div>
+              <WorkspaceWelcome
+                workspaceDir={workspaceDir}
+                tree={fileTree}
+                openFiles={openFiles}
+                onQuickOpen={() => openCommandPalette("files")}
+                onFocusChat={focusChat}
+                onOpenTerminal={() => setTerminalVisible(true)}
+                onOpenFile={openFile}
+              />
             )}
+            </Suspense>
           </div>
           <Terminal
             key={workspaceDir}
@@ -1737,7 +1906,8 @@ function AuthenticatedApp({
 
         {teamVisible && (
           <div className="team-sidebar">
-            <TeamPanel
+            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+              <TeamPanel
               teams={team.teams}
               activeTeam={team.activeTeam}
               currentUsername={username}
@@ -1850,9 +2020,24 @@ function AuthenticatedApp({
                     : t("team.releasedToast", { path })
                 );
               }}
-            />
+              />
+            </Suspense>
           </div>
         )}
+
+        <GitPanel
+          visible={gitVisible}
+          token={token}
+          workspaceDir={workspaceDir}
+          onOpenFile={openFile}
+          onAskReview={handleGitReview}
+          onClose={() => setGitVisible(false)}
+        />
+        <AgentBoard
+          visible={agentsVisible}
+          token={token}
+          onClose={() => setAgentsVisible(false)}
+        />
 
         <div
           className={`resize-handle${!chatVisible ? " hidden" : ""}${draggingRef.current === "chat" ? " dragging" : ""}`}
@@ -1867,6 +2052,11 @@ function AuthenticatedApp({
           activeRequestIds={chat.activeRequestIds}
           connected={chat.connected}
           visible={chatVisible}
+          focusRequest={chatFocusNonce}
+          agentMode={chat.agentMode}
+          onAgentModeChange={chat.setAgentMode}
+          currentRunSummary={chat.currentRunSummary}
+          onOpenFile={openFile}
           historyLoading={chat.historyLoading}
           historyLoadingId={chat.historyLoadingId}
           historyError={chat.historyError}
@@ -1876,6 +2066,7 @@ function AuthenticatedApp({
           onSteer={handleChatSteer}
           onStop={chat.stopCurrentRun}
           onClear={chat.clearMessages}
+          onRetry={chat.retryLast}
           onLoadConversation={chat.loadConversation}
           onRefreshConversations={chat.refreshConversations}
           onApplyCode={handleApplyCode}
@@ -1935,20 +2126,22 @@ function AuthenticatedApp({
               )}
             </div>
             <div className="diff-modal-body">
-              <DiffEditor
-                height="100%"
-                original={diffViewerFile.remoteContent}
-                modified={diffViewerFile.content}
-                language={diffViewerFile.language}
-                theme={getEditorThemeName(theme)}
-                options={{
-                  readOnly: true,
-                  renderSideBySide: true,
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  automaticLayout: true,
-                }}
-              />
+              <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+                <DiffEditor
+                  height="100%"
+                  original={diffViewerFile.remoteContent}
+                  modified={diffViewerFile.content}
+                  language={diffViewerFile.language}
+                  theme={getEditorThemeName(theme)}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    automaticLayout: true,
+                  }}
+                />
+              </Suspense>
             </div>
             <div className="diff-merge-panel">
               <div className="diff-merge-header">
@@ -2067,6 +2260,21 @@ function AuthenticatedApp({
           </div>
         </div>
       )}
+
+      <CommandPalette
+        visible={commandPaletteVisible}
+        mode={commandPaletteMode}
+        tree={fileTree}
+        onClose={() => setCommandPaletteVisible(false)}
+        onOpenFile={openFile}
+        onRunCommand={runPaletteCommand}
+      />
+      <WorkspaceSearchPanel
+        visible={workspaceSearchVisible}
+        onClose={() => setWorkspaceSearchVisible(false)}
+        onSearch={fs.searchWorkspace}
+        onOpenResult={openSearchResult}
+      />
     </div>
   );
 }

@@ -8,6 +8,8 @@ import React, {
 import {
   ChatMessage,
   ConversationSummary,
+  AgentMode,
+  ConversationRunSummary,
   FileUpdate,
   SelectionInfo,
 } from "../types";
@@ -22,6 +24,7 @@ import {
   Plus,
   RefreshCw,
   Square,
+  GitCompare,
 } from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
@@ -64,6 +67,11 @@ interface ChatPanelProps {
   activeRequestIds?: string[];
   connected: boolean;
   visible: boolean;
+  focusRequest?: number;
+  agentMode: AgentMode;
+  onAgentModeChange: (mode: AgentMode) => void;
+  currentRunSummary: ConversationRunSummary | null;
+  onOpenFile: (path: string) => void;
   historyLoading: boolean;
   historyLoadingId: string | null;
   historyError: string | null;
@@ -73,6 +81,7 @@ interface ChatPanelProps {
   onSteer: (message: string) => void;
   onStop: () => void;
   onClear: () => void;
+  onRetry: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
   onRefreshConversations: () => Promise<void> | void;
   onApplyCode: (code: string) => void;
@@ -88,6 +97,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   activeRequestIds,
   connected,
   visible,
+  focusRequest,
+  agentMode,
+  onAgentModeChange,
+  currentRunSummary,
+  onOpenFile,
   historyLoading,
   historyLoadingId,
   historyError,
@@ -97,6 +111,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onSteer,
   onStop,
   onClear,
+  onRetry,
   onLoadConversation,
   onRefreshConversations,
   onApplyCode,
@@ -106,6 +121,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const { locale, t } = useI18n();
   const [input, setInput] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
@@ -119,6 +135,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       setHistoryOpen(false);
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (visible && focusRequest) {
+      textareaRef.current?.focus();
+    }
+  }, [focusRequest, visible]);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
@@ -191,6 +213,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       }),
     [locale]
   );
+  const activeAssistantMessage = useMemo(
+    () =>
+      [...messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === "assistant" &&
+            message.requestId &&
+            (activeRequestIds || []).includes(message.requestId)
+        ),
+    [activeRequestIds, messages]
+  );
+  const activeTool = activeAssistantMessage?.toolCalls?.find((step) => step.result === undefined);
 
   return (
     <div className="chat-panel" style={style}>
@@ -212,11 +247,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
           <button
             className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
-            title={t("chat.history")}
+            title={t("chat.tasks")}
             onClick={() => setHistoryOpen((open) => !open)}
             disabled={isStreaming}
           >
             <History size={14} />
+          </button>
+          <button
+            className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
+            title={t("chat.changes")}
+            onClick={() => setChangesOpen((open) => !open)}
+          >
+            <GitCompare size={14} />
           </button>
           {messages.length > 0 && (
             <button
@@ -230,6 +272,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           )}
         </div>
       </div>
+
+      <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>
+        {(["ask", "code", "review", "plan"] as AgentMode[]).map((mode) => (
+          <button
+            type="button"
+            key={mode}
+            role="tab"
+            aria-selected={agentMode === mode}
+            className={`chat-mode-btn${agentMode === mode ? " active" : ""}`}
+            onClick={() => onAgentModeChange(mode)}
+            disabled={isStreaming}
+            title={t(`chat.mode.${mode}.hint`)}
+          >
+            {t(`chat.mode.${mode}.label`)}
+          </button>
+        ))}
+      </div>
+
+      {changesOpen && (
+        <div className="chat-changes-panel">
+          <div className="chat-changes-header">
+            <strong>{t("chat.changes")}</strong>
+            <span>{currentRunSummary?.changedFiles.length || 0}</span>
+          </div>
+          {currentRunSummary?.changedFiles.length ? (
+            <div className="chat-changes-list">
+              {currentRunSummary.changedFiles.map((path) => (
+                <button type="button" key={path} onClick={() => onOpenFile(path)}>
+                  <GitCompare size={12} />
+                  <code>{path}</code>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="chat-changes-empty">{t("chat.noChanges")}</div>
+          )}
+        </div>
+      )}
 
       {historyOpen && (
         <div className="chat-history-panel">
@@ -283,6 +363,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       {formatTimestamp(conversation.updatedAt)}
                     </span>
                   </div>
+                  <div className="chat-history-item-badges">
+                    <span className={`chat-task-mode mode-${conversation.mode || "code"}`}>
+                      {t(`chat.mode.${conversation.mode || "code"}.label`)}
+                    </span>
+                    <span className={`chat-task-status status-${conversation.status || "completed"}`}>
+                      {t(`chat.taskStatus.${conversation.status || "completed"}`)}
+                    </span>
+                  </div>
                   {conversation.preview && (
                     <div className="chat-history-item-preview">
                       {conversation.preview}
@@ -296,6 +384,53 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </button>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {isStreaming && (
+        <div className="chat-run-status">
+          <span className="chat-run-status-dot" />
+          <div className="chat-run-status-copy">
+            <strong>{t("chat.runInProgress")}</strong>
+            <span>
+              {activeTool
+                ? t("chat.runCurrentTool", { tool: activeTool.name })
+                : t("chat.runPreparing")}
+            </span>
+          </div>
+          <span className="chat-run-status-count">
+            {t("chat.runSteps", { count: activeAssistantMessage?.toolCalls?.length || 0 })}
+          </span>
+        </div>
+      )}
+
+      {!isStreaming && currentRunSummary && (
+        <div className="chat-completion-summary">
+          <div className="chat-completion-summary-head">
+            <strong>{t("chat.completionSummary")}</strong>
+            {currentRunSummary.errorCount > 0 && (
+              <span className="chat-summary-warning">
+                {t("chat.summaryErrors", { count: currentRunSummary.errorCount })}
+              </span>
+            )}
+          </div>
+          <div className="chat-completion-summary-stats">
+            <span>{t("chat.summaryFiles", { count: currentRunSummary.changedFiles.length })}</span>
+            <span>{t("chat.summaryCommands", { count: currentRunSummary.commandCount })}</span>
+            <span>{t("chat.summaryTools", { count: currentRunSummary.toolCallCount })}</span>
+          </div>
+          {currentRunSummary.changedFiles.length > 0 && (
+            <div className="chat-completion-files">
+              {currentRunSummary.changedFiles.slice(0, 4).map((path) => (
+                <code key={path}>{path}</code>
+              ))}
+            </div>
+          )}
+          {currentRunSummary.errorCount > 0 && (
+            <button type="button" className="chat-summary-retry" onClick={onRetry}>
+              {t("chat.retryTask")}
+            </button>
           )}
         </div>
       )}

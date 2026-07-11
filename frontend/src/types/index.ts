@@ -58,12 +58,43 @@ export interface ChatMessage {
   thinking?: string;
 }
 
+export type AgentMode = "ask" | "code" | "review" | "plan";
+export type ConversationStatus = "queued" | "running" | "completed" | "stopped" | "failed";
+
+export interface ConversationRunSummary {
+  changedFiles: string[];
+  toolCallCount: number;
+  errorCount: number;
+  commandCount: number;
+}
+
+export interface GitStatusEntry {
+  path: string;
+  previousPath?: string;
+  indexStatus: string;
+  worktreeStatus: string;
+  kind: "modified" | "added" | "deleted" | "renamed" | "untracked";
+}
+
+export interface GitStatus {
+  isRepo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  entries: GitStatusEntry[];
+  updatedAt: number;
+}
+
 export interface ConversationSummary {
   id: string;
   title: string;
   preview: string;
   updatedAt: number;
   messageCount: number;
+  mode?: AgentMode;
+  status?: ConversationStatus;
+  summary?: ConversationRunSummary;
 }
 
 export interface FileContext {
@@ -180,6 +211,15 @@ export interface TeamDetails extends TeamSummary {
   claims: TeamClaim[];
   presence: TeamPresence[];
   activity: TeamActivity[];
+}
+
+export interface AgentSnapshot {
+  name: string;
+  role: string;
+  status: "working" | "idle" | "shutdown";
+  currentTask?: string;
+  startedAt?: number;
+  updatedAt?: number;
 }
 
 export const LANGUAGE_MAP: Record<string, string> = {

@@ -1,5 +1,5 @@
 import React from "react";
-import * as monaco from "monaco-editor";
+import type * as monaco from "monaco-editor";
 import type { PluginPermission } from "./permissions";
 import type {
   BuiltinPluginDefinition,
@@ -51,6 +51,14 @@ const pluginLoadStates: PluginLoadState[] = [];
 const localeBundles = new Map<string, LocaleBundle>();
 const stateListeners = new Set<(states: PluginLoadState[]) => void>();
 let initializationPromise: Promise<PluginLoadState[]> | null = null;
+let monacoApi: typeof monaco | null = null;
+
+async function loadMonaco(): Promise<typeof monaco> {
+  if (!monacoApi) {
+    monacoApi = await import("monaco-editor");
+  }
+  return monacoApi;
+}
 
 function createPluginLogger(pluginId: string): PluginLogger {
   const prefix = `[plugin:${pluginId}]`;
@@ -75,9 +83,13 @@ function registerChatTextRenderer(
   );
 }
 
-function registerEditorSetup(pluginId: string, setup: EditorSetupHandler): void {
+function registerEditorSetup(
+  pluginId: string,
+  setup: EditorSetupHandler,
+  editorMonaco: typeof monaco
+): void {
   try {
-    setup({ monaco });
+    setup({ monaco: editorMonaco });
   } catch (error) {
     throw new Error(
       error instanceof Error
@@ -211,13 +223,14 @@ function applyPluginOverride(
 }
 
 function createActivationContext(
-  manifest: RuntimePluginManifest
+  manifest: RuntimePluginManifest,
+  editorMonaco?: typeof monaco
 ): PluginActivationContext {
   const logger = createPluginLogger(manifest.id);
 
   return {
     React,
-    monaco,
+    monaco: editorMonaco as typeof monaco,
     plugin: {
       id: manifest.id,
       permissions: [...manifest.permissions],
@@ -232,7 +245,10 @@ function createActivationContext(
     editor: {
       registerSetup(setup) {
         ensurePermission(manifest, "editor.setup");
-        registerEditorSetup(manifest.id, setup);
+        if (!editorMonaco) {
+          throw new Error("Monaco is unavailable for this editor plugin");
+        }
+        registerEditorSetup(manifest.id, setup, editorMonaco);
       },
       registerMountHandler(handler) {
         ensurePermission(manifest, "editor.mount");
@@ -263,7 +279,12 @@ async function activatePlugin(
   manifest: RuntimePluginManifest,
   activate: BuiltinPluginDefinition["activate"]
 ): Promise<void> {
-  await activate(createActivationContext(manifest));
+  const editorMonaco = manifest.permissions.some((permission) =>
+    permission.startsWith("editor.")
+  )
+    ? await loadMonaco()
+    : undefined;
+  await activate(createActivationContext(manifest, editorMonaco));
 }
 
 function resolveEntrypoint(moduleValue: unknown): BuiltinPluginDefinition["activate"] | null {
@@ -301,7 +322,8 @@ function trackPluginLoad(
 }
 
 async function loadBuiltinPlugins(): Promise<void> {
-  for (const plugin of builtinPlugins) {
+  const { monacoHighlighterPlugin } = await import("./builtin/monacoHighlighterPlugin");
+  for (const plugin of [...builtinPlugins, monacoHighlighterPlugin]) {
     const manifest = applyPluginOverride(plugin.manifest, registry.overrides);
 
     if (!manifest.enabled) {

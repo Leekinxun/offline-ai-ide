@@ -1,6 +1,7 @@
 import {
   registerComponentLanguages,
 } from "../../editor/componentLanguages";
+import "../../editor/monacoSetup";
 import { registerSemanticTokensProviders } from "../../editor/semanticTokens";
 import { registerEditorTheme } from "../../editor/theme";
 import { derivePluginScopes } from "../permissions";

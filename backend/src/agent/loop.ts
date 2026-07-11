@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import {
   OpenAIMessage,
   OpenAIResponse,
+  AgentMode,
   ToolFileUpdate,
   WsServerMessage,
   wsSend,
@@ -61,7 +62,8 @@ export async function runAgentLoop(
 
   const todoManager = new TodoManager();
   const readOnlyWorkspace = !canWriteActiveWorkspace(session);
-  const tools = getAllTools({ readOnly: readOnlyWorkspace });
+  const mode = control?.mode || "code";
+  const tools = getAllTools({ readOnly: readOnlyWorkspace, mode });
   const toolCtx = {
     workspaceDir: session.workspaceDir,
     vllmApiUrl: config.vllmApiUrl,
@@ -160,6 +162,7 @@ export async function runAgentLoop(
 
       const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
         readOnlyWorkspace,
+        mode,
       });
 
       // Non-streaming call for tool-use rounds
@@ -440,6 +443,7 @@ interface PendingUserTurn {
 export interface AgentLoopControl {
   isStopped: () => boolean;
   createAbortSignal: () => AbortSignal | undefined;
+  mode?: AgentMode;
 }
 
 function buildUserContent(

@@ -2,10 +2,11 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import type { ToolFileUpdate } from "../agent/types.js";
+import type { AgentMode } from "../agent/types.js";
 
 const HISTORY_DIR_NAME = ".history";
 const CONVERSATION_FILE_EXTENSION = ".jsonl";
-const MAX_STORED_CONVERSATIONS = 5;
+const MAX_STORED_CONVERSATIONS = 30;
 const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const conversationMutationQueues = new Map<string, Promise<void>>();
 
@@ -31,6 +32,18 @@ interface ConversationMetaRecord {
   createdAt: number;
   updatedAt: number;
   title?: string;
+  mode?: AgentMode;
+  status?: ConversationStatus;
+  summary?: ConversationRunSummary;
+}
+
+export type ConversationStatus = "queued" | "running" | "completed" | "stopped" | "failed";
+
+export interface ConversationRunSummary {
+  changedFiles: string[];
+  toolCallCount: number;
+  errorCount: number;
+  commandCount: number;
 }
 
 export interface ConversationSummary {
@@ -39,6 +52,9 @@ export interface ConversationSummary {
   preview: string;
   updatedAt: number;
   messageCount: number;
+  mode: AgentMode;
+  status: ConversationStatus;
+  summary?: ConversationRunSummary;
 }
 
 interface ParsedConversationFile {
@@ -158,6 +174,15 @@ function normalizeConversationMeta(raw: unknown): ConversationMetaRecord | null 
         : Date.now(),
     ...(typeof candidate.title === "string" && sanitizeConversationTitle(candidate.title)
       ? { title: sanitizeConversationTitle(candidate.title) }
+      : {}),
+    ...(candidate.mode === "ask" || candidate.mode === "code" || candidate.mode === "review" || candidate.mode === "plan"
+      ? { mode: candidate.mode }
+      : {}),
+    ...(candidate.status === "queued" || candidate.status === "running" || candidate.status === "completed" || candidate.status === "stopped" || candidate.status === "failed"
+      ? { status: candidate.status }
+      : {}),
+    ...(candidate.summary && typeof candidate.summary === "object"
+      ? { summary: candidate.summary as ConversationRunSummary }
       : {}),
   };
 }
@@ -330,6 +355,24 @@ export function updateConversationTitle(
   });
 }
 
+export function updateConversationState(
+  workspaceDir: string,
+  conversationId: string,
+  state: { mode?: AgentMode; status?: ConversationStatus; summary?: ConversationRunSummary }
+): Promise<void> {
+  return queueConversationMutation(workspaceDir, conversationId, () => {
+    const parsed = readConversationFile(workspaceDir, conversationId);
+    parsed.meta = {
+      ...parsed.meta,
+      ...(state.mode ? { mode: state.mode } : {}),
+      ...(state.status ? { status: state.status } : {}),
+      ...(state.summary ? { summary: state.summary } : {}),
+      updatedAt: Date.now(),
+    };
+    writeConversationFile(workspaceDir, conversationId, parsed);
+  });
+}
+
 export function readConversationMessages(
   workspaceDir: string,
   conversationId: string
@@ -366,6 +409,9 @@ export function listConversationSummaries(
         preview: truncateText(lastMessage?.content || "", 80),
         updatedAt: parsed.meta.updatedAt || stats.mtimeMs,
         messageCount: messages.length,
+        mode: parsed.meta.mode || "code",
+        status: parsed.meta.status || "completed",
+        ...(parsed.meta.summary ? { summary: parsed.meta.summary } : {}),
       };
     });
 

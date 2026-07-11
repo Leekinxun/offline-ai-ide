@@ -53,11 +53,28 @@ export interface ToolFileUpdate {
   selection?: FileSelectionRange;
 }
 
+export type AgentMode = "ask" | "code" | "review" | "plan";
+
 // --- WebSocket message types (server -> client) ---
 
 export type WsServerMessage =
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
+  | {
+      type: "conversation_state";
+      conversationId: string;
+      mode: AgentMode;
+      status: "queued" | "running" | "completed" | "stopped" | "failed";
+    }
+  | {
+      type: "summary";
+      conversationId: string;
+      requestId: string;
+      changedFiles: string[];
+      toolCallCount: number;
+      errorCount: number;
+      commandCount: number;
+    }
   | { type: "stopped"; requestId?: string; content?: string }
   | { type: "steering"; requestId: string; content: string }
   | { type: "thinking"; requestId: string; content: string }
@@ -122,6 +139,9 @@ export interface TeamMember {
   name: string;
   role: string;
   status: "working" | "idle" | "shutdown";
+  currentTask?: string;
+  startedAt?: number;
+  updatedAt?: number;
 }
 
 export interface InboxMessage {

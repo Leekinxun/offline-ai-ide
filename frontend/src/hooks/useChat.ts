@@ -4,6 +4,8 @@ import {
   ConversationSummary,
   FileContext,
   FileUpdate,
+  AgentMode,
+  ConversationRunSummary,
 } from "../types";
 import { useI18n } from "../i18n";
 
@@ -14,6 +16,9 @@ interface ConversationsResponse {
 interface ConversationDetailResponse {
   id: string;
   messages?: ChatMessage[];
+  mode?: AgentMode;
+  status?: string;
+  summary?: ConversationRunSummary;
 }
 
 export function useChat(
@@ -32,6 +37,8 @@ export function useChat(
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [agentMode, setAgentMode] = useState<AgentMode>("code");
+  const [currentRunSummary, setCurrentRunSummary] = useState<ConversationRunSummary | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
@@ -146,6 +153,25 @@ export function useChat(
           void refreshConversations();
           break;
 
+        case "conversation_state":
+          setConversations((prev) =>
+            prev.map((conversation) =>
+              conversation.id === data.conversationId
+                ? { ...conversation, mode: data.mode, status: data.status }
+                : conversation
+            )
+          );
+          if (data.mode) {
+            setAgentMode(data.mode);
+          }
+          break;
+
+        case "summary":
+          if (data.conversationId === currentConversationId || !currentConversationId) {
+            setCurrentRunSummary(data);
+          }
+          break;
+
         case "token":
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
@@ -241,11 +267,13 @@ export function useChat(
     setCurrentConversationId(null);
     setHistoryError(null);
     setActiveRequestIds([]);
+    setAgentMode("code");
+    setCurrentRunSummary(null);
     void refreshConversations();
   }, [refreshConversations, workspaceDir]);
 
   const sendMessage = useCallback(
-    (content: string, context?: FileContext) => {
+    (content: string, context?: FileContext, modeOverride?: AgentMode) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
       const requestId = createRequestId();
 
@@ -279,10 +307,11 @@ export function useChat(
           context,
           history,
           conversationId: currentConversationId,
+          mode: modeOverride || agentMode,
         })
       );
     },
-    [currentConversationId, messages]
+    [agentMode, currentConversationId, messages]
   );
 
   const sendSteering = useCallback(
@@ -315,10 +344,11 @@ export function useChat(
           message: content,
           context,
           conversationId: currentConversationId,
+          mode: agentMode,
         })
       );
     },
-    [currentConversationId]
+    [agentMode, currentConversationId]
   );
 
   const stopCurrentRun = useCallback(() => {
@@ -342,8 +372,15 @@ export function useChat(
   const clearMessages = useCallback(() => {
     setMessages([]);
     setCurrentConversationId(null);
+    setCurrentRunSummary(null);
     setActiveRequestIds([]);
   }, []);
+
+  const retryLast = useCallback(() => {
+    const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
+    if (!lastUserMessage) return;
+    sendMessage(lastUserMessage.content);
+  }, [messages, sendMessage]);
 
   const loadConversation = useCallback(
     async (conversationId: string) => {
@@ -368,6 +405,8 @@ export function useChat(
         const payload = (await response.json()) as ConversationDetailResponse;
         setMessages(Array.isArray(payload.messages) ? payload.messages : []);
         setCurrentConversationId(payload.id || conversationId);
+        setAgentMode(payload.mode || "code");
+        setCurrentRunSummary(payload.summary || null);
       } catch (error) {
         setHistoryError(
           error instanceof Error
@@ -387,6 +426,7 @@ export function useChat(
     sendSteering,
     stopCurrentRun,
     clearMessages,
+    retryLast,
     isStreaming: activeRequestIds.length > 0,
     activeRequestIds,
     connected,
@@ -397,6 +437,9 @@ export function useChat(
     historyError,
     refreshConversations,
     loadConversation,
+    agentMode,
+    setAgentMode,
+    currentRunSummary,
   };
 }
 

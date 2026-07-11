@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import { wsSend } from "../agent/types.js";
+import type { AgentMode } from "../agent/types.js";
 import { runAgentLoop } from "../agent/loop.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import {
@@ -7,10 +8,15 @@ import {
   conversationExists,
   createConversationId,
   updateConversationTitle,
+  updateConversationState,
   readConversationMessages,
   type PersistedChatMessage,
 } from "../chat/history.js";
 import { generateConversationTitle } from "../chat/title.js";
+
+function normalizeAgentMode(value: unknown): AgentMode {
+  return value === "ask" || value === "review" || value === "plan" ? value : "code";
+}
 
 export function handleChatWs(ws: WebSocket, session: UserSession): void {
   const steeringQueue: PendingUserMessage[] = [];
@@ -41,6 +47,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         typeof data.conversationId === "string" ? data.conversationId.trim() : "";
       const requestedRequestId =
         typeof data.requestId === "string" ? data.requestId.trim() : "";
+      const mode = normalizeAgentMode(data.mode);
 
       if (!userMessage.trim()) {
         wsSend(ws, { type: "error", content: "Empty message" });
@@ -59,6 +66,12 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         conversationId = createConversationId();
         created = true;
       }
+
+      await updateConversationState(session.workspaceDir, conversationId, {
+        mode,
+        status: "running",
+      });
+      wsSend(ws, { type: "conversation_state", conversationId, mode, status: "running" });
 
       const userEntry: PersistedChatMessage = {
         role: "user",
@@ -93,6 +106,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         message: userMessage.trim(),
         context,
         conversationId,
+        mode,
       };
 
       if (activeRun) {
@@ -130,6 +144,7 @@ interface PendingUserMessage {
   message: string;
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId: string;
+  mode: AgentMode;
 }
 
 async function processConversationQueue(
@@ -141,7 +156,7 @@ async function processConversationQueue(
 ): Promise<void> {
   let activeConversationId = initialTurn.conversationId;
 
-  await runAgentLoop(
+  const assistantMessages = await runAgentLoop(
     ws,
     initialTurn.message,
     initialTurn.requestId,
@@ -167,8 +182,29 @@ async function processConversationQueue(
     {
       isStopped: () => controlState.stopped,
       createAbortSignal: () => controlState.createAbortSignal(),
+      mode: initialTurn.mode,
     }
   );
+
+  const summary = summarizeAssistantMessages(assistantMessages);
+  const finalStatus = controlState.stopped ? "stopped" : "completed";
+  await updateConversationState(session.workspaceDir, activeConversationId, {
+    mode: initialTurn.mode,
+    status: finalStatus,
+    summary,
+  });
+  wsSend(ws, {
+    type: "summary",
+    conversationId: activeConversationId,
+    requestId: initialTurn.requestId,
+    ...summary,
+  });
+  wsSend(ws, {
+    type: "conversation_state",
+    conversationId: activeConversationId,
+    mode: initialTurn.mode,
+    status: finalStatus,
+  });
 
   if (controlState.stopped) {
     controlState.reset();
@@ -180,6 +216,29 @@ async function processConversationQueue(
     controlState.reset();
     await processConversationQueue(ws, session, nextTurn, steeringQueue, controlState);
   }
+}
+
+function summarizeAssistantMessages(messages: PersistedChatMessage[]) {
+  const changedFiles = new Set<string>();
+  let toolCallCount = 0;
+  let errorCount = 0;
+  let commandCount = 0;
+
+  for (const message of messages) {
+    for (const toolCall of message.toolCalls || []) {
+      toolCallCount += 1;
+      if (toolCall.isError) errorCount += 1;
+      if (toolCall.name === "bash") commandCount += 1;
+      if (toolCall.fileUpdate?.path) changedFiles.add(toolCall.fileUpdate.path);
+    }
+  }
+
+  return {
+    changedFiles: Array.from(changedFiles).sort(),
+    toolCallCount,
+    errorCount,
+    commandCount,
+  };
 }
 
 function buildModelHistoryForTurn(

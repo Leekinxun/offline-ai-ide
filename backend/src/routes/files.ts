@@ -2,6 +2,7 @@ import { Router, Request } from "express";
 import fs from "fs";
 import multer from "multer";
 import path from "path";
+import { execFileSync } from "child_process";
 import { safePath as safePathUtil } from "../utils/safePath.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
 import { createDirectoryZipStream } from "../utils/zipStream.js";
@@ -285,6 +286,174 @@ filesRouter.get("/tree", (req, res) => {
     return res.json([]);
   }
   res.json(buildTree(workspaceDir));
+});
+
+// GET /git-status
+// Uses fixed git arguments so the UI can inspect repository state without
+// exposing a general-purpose command execution endpoint.
+filesRouter.get("/git-status", (req, res) => {
+  const workspaceDir = getWorkspace(req);
+  try {
+    const output = execFileSync("git", ["status", "--porcelain=v1", "-b"], {
+      cwd: workspaceDir,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const lines = output.split(/\r?\n/).filter(Boolean);
+    const branchLine = lines.find((line) => line.startsWith("## ")) || "## HEAD";
+    const branchDescription = branchLine.slice(3).trim();
+    const branch = branchDescription.split("...")[0] || "HEAD";
+    const upstreamMatch = branchDescription.match(/\.\.\.([^ ]+)/);
+    const aheadMatch = branchDescription.match(/ahead (\d+)/);
+    const behindMatch = branchDescription.match(/behind (\d+)/);
+    const entries = lines
+      .filter((line) => !line.startsWith("## "))
+      .map((line) => {
+        const indexStatus = line[0] || " ";
+        const worktreeStatus = line[1] || " ";
+        const rawPath = line.slice(3).trim();
+        const pathParts = rawPath.split(" -> ");
+        return {
+          path: pathParts[pathParts.length - 1] || rawPath,
+          previousPath: pathParts.length > 1 ? pathParts[0] : undefined,
+          indexStatus,
+          worktreeStatus,
+          kind: indexStatus === "?" && worktreeStatus === "?"
+            ? "untracked"
+            : indexStatus === "A" || worktreeStatus === "A"
+              ? "added"
+              : indexStatus === "D" || worktreeStatus === "D"
+                ? "deleted"
+                : indexStatus === "R"
+                  ? "renamed"
+                  : "modified",
+        };
+      });
+
+    return res.json({
+      isRepo: true,
+      branch,
+      upstream: upstreamMatch?.[1] || null,
+      ahead: Number(aheadMatch?.[1] || 0),
+      behind: Number(behindMatch?.[1] || 0),
+      entries,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    return res.json({
+      isRepo: false,
+      branch: null,
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      entries: [],
+      updatedAt: Date.now(),
+    });
+  }
+});
+
+// GET /git-diff?path=relative/file
+filesRouter.get("/git-diff", (req, res) => {
+  const relPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!relPath) return res.status(400).json({ detail: "path required" });
+
+  const workspaceDir = getWorkspace(req);
+  try {
+    const fullPath = safePathUtil(relPath, workspaceDir);
+    const runDiff = (args: string[]): string => {
+      try {
+        return execFileSync("git", args, {
+          cwd: workspaceDir,
+          encoding: "utf-8",
+          timeout: 10_000,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error: any) {
+        return String(error?.stdout || "");
+      }
+    };
+
+    let diff = runDiff(["diff", "HEAD", "--no-ext-diff", "--unified=40", "--", relPath]);
+    if (!diff && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      diff = runDiff(["diff", "--no-index", "--unified=40", "/dev/null", fullPath]);
+      diff = diff.replaceAll(fullPath, relPath);
+    }
+
+    return res.json({
+      path: relPath,
+      diff,
+      hasChanges: Boolean(diff.trim()),
+      updatedAt: Date.now(),
+    });
+  } catch (error: any) {
+    return res.status(error?.message === "Path traversal denied" ? 403 : 400).json({
+      detail: error?.message || "Failed to load git diff",
+    });
+  }
+});
+
+// GET /search?query=xxx
+// Bounded text search for the command palette. Hidden folders and very large/binary
+// files are skipped so this stays responsive in a browser-based IDE.
+filesRouter.get("/search", (req, res) => {
+  const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+  if (!query) return res.json({ results: [] });
+
+  const workspaceDir = getWorkspace(req);
+  const results: Array<{
+    path: string;
+    line: number;
+    column: number;
+    preview: string;
+  }> = [];
+  const normalizedQuery = query.toLocaleLowerCase();
+  let visitedFiles = 0;
+
+  const visit = (directory: string, relativePrefix = "") => {
+    if (results.length >= 200 || visitedFiles >= 5000) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= 200 || entry.name.startsWith(".")) return;
+      const absolutePath = path.join(directory, entry.name);
+      const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        visit(absolutePath, relativePath);
+        continue;
+      }
+
+      visitedFiles += 1;
+      try {
+        const stat = fs.statSync(absolutePath);
+        if (stat.size > 1024 * 1024) continue;
+        const content = fs.readFileSync(absolutePath, "utf-8");
+        if (content.includes("\u0000")) continue;
+        const lines = content.split(/\r?\n/);
+        for (let index = 0; index < lines.length && results.length < 200; index += 1) {
+          const line = lines[index];
+          const column = line.toLocaleLowerCase().indexOf(normalizedQuery);
+          if (column < 0) continue;
+          results.push({
+            path: relativePath,
+            line: index + 1,
+            column: column + 1,
+            preview: line.trim().slice(0, 240),
+          });
+        }
+      } catch {
+        // Ignore files that disappear or cannot be decoded during a search.
+      }
+    }
+  };
+
+  visit(workspaceDir);
+  res.json({ results });
 });
 
 // GET /changes?since=timestamp
