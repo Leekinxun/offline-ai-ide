@@ -18,18 +18,23 @@ export const TabBar: React.FC<TabBarProps> = ({
   if (openFiles.length === 0) return null;
 
   return (
-    <div className="tabbar">
+    <div className="tabbar" role="tablist" aria-label="Open files">
       {openFiles.map((file) => (
         <div
           key={file.path}
           className={`tab${file.path === activeFilePath ? " active" : ""}`}
           onClick={() => onSelectTab(file.path)}
+          role="tab"
+          aria-selected={file.path === activeFilePath}
+          title={file.path}
         >
           {file.modified && <span className="tab-modified" />}
           {file.remoteUpdated && <span className="tab-remote-updated" />}
           <span className="tab-name">{file.name}</span>
           <button
+            type="button"
             className="tab-close"
+            aria-label={`Close ${file.name}`}
             onClick={(e) => {
               e.stopPropagation();
               onCloseTab(file.path);

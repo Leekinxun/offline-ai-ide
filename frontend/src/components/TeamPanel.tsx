@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { TeamDetails, TeamRole, TeamSummary } from "../types";
 import { useI18n } from "../i18n";
-import { Copy, Plus, RefreshCw, Users } from "lucide-react";
+import { Copy, Plus, RefreshCw, Users, X } from "lucide-react";
 
 interface TeamPanelProps {
   teams: TeamSummary[];
@@ -11,6 +11,7 @@ interface TeamPanelProps {
   loading: boolean;
   error: string | null;
   activeFilePath: string | null;
+  onClose?: () => void;
   onRefresh: () => void;
   onCreateTeam: (name: string) => Promise<void>;
   onJoinTeam: (code: string) => Promise<void>;
@@ -31,6 +32,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   loading,
   error,
   activeFilePath,
+  onClose,
   onRefresh,
   onCreateTeam,
   onJoinTeam,
@@ -130,9 +132,16 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
           <Users size={15} />
           <span>{t("team.title")}</span>
         </div>
-        <button className="sidebar-action-btn" onClick={onRefresh} title={t("team.refresh")}>
-          <RefreshCw size={14} />
-        </button>
+        <div className="team-panel-header-actions">
+          <button type="button" className="sidebar-action-btn" onClick={onRefresh} title={t("team.refresh")}>
+            <RefreshCw size={14} />
+          </button>
+          {onClose && (
+            <button type="button" className="sidebar-action-btn" onClick={onClose} title={t("common.close")}>
+              <X size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="team-panel-section">

@@ -35,6 +35,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
   return (
     <div className="login-page">
+      <div className="login-page-grid" aria-hidden="true" />
       <form className="login-card" onSubmit={handleSubmit}>
         <BrandMark
           size={54}
@@ -43,9 +44,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           stacked
           className="login-logo"
         />
-        {error && <div className="login-error">{error}</div>}
+        <p className="login-description">{t("login.description")}</p>
+        {error && <div className="login-error" role="alert">{error}</div>}
+        <label className="sr-only" htmlFor="login-username">{t("login.username")}</label>
         <input
           ref={inputRef}
+          id="login-username"
+          name="username"
           className="login-input"
           type="text"
           placeholder={t("login.username")}
@@ -53,7 +58,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           onChange={(e) => setUsername(e.target.value)}
           autoComplete="username"
         />
+        <label className="sr-only" htmlFor="login-password">{t("login.password")}</label>
         <input
+          id="login-password"
+          name="password"
           className="login-input"
           type="password"
           placeholder={t("login.password")}
@@ -68,6 +76,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         >
           {submitting ? t("login.signingIn") : t("login.signIn")}
         </button>
+        <div className="login-footer">
+          <span className="login-status-dot" />
+          <span>{t("app.offline")}</span>
+          <span>·</span>
+          <span>{t("login.privateWorkspace")}</span>
+        </div>
       </form>
     </div>
   );

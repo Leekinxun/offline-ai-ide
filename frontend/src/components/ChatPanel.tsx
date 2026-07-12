@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Square,
   GitCompare,
+  Sparkles,
 } from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
@@ -197,8 +198,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     isComposingRef.current = false;
   }, []);
 
-  if (!visible) return null;
-
   const selectionLineCount = selectionInfo
     ? selectionInfo.endLine - selectionInfo.startLine + 1
     : 0;
@@ -227,11 +226,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   );
   const activeTool = activeAssistantMessage?.toolCalls?.find((step) => step.result === undefined);
 
+  if (!visible) return null;
+
   return (
     <div className="chat-panel" style={style}>
       <div className="chat-header">
         <div className="chat-header-main">
-          <span className="chat-header-title">{t("chat.title")}</span>
+          <div className="chat-header-heading">
+            <span className="chat-header-title">{t("chat.title")}</span>
+            <span className={`chat-header-mode mode-${agentMode}`}>
+              {t(`chat.mode.${agentMode}.label`)}
+            </span>
+          </div>
           {currentConversationId && (
             <span className="chat-conversation-pill">
               {t("chat.continuingConversation")}
@@ -274,6 +280,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>
+        <div className="chat-mode-switcher-heading">
+          <span>{t("chat.modeLabel")}</span>
+          <small>{t(`chat.mode.${agentMode}.hint`)}</small>
+        </div>
         {(["ask", "code", "review", "plan"] as AgentMode[]).map((mode) => (
           <button
             type="button"
@@ -402,6 +412,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           <span className="chat-run-status-count">
             {t("chat.runSteps", { count: activeAssistantMessage?.toolCalls?.length || 0 })}
           </span>
+          <button
+            type="button"
+            className="chat-run-stop"
+            onClick={onStop}
+            title={t("chat.stop")}
+          >
+            <Square size={12} />
+            <span>{t("chat.stop")}</span>
+          </button>
         </div>
       )}
 
@@ -409,12 +428,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <div className="chat-completion-summary">
           <div className="chat-completion-summary-head">
             <strong>{t("chat.completionSummary")}</strong>
-            {currentRunSummary.errorCount > 0 && (
-              <span className="chat-summary-warning">
-                {t("chat.summaryErrors", { count: currentRunSummary.errorCount })}
-              </span>
-            )}
+            <span className={`chat-summary-status${currentRunSummary.errorCount > 0 ? " failed" : " completed"}`}>
+              {t(`chat.taskStatus.${currentRunSummary.errorCount > 0 ? "failed" : "completed"}`)}
+            </span>
           </div>
+          {currentRunSummary.errorCount > 0 && (
+            <span className="chat-summary-warning">
+              {t("chat.summaryErrors", { count: currentRunSummary.errorCount })}
+            </span>
+          )}
           <div className="chat-completion-summary-stats">
             <span>{t("chat.summaryFiles", { count: currentRunSummary.changedFiles.length })}</span>
             <span>{t("chat.summaryCommands", { count: currentRunSummary.commandCount })}</span>
@@ -423,7 +445,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           {currentRunSummary.changedFiles.length > 0 && (
             <div className="chat-completion-files">
               {currentRunSummary.changedFiles.slice(0, 4).map((path) => (
-                <code key={path}>{path}</code>
+                <button type="button" className="chat-completion-file" key={path} onClick={() => onOpenFile(path)}>
+                  <GitCompare size={11} />
+                  <code>{path}</code>
+                </button>
               ))}
             </div>
           )}
@@ -437,22 +462,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       <div className="chat-messages">
         {messages.length === 0 && (
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "var(--text-tertiary)",
-              fontSize: 13,
-              textAlign: "center",
-              padding: 20,
-              lineHeight: 1.6,
-            }}
-          >
-            {t("chat.emptyPrimary")}
-            <br />
-            {t("chat.emptySecondary")}
+          <div className="chat-empty-state">
+            <div className="chat-empty-icon"><Sparkles size={18} /></div>
+            <strong>{t("chat.emptyPrimary")}</strong>
+            <span>{t("chat.emptySecondary")}</span>
           </div>
         )}
         {messages.map((msg, idx) => (
@@ -473,6 +486,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       <div className="chat-input-area">
+        <div className="chat-composer-context">
+          <span className={`chat-composer-mode mode-${agentMode}`}>
+            {t(`chat.mode.${agentMode}.label`)}
+          </span>
+          {activeFileName && <code>{activeFileName}</code>}
+        </div>
         {/* Selection indicator */}
         {selectionInfo && activeFileName && (
           <div className="chat-selection-badge">

@@ -42,6 +42,7 @@ import {
   Minimize2,
   GitBranch,
   Bot,
+  ChevronRight,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -260,11 +261,11 @@ function AuthenticatedApp({
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 860);
   const [chatVisible, setChatVisible] = useState(true);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
-  const [teamVisible, setTeamVisible] = useState(true);
+  const [teamVisible, setTeamVisible] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode>("commands");
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
@@ -1569,81 +1570,87 @@ function AuthenticatedApp({
           </button>
         </div>
         <div className="titlebar-right">
-          <span className="user-badge">{username}</span>
-          <button
-            className={`titlebar-btn${focusMode ? " active" : ""}`}
-            onClick={toggleFocusMode}
-            title={t(focusMode ? "app.exitFocusMode" : "app.focusMode")}
-          >
-            {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
-          </button>
-          <button
-            className={`titlebar-btn${settingsVisible ? " active" : ""}`}
-            onClick={() => setSettingsVisible(true)}
-            title={t("app.settings")}
-          >
-            <Settings size={17} />
-          </button>
-          <button
-            className="titlebar-btn"
-            onClick={onToggleTheme}
-            title={
-              theme === "light"
-                ? t("app.switchToDarkTheme")
-                : t("app.switchToLightTheme")
-            }
-          >
-            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
-          </button>
-          <button
-            className={`titlebar-btn${teamVisible ? " active" : ""}`}
-            onClick={() => setTeamVisible((v) => !v)}
-            title={t("team.title")}
-          >
-            <Users size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${gitVisible ? " active" : ""}`}
-            onClick={() => setGitVisible((value) => !value)}
-            title={t("git.title")}
-          >
-            <GitBranch size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${agentsVisible ? " active" : ""}`}
-            onClick={() => setAgentsVisible((value) => !value)}
-            title={t("agents.title")}
-          >
-            <Bot size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
-            onClick={() => setSidebarVisible((v) => !v)}
-            title={t("app.toggleSidebar")}
-          >
-            <PanelLeft size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${terminalVisible ? " active" : ""}`}
-            onClick={() => setTerminalVisible((v) => !v)}
-            title={t("app.toggleTerminal")}
-          >
-            <TerminalSquare size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${chatVisible ? " active" : ""}`}
-            onClick={() => setChatVisible((v) => !v)}
-            title={t("app.toggleAiChat")}
-          >
-            <MessageSquare size={17} />
-          </button>
-          <button
-            className="titlebar-btn"
-            onClick={onLogout}
-            title={t("app.logout")}
-          >
-            <LogOut size={17} />
-          </button>
+          <div className="titlebar-context-actions">
+            <span className="user-badge">{username}</span>
+            <button
+              className={`titlebar-btn${focusMode ? " active" : ""}`}
+              onClick={toggleFocusMode}
+              title={t(focusMode ? "app.exitFocusMode" : "app.focusMode")}
+            >
+              {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+            </button>
+            <button
+              className={`titlebar-btn${settingsVisible ? " active" : ""}`}
+              onClick={() => setSettingsVisible(true)}
+              title={t("app.settings")}
+            >
+              <Settings size={17} />
+            </button>
+            <button
+              className="titlebar-btn"
+              onClick={onToggleTheme}
+              title={
+                theme === "light"
+                  ? t("app.switchToDarkTheme")
+                  : t("app.switchToLightTheme")
+              }
+            >
+              {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+            </button>
+          </div>
+          <div className="titlebar-panel-actions">
+            <button
+              className={`titlebar-btn${teamVisible ? " active" : ""}`}
+              onClick={() => setTeamVisible((v) => !v)}
+              title={t("team.title")}
+            >
+              <Users size={17} />
+            </button>
+            <button
+              className={`titlebar-btn${gitVisible ? " active" : ""}`}
+              onClick={() => setGitVisible((value) => !value)}
+              title={t("git.title")}
+            >
+              <GitBranch size={17} />
+            </button>
+            <button
+              className={`titlebar-btn${agentsVisible ? " active" : ""}`}
+              onClick={() => setAgentsVisible((value) => !value)}
+              title={t("agents.title")}
+            >
+              <Bot size={17} />
+            </button>
+            <button
+              className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
+              onClick={() => setSidebarVisible((v) => !v)}
+              title={t("app.toggleSidebar")}
+            >
+              <PanelLeft size={17} />
+            </button>
+            <button
+              className={`titlebar-btn${terminalVisible ? " active" : ""}`}
+              onClick={() => setTerminalVisible((v) => !v)}
+              title={t("app.toggleTerminal")}
+            >
+              <TerminalSquare size={17} />
+            </button>
+            <button
+              className={`titlebar-btn${chatVisible ? " active" : ""}`}
+              onClick={() => setChatVisible((v) => !v)}
+              title={t("app.toggleAiChat")}
+            >
+              <MessageSquare size={17} />
+            </button>
+          </div>
+          <div className="titlebar-session-actions">
+            <button
+              className="titlebar-btn"
+              onClick={onLogout}
+              title={t("app.logout")}
+            >
+              <LogOut size={17} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1663,6 +1670,21 @@ function AuthenticatedApp({
 
       {/* Main Layout */}
       <div className="main-layout">
+        {(sidebarVisible || chatVisible || teamVisible || gitVisible || agentsVisible || terminalVisible) && (
+          <button
+            type="button"
+            className="mobile-drawer-scrim"
+            aria-label={t("common.close")}
+            onClick={() => {
+              setSidebarVisible(false);
+              setChatVisible(false);
+              setTeamVisible(false);
+              setGitVisible(false);
+              setAgentsVisible(false);
+              setTerminalVisible(false);
+            }}
+          />
+        )}
         <Sidebar
           tree={fileTree}
           activeFilePath={activeFilePath}
@@ -1694,6 +1716,27 @@ function AuthenticatedApp({
             onSelectTab={setActiveFilePath}
             onCloseTab={closeTab}
           />
+          {activeFile && (
+            <div className="editor-context-bar">
+              <div className="editor-context-path" title={activeFile.path}>
+                <span>{workspaceLabel}</span>
+                <ChevronRight size={12} />
+                <code>{activeFile.path}</code>
+              </div>
+              <div className="editor-context-statuses">
+                {activeFile.modified && (
+                  <span className="editor-context-status modified">
+                    {t("editor.unsaved")}
+                  </span>
+                )}
+                {activeFile.remoteUpdated && (
+                  <span className="editor-context-status remote">
+                    {t("editor.remoteUpdated")}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           <div className="editor-main">
             {activeConflictFile && (
               <div className="editor-conflict-banner">
@@ -1905,7 +1948,7 @@ function AuthenticatedApp({
         </div>
 
         {teamVisible && (
-          <div className="team-sidebar">
+          <div className="team-sidebar" role="complementary" aria-label={t("team.title")}>
             <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
               <TeamPanel
               teams={team.teams}
@@ -1915,6 +1958,7 @@ function AuthenticatedApp({
               loading={team.loading}
               error={team.error}
               activeFilePath={activeFilePath}
+              onClose={() => setTeamVisible(false)}
               onRefresh={team.refresh}
               onCreateTeam={async (name) => {
                 try {

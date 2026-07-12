@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
 </p>
 
-> Current Version: `v0.5.1`
+> Current Version: `v0.6.0`
 >
-> Release Date: `2026-07-09`
+> Release Date: `2026-07-12`
 
 A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,15 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.6.0 · 2026-07-12
+
+- Added a Codex-inspired **workspace shell** with grouped top-bar controls, workspace welcome state, focus mode, command palette, workspace search, responsive drawers, and reduced-motion support
+- Added clearer **Ask / Code / Review / Plan** task workflows with current-mode context, mode descriptions, running stop control, completion status, empty states, composer context, and clickable changed-file links
+- Added stronger **editor and review context** with file breadcrumbs, accessible tab metadata, unsaved/remote-update indicators, Git change summaries and status badges, improved Diff actions, and direct file navigation from review results
+- Unified the **Team / Agent / Terminal** panel states with agent progress summaries, terminal connection status, mobile drawer scrim and close behavior, and keyboard/focus accessibility refinements
+- Refined light/dark **visual tokens**, panel headers, scrollbars, login surface, form focus states, and local workspace status presentation
+- Added [`DESIGN.md`](DESIGN.md) as the UI/UX design source of truth and implementation roadmap
 
 ### v0.5.1 · 2026-07-09
 
@@ -66,25 +75,26 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.5.1` is the current documented release and adds upload handling, admin upload limits, editor font preferences, per-file editor position restore, explicit AI stop/correction controls, Markdown rendering, theme switching, and custom system prompts on top of the `v0.5.0` collaboration feature set.
+`v0.6.0` is the current documented release and adds the Codex-inspired workspace shell, clearer task workflows, stronger editor/Git/review context, unified collaboration and terminal panels, responsive behavior, accessibility refinements, and the UI design source of truth on top of the `v0.5.1` feature set.
 
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
+- **Codex-Inspired Workspace UI** — Grouped workspace controls, focused task workflows, command palette and search, responsive side panels, clear status surfaces, light/dark visual tokens, and keyboard-friendly interactions
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
 - **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
-- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
+- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
-- **Integrated Terminal** — Full PTY terminal (xterm.js) with Conda pre-installed, auto-activates the `base` environment, and includes `ruff` out of the box
+- **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
 - **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt / upload size limit from the UI, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
-- **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves
-- **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, and work in parallel
-- **Task Board** — Create, assign, and track tasks across agents
+- **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
+- **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
+- **Task Board** — Create, assign, and track tasks across agents with clearer workspace status and task-oriented UI context
 - **Docker Ready** — Multi-stage Dockerfile with Node.js, Python, Conda, Git, and common dev tools pre-installed
 
 ## Quick Start

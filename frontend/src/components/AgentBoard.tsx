@@ -39,9 +39,16 @@ export const AgentBoard: React.FC<AgentBoardProps> = ({ visible, token, onClose 
         </div>
       </div>
 
-      <div className="agent-board-summary">
-        <span>{agents.filter((agent) => agent.status === "working").length} {t("agents.working")}</span>
-        <span>{agents.length} {t("agents.total")}</span>
+      <div className="agent-board-summary" aria-live="polite">
+        <span className="agent-summary-item working">
+          <i />
+          <strong>{agents.filter((agent) => agent.status === "working").length}</strong>
+          {t("agents.working")}
+        </span>
+        <span className="agent-summary-item">
+          <strong>{agents.length}</strong>
+          {t("agents.total")}
+        </span>
       </div>
 
       {error && <div className="agent-board-error">{error}</div>}

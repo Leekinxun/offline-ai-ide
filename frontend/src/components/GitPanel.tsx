@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { GitBranch, RefreshCw, FilePlus2, FileX2, FilePenLine, ArrowUp, ArrowDown, Copy, Check, Bot } from "lucide-react";
+import { GitBranch, RefreshCw, FilePlus2, FileX2, FilePenLine, ArrowUp, ArrowDown, Copy, Check, Bot, GitCompare } from "lucide-react";
 import { GitStatus } from "../types";
 import { useI18n } from "../i18n";
 
@@ -86,6 +86,14 @@ export const GitPanel: React.FC<GitPanelProps> = ({
 
   if (!visible) return null;
 
+  const changeCounts = status?.entries.reduce(
+    (counts, entry) => {
+      counts[entry.kind] += 1;
+      return counts;
+    },
+    { modified: 0, added: 0, deleted: 0, renamed: 0, untracked: 0 }
+  );
+
   return (
     <aside className="git-panel">
       <div className="git-panel-header">
@@ -113,6 +121,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             <div><GitBranch size={14} /><strong>{status.branch}</strong></div>
             <span>{status.entries.length} {t("git.changesCount")}</span>
           </div>
+          <div className="git-panel-summary" aria-label={t("git.changesCount")}>
+            <span className="git-summary-total"><GitCompare size={12} />{status.entries.length}</span>
+            <span className="git-summary-item modified">M {changeCounts?.modified || 0}</span>
+            <span className="git-summary-item added">+ {((changeCounts?.added || 0) + (changeCounts?.untracked || 0))}</span>
+            <span className="git-summary-item deleted">− {changeCounts?.deleted || 0}</span>
+          </div>
           {(status.ahead > 0 || status.behind > 0) && (
             <div className="git-panel-sync">
               {status.ahead > 0 && <span><ArrowUp size={12} />{status.ahead}</span>}
@@ -121,13 +135,21 @@ export const GitPanel: React.FC<GitPanelProps> = ({
             </div>
           )}
           <div className="git-panel-list">
+            {status.entries.length > 0 && (
+              <div className="git-panel-list-header">
+                <span>{t("git.changesCount")}</span>
+                <span>{t("git.openDiff")}</span>
+              </div>
+            )}
             {status.entries.length === 0 ? (
               <div className="git-panel-empty">{t("git.clean")}</div>
             ) : status.entries.map((entry) => (
               <button type="button" className="git-panel-entry" key={`${entry.kind}:${entry.path}`} onClick={() => void openDiff(entry.path)} title={t("git.openDiff")}>
                 <span className={`git-entry-icon kind-${entry.kind}`}>{entryIcon(entry.kind)}</span>
                 <code>{entry.path}</code>
-                <small>{entry.indexStatus}{entry.worktreeStatus}</small>
+                <small className={`git-entry-status kind-${entry.kind}`}>
+                  {entry.indexStatus}{entry.worktreeStatus}
+                </small>
               </button>
             ))}
           </div>
@@ -139,11 +161,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({
         <div className="git-diff-overlay" onMouseDown={() => setDiffPath(null)}>
           <div className="git-diff-dialog" onMouseDown={(event) => event.stopPropagation()}>
             <div className="git-diff-dialog-header">
-              <div><GitBranch size={14} /><strong>{diffPath}</strong></div>
+              <div><GitCompare size={14} /><strong>{diffPath}</strong></div>
               <button type="button" className="sidebar-action-btn" onClick={() => setDiffPath(null)}>×</button>
             </div>
             <div className="git-diff-dialog-toolbar">
-              <button type="button" className="dialog-btn" onClick={() => onOpenFile(diffPath)}>{t("git.openFile")}</button>
+              <span className="git-diff-toolbar-label">{t("git.openDiff")}</span>
+              <button type="button" className="dialog-btn" onClick={() => { onOpenFile(diffPath); setDiffPath(null); }}>{t("git.openFile")}</button>
               <button type="button" className="dialog-btn" onClick={() => void copyDiff()}>
                 {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? t("git.copied") : t("git.copyDiff")}
               </button>

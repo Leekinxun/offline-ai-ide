@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -23,6 +23,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const initialized = useRef(false);
+  const [connected, setConnected] = useState(false);
   const disconnectLabelRef = useRef(t("terminal.disconnected"));
 
   disconnectLabelRef.current = t("terminal.disconnected");
@@ -33,18 +34,20 @@ export const Terminal: React.FC<TerminalProps> = ({
     if (!visible || initialized.current || !containerRef.current) return;
     initialized.current = true;
 
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2563eb";
+
     const xterm = new XTerm({
       theme: {
         background: "#1d1d1f",
         foreground: "#d4d4d4",
-        cursor: "#007aff",
+        cursor: accent,
         cursorAccent: "#1d1d1f",
-        selectionBackground: "rgba(0, 122, 255, 0.3)",
+        selectionBackground: "rgba(37, 99, 235, 0.3)",
         black: "#1d1d1f",
         red: "#ff3b30",
         green: "#34c759",
         yellow: "#ff9500",
-        blue: "#007aff",
+        blue: accent,
         magenta: "#af52de",
         cyan: "#5ac8fa",
         white: "#d4d4d4",
@@ -75,6 +78,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     const ws = new WebSocket(`${proto}//${window.location.host}/ws/terminal?token=${encodeURIComponent(token)}`);
 
     ws.onopen = () => {
+      setConnected(true);
       xterm.focus();
       ws.send(
         JSON.stringify({
@@ -90,6 +94,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     };
 
     ws.onclose = () => {
+      setConnected(false);
       xterm.write(`\r\n\x1b[90m${disconnectLabelRef.current}\x1b[0m\r\n`);
     };
 
@@ -115,6 +120,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     return () => {
       window.removeEventListener("resize", handleResize);
       ws.close();
+      setConnected(false);
       xterm.dispose();
       initialized.current = false;
     };
@@ -138,7 +144,11 @@ export const Terminal: React.FC<TerminalProps> = ({
       style={visible ? undefined : { display: "none" }}
     >
       <div className="terminal-header">
-        <span className="terminal-header-title">{t("terminal.title")}</span>
+        <div className="terminal-header-title"><span className="terminal-header-icon">›_</span>{t("terminal.title")}</div>
+        <div className={`terminal-header-status${connected ? " connected" : ""}`}>
+          <span />
+          {disabled ? t("terminal.offline") : connected ? t("terminal.connected") : t("terminal.offline")}
+        </div>
       </div>
       {disabled ? (
         <div className="terminal-disabled">
