@@ -1,8 +1,13 @@
 services:
   ai-ide:
-    build: .
+    image: ai-ide:latest          # 构建出来的镜像名和标签
+    container_name: crownforge        # 容器名
+    build:
+      context: .
+      pull: false                 # 明确构建时不去拉取基础镜像的更新（按需保留，通常建议加上）
+    pull_policy: never            # 核心配置：明确声明永远不拉取远程镜像
     ports:
-      - "3000:3000"
+      - "9798:3000"
     volumes:
       - ./workspace:/workspace
       - ./plugins:/app/plugins
