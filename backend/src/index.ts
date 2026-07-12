@@ -78,5 +78,5 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
 });
 
 server.listen(config.port, "0.0.0.0", () => {
-  console.log(`AI IDE running at http://localhost:${config.port}`);
+  console.log(`CrownForge running at http://localhost:${config.port}`);
 });

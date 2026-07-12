@@ -1,6 +1,6 @@
 # Example Markdown File Preview
 
-This is a real external plugin example for the AI IDE plugin system.
+This is a real external plugin example for the CrownForge plugin system.
 
 It demonstrates:
 

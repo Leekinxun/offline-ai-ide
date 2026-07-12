@@ -7,6 +7,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { BrandMark } from "./components/BrandMark";
+import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
@@ -128,7 +129,7 @@ export default function App() {
         <div className="login-card" style={{ textAlign: "center", padding: 40 }}>
           <BrandMark
             size={56}
-            title="AI IDE"
+            title={PRODUCT_NAME}
             subtitle={t("app.loadingWorkspace")}
             stacked
             className="loading-brand"
@@ -1543,7 +1544,7 @@ function AuthenticatedApp({
         <div className="titlebar-left">
           <BrandMark
             size={22}
-            title="AI IDE"
+            title={PRODUCT_NAME}
             subtitle={t("app.offline")}
             className="titlebar-brand"
           />

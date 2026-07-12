@@ -1,14 +1,14 @@
-# AI IDE
+# CrownForge
 
 <p align="center">
-  <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
+  <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> 当前版本：`v0.5.1`
+> 当前版本：`v0.6.0`
 >
-> 发布时间：`2026-07-09`
+> 发布时间：`2026-07-12`
 
-完全离线、可私有化部署的 Web AI 集成开发环境，集代码编辑器、集成终端、AI 编程助手和多智能体协作于一体，一个 Docker 容器即可运行。
+CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台，集代码编辑器、集成终端、Rolex Agent 和多智能体协作于一体，一个 Docker 容器即可运行。
 
 **无需联网，数据不出内网。** 接入任意 OpenAI 兼容的大模型（vLLM、Ollama、LocalAI 等），即可拥有完全自主可控的 Cursor / Windsurf 替代方案。
 
@@ -18,6 +18,13 @@
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.6.0 · 2026-07-12
+
+- 新增以 **CrownForge** 为核心的品牌视觉，统一替换原有 AI IDE 展示名称，并加入皇冠、锻造台和火花组合而成的原生 SVG Logo
+- 新增统一品牌常量，应用标题、登录页、工作区欢迎页、顶部品牌区和 favicon 使用同一产品名称
+- 补充 **Rolex Agent** 作为底层 Agent 的产品说明，并同步更新插件示例和启动日志中的产品名称
+- 同步完善中英文 README 与 `DESIGN.md` 中的品牌规范和 Logo 方向
 
 ### v0.5.1 · 2026-07-09
 

@@ -1,14 +1,14 @@
-# AI IDE
+# CrownForge
 
 <p align="center">
-  <img src="frontend/public/favicon.svg" width="88" alt="AI IDE logo" />
+  <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
 > Current Version: `v0.6.0`
 >
 > Release Date: `2026-07-12`
 
-A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, integrated terminal, AI coding assistant, and multi-agent collaboration — all running in a single Docker container.
+CrownForge is a fully offline, self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration — all running in a single Docker container.
 
 **No cloud dependencies. No data leaves your network.** Connect any OpenAI-compatible LLM (vLLM, Ollama, LocalAI, etc.) and get a private Cursor/Windsurf alternative you fully control.
 
@@ -26,6 +26,7 @@ A fully offline, self-hosted, web-based AI-powered IDE featuring a code editor, 
 - Added stronger **editor and review context** with file breadcrumbs, accessible tab metadata, unsaved/remote-update indicators, Git change summaries and status badges, improved Diff actions, and direct file navigation from review results
 - Unified the **Team / Agent / Terminal** panel states with agent progress summaries, terminal connection status, mobile drawer scrim and close behavior, and keyboard/focus accessibility refinements
 - Refined light/dark **visual tokens**, panel headers, scrollbars, login surface, form focus states, and local workspace status presentation
+- Rebranded the product as **CrownForge**, added a unified brand constant, and replaced the former logo with a native SVG mark pairing a crown, forge, and spark motif
 - Added [`DESIGN.md`](DESIGN.md) as the UI/UX design source of truth and implementation roadmap
 
 ### v0.5.1 · 2026-07-09
@@ -86,7 +87,7 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
-- **AI Coding Assistant** — Chat with an AI agent that can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
+- **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
 - **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)

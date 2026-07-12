@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "permissions": ["editor.preview"],
   "description": "Zero-build external plugin example that adds Markdown file preview support.",
-  "author": "AI IDE",
+  "author": "CrownForge",
   "entry": "index.js"
 }

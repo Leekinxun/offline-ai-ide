@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-11
+- Last refreshed: 2026-07-12
 - Primary product surfaces: 登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Agent Board、终端和设置
 - Evidence reviewed:
   - `frontend/src/App.tsx`：三栏工作区、顶部操作栏、面板开关、Focus Mode 和响应式布局
@@ -15,8 +15,11 @@
 
 ## Brand
 
+- Product name: CrownForge
+- Underlying agent: Rolex Agent
 - Personality: 安静、专业、可信、面向开发者；接近 Codex 的“工作台”而不是营销型聊天产品
 - Trust signals: 清晰的运行状态、变更范围、工具调用过程、可恢复操作、明确的错误和空状态
+- Logo direction: 深色工作台底、金色皇冠锻造符号、青色火花；在浅色和深色主题中保持清晰识别
 - Avoid: 过度渐变、强装饰性卡片、无意义的动画、过多彩色徽章、把 AI 输出伪装成人类确认过的结果
 
 ## Product goals
@@ -99,7 +102,7 @@
   - 仅用于面板打开、状态变化、流式输出和成功反馈
   - 动画短、可打断，并尊重 `prefers-reduced-motion`
 - Imagery/iconography:
-  - 延续 Lucide 图标；图标必须配合 tooltip 或可见文字
+  - 使用 CrownForge 品牌 SVG 标记和 Lucide 图标；图标必须配合 tooltip 或可见文字
   - 不新增营销插画；欢迎页可以使用品牌标记和轻量几何图形
 
 ## Components

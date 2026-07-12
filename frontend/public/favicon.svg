@@ -1,37 +1,48 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <defs>
-    <linearGradient id="favicon-bg" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0F172A" />
-      <stop offset="0.58" stop-color="#0B57D0" />
-      <stop offset="1" stop-color="#0A84FF" />
+    <linearGradient id="crownforge-bg" x1="8" y1="5" x2="57" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101A2D" />
+      <stop offset="0.62" stop-color="#153E73" />
+      <stop offset="1" stop-color="#0A84A8" />
     </linearGradient>
-    <linearGradient id="favicon-slash" x1="36" y1="18" x2="28" y2="46" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFC369" />
-      <stop offset="1" stop-color="#FF7A18" />
+    <linearGradient id="crownforge-crown" x1="17" y1="14" x2="48" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE7A3" />
+      <stop offset="0.52" stop-color="#F7B955" />
+      <stop offset="1" stop-color="#D77A2A" />
     </linearGradient>
+    <linearGradient id="crownforge-forge" x1="20" y1="38" x2="44" y2="51" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D9F7FF" />
+      <stop offset="1" stop-color="#7FD4E5" />
+    </linearGradient>
+    <filter id="crownforge-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
   </defs>
-  <rect x="4" y="4" width="56" height="56" rx="18" fill="url(#favicon-bg)" />
-  <rect x="7" y="7" width="50" height="50" rx="15" stroke="#FFFFFF" stroke-opacity="0.16" />
+
+  <rect x="4" y="4" width="56" height="56" rx="17" fill="url(#crownforge-bg)" />
+  <rect x="6.5" y="6.5" width="51" height="51" rx="14.5" stroke="#DDF8FF" stroke-opacity="0.18" />
+  <path d="M13 48.5H51" stroke="#72D5E8" stroke-opacity="0.28" stroke-width="1" />
+
   <path
-    d="M24 19.5L14.5 32L24 44.5"
-    stroke="#F4F9FF"
-    stroke-width="5"
-    stroke-linecap="round"
+    d="M16 20.5L24.5 27L32 14.5L39.5 27L48 20.5L44.5 36H19.5L16 20.5Z"
+    fill="url(#crownforge-crown)"
+    stroke="#FFF3C6"
+    stroke-opacity="0.66"
+    stroke-width="1.2"
     stroke-linejoin="round"
   />
-  <path
-    d="M40 19.5L49.5 32L40 44.5"
-    stroke="#A9DEFF"
-    stroke-width="5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
-  <path
-    d="M35 18L29 46"
-    stroke="url(#favicon-slash)"
-    stroke-width="5"
-    stroke-linecap="round"
-  />
-  <circle cx="48.5" cy="15.5" r="7" fill="#6AF1C5" fill-opacity="0.18" />
-  <circle cx="48.5" cy="15.5" r="4" fill="#7CF5D0" />
+  <path d="M20 34H44L42 39H22L20 34Z" fill="#C8742C" fill-opacity="0.92" />
+  <path d="M22 39H42L40 43H24L22 39Z" fill="url(#crownforge-forge)" />
+  <path d="M25 43H39L41 49H23L25 43Z" fill="#9AE7F2" fill-opacity="0.86" />
+  <path d="M27 46H37" stroke="#153E73" stroke-opacity="0.7" stroke-width="1.5" stroke-linecap="round" />
+
+  <g filter="url(#crownforge-glow)" stroke="#A7F6E0" stroke-linecap="round">
+    <path d="M49 13V18" stroke-width="1.6" />
+    <path d="M46.5 15.5H51.5" stroke-width="1.6" />
+    <path d="M51.7 10.7L53.4 9" stroke-width="1.2" />
+  </g>
 </svg>

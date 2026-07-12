@@ -3,6 +3,7 @@ import { FilePlus2, FolderOpen, MessageSquareText, Search, TerminalSquare } from
 import { FileNode, OpenFile } from "../types";
 import { useI18n } from "../i18n";
 import { BrandMark } from "./BrandMark";
+import { PRODUCT_NAME } from "../brand";
 
 interface WorkspaceWelcomeProps {
   workspaceDir: string;
@@ -40,7 +41,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
   return (
     <div className="workspace-welcome">
       <div className="workspace-welcome-hero">
-        <BrandMark size={48} title="AI IDE" subtitle={t("welcome.privateWorkspace")} stacked />
+        <BrandMark size={48} title={PRODUCT_NAME} subtitle={t("welcome.privateWorkspace")} stacked />
         <span className="workspace-welcome-eyebrow">{t("welcome.workspace")}</span>
         <h1>{workspaceName(workspaceDir)}</h1>
         <p>{t("welcome.description", { count: fileCount })}</p>

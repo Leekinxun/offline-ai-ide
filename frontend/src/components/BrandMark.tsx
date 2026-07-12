@@ -1,4 +1,5 @@
 import React from "react";
+import { PRODUCT_NAME } from "../brand";
 
 interface BrandMarkProps {
   size?: number;
@@ -23,7 +24,7 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
     <div className={classes}>
       <img
         src="/favicon.svg"
-        alt="AI IDE"
+        alt={PRODUCT_NAME}
         className="brand-mark-image"
         style={{ width: size, height: size }}
         draggable={false}

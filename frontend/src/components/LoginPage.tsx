@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "../i18n";
+import { PRODUCT_NAME } from "../brand";
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<string | null>;
@@ -39,7 +40,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       <form className="login-card" onSubmit={handleSubmit}>
         <BrandMark
           size={54}
-          title="AI IDE"
+          title={PRODUCT_NAME}
           subtitle={t("login.privateWorkspace")}
           stacked
           className="login-logo"
