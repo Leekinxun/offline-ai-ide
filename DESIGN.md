@@ -17,6 +17,8 @@
 
 - Observed: 当前工作区已经具备三栏布局、品牌标识、命令入口、AI 模式、Git/Agent/终端面板和深浅色主题。
 - Observed: 顶部栏、左侧资源区和右侧 AI 区同时承载较多图标与状态，主次关系不够明显。
+- Observed: 现有全局字号偏向紧凑仪表盘密度，正文、面板标题和文件树在远程服务器浏览器中可读性不足。
+- Observed: 资源管理器把文件树操作集中在一排小图标中，工作区路径与文件筛选能力不够突出，批量操作也缺少明确的模式反馈。
 - Observed: 空工作区欢迎页视觉中心明确，但进入真实任务后，AI 任务标题、运行阶段、变更摘要和下一步动作没有形成同一条稳定的视觉主线。
 - Observed: AI 面板已经有上下文、MCP、Memory/Skills 和运行历史状态，但多数状态仍以细小胶囊呈现，重要程度不足。
 - Inference: “高级感”不应来自更多渐变或装饰，而应来自更克制的表面层级、稳定的任务结构、清晰的状态语义和更少但更强的操作入口。
@@ -44,7 +46,7 @@
   - Action accent：蓝色用于焦点、链接、主按钮和当前选择。
   - Status colors：成功、警告、错误只表达状态，不用于大面积装饰。
 - Typography:
-  - 任务标题 20–24px；面板标题 12–14px；状态和元信息 10–12px。
+  - 任务标题 20–24px；面板标题 13–15px；正文和文件名 14px；状态和元信息不低于 11–12px。
   - 用户内容和 AI 结论使用舒适行高；工具日志、路径、Token 和运行指标使用等宽字体。
   - 减少全大写标签，使用短词和动词提高扫描速度。
 - Layout rhythm:
@@ -78,6 +80,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
 - `Composer`: make mode, current file/selection, steering, attachments and send/stop state one coherent control group.
 - `PanelShell`: standardize title, close, refresh, empty, loading and error states across Git, Agent, Team, Terminal, Settings and Knowledge.
 - `KnowledgeCenter`: combine Memory and Skills management with search, scope, preview and recent usage while preserving the current admin boundary.
+- `Explorer`: keep the workspace identity visible, provide an inline tree filter, group primary creation actions, and make selection mode and item states legible without relying on tiny icon-only controls.
 
 ## Redesign phases and acceptance criteria
 
@@ -170,6 +173,12 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   2. AI 运行状态、需要用户决策的动作和变更摘要
   3. 工具调用细节、历史信息和辅助设置
 
+- Explorer hierarchy:
+  1. 当前工作区名称和路径
+  2. 文件树筛选与主要创建操作
+  3. 当前文件、展开层级和协作状态
+  4. 上传、下载、批量删除等低频操作
+
 ## Design principles
 
 - Focus first: 中央编辑区是默认主角，任何辅助面板都应可隐藏、折叠或抽屉化。
@@ -187,7 +196,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - 成功/警告/错误只表达状态，不作为大面积装饰
 - Typography:
   - UI 使用现有系统无衬线字体；代码和路径使用等宽字体
-  - 页面标题、面板标题、辅助标签建立明确的三级层级
+  - 页面标题、面板标题、正文、文件名和辅助标签建立明确的三级层级，默认正文不低于 14px
   - 避免全大写长文案，面板标题保留短而可扫描的词组
 - Spacing/layout rhythm:
   - 以 4px 为基础单位，常用间距 8/12/16/24px

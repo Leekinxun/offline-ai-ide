@@ -27,6 +27,8 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - Git、Agent、Team、Terminal、Settings、Knowledge 等界面统一使用 `PanelShell` 风格，并补齐加载中 / 空状态 / 错误状态与响应式行为
 - 完善 Tab、命令面板、搜索、Dialog、Esc 关闭、可见焦点、ARIA Dialog 语义、窄屏触控尺寸和 reduced-motion 等键盘与无障碍体验
 - 新增可重复执行的 **UI Contract** 检查，并纳入 `scripts/verify.sh`，覆盖响应式断点、焦点状态、Dialog 语义、`PanelShell` 和 reduced-motion 支持
+- 提升 Workbench 全局字号，并统一面板、状态和元信息层级，改善远程服务器浏览器中的阅读体验
+- 重构 **资源管理器**：新增工作区身份卡、文件筛选、文件 / 文件夹统计、分组创建操作、可键盘操作的文件树，以及更清晰的空工作区 / 无匹配状态
 
 ### v0.6.1 · 2026-07-14
 
@@ -90,7 +92,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.7.0` 是当前 README 记录的最新版本，完成 CrownForge Workbench 前端改造，补充任务上下文、响应式面板、按文件编辑器状态恢复、键盘无障碍交互和可重复的 UI Contract 验证，并延续 `v0.6.1` 的 Agent 上下文与 MCP 能力。
+`v0.7.0` 是当前 README 记录的最新版本，完成 CrownForge Workbench 前端改造，补充任务上下文、响应式面板、可读字号、增强版资源管理器、按文件编辑器状态恢复、键盘无障碍交互和可重复的 UI Contract 验证，并延续 `v0.6.1` 的 Agent 上下文与 MCP 能力。
 
 ## 功能特性
 

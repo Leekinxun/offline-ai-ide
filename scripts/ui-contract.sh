@@ -6,6 +6,8 @@ CSS_FILE="$ROOT_DIR/frontend/src/App.css"
 APP_FILE="$ROOT_DIR/frontend/src/App.tsx"
 COMMAND_FILE="$ROOT_DIR/frontend/src/components/CommandPalette.tsx"
 SEARCH_FILE="$ROOT_DIR/frontend/src/components/WorkspaceSearchPanel.tsx"
+SIDEBAR_FILE="$ROOT_DIR/frontend/src/components/Sidebar.tsx"
+TREE_FILE="$ROOT_DIR/frontend/src/components/FileTree.tsx"
 
 assert_contains() {
   local file="$1"
@@ -28,5 +30,8 @@ assert_contains "$APP_FILE" "aria-modal=\"true\"" "diff dialog semantics"
 assert_contains "$APP_FILE" "handleEscape" "global Escape handling"
 assert_contains "$COMMAND_FILE" "aria-modal=\"true\"" "command dialog semantics"
 assert_contains "$SEARCH_FILE" "aria-modal=\"true\"" "search dialog semantics"
+assert_contains "$SIDEBAR_FILE" "sidebar-search" "explorer inline filter"
+assert_contains "$SIDEBAR_FILE" "sidebar-workspace-card" "explorer workspace identity"
+assert_contains "$TREE_FILE" "role=\"treeitem\"" "keyboard-accessible file tree items"
 
 echo "CrownForge UI contract passed."

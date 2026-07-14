@@ -14,6 +14,8 @@ import {
   ChevronRight,
   Folder,
   CheckSquare,
+  Search,
+  X,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 
@@ -64,6 +66,41 @@ function collectTreePaths(nodes: FileNode[]): Set<string> {
   return paths;
 }
 
+function filterTree(nodes: FileNode[], query: string): FileNode[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) return nodes;
+
+  return nodes.flatMap((node) => {
+    const children = node.children ? filterTree(node.children, normalizedQuery) : [];
+    const matches = node.name.toLocaleLowerCase().includes(normalizedQuery);
+    if (!matches && children.length === 0) return [];
+
+    return [{
+      ...node,
+      children: matches && node.children ? node.children : children,
+    }];
+  });
+}
+
+function countTreeNodes(nodes: FileNode[]): { files: number; folders: number } {
+  return nodes.reduce(
+    (counts, node) => {
+      if (node.type === "directory") {
+        counts.folders += 1;
+        if (node.children) {
+          const nested = countTreeNodes(node.children);
+          counts.files += nested.files;
+          counts.folders += nested.folders;
+        }
+      } else {
+        counts.files += 1;
+      }
+      return counts;
+    },
+    { files: 0, folders: 0 }
+  );
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   tree,
   activeFilePath,
@@ -103,6 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   } | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
+  const [treeQuery, setTreeQuery] = useState("");
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
@@ -128,6 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     setSelectedPaths([]);
     setMultiSelectEnabled(false);
+    setTreeQuery("");
   }, [workspaceDir]);
 
   useEffect(() => {
@@ -371,11 +410,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   if (!visible) return null;
 
   const workspaceName = workspaceDir.split("/").pop() || workspaceDir;
+  const filteredTree = useMemo(() => filterTree(tree, treeQuery), [tree, treeQuery]);
+  const treeStats = useMemo(() => countTreeNodes(filteredTree), [filteredTree]);
 
   return (
     <div className="sidebar" style={style}>
       <div className="sidebar-header">
-        <span className="sidebar-title">{t("sidebar.explorer")}</span>
+        <div className="sidebar-heading">
+          <span className="sidebar-eyebrow">{t("sidebar.workspaceLabel")}</span>
+          <span className="sidebar-title">{t("sidebar.explorer")}</span>
+        </div>
         <div className="sidebar-actions">
           <input
             ref={fileUploadInputRef}
@@ -391,9 +435,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
             multiple
             onChange={(e) => void handleUploadFiles(e.target.files, true)}
           />
+          <div className="sidebar-action-group sidebar-action-group-primary">
+            <button
+              className="sidebar-action-btn primary"
+              title={t("sidebar.newFile")}
+              aria-label={t("sidebar.newFile")}
+              onClick={() => handleCreateFile()}
+              disabled={!canEditWorkspace}
+            >
+              <FilePlus size={16} />
+            </button>
+            <button
+              className="sidebar-action-btn primary"
+              title={t("sidebar.newFolder")}
+              aria-label={t("sidebar.newFolder")}
+              onClick={() => handleCreateFolder()}
+              disabled={!canEditWorkspace}
+            >
+              <FolderPlus size={16} />
+            </button>
+          </div>
+          <span className="sidebar-action-divider" aria-hidden="true" />
           <button
             className="sidebar-action-btn"
             title={t("sidebar.openFolder")}
+            aria-label={t("sidebar.openFolder")}
             onClick={openFolderBrowser}
           >
             <FolderOpen size={15} />
@@ -401,6 +467,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             className="sidebar-action-btn"
             title={t("sidebar.uploadFiles")}
+            aria-label={t("sidebar.uploadFiles")}
             onClick={() => fileUploadInputRef.current?.click()}
             disabled={!canEditWorkspace}
           >
@@ -409,6 +476,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             className="sidebar-action-btn"
             title={t("sidebar.uploadFolder")}
+            aria-label={t("sidebar.uploadFolder")}
             onClick={() => folderUploadInputRef.current?.click()}
             disabled={!canEditWorkspace}
           >
@@ -416,23 +484,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
           <button
             className="sidebar-action-btn"
-            title={t("sidebar.newFile")}
-            onClick={() => handleCreateFile()}
-            disabled={!canEditWorkspace}
-          >
-            <FilePlus size={15} />
-          </button>
-          <button
-            className="sidebar-action-btn"
-            title={t("sidebar.newFolder")}
-            onClick={() => handleCreateFolder()}
-            disabled={!canEditWorkspace}
-          >
-            <FolderPlus size={15} />
-          </button>
-          <button
-            className="sidebar-action-btn"
             title={t("common.refresh")}
+            aria-label={t("common.refresh")}
             onClick={onRefreshTree}
           >
             <RefreshCw size={15} />
@@ -440,6 +493,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             className={`sidebar-action-btn${multiSelectEnabled ? " active" : ""}`}
             title={t("sidebar.toggleMultiSelect")}
+            aria-label={t("sidebar.toggleMultiSelect")}
             onClick={handleToggleMultiSelect}
           >
             <CheckSquare size={15} />
@@ -451,6 +505,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ? t("sidebar.deleteSelectedCount", { count: selectedPaths.length })
                 : t("sidebar.deleteSelected")
             }
+            aria-label={t("sidebar.deleteSelected")}
             onClick={() => void handleBatchDelete()}
             disabled={!canEditWorkspace || selectedPaths.length === 0}
           >
@@ -458,8 +513,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
       </div>
-      <div className="sidebar-workspace-path" title={workspaceDir}>
-        {workspaceName}
+      <div className="sidebar-workspace-card" title={workspaceDir}>
+        <div className="sidebar-workspace-icon" aria-hidden="true">
+          <FolderOpen size={16} />
+        </div>
+        <div className="sidebar-workspace-copy">
+          <span className="sidebar-workspace-label">{t("sidebar.currentWorkspace")}</span>
+          <strong>{workspaceName}</strong>
+          <span>{workspaceDir}</span>
+        </div>
+      </div>
+      <div className="sidebar-tools">
+        <label className="sidebar-search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            value={treeQuery}
+            onChange={(event) => setTreeQuery(event.target.value)}
+            placeholder={t("sidebar.filterPlaceholder")}
+            aria-label={t("sidebar.filterPlaceholder")}
+          />
+          {treeQuery && (
+            <button
+              type="button"
+              className="sidebar-search-clear"
+              onClick={() => setTreeQuery("")}
+              title={t("common.clear")}
+              aria-label={t("common.clear")}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </label>
+        <div className="sidebar-tree-meta" aria-live="polite">
+          <span>{treeStats.folders} {t("sidebar.folders")}</span>
+          <span>{treeStats.files} {t("sidebar.files")}</span>
+        </div>
       </div>
       {selectedPaths.length > 0 && (
         <div className="sidebar-selection-bar">
@@ -483,20 +572,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
-      <div className="file-tree">
-        <FileTree
-          nodes={tree}
-          activeFilePath={activeFilePath}
-          selectedPaths={selectedPathSet}
-          multiSelectEnabled={multiSelectEnabled}
-          canEditWorkspace={canEditWorkspace}
-          claims={activeTeam?.claims}
-          presence={activeTeam?.presence}
-          onFileSelect={onFileSelect}
-          onToggleSelect={handleToggleSelection}
-          onDownload={handleDownload}
-          onContextMenu={handleContextMenu}
-        />
+      <div className="file-tree" role="tree" aria-label={t("sidebar.explorer")}>
+        {filteredTree.length > 0 ? (
+          <FileTree
+            nodes={filteredTree}
+            activeFilePath={activeFilePath}
+            selectedPaths={selectedPathSet}
+            multiSelectEnabled={multiSelectEnabled}
+            canEditWorkspace={canEditWorkspace}
+            claims={activeTeam?.claims}
+            presence={activeTeam?.presence}
+            filterQuery={treeQuery}
+            onFileSelect={onFileSelect}
+            onToggleSelect={handleToggleSelection}
+            onDownload={handleDownload}
+            onContextMenu={handleContextMenu}
+          />
+        ) : (
+          <div className="sidebar-tree-empty">
+            <Search size={18} aria-hidden="true" />
+            <strong>{treeQuery ? t("sidebar.noMatches") : t("sidebar.emptyWorkspace")}</strong>
+            <span>{treeQuery ? t("sidebar.noMatchesHint") : t("sidebar.emptyWorkspaceHint")}</span>
+          </div>
+        )}
       </div>
       {!canEditWorkspace && (
         <div className="sidebar-readonly-banner">{t("team.readOnlyHint")}</div>

@@ -15,6 +15,7 @@ interface FileTreeProps {
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
+  filterQuery?: string;
   depth?: number;
 }
 
@@ -30,6 +31,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onContextMenu,
   claims,
   presence,
+  filterQuery = "",
   depth = 0,
 }) => {
   return (
@@ -48,6 +50,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           onContextMenu={onContextMenu}
           claims={claims}
           presence={presence}
+          filterQuery={filterQuery}
           depth={depth}
         />
       ))}
@@ -67,6 +70,7 @@ interface FileTreeItemProps {
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
+  filterQuery: string;
   depth: number;
 }
 
@@ -82,13 +86,14 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   onContextMenu,
   claims,
   presence,
+  filterQuery,
   depth,
 }) => {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(depth < 1);
 
-  const handleClick = useCallback((event: React.MouseEvent) => {
-    if (multiSelectEnabled || event.ctrlKey || event.metaKey) {
+  const activateNode = useCallback((event?: React.MouseEvent) => {
+    if (multiSelectEnabled || event?.ctrlKey || event?.metaKey) {
       onToggleSelect(node.path, !selectedPaths.has(node.path));
       return;
     }
@@ -98,9 +103,15 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
     } else {
       onFileSelect(node.path);
     }
-  }, [node, onFileSelect, onToggleSelect, selectedPaths]);
+  }, [multiSelectEnabled, node, onFileSelect, onToggleSelect, selectedPaths]);
+
+  const handleClick = useCallback((event: React.MouseEvent) => {
+    activateNode(event);
+  }, [activateNode]);
 
   const isActive = node.path === activeFilePath;
+  const isFilterActive = Boolean(filterQuery.trim());
+  const isExpanded = isFilterActive || expanded;
   const isSelected = selectedPaths.has(node.path);
   const claim = claims?.find((entry) => entry.path === node.path);
   const viewers = presence?.filter((entry) => entry.activeFilePath === node.path) || [];
@@ -112,6 +123,15 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, node)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          activateNode();
+        }}
+        role="treeitem"
+        tabIndex={0}
+        aria-selected={isActive || isSelected}
+        aria-expanded={node.type === "directory" ? isExpanded : undefined}
       >
         {node.type === "directory" && (
           <ChevronRight
@@ -157,7 +177,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
           <Download size={13} />
         </button>
       </div>
-      {node.type === "directory" && expanded && node.children && (
+      {node.type === "directory" && isExpanded && node.children && (
         <div className="tree-children">
           <FileTree
             nodes={node.children}
@@ -171,6 +191,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onContextMenu={onContextMenu}
             claims={claims}
             presence={presence}
+            filterQuery={filterQuery}
             depth={depth + 1}
           />
         </div>

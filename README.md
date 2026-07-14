@@ -27,6 +27,8 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Standardized Git, Agent, Team, Terminal, Settings, and Knowledge surfaces with shared `PanelShell` styling, clear loading / empty / error states, and responsive behavior
 - Improved keyboard-friendly Tab / Command Palette / Search / Dialog flows, Escape-to-close behavior, visible focus states, ARIA dialog semantics, touch-sized narrow-screen controls, and reduced-motion support
 - Added a repeatable **UI Contract** check to `scripts/verify.sh` covering responsive breakpoints, focus states, dialog semantics, `PanelShell`, and reduced-motion support
+- Increased the Workbench typography baseline and normalized panel, status, and metadata sizing for better readability on remote browser sessions
+- Reworked the **Explorer** with a visible workspace identity card, inline file filtering, file/folder counts, grouped creation actions, keyboard-accessible tree items, and clearer empty / no-match states
 
 ### v0.6.1 · 2026-07-14
 
@@ -96,7 +98,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.7.0` is the current documented release and completes the CrownForge Workbench frontend redesign with task context surfaces, responsive panels, per-file editor state restoration, accessible keyboard interactions, and repeatable UI contract verification on top of the `v0.6.1` Agent context and MCP capabilities.
+`v0.7.0` is the current documented release and completes the CrownForge Workbench frontend redesign with task context surfaces, responsive panels, readable typography, a more capable Explorer, per-file editor state restoration, accessible keyboard interactions, and repeatable UI contract verification on top of the `v0.6.1` Agent context and MCP capabilities.
 
 ## Features
 
