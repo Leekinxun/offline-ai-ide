@@ -4,7 +4,7 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> Current Version: `v0.6.1`
+> Current Version: `v0.7.0`
 >
 > Release Date: `2026-07-14`
 
@@ -18,6 +18,15 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.7.0 · 2026-07-14
+
+- Completed the **CrownForge Workbench frontend redesign** across the task-first AI panel, editor canvas, panel surfaces, responsive drawers, and settings / terminal / knowledge experiences
+- Added `TaskHeader` and `ContextStrip` so mode, run state, context budget, MCP health, and Memory / Skills state are readable at a glance
+- Added per-file Monaco **view-state restoration** so switching tabs preserves scroll position, cursor, selection, and folding state
+- Standardized Git, Agent, Team, Terminal, Settings, and Knowledge surfaces with shared `PanelShell` styling, clear loading / empty / error states, and responsive behavior
+- Improved keyboard-friendly Tab / Command Palette / Search / Dialog flows, Escape-to-close behavior, visible focus states, ARIA dialog semantics, touch-sized narrow-screen controls, and reduced-motion support
+- Added a repeatable **UI Contract** check to `scripts/verify.sh` covering responsive breakpoints, focus states, dialog semantics, `PanelShell`, and reduced-motion support
 
 ### v0.6.1 · 2026-07-14
 
@@ -87,7 +96,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.6.1` is the current documented release and adds persistent agent context, external MCP connectivity with lazy tool loading, workspace/user memory, reusable skills, Memory/Skills management centers, and regression coverage on top of the `v0.6.0` UI and workspace experience.
+`v0.7.0` is the current documented release and completes the CrownForge Workbench frontend redesign with task context surfaces, responsive panels, per-file editor state restoration, accessible keyboard interactions, and repeatable UI contract verification on top of the `v0.6.1` Agent context and MCP capabilities.
 
 ## Features
 
@@ -137,7 +146,7 @@ The repository includes repeatable local checks for the Agent harness and deploy
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` runs backend tests/typecheck, the context performance benchmark, the frontend production build, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
+`verify.sh` runs backend tests/typecheck, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
 
 Or use Docker Compose:
 

@@ -4,7 +4,7 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> 当前版本：`v0.6.1`
+> 当前版本：`v0.7.0`
 >
 > 发布时间：`2026-07-14`
 
@@ -18,6 +18,15 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.7.0 · 2026-07-14
+
+- 完成 **CrownForge Workbench 前端改造**，覆盖任务优先的 AI 面板、编辑器画布、各类面板、响应式抽屉，以及设置 / 终端 / 知识体验
+- 新增 `TaskHeader` 与 `ContextStrip`，让当前模式、运行状态、上下文预算、MCP 健康状态和 Memory / Skills 状态一眼可见
+- 新增按文件保存的 Monaco **视图状态恢复**，切换标签页时保留滚动位置、光标、选区和折叠状态
+- Git、Agent、Team、Terminal、Settings、Knowledge 等界面统一使用 `PanelShell` 风格，并补齐加载中 / 空状态 / 错误状态与响应式行为
+- 完善 Tab、命令面板、搜索、Dialog、Esc 关闭、可见焦点、ARIA Dialog 语义、窄屏触控尺寸和 reduced-motion 等键盘与无障碍体验
+- 新增可重复执行的 **UI Contract** 检查，并纳入 `scripts/verify.sh`，覆盖响应式断点、焦点状态、Dialog 语义、`PanelShell` 和 reduced-motion 支持
 
 ### v0.6.1 · 2026-07-14
 
@@ -81,7 +90,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.6.1` 是当前 README 记录的最新版本，在 `v0.6.0` CrownForge 工作区体验基础上，补充了 Agent 上下文、MCP、记忆、Skills、运行恢复和管理中心能力。
+`v0.7.0` 是当前 README 记录的最新版本，完成 CrownForge Workbench 前端改造，补充任务上下文、响应式面板、按文件编辑器状态恢复、键盘无障碍交互和可重复的 UI Contract 验证，并延续 `v0.6.1` 的 Agent 上下文与 MCP 能力。
 
 ## 功能特性
 
@@ -94,7 +103,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` 会依次执行后端测试与类型检查、上下文性能基准、前端生产构建和差异检查；`docker-smoke.sh` 会构建镜像、启动一次性容器、检查 `/api/health`，并确认容器能够返回 CrownForge 前端页面。端口被占用时可以通过 `CROWNFORGE_SMOKE_PORT` 覆盖默认端口。
+`verify.sh` 会依次执行后端测试与类型检查、上下文性能基准、前端生产构建、前端 UI Contract 检查和差异检查；`docker-smoke.sh` 会构建镜像、启动一次性容器、检查 `/api/health`，并确认容器能够返回 CrownForge 前端页面。端口被占用时可以通过 `CROWNFORGE_SMOKE_PORT` 覆盖默认端口。
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
