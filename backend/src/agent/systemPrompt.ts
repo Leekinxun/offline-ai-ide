@@ -2,6 +2,8 @@ import { config } from "../config.js";
 import type { AgentMode } from "./types.js";
 import fs from "fs";
 import path from "path";
+import { buildMemoryPrompt, loadMemorySnapshot } from "./memory.js";
+import { buildSkillsPrompt } from "./skills.js";
 
 function loadWorkspaceGuidance(workspaceDir: string): string {
   const candidates = [
@@ -25,6 +27,21 @@ function loadWorkspaceGuidance(workspaceDir: string): string {
     : "";
 }
 
+function loadPersistentContext(workspaceDir: string): string {
+  const sections: string[] = [];
+  try {
+    sections.push(buildMemoryPrompt(loadMemorySnapshot(workspaceDir)));
+  } catch {
+    // Persistent context is best-effort and must not block the agent loop.
+  }
+  try {
+    sections.push(buildSkillsPrompt(workspaceDir));
+  } catch {
+    // A malformed skill directory must not prevent ordinary coding tasks.
+  }
+  return sections.filter(Boolean).join("\n");
+}
+
 export function buildSystemPrompt(
   workspaceDir: string,
   todoState: string,
@@ -38,9 +55,10 @@ export function buildSystemPrompt(
   const mode = options?.mode || "code";
   const modeNotice = `\n\n## Interaction Mode: ${mode.toUpperCase()}\n- ASK: inspect and explain; do not modify files.\n- REVIEW: inspect changes and run focused checks; do not modify files.\n- PLAN: produce an ordered implementation plan and persist task items when useful; do not modify source files.\n- CODE: implement the requested change, run verification, and summarize evidence.`;
   const workspaceGuidance = loadWorkspaceGuidance(workspaceDir);
+  const persistentContext = loadPersistentContext(workspaceDir);
 
   if (customPrompt && customPrompt.trim()) {
-    return `${customPrompt.trim()}${modeNotice}${workspaceGuidance}${readOnlyNotice}`;
+    return `${customPrompt.trim()}${modeNotice}${workspaceGuidance}${persistentContext}${readOnlyNotice}`;
   }
 
   return `You are an expert AI coding agent embedded in a Web IDE.
@@ -87,5 +105,5 @@ ${todoState || "No active todos."}
 
 When the user provides file context or code selection, focus on that specific code.
 When generating or modifying code, always wrap it in a fenced code block with the appropriate language tag.
-Be concise and precise.${modeNotice}${workspaceGuidance}${readOnlyNotice}`;
+Be concise and precise.${modeNotice}${workspaceGuidance}${persistentContext}${readOnlyNotice}`;
 }

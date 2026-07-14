@@ -21,6 +21,13 @@ services:
       # Agent tuning (optional)
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
+      - AGENT_CONTEXT_COMPACT_THRESHOLD=60000
+      # External MCP endpoints (comma-separated; can also be managed in admin Settings)
+      - MCP_BASE_URLS=
+      - MCP_LAZY_URLS=
+      - MCP_DISABLED_URLS=
+      - MCP_TIMEOUT=60
+      - MCP_CONNECT_TIMEOUT=10
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   KeyRound,
   Languages,
+  PlugZap,
+  RefreshCw,
   Save,
   Settings,
   Shield,
@@ -12,7 +14,7 @@ import {
 } from "lucide-react";
 import { useAdminSettings } from "../hooks/useAdminSettings";
 import { useI18n } from "../i18n";
-import { AdminSettings, AdminUser, LlmSettings } from "../types";
+import { AdminSettings, AdminUser, LlmSettings, McpServerPreview, McpSettings } from "../types";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 
 interface SettingsModalProps {
@@ -52,6 +54,14 @@ interface AppFormState {
   uploadMaxFileSizeMb: string;
 }
 
+interface McpFormState {
+  baseUrls: string;
+  lazyUrls: string;
+  disabledUrls: string;
+  timeout: string;
+  connectTimeout: string;
+}
+
 const EMPTY_CREATE_USER_FORM: CreateUserForm = {
   username: "",
   password: "",
@@ -70,6 +80,14 @@ const EMPTY_LLM_FORM: LlmFormState = {
 
 const EMPTY_APP_FORM: AppFormState = {
   uploadMaxFileSizeMb: "250",
+};
+
+const EMPTY_MCP_FORM: McpFormState = {
+  baseUrls: "",
+  lazyUrls: "",
+  disabledUrls: "",
+  timeout: "60",
+  connectTimeout: "10",
 };
 
 function buildDefaultWorkspace(username: string, allowedRoots: string[]): string {
@@ -96,6 +114,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [savingLlm, setSavingLlm] = useState(false);
   const [savingApp, setSavingApp] = useState(false);
+  const [savingMcp, setSavingMcp] = useState(false);
+  const [inspectingMcp, setInspectingMcp] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
@@ -105,6 +125,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [llmForm, setLlmForm] = useState<LlmFormState>(EMPTY_LLM_FORM);
   const [appForm, setAppForm] = useState<AppFormState>(EMPTY_APP_FORM);
+  const [mcpForm, setMcpForm] = useState<McpFormState>(EMPTY_MCP_FORM);
+  const [mcpServers, setMcpServers] = useState<McpServerPreview[]>([]);
   const [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null);
   const [nextPassword, setNextPassword] = useState("");
 
@@ -124,6 +146,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       });
       setAppForm({
         uploadMaxFileSizeMb: String(data.app?.uploadMaxFileSizeMb || 250),
+      });
+      setMcpForm({
+        baseUrls: (data.mcp?.baseUrls || []).join("\n"),
+        lazyUrls: (data.mcp?.lazyUrls || []).join("\n"),
+        disabledUrls: (data.mcp?.disabledUrls || []).join("\n"),
+        timeout: String(data.mcp?.timeout || 60),
+        connectTimeout: String(data.mcp?.connectTimeout || 10),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToLoadSettings"));
@@ -308,6 +337,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setError(e instanceof Error ? e.message : t("settings.failedToSaveAppSettings"));
     } finally {
       setSavingApp(false);
+    }
+  };
+
+  const handleSaveMcp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (savingMcp) return;
+
+    const timeout = Number.parseInt(mcpForm.timeout, 10);
+    const connectTimeout = Number.parseInt(mcpForm.connectTimeout, 10);
+    if (
+      !Number.isInteger(timeout) ||
+      timeout <= 0 ||
+      !Number.isInteger(connectTimeout) ||
+      connectTimeout <= 0
+    ) {
+      setError(t("settings.mcpTimeoutPositiveInteger"));
+      return;
+    }
+
+    const payload: McpSettings = {
+      baseUrls: mcpForm.baseUrls
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      lazyUrls: mcpForm.lazyUrls
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      disabledUrls: mcpForm.disabledUrls
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      timeout,
+      connectTimeout,
+    };
+
+    setSavingMcp(true);
+    setError(null);
+    try {
+      const saved = await adminSettings.updateMcpSettings(payload);
+      setMcpForm({
+        baseUrls: saved.baseUrls.join("\n"),
+        lazyUrls: saved.lazyUrls.join("\n"),
+        disabledUrls: saved.disabledUrls.join("\n"),
+        timeout: String(saved.timeout),
+        connectTimeout: String(saved.connectTimeout),
+      });
+      setSettings((prev) => (prev ? { ...prev, mcp: saved } : prev));
+      setMcpServers([]);
+      onShowToast(t("settings.mcpSettingsSaved"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToSaveMcpSettings"));
+    } finally {
+      setSavingMcp(false);
+    }
+  };
+
+  const handleInspectMcp = async () => {
+    if (inspectingMcp) return;
+    setInspectingMcp(true);
+    setError(null);
+    try {
+      setMcpServers(await adminSettings.inspectMcpServers());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToInspectMcp"));
+    } finally {
+      setInspectingMcp(false);
     }
   };
 
@@ -524,6 +620,114 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   ))}
                 </div>
+              </section>
+
+              <section className="settings-card">
+                <div className="settings-card-header">
+                  <div className="settings-card-title">
+                    <PlugZap size={16} />
+                    <span>{t("settings.mcpConfiguration")}</span>
+                  </div>
+                  <span className="settings-card-meta">
+                    {t("settings.mcpMeta")}
+                  </span>
+                </div>
+
+                <form className="settings-form" onSubmit={handleSaveMcp}>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.mcpEndpoints")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={4}
+                      value={mcpForm.baseUrls}
+                      onChange={(e) =>
+                        setMcpForm((prev) => ({ ...prev, baseUrls: e.target.value }))
+                      }
+                      placeholder="http://host.docker.internal:8444/mcp"
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                  </label>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.mcpLazyEndpoints")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={3}
+                      value={mcpForm.lazyUrls}
+                      onChange={(e) => setMcpForm((prev) => ({ ...prev, lazyUrls: e.target.value }))}
+                      placeholder={t("settings.mcpLazyEndpointsPlaceholder")}
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                  </label>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.mcpDisabledEndpoints")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={2}
+                      value={mcpForm.disabledUrls}
+                      onChange={(e) => setMcpForm((prev) => ({ ...prev, disabledUrls: e.target.value }))}
+                      placeholder={t("settings.mcpDisabledEndpointsPlaceholder")}
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                  </label>
+                  <div className="settings-form-row">
+                    <label className="settings-field">
+                      <span>{t("settings.mcpTimeout")}</span>
+                      <input
+                        className="settings-input"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={mcpForm.timeout}
+                        onChange={(e) => setMcpForm((prev) => ({ ...prev, timeout: e.target.value }))}
+                      />
+                    </label>
+                    <label className="settings-field">
+                      <span>{t("settings.mcpConnectTimeout")}</span>
+                      <input
+                        className="settings-input"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={mcpForm.connectTimeout}
+                        onChange={(e) => setMcpForm((prev) => ({ ...prev, connectTimeout: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-form-footer">
+                    <span className="settings-help-text">{t("settings.mcpHelp")}</span>
+                    <div className="settings-form-actions">
+                      <button
+                        className="dialog-btn"
+                        type="button"
+                        onClick={() => void handleInspectMcp()}
+                        disabled={inspectingMcp}
+                      >
+                        <RefreshCw size={14} />
+                        {inspectingMcp ? t("settings.mcpInspecting") : t("settings.mcpInspect")}
+                      </button>
+                      <button className="dialog-btn primary" type="submit" disabled={savingMcp}>
+                        <Save size={14} />
+                        {savingMcp ? t("settings.saving") : t("settings.saveMcpSettings")}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+
+                {mcpServers.length > 0 && (
+                  <div className="settings-mcp-list">
+                    {mcpServers.map((server) => (
+                      <div className="settings-mcp-row" key={server.endpointKey}>
+                        <div className="settings-mcp-info">
+                          <code>{server.endpoint}</code>
+                          <span>{server.ok ? t("settings.mcpServerReady") : server.error || t("settings.mcpServerFailed")}</span>
+                        </div>
+                        <span className={`settings-mcp-badge${server.ok ? " ready" : " failed"}`}>
+                          {server.ok ? t("settings.mcpToolCount", { count: server.toolCount }) : t("settings.mcpServerFailed")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
 
               <section className="settings-card">

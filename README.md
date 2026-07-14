@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> Current Version: `v0.6.0`
+> Current Version: `v0.6.1`
 >
-> Release Date: `2026-07-12`
+> Release Date: `2026-07-14`
 
 CrownForge is a fully offline, self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,15 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.6.1 · 2026-07-14
+
+- Added Codex-inspired **agent context management** with automatic micro-compaction, explicit `/compress` support, context status events, safe transcript trimming, and preserved run transcripts under `.transcripts/`
+- Added configurable **external MCP connectivity** through HTTP / SSE JSON-RPC endpoints, including endpoint inspection, tool discovery, scoped tool names, timeout controls, and graceful offline fallback
+- Added MCP **lazy loading** with `eager`, `lazy`, and `disabled` endpoint modes; lazy endpoints expose search and activation controls first, loading only selected tool schemas into the next reasoning round to reduce context pressure
+- Added persistent **workspace and user memory** under `.codex/USER.md` and `.codex/MEMORY.md`, with `memory_read` / `memory_write` tools and memory context injected into new agent runs
+- Added reusable **workspace skills** discovered from `.codex/skills/*/SKILL.md` and `skills/*/SKILL.md`, with metadata-only catalog loading and on-demand `skill_load`
+- Added MCP, memory, skills, and context regression tests, plus matching admin settings, environment variables, status events, and documentation
 
 ### v0.6.0 · 2026-07-12
 
@@ -76,7 +85,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.6.0` is the current documented release and adds the Codex-inspired workspace shell, clearer task workflows, stronger editor/Git/review context, unified collaboration and terminal panels, responsive behavior, accessibility refinements, and the UI design source of truth on top of the `v0.5.1` feature set.
+`v0.6.1` is the current documented release and adds persistent agent context, external MCP connectivity with lazy tool loading, workspace/user memory, reusable skills, and regression coverage on top of the `v0.6.0` UI and workspace experience.
 
 ## Features
 
@@ -87,11 +96,12 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
-- **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, Stop and Correct controls for interruptible steering/follow-up messages mid-run, and honors team read-only roles
+- **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, interruptible steering, automatic context compaction with preserved `.transcripts/`, lazy-loaded external MCP tools, and honors team read-only roles
+- **Persistent Agent Context** — Workspace-local `.codex/USER.md` and `.codex/MEMORY.md` are loaded into new agent runs, while reusable `.codex/skills/*/SKILL.md` workflows are catalogued and can be loaded on demand
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
 - **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
-- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt / upload size limit from the UI, and switch interface language between English and Simplified Chinese
+- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
@@ -145,6 +155,12 @@ services:
       - WORKSPACE_DIR=/workspace
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
+      - AGENT_CONTEXT_COMPACT_THRESHOLD=60000
+      - MCP_BASE_URLS=
+      - MCP_LAZY_URLS=
+      - MCP_DISABLED_URLS=
+      - MCP_TIMEOUT=60
+      - MCP_CONNECT_TIMEOUT=10
       - UPLOAD_MAX_FILE_SIZE_MB=250
     restart: unless-stopped
     extra_hosts:
@@ -215,6 +231,12 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `PORT` | `3000` | Server port |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens per AI response |
+| `AGENT_CONTEXT_COMPACT_THRESHOLD` | `60000` | Estimated context-token threshold that triggers automatic compaction |
+| `MCP_BASE_URLS` | *(empty)* | Comma- or newline-separated HTTP/SSE MCP endpoints |
+| `MCP_LAZY_URLS` | *(empty)* | Endpoints whose tools are searched and activated on demand |
+| `MCP_DISABLED_URLS` | *(empty)* | Endpoints excluded from Agent tool discovery |
+| `MCP_TIMEOUT` | `60` | MCP request timeout in seconds |
+| `MCP_CONNECT_TIMEOUT` | `10` | MCP connection timeout in seconds |
 | `SYSTEM_PROMPT` | *(empty)* | Optional default system prompt override for the AI agent |
 | `UPLOAD_MAX_FILE_SIZE_MB` | `250` | Per-file upload limit in MB; can be overridden from admin Settings |
 | `USERS_CONFIG` | *(auto-detect)* | Path to `users.json` |
@@ -225,8 +247,11 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max tokens, max agent iterations, system prompt, plugin overrides, and upload size limits |
+| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max tokens, max agent iterations, system prompt, MCP endpoints, plugin overrides, and upload size limits |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
+| `<workspace>/.codex/USER.md` | Stores durable user preferences and working conventions |
+| `<workspace>/.codex/MEMORY.md` | Stores durable project facts, decisions, and conventions |
+| `<workspace>/.codex/skills/*/SKILL.md` | Stores reusable workspace workflows discovered by the Agent |
 | `<workspace>/.team/teams.json` | Stores team membership, roles, invites, presence, claims, and activity for shared collaboration |
 
 If you run with Docker and want admin changes to survive container recreation, persist these files with bind mounts or a volume-backed path.
@@ -269,6 +294,10 @@ LLM runtime settings can be managed in two ways:
 - Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, `AGENT_MAX_TOKENS`, `MAX_AGENT_ITERATIONS`, and `SYSTEM_PROMPT` via environment variables
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately. The system prompt is included in this runtime configuration, so admins can customize the assistant behavior without rebuilding the image.
+
+### External MCP
+
+Administrators can add HTTP/SSE MCP endpoints from **Settings → External MCP**, test their connections, and inspect the discovered tools. Endpoints can be marked lazy so the Agent first uses `search_lazy_mcp_tools`, then `activate_lazy_mcp_tools` to expose only the relevant tools. Eager tools use endpoint-scoped names such as `mcp_<endpoint>__<tool>`. MCP servers that are unavailable are reported in the UI and do not prevent built-in tools from running.
 
 ### Uploads
 
@@ -349,6 +378,8 @@ The AI assistant can:
 - **Spawn teammates** — create autonomous sub-agents with specific roles
 - **Collaborate** — agents communicate via a message bus and can claim tasks
 - **Respect team permissions** — file-writing tools are automatically restricted when the active team role is read-only
+- **Manage long contexts** — tool results are micro-compacted, oversized conversations are summarized automatically, and the `compress` tool can request compaction before continuing
+- **Reuse project knowledge** — persistent Memory is injected at session start, workspace Skills are listed in the prompt, and `skill_load` reads a selected workflow before execution
 
 ### Agent Tools
 
@@ -358,6 +389,12 @@ The AI assistant can:
 | `read_file` | Read file contents |
 | `write_file` | Create or overwrite files |
 | `edit_file` | Find-and-replace in existing files |
+| `compress` | Summarize the current context and preserve the full transcript in `.transcripts/` |
+| `memory_read` | Read user or workspace persistent memory |
+| `memory_write` | Replace user or workspace persistent memory with durable Markdown |
+| `skill_load` | Load a workspace `SKILL.md` workflow by name |
+| `search_lazy_mcp_tools` | Search hidden tools on lazy MCP endpoints |
+| `activate_lazy_mcp_tools` | Activate selected lazy MCP tools for the next reasoning round |
 | `TodoWrite` | Update the in-chat task checklist |
 | `task_create` | Create a persistent task |
 | `task_update` | Update task status |

@@ -19,6 +19,14 @@ interface AppRuntimeSettings {
   uploadMaxFileSizeMb: number;
 }
 
+export interface McpRuntimeSettings {
+  baseUrls: string[];
+  lazyUrls: string[];
+  disabledUrls: string[];
+  timeout: number;
+  connectTimeout: number;
+}
+
 interface PersistedPluginSettings {
   overrides?: Record<string, Partial<PluginOverrideSettings>>;
 }
@@ -27,6 +35,7 @@ interface PersistedAppSettings {
   llm?: Partial<LlmRuntimeSettings>;
   plugins?: PersistedPluginSettings;
   app?: Partial<AppRuntimeSettings>;
+  mcp?: Partial<McpRuntimeSettings>;
 }
 
 function parsePositiveInteger(
@@ -41,6 +50,23 @@ function parsePositiveInteger(
         : Number.NaN;
 
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseUrlList(value: unknown): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]/)
+      : [];
+
+  return Array.from(
+    new Set(
+      values
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 function resolveWorkspaceDir(): string {
@@ -122,6 +148,18 @@ const appSettingsPath = resolveAppSettingsPath();
 let persistedAppSettings = loadPersistedAppSettings(appSettingsPath);
 const persistedLlmSettings = persistedAppSettings.llm || {};
 const persistedRuntimeSettings = persistedAppSettings.app || {};
+const persistedMcpSettings = persistedAppSettings.mcp || {};
+const initialMcpUrls = parseUrlList(
+  persistedMcpSettings.baseUrls ||
+    process.env.MCP_BASE_URLS ||
+    process.env.MCP_BASE_URL
+);
+const initialMcpLazyUrls = parseUrlList(
+  persistedMcpSettings.lazyUrls || process.env.MCP_LAZY_URLS
+);
+const initialMcpDisabledUrls = parseUrlList(
+  persistedMcpSettings.disabledUrls || process.env.MCP_DISABLED_URLS
+);
 
 function savePersistedAppSettings(): void {
   fs.mkdirSync(path.dirname(config.appSettingsPath), { recursive: true });
@@ -144,9 +182,24 @@ export const config = {
   systemPrompt: persistedLlmSettings.systemPrompt || process.env.SYSTEM_PROMPT || "",
   staticDir: process.env.STATIC_DIR || "static",
   maxAgentIterations: parsePositiveInteger(process.env.MAX_AGENT_ITERATIONS, 30),
+  contextCompactThreshold: parsePositiveInteger(
+    process.env.AGENT_CONTEXT_COMPACT_THRESHOLD,
+    60000
+  ),
   agentMaxTokens: parsePositiveInteger(
     persistedLlmSettings.maxTokens,
     parsePositiveInteger(process.env.AGENT_MAX_TOKENS, 8192)
+  ),
+  mcpBaseUrls: initialMcpUrls,
+  mcpLazyUrls: initialMcpLazyUrls,
+  mcpDisabledUrls: initialMcpDisabledUrls,
+  mcpTimeout: parsePositiveInteger(
+    persistedMcpSettings.timeout,
+    parsePositiveInteger(process.env.MCP_TIMEOUT, 60)
+  ),
+  mcpConnectTimeout: parsePositiveInteger(
+    persistedMcpSettings.connectTimeout,
+    parsePositiveInteger(process.env.MCP_CONNECT_TIMEOUT, 10)
   ),
   usersConfigPath: process.env.USERS_CONFIG || "users.json",
   pluginsDir: resolvePluginsDir(),
@@ -161,6 +214,32 @@ export function getAppSettings(): AppRuntimeSettings {
   return {
     uploadMaxFileSizeMb: config.uploadMaxFileSizeMb,
   };
+}
+
+export function getMcpSettings(): McpRuntimeSettings {
+  return {
+    baseUrls: [...config.mcpBaseUrls],
+    lazyUrls: [...config.mcpLazyUrls],
+    disabledUrls: [...config.mcpDisabledUrls],
+    timeout: config.mcpTimeout,
+    connectTimeout: config.mcpConnectTimeout,
+  };
+}
+
+export function updateMcpSettings(next: McpRuntimeSettings): McpRuntimeSettings {
+  config.mcpBaseUrls = parseUrlList(next.baseUrls);
+  config.mcpLazyUrls = parseUrlList(next.lazyUrls);
+  config.mcpDisabledUrls = parseUrlList(next.disabledUrls);
+  config.mcpTimeout = next.timeout;
+  config.mcpConnectTimeout = next.connectTimeout;
+
+  persistedAppSettings = {
+    ...persistedAppSettings,
+    mcp: getMcpSettings(),
+  };
+  savePersistedAppSettings();
+
+  return getMcpSettings();
 }
 
 export function updateAppSettings(

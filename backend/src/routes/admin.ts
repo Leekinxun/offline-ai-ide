@@ -4,11 +4,14 @@ import {
   clearPluginOverride,
   getAppSettings,
   getLlmSettings,
+  getMcpSettings,
   getPluginOverrides,
   setPluginEnabled,
   updateAppSettings,
   updateLlmSettings,
+  updateMcpSettings,
 } from "../config.js";
+import { getMcpClient } from "../agent/mcp.js";
 
 export const adminRouter = Router();
 
@@ -44,6 +47,28 @@ function normalizePositiveInteger(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizeMcpEndpointList(value: unknown): { urls: string[]; error?: string } {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]/)
+      : [];
+  const urls: string[] = [];
+  for (const rawUrl of values) {
+    if (typeof rawUrl !== "string") return { urls, error: "MCP endpoints must be strings" };
+    const normalized = rawUrl.trim().replace(/\/+$/, "");
+    if (!normalized) continue;
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported protocol");
+    } catch {
+      return { urls, error: `Invalid MCP endpoint: ${normalized}` };
+    }
+    if (!urls.includes(normalized)) urls.push(normalized);
+  }
+  return { urls };
+}
+
 function isValidUsername(username: string): boolean {
   return /^[^\s/\\]+$/.test(username);
 }
@@ -55,11 +80,55 @@ adminRouter.get("/settings", (req, res) => {
     users: sessionManager.listUsers(),
     allowedRoots: sessionManager.getAllowedRoots(),
     llm: getLlmSettings(),
+    mcp: getMcpSettings(),
     app: getAppSettings(),
     plugins: {
       overrides: getPluginOverrides(),
     },
   });
+});
+
+adminRouter.get("/mcp/inspect", async (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  try {
+    const servers = await getMcpClient().inspectServers();
+    res.json({ servers });
+  } catch (error: any) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+adminRouter.put("/mcp", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const baseResult = normalizeMcpEndpointList(req.body.baseUrls);
+  const lazyResult = normalizeMcpEndpointList(req.body.lazyUrls);
+  const disabledResult = normalizeMcpEndpointList(req.body.disabledUrls);
+  if (baseResult.error || lazyResult.error || disabledResult.error) {
+    return res.status(400).json({ error: baseResult.error || lazyResult.error || disabledResult.error });
+  }
+
+  const timeout = normalizePositiveInteger(req.body.timeout);
+  const connectTimeout = normalizePositiveInteger(req.body.connectTimeout);
+  if (timeout === null || connectTimeout === null) {
+    return res.status(400).json({
+      error: "MCP timeout and connectTimeout must be positive integers",
+    });
+  }
+
+  try {
+    const mcp = updateMcpSettings({
+      baseUrls: baseResult.urls,
+      lazyUrls: lazyResult.urls,
+      disabledUrls: disabledResult.urls,
+      timeout,
+      connectTimeout,
+    });
+    res.json({ mcp });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 adminRouter.put("/app", (req, res) => {

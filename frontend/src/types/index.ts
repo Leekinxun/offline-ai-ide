@@ -68,6 +68,28 @@ export interface ConversationRunSummary {
   commandCount: number;
 }
 
+export interface ContextState {
+  estimatedTokens: number;
+  threshold: number;
+  status: "ready" | "compacting" | "warning";
+  compactionCount: number;
+  lastCompactedAt?: number;
+  transcriptPath?: string;
+  message?: string;
+}
+
+export interface McpState {
+  status: "ready" | "warning";
+  serverCount: number;
+  toolCount: number;
+  message?: string;
+}
+
+export interface KnowledgeState {
+  memoryFiles: number;
+  skillCount: number;
+}
+
 export interface GitStatusEntry {
   path: string;
   previousPath?: string;
@@ -125,6 +147,23 @@ export interface LlmSettings {
   systemPrompt?: string;
 }
 
+export interface McpSettings {
+  baseUrls: string[];
+  lazyUrls: string[];
+  disabledUrls: string[];
+  timeout: number;
+  connectTimeout: number;
+}
+
+export interface McpServerPreview {
+  endpoint: string;
+  endpointKey: string;
+  ok: boolean;
+  toolCount: number;
+  tools: Array<{ name: string; description: string }>;
+  error?: string;
+}
+
 export interface PluginOverrideSettings {
   enabled: boolean;
 }
@@ -137,6 +176,7 @@ export interface AdminSettings {
   users: AdminUser[];
   allowedRoots: string[];
   llm: LlmSettings;
+  mcp: McpSettings;
   app: AppSettings;
   plugins?: {
     overrides: Record<string, PluginOverrideSettings>;

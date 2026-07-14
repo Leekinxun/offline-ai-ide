@@ -2101,6 +2101,9 @@ function AuthenticatedApp({
           agentMode={chat.agentMode}
           onAgentModeChange={chat.setAgentMode}
           currentRunSummary={chat.currentRunSummary}
+          contextState={chat.contextState}
+          mcpState={chat.mcpState}
+          knowledgeState={chat.knowledgeState}
           onOpenFile={openFile}
           historyLoading={chat.historyLoading}
           historyLoadingId={chat.historyLoadingId}

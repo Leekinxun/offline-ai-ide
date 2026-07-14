@@ -6,6 +6,9 @@ import {
   FileUpdate,
   AgentMode,
   ConversationRunSummary,
+  ContextState,
+  McpState,
+  KnowledgeState,
 } from "../types";
 import { useI18n } from "../i18n";
 
@@ -39,6 +42,21 @@ export function useChat(
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [agentMode, setAgentMode] = useState<AgentMode>("code");
   const [currentRunSummary, setCurrentRunSummary] = useState<ConversationRunSummary | null>(null);
+  const [contextState, setContextState] = useState<ContextState>({
+    estimatedTokens: 0,
+    threshold: 60000,
+    status: "ready",
+    compactionCount: 0,
+  });
+  const [mcpState, setMcpState] = useState<McpState>({
+    status: "ready",
+    serverCount: 0,
+    toolCount: 0,
+  });
+  const [knowledgeState, setKnowledgeState] = useState<KnowledgeState>({
+    memoryFiles: 0,
+    skillCount: 0,
+  });
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
@@ -172,6 +190,34 @@ export function useChat(
           }
           break;
 
+        case "context_state":
+          setContextState({
+            estimatedTokens: Number(data.estimatedTokens) || 0,
+            threshold: Number(data.threshold) || 60000,
+            status: data.status || "ready",
+            compactionCount: Number(data.compactionCount) || 0,
+            lastCompactedAt: data.lastCompactedAt,
+            transcriptPath: data.transcriptPath,
+            message: data.message,
+          });
+          break;
+
+        case "mcp_state":
+          setMcpState({
+            status: data.status || "ready",
+            serverCount: Number(data.serverCount) || 0,
+            toolCount: Number(data.toolCount) || 0,
+            message: data.message,
+          });
+          break;
+
+        case "knowledge_state":
+          setKnowledgeState({
+            memoryFiles: Number(data.memoryFiles) || 0,
+            skillCount: Number(data.skillCount) || 0,
+          });
+          break;
+
         case "token":
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
@@ -269,6 +315,14 @@ export function useChat(
     setActiveRequestIds([]);
     setAgentMode("code");
     setCurrentRunSummary(null);
+    setContextState({
+      estimatedTokens: 0,
+      threshold: 60000,
+      status: "ready",
+      compactionCount: 0,
+    });
+    setMcpState({ status: "ready", serverCount: 0, toolCount: 0 });
+    setKnowledgeState({ memoryFiles: 0, skillCount: 0 });
     void refreshConversations();
   }, [refreshConversations, workspaceDir]);
 
@@ -374,6 +428,14 @@ export function useChat(
     setCurrentConversationId(null);
     setCurrentRunSummary(null);
     setActiveRequestIds([]);
+    setContextState({
+      estimatedTokens: 0,
+      threshold: 60000,
+      status: "ready",
+      compactionCount: 0,
+    });
+    setMcpState({ status: "ready", serverCount: 0, toolCount: 0 });
+    setKnowledgeState({ memoryFiles: 0, skillCount: 0 });
   }, []);
 
   const retryLast = useCallback(() => {
@@ -440,6 +502,9 @@ export function useChat(
     agentMode,
     setAgentMode,
     currentRunSummary,
+    contextState,
+    mcpState,
+    knowledgeState,
   };
 }
 

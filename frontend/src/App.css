@@ -2252,6 +2252,48 @@ select:focus-visible {
   background: var(--success);
 }
 
+.chat-context-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-context-status.compacting {
+  color: var(--accent);
+}
+
+.chat-context-status.warning {
+  color: var(--status-warning-fg);
+}
+
+.chat-mcp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--status-purple-fg);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.chat-mcp-status.warning {
+  color: var(--status-warning-fg);
+}
+
+.chat-knowledge-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--status-success-fg);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .chat-history-panel {
   display: flex;
   flex-direction: column;
@@ -4210,6 +4252,13 @@ select:focus-visible {
   gap: 12px;
 }
 
+.settings-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .settings-checkbox {
   display: inline-flex;
   align-items: center;
@@ -4232,6 +4281,56 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.settings-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-mcp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 10px;
+  background: var(--elevated-surface-muted);
+}
+
+.settings-mcp-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-mcp-info code {
+  color: var(--text-primary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.settings-mcp-info span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.settings-mcp-badge {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-mcp-badge.ready {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
 }
 
 .settings-user-row {
@@ -4692,6 +4791,8 @@ select:focus-visible {
   .settings-form-row,
   .settings-user-row,
   .settings-form-footer,
+  .settings-form-actions,
+  .settings-mcp-row,
   .settings-plugin-header,
   .settings-plugin-toolbar {
     grid-template-columns: 1fr;

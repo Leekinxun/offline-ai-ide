@@ -9,12 +9,21 @@ import {
   wsSend,
 } from "./types.js";
 import { callChatCompletion } from "./llm.js";
-import { getAllTools, TOOL_DISPATCH } from "./tools.js";
+import { getAllTools, MCP_CONTROL_TOOLS, TOOL_DISPATCH } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import type { PersistedChatMessage } from "../chat/history.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
+import { getMcpClient, McpToolSelection } from "./mcp.js";
+import { loadMemorySnapshot } from "./memory.js";
+import { listWorkspaceSkills } from "./skills.js";
+import {
+  compactMessages,
+  estimateMessageTokens,
+  microcompactMessages,
+  safeTrimMessages,
+} from "./context.js";
 
 /**
  * Extract <think>...</think> blocks from LLM output.
@@ -64,6 +73,8 @@ export async function runAgentLoop(
   const readOnlyWorkspace = !canWriteActiveWorkspace(session);
   const mode = control?.mode || "code";
   const tools = getAllTools({ readOnly: readOnlyWorkspace, mode });
+  const mcpClient = getMcpClient();
+  const mcpSelection = new McpToolSelection();
   const toolCtx = {
     workspaceDir: session.workspaceDir,
     vllmApiUrl: config.vllmApiUrl,
@@ -78,7 +89,7 @@ export async function runAgentLoop(
 
   // Build user content with file/selection context
   // Build message history
-  const messages: OpenAIMessage[] = [
+  let messages: OpenAIMessage[] = [
     ...(history || []).slice(-10).map((h) => ({
       role: h.role as "user" | "assistant",
       content: h.content,
@@ -100,6 +111,58 @@ export async function runAgentLoop(
 
   let pendingTurns: PendingUserTurn[] = consumePendingUserMessages?.() || [];
   let currentRequestId = requestId;
+  let compactionCount = 0;
+  let lastCompactedAt: number | undefined;
+  let lastTranscriptPath: string | undefined;
+  let knowledgeStateSent = false;
+
+  const emitContextState = (
+    status: "ready" | "compacting" | "warning",
+    message?: string
+  ) => {
+    emit({
+      type: "context_state",
+      requestId: currentRequestId,
+      estimatedTokens: estimateMessageTokens(messages),
+      threshold: config.contextCompactThreshold,
+      status,
+      compactionCount,
+      lastCompactedAt,
+      transcriptPath: lastTranscriptPath,
+      message,
+    });
+  };
+
+  const compactContextIfNeeded = async (force = false) => {
+    messages = microcompactMessages(messages);
+    const estimatedTokens = estimateMessageTokens(messages);
+    if (!force && estimatedTokens <= config.contextCompactThreshold) {
+      emitContextState("ready");
+      return;
+    }
+
+    emitContextState("compacting");
+    try {
+      const result = await compactMessages({
+        workspaceDir: session.workspaceDir,
+        messages,
+        apiUrl: config.vllmApiUrl,
+        apiKey: config.vllmApiKey,
+        model: config.modelName,
+      });
+      messages = result.messages;
+      compactionCount += 1;
+      lastCompactedAt = Date.now();
+      lastTranscriptPath = result.transcriptPath;
+      emitContextState("ready");
+    } catch (error) {
+      messages = safeTrimMessages(messages);
+      emitContextState(
+        "warning",
+        `Context summary failed; retained a recent message window (${error instanceof Error ? error.message : "unknown error"}).`
+      );
+    }
+  };
 
   const stopCurrentTurn = async (
     currentAssistantMessage: PersistedChatMessage
@@ -160,10 +223,56 @@ export async function runAgentLoop(
         continue outer;
       }
 
+      await compactContextIfNeeded();
+
       const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
         readOnlyWorkspace,
         mode,
       });
+
+      if (!knowledgeStateSent) {
+        let memoryFiles = 0;
+        let skillCount = 0;
+        try {
+          const memory = loadMemorySnapshot(session.workspaceDir);
+          memoryFiles = Number(Boolean(memory.user)) + Number(Boolean(memory.workspace));
+        } catch {
+          // Persistent context is best-effort; the prompt loader applies the same policy.
+        }
+        try {
+          skillCount = listWorkspaceSkills(session.workspaceDir).length;
+        } catch {
+          // A malformed skill directory must not block the task.
+        }
+        emit({
+          type: "knowledge_state",
+          requestId: currentRequestId,
+          memoryFiles,
+          skillCount,
+        });
+        knowledgeStateSent = true;
+      }
+
+      let availableTools = tools;
+      const mcpDiscovery = await mcpClient.discoverTools(false, mcpSelection);
+      if (mcpDiscovery.servers.length > 0) {
+        const failedServers = mcpDiscovery.servers.filter((server) => !server.ok);
+        emit({
+          type: "mcp_state",
+          requestId: currentRequestId,
+          status: failedServers.length > 0 ? "warning" : "ready",
+          serverCount: mcpDiscovery.servers.filter((server) => server.ok).length,
+          toolCount: mcpDiscovery.tools.length,
+          message:
+            failedServers.length > 0
+              ? failedServers.map((server) => `${server.endpoint}: ${server.error}`).join(" | ")
+              : undefined,
+        });
+        availableTools = [...tools, ...mcpDiscovery.tools];
+        if (mcpDiscovery.hasLazyEndpoints) {
+          availableTools = [...availableTools, ...MCP_CONTROL_TOOLS];
+        }
+      }
 
       // Non-streaming call for tool-use rounds
       let resp: Response;
@@ -174,7 +283,7 @@ export async function runAgentLoop(
           model: config.modelName,
           systemPrompt,
           messages,
-          tools,
+          tools: availableTools,
           maxTokens: config.agentMaxTokens,
           temperature: 0.3,
           stream: false,
@@ -281,12 +390,16 @@ export async function runAgentLoop(
 
         // Execute each tool call
         const executedToolCalls: typeof assistantMsg.tool_calls = [];
+        let compressRequested = false;
         for (const toolCall of assistantMsg.tool_calls) {
           if (control?.isStopped()) {
             await stopCurrentTurn(currentAssistantMessage);
             return persistedAssistantMessages;
           }
           executedToolCalls.push(toolCall);
+          if (toolCall.function.name === "compress") {
+            compressRequested = true;
+          }
           const args = parseToolArgs(toolCall.function.arguments);
           emit({
             type: "tool_call",
@@ -300,7 +413,32 @@ export async function runAgentLoop(
           let isError = false;
           let fileUpdate: ToolFileUpdate | undefined;
           const handler = TOOL_DISPATCH[toolCall.function.name];
-          if (handler) {
+          if (toolCall.function.name === "search_lazy_mcp_tools") {
+            try {
+              result = await mcpClient.searchLazyTools(args.query, args.endpoint_key);
+            } catch (e: any) {
+              result = `Error: ${e.message}`;
+              isError = true;
+            }
+          } else if (toolCall.function.name === "activate_lazy_mcp_tools") {
+            try {
+              result = await mcpClient.activateLazyTools(
+                mcpSelection,
+                args.endpoint_key,
+                args.tool_names
+              );
+            } catch (e: any) {
+              result = `Error: ${e.message}`;
+              isError = true;
+            }
+          } else if (toolCall.function.name.startsWith("mcp_")) {
+            try {
+              result = await mcpClient.callTool(toolCall.function.name, args);
+            } catch (e: any) {
+              result = `[MCP Error] ${e.message}`;
+              isError = true;
+            }
+          } else if (handler) {
             try {
               const execution = await handler(args, toolCtx);
               if (typeof execution === "string") {
@@ -317,7 +455,7 @@ export async function runAgentLoop(
             result = `Unknown tool: ${toolCall.function.name}`;
             isError = true;
           }
-          if (result.startsWith("Error:")) {
+          if (result.startsWith("Error:") || result.startsWith("[MCP Error]")) {
             isError = true;
             fileUpdate = undefined;
           }
@@ -361,6 +499,10 @@ export async function runAgentLoop(
           if (await consumeSteeringTurns(currentAssistantMessage)) {
             continue outer;
           }
+        }
+
+        if (compressRequested) {
+          await compactContextIfNeeded(true);
         }
 
         // Continue to next iteration

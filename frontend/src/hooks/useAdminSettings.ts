@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { AdminSettings, AppSettings, LlmSettings } from "../types";
+import { AdminSettings, AppSettings, LlmSettings, McpSettings, McpServerPreview } from "../types";
 
 const API = "/api/admin";
 
@@ -110,6 +110,33 @@ export function useAdminSettings(token: string) {
     [authHeaders]
   );
 
+  const updateMcpSettings = useCallback(
+    async (settings: McpSettings) => {
+      const res = await fetch(`${API}/mcp`, {
+        method: "PUT",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to save MCP settings");
+      }
+      const data = await res.json();
+      return data.mcp as McpSettings;
+    },
+    [authHeaders]
+  );
+
+  const inspectMcpServers = useCallback(async (): Promise<McpServerPreview[]> => {
+    const res = await fetch(`${API}/mcp/inspect`, { headers: authHeaders() });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Failed to inspect MCP servers");
+    }
+    const data = await res.json();
+    return Array.isArray(data.servers) ? (data.servers as McpServerPreview[]) : [];
+  }, [authHeaders]);
+
   return useMemo(
     () => ({
       fetchSettings,
@@ -118,6 +145,8 @@ export function useAdminSettings(token: string) {
       deleteUser,
       updateLlmSettings,
       updateAppSettings,
+      updateMcpSettings,
+      inspectMcpServers,
     }),
     [
       fetchSettings,
@@ -126,6 +155,8 @@ export function useAdminSettings(token: string) {
       deleteUser,
       updateLlmSettings,
       updateAppSettings,
+      updateMcpSettings,
+      inspectMcpServers,
     ]
   );
 }

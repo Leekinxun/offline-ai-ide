@@ -14,6 +14,8 @@ import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { runSubagent } from "./subagent.js";
 import { recordKnownFileMutation } from "../files/mutationRegistry.js";
+import { readMemory, writeMemory } from "./memory.js";
+import { loadWorkspaceSkill } from "./skills.js";
 
 // ---- Tool handler type ----
 
@@ -175,6 +177,18 @@ async function runEditFile(
 // ---- Dispatch table ----
 
 export const TOOL_DISPATCH: Record<string, ToolHandler> = {
+  compress: async () =>
+    "Context compaction requested. The agent will summarize the conversation before continuing.",
+
+  memory_read: async (args, ctx) =>
+    readMemory(ctx.workspaceDir, args.scope),
+
+  memory_write: async (args, ctx) =>
+    writeMemory(ctx.workspaceDir, args.scope, args.content),
+
+  skill_load: async (args, ctx) =>
+    loadWorkspaceSkill(ctx.workspaceDir, args.name),
+
   bash: async (args, ctx) =>
     runBash(args.command as string, ctx.workspaceDir),
 
@@ -259,6 +273,55 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 // ---- Tool definitions (OpenAI function-calling format) ----
 
 export const CORE_TOOLS: OpenAIToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "compress",
+      description: "Compact the current conversation context before continuing the task.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "memory_read",
+      description: "Read durable user or workspace memory. Use scope 'user' for preferences and 'workspace' for project conventions.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["user", "workspace"] },
+        },
+        required: ["scope"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "memory_write",
+      description: "Persist concise durable preferences, project conventions, or decisions. Never store secrets or transient task output.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["user", "workspace"] },
+          content: { type: "string", description: "Complete replacement Markdown content for the memory file" },
+        },
+        required: ["scope", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "skill_load",
+      description: "Load the full body of a relevant workspace SKILL.md workflow before following it.",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", description: "Skill name from the Workspace Skills catalog" } },
+        required: ["name"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -501,7 +564,40 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
   },
 ];
 
-const READ_ONLY_TOOL_NAMES = new Set(["read_file", "TodoWrite"]);
+export const MCP_CONTROL_TOOLS: OpenAIToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "search_lazy_mcp_tools",
+      description: "Search hidden lazy MCP tools by capability before exposing them to the model.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Capability or tool keyword to search for" },
+          endpoint_key: { type: "string", description: "Optional endpoint key to narrow the search" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "activate_lazy_mcp_tools",
+      description: "Expose selected tools from one lazy MCP endpoint for the next reasoning round.",
+      parameters: {
+        type: "object",
+        properties: {
+          endpoint_key: { type: "string", description: "Endpoint key returned by search_lazy_mcp_tools" },
+          tool_names: { type: "array", items: { type: "string" }, description: "Exact MCP tool names to activate" },
+        },
+        required: ["endpoint_key", "tool_names"],
+      },
+    },
+  },
+];
+
+const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "TodoWrite"]);
 
 export function getAllTools(options?: { readOnly?: boolean; mode?: "ask" | "code" | "review" | "plan" }): OpenAIToolDef[] {
   const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];

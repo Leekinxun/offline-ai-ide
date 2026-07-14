@@ -67,6 +67,31 @@ export type WsServerMessage =
       status: "queued" | "running" | "completed" | "stopped" | "failed";
     }
   | {
+      type: "context_state";
+      requestId: string;
+      estimatedTokens: number;
+      threshold: number;
+      status: "ready" | "compacting" | "warning";
+      compactionCount: number;
+      lastCompactedAt?: number;
+      transcriptPath?: string;
+      message?: string;
+    }
+  | {
+      type: "mcp_state";
+      requestId: string;
+      status: "ready" | "warning";
+      serverCount: number;
+      toolCount: number;
+      message?: string;
+    }
+  | {
+      type: "knowledge_state";
+      requestId: string;
+      memoryFiles: number;
+      skillCount: number;
+    }
+  | {
       type: "summary";
       conversationId: string;
       requestId: string;

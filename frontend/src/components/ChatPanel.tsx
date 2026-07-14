@@ -12,9 +12,13 @@ import {
   ConversationRunSummary,
   FileUpdate,
   SelectionInfo,
+  ContextState,
+  McpState,
+  KnowledgeState,
 } from "../types";
 import {
   Send,
+  BookOpen,
   Trash2,
   Copy,
   ArrowDownToLine,
@@ -26,6 +30,7 @@ import {
   Square,
   GitCompare,
   Sparkles,
+  PlugZap,
 } from "lucide-react";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
@@ -72,6 +77,9 @@ interface ChatPanelProps {
   agentMode: AgentMode;
   onAgentModeChange: (mode: AgentMode) => void;
   currentRunSummary: ConversationRunSummary | null;
+  contextState: ContextState;
+  mcpState: McpState;
+  knowledgeState: KnowledgeState;
   onOpenFile: (path: string) => void;
   historyLoading: boolean;
   historyLoadingId: string | null;
@@ -102,6 +110,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   agentMode,
   onAgentModeChange,
   currentRunSummary,
+  contextState,
+  mcpState,
+  knowledgeState,
   onOpenFile,
   historyLoading,
   historyLoadingId,
@@ -251,6 +262,50 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             />
             {connected ? t("chat.online") : t("chat.offline")}
           </div>
+          {(contextState.estimatedTokens > 0 || contextState.status !== "ready") && (
+            <div
+              className={`chat-context-status ${contextState.status}`}
+              title={contextState.message || t("chat.contextHint")}
+            >
+              <Sparkles size={12} />
+              <span>
+                {contextState.status === "compacting"
+                  ? t("chat.contextCompacting")
+                  : contextState.status === "warning"
+                    ? t("chat.contextWarning")
+                    : contextState.compactionCount > 0
+                      ? t("chat.contextCompressed", { count: contextState.compactionCount })
+                      : t("chat.contextTokens", {
+                          used: Math.round(contextState.estimatedTokens / 1000),
+                          limit: Math.round(contextState.threshold / 1000),
+                        })}
+              </span>
+            </div>
+          )}
+          {(mcpState.serverCount > 0 || mcpState.status === "warning") && (
+            <div
+              className={`chat-mcp-status ${mcpState.status}`}
+              title={mcpState.message || t("chat.mcpHint")}
+            >
+              <PlugZap size={12} />
+              <span>
+                {mcpState.status === "warning"
+                  ? t("chat.mcpWarning")
+                  : t("chat.mcpTools", { count: mcpState.toolCount })}
+              </span>
+            </div>
+          )}
+          {(knowledgeState.memoryFiles > 0 || knowledgeState.skillCount > 0) && (
+            <div className="chat-knowledge-status" title={t("chat.knowledgeHint")}>
+              <BookOpen size={12} />
+              <span>
+                {t("chat.knowledge", {
+                  memory: knowledgeState.memoryFiles,
+                  skills: knowledgeState.skillCount,
+                })}
+              </span>
+            </div>
+          )}
           <button
             className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
             title={t("chat.tasks")}
