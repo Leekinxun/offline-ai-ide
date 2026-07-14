@@ -5,6 +5,7 @@ import { config } from "../config.js";
 import { safePath } from "../utils/safePath.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { callChatCompletion } from "./llm.js";
+import { resolveMaxOutputTokens } from "./modelCapabilities.js";
 
 const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
   {
@@ -143,13 +144,19 @@ export async function runSubagent(
   for (let i = 0; i < 30; i++) {
     let resp: Response;
     try {
+      const maxOutputTokens = await resolveMaxOutputTokens({
+        apiUrl: vllmApiUrl,
+        apiKey: vllmApiKey,
+        modelName,
+        fallbackMaxOutputTokens: config.agentMaxTokens,
+      });
       resp = await callChatCompletion({
         apiUrl: vllmApiUrl,
         apiKey: vllmApiKey,
         model: modelName,
         messages,
         tools,
-        maxTokens: config.agentMaxTokens,
+        maxTokens: maxOutputTokens,
         temperature: 0.3,
       });
     } catch {

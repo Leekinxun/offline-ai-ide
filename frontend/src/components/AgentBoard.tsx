@@ -28,7 +28,7 @@ export const AgentBoard: React.FC<AgentBoardProps> = ({ visible, token, onClose 
   if (!visible) return null;
 
   return (
-    <aside className="agent-board">
+    <aside className="agent-board panel-shell">
       <div className="agent-board-header">
         <div className="agent-board-title"><Bot size={16} /><strong>{t("agents.title")}</strong></div>
         <div className="agent-board-actions">

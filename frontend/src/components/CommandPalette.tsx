@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Command, FileCode2, Search, Sparkles, TerminalSquare, X } from "lucide-react";
+import { BookOpen, Bot, Command, FileCode2, GitBranch, History, Search, Settings, Sparkles, TerminalSquare, Users, X, Plus } from "lucide-react";
 import { FileNode } from "../types";
 import { useI18n } from "../i18n";
 
@@ -98,6 +98,62 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         icon: <Command size={15} />,
         action: () => onRunCommand("chat"),
       },
+      {
+        id: "new-conversation",
+        label: t("command.newConversation"),
+        hint: "Cmd/Ctrl+Alt+N",
+        icon: <Plus size={15} />,
+        action: () => onRunCommand("new-conversation"),
+      },
+      {
+        id: "history",
+        label: t("command.openTasks"),
+        hint: "Cmd/Ctrl+Alt+←/→",
+        icon: <History size={15} />,
+        action: () => onRunCommand("history"),
+      },
+      {
+        id: "settings",
+        label: t("command.openSettings"),
+        hint: t("command.openSettingsHint"),
+        icon: <Settings size={15} />,
+        action: () => onRunCommand("settings"),
+      },
+      {
+        id: "knowledge",
+        label: t("command.openKnowledge"),
+        hint: t("command.openKnowledgeHint"),
+        icon: <BookOpen size={15} />,
+        action: () => onRunCommand("knowledge"),
+      },
+      {
+        id: "mcp",
+        label: t("command.openMcp"),
+        hint: t("command.openMcpHint"),
+        icon: <Bot size={15} />,
+        action: () => onRunCommand("mcp"),
+      },
+      {
+        id: "git",
+        label: t("command.openGit"),
+        hint: t("command.openGitHint"),
+        icon: <GitBranch size={15} />,
+        action: () => onRunCommand("git"),
+      },
+      {
+        id: "agents",
+        label: t("command.openAgents"),
+        hint: t("command.openAgentsHint"),
+        icon: <Sparkles size={15} />,
+        action: () => onRunCommand("agents"),
+      },
+      {
+        id: "team",
+        label: t("command.openTeam"),
+        hint: t("command.openTeamHint"),
+        icon: <Users size={15} />,
+        action: () => onRunCommand("team"),
+      },
     ];
 
     return commands.filter((item) =>
@@ -130,7 +186,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div className="command-palette-overlay" onMouseDown={onClose}>
-      <div className="command-palette" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="command-palette" role="dialog" aria-modal="true" aria-label={mode === "files" ? t("command.quickOpen") : t("command.commandPalette")} onMouseDown={(event) => event.stopPropagation()}>
         <div className="command-palette-input-row">
           {mode === "files" ? <Search size={17} /> : <Command size={17} />}
           <input

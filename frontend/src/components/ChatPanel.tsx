@@ -15,23 +15,25 @@ import {
   ContextState,
   McpState,
   KnowledgeState,
+  AgentRunState,
+  AgentRunSummary,
 } from "../types";
 import {
   Send,
-  BookOpen,
-  Trash2,
   Copy,
   ArrowDownToLine,
   TextSelect,
   ChevronRight,
-  History,
   Plus,
   RefreshCw,
   Square,
   GitCompare,
   Sparkles,
-  PlugZap,
+  Activity,
+  RotateCcw,
 } from "lucide-react";
+import { ContextStrip } from "./ContextStrip";
+import { TaskHeader } from "./TaskHeader";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
@@ -80,6 +82,9 @@ interface ChatPanelProps {
   contextState: ContextState;
   mcpState: McpState;
   knowledgeState: KnowledgeState;
+  historyRequest?: number;
+  newConversationRequest?: number;
+  onOpenSettings: () => void;
   onOpenFile: (path: string) => void;
   historyLoading: boolean;
   historyLoadingId: string | null;
@@ -93,6 +98,12 @@ interface ChatPanelProps {
   onRetry: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
   onRefreshConversations: () => Promise<void> | void;
+  runState: AgentRunState | null;
+  runHistory: AgentRunSummary[];
+  runHistoryLoading: boolean;
+  runHistoryError: string | null;
+  onLoadRun: (runId: string) => Promise<void> | void;
+  onResumeRun: (conversationId: string, runId?: string) => Promise<void> | void;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
   style?: React.CSSProperties;
@@ -113,6 +124,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   contextState,
   mcpState,
   knowledgeState,
+  historyRequest,
+  newConversationRequest,
+  onOpenSettings,
   onOpenFile,
   historyLoading,
   historyLoadingId,
@@ -126,6 +140,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onRetry,
   onLoadConversation,
   onRefreshConversations,
+  runState,
+  runHistory,
+  runHistoryLoading,
+  runHistoryError,
+  onLoadRun,
+  onResumeRun,
   onApplyCode,
   onNavigateToFileUpdate,
   style,
@@ -134,9 +154,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [input, setInput] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [runTimelineOpen, setRunTimelineOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
+  const handledNewConversationRef = useRef(0);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -147,6 +169,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       setHistoryOpen(false);
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (historyRequest) setHistoryOpen(true);
+  }, [historyRequest]);
+
+  useEffect(() => {
+    if (!newConversationRequest || handledNewConversationRef.current === newConversationRequest) return;
+    handledNewConversationRef.current = newConversationRequest;
+    if (isStreaming) return;
+    onClear();
+    setHistoryOpen(false);
+  }, [isStreaming, newConversationRequest, onClear]);
 
   useEffect(() => {
     if (visible && focusRequest) {
@@ -240,99 +274,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="chat-panel" style={style}>
-      <div className="chat-header">
-        <div className="chat-header-main">
-          <div className="chat-header-heading">
-            <span className="chat-header-title">{t("chat.title")}</span>
-            <span className={`chat-header-mode mode-${agentMode}`}>
-              {t(`chat.mode.${agentMode}.label`)}
-            </span>
-          </div>
-          {currentConversationId && (
-            <span className="chat-conversation-pill">
-              {t("chat.continuingConversation")}
-            </span>
-          )}
-        </div>
-        <div className="chat-header-actions">
-          <div className="chat-status">
-            <span
-              className={`chat-status-dot${connected ? " connected" : ""}`}
-            />
-            {connected ? t("chat.online") : t("chat.offline")}
-          </div>
-          {(contextState.estimatedTokens > 0 || contextState.status !== "ready") && (
-            <div
-              className={`chat-context-status ${contextState.status}`}
-              title={contextState.message || t("chat.contextHint")}
-            >
-              <Sparkles size={12} />
-              <span>
-                {contextState.status === "compacting"
-                  ? t("chat.contextCompacting")
-                  : contextState.status === "warning"
-                    ? t("chat.contextWarning")
-                    : contextState.compactionCount > 0
-                      ? t("chat.contextCompressed", { count: contextState.compactionCount })
-                      : t("chat.contextTokens", {
-                          used: Math.round(contextState.estimatedTokens / 1000),
-                          limit: Math.round(contextState.threshold / 1000),
-                        })}
-              </span>
-            </div>
-          )}
-          {(mcpState.serverCount > 0 || mcpState.status === "warning") && (
-            <div
-              className={`chat-mcp-status ${mcpState.status}`}
-              title={mcpState.message || t("chat.mcpHint")}
-            >
-              <PlugZap size={12} />
-              <span>
-                {mcpState.status === "warning"
-                  ? t("chat.mcpWarning")
-                  : t("chat.mcpTools", { count: mcpState.toolCount })}
-              </span>
-            </div>
-          )}
-          {(knowledgeState.memoryFiles > 0 || knowledgeState.skillCount > 0) && (
-            <div className="chat-knowledge-status" title={t("chat.knowledgeHint")}>
-              <BookOpen size={12} />
-              <span>
-                {t("chat.knowledge", {
-                  memory: knowledgeState.memoryFiles,
-                  skills: knowledgeState.skillCount,
-                })}
-              </span>
-            </div>
-          )}
-          <button
-            className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
-            title={t("chat.tasks")}
-            onClick={() => setHistoryOpen((open) => !open)}
-            disabled={isStreaming}
-          >
-            <History size={14} />
-          </button>
-          <button
-            className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
-            title={t("chat.changes")}
-            onClick={() => setChangesOpen((open) => !open)}
-          >
-            <GitCompare size={14} />
-          </button>
-          {messages.length > 0 && (
-            <button
-              className="sidebar-action-btn"
-              title={t("chat.clearChat")}
-              onClick={onClear}
-              disabled={isStreaming}
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="chat-panel panel-shell" style={style}>
+      <TaskHeader
+        agentMode={agentMode}
+        connected={connected}
+        currentConversationId={currentConversationId}
+        isStreaming={isStreaming}
+        activeToolName={activeTool?.name}
+        hasMessages={messages.length > 0}
+        historyOpen={historyOpen}
+        changesOpen={changesOpen}
+        onToggleHistory={() => setHistoryOpen((open) => !open)}
+        onToggleChanges={() => setChangesOpen((open) => !open)}
+        onClear={onClear}
+      />
 
       <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>
         <div className="chat-mode-switcher-heading">
@@ -354,6 +309,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </button>
         ))}
       </div>
+
+      <ContextStrip
+        contextState={contextState}
+        mcpState={mcpState}
+        knowledgeState={knowledgeState}
+        onOpenSettings={onOpenSettings}
+      />
+
+      {contextState.preview && (
+        <div className="chat-context-preview">
+          <div className="chat-context-preview-heading">
+            <span><Sparkles size={12} /> {t("chat.contextPreview")}</span>
+            <code>{contextState.preview.transcriptPath}</code>
+          </div>
+          <div className="chat-context-preview-stats">
+            <span>{t("chat.contextProtected", { count: contextState.preview.protectedMessageCount })}</span>
+            <span>{t("chat.contextCompactedMessages", { count: contextState.preview.compactedMessageCount })}</span>
+            <span>{t("chat.contextRecoverable")}</span>
+          </div>
+        </div>
+      )}
 
       {changesOpen && (
         <div className="chat-changes-panel">
@@ -450,6 +426,53 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               ))}
             </div>
           )}
+
+          {currentConversationId && (
+            <div className="chat-run-history">
+              <div className="chat-run-history-heading">
+                <span><Activity size={12} /> {t("chat.runHistory")}</span>
+                {runHistoryLoading && <RefreshCw size={12} className="chat-spin" />}
+              </div>
+              {runHistoryError && (
+                <div className="chat-history-message error">{runHistoryError}</div>
+              )}
+              {!runHistoryLoading && runHistory.length === 0 && (
+                <div className="chat-run-history-empty">{t("chat.noRunHistory")}</div>
+              )}
+              {runHistory.length > 0 && (
+                <div className="chat-run-history-list">
+                  {runHistory.slice(0, 8).map((run) => (
+                    <div className="chat-run-history-item" key={run.runId}>
+                      <button
+                        type="button"
+                        className="chat-run-history-main"
+                        onClick={() => void onLoadRun(run.runId)}
+                        disabled={runHistoryLoading}
+                      >
+                        <span className="chat-run-history-title">
+                          {t(`chat.taskStatus.${run.status}`)} · {run.mode}
+                        </span>
+                        <span className="chat-run-history-meta">
+                          {formatTimestamp(run.startedAt)} · {run.metrics.modelCalls} {t("chat.runModels")}
+                        </span>
+                      </button>
+                      {(run.status === "running" || run.status === "stopped" || run.status === "failed") && (
+                        <button
+                          type="button"
+                          className="chat-run-history-resume"
+                          onClick={() => void onResumeRun(run.conversationId, run.runId)}
+                          disabled={isStreaming}
+                          title={t("chat.resumeRun")}
+                        >
+                          <RotateCcw size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -511,6 +534,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <button type="button" className="chat-summary-retry" onClick={onRetry}>
               {t("chat.retryTask")}
             </button>
+          )}
+        </div>
+      )}
+
+      {runState && !isStreaming && (
+        <div className="chat-run-telemetry">
+          <button
+            type="button"
+            className="chat-run-telemetry-header"
+            onClick={() => setRunTimelineOpen((open) => !open)}
+          >
+            <span><Activity size={13} /> {t("chat.runTelemetry")}</span>
+            <span className={`chat-summary-status${runState.status === "failed" ? " failed" : ""}`}>
+              {t(`chat.taskStatus.${runState.status}`)}
+            </span>
+          </button>
+          <div className="chat-run-telemetry-stats">
+            <span>{t("chat.runDuration", { value: Math.round((runState.metrics.durationMs || 0) / 1000) })}</span>
+            <span>{t("chat.runModels", { count: runState.metrics.modelCalls })}</span>
+            <span>{t("chat.runTokens", { count: runState.metrics.totalTokens || runState.metrics.estimatedTokensPeak })}</span>
+            <span>{t("chat.runErrors", { count: runState.metrics.toolErrors + runState.metrics.modelErrors })}</span>
+          </div>
+          {runTimelineOpen && (
+            <div className="chat-run-timeline">
+              {runState.events.slice(-10).map((event) => (
+                <div className={`chat-run-timeline-event${event.isError ? " error" : ""}`} key={event.id}>
+                  <span className="chat-run-timeline-dot" />
+                  <div>
+                    <strong>{event.label}</strong>
+                    <small>
+                      {formatTimestamp(event.timestamp)}
+                      {event.durationMs !== undefined && ` · ${event.durationMs}ms`}
+                    </small>
+                    {event.detail && <p>{event.detail}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

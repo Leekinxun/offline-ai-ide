@@ -7,6 +7,7 @@ import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
 import { safePath } from "../utils/safePath.js";
 import { callChatCompletion } from "./llm.js";
+import { resolveMaxOutputTokens } from "./modelCapabilities.js";
 
 const POLL_INTERVAL = 5000; // ms
 const IDLE_TIMEOUT = 60000; // ms
@@ -187,6 +188,12 @@ export class TeammateManager {
 
       let resp: Response;
       try {
+        const maxOutputTokens = await resolveMaxOutputTokens({
+          apiUrl: vllmUrl,
+          apiKey: vllmApiKey,
+          modelName: model,
+          fallbackMaxOutputTokens: config.agentMaxTokens,
+        });
         resp = await callChatCompletion({
           apiUrl: vllmUrl,
           apiKey: vllmApiKey,
@@ -194,7 +201,7 @@ export class TeammateManager {
           systemPrompt: sysPrompt,
           messages,
           tools: TEAMMATE_TOOLS,
-          maxTokens: config.agentMaxTokens,
+          maxTokens: maxOutputTokens,
         });
       } catch {
         this.setStatus(name, "shutdown");

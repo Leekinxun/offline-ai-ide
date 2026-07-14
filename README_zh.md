@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> 当前版本：`v0.6.0`
+> 当前版本：`v0.6.1`
 >
-> 发布时间：`2026-07-12`
+> 发布时间：`2026-07-14`
 
 CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台，集代码编辑器、集成终端、Rolex Agent 和多智能体协作于一体，一个 Docker 容器即可运行。
 
@@ -18,6 +18,14 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ![IDE](docs/screenshots/ide.png)
 
 ## 版本更新
+
+### v0.6.1 · 2026-07-14
+
+- 新增持久化 Agent 上下文、自动压缩、外部 MCP、MCP 懒加载、工作区 / 用户记忆和可复用 Skills
+- 新增管理员 **记忆管理中心**：支持查看、编辑、清空和跨作用域合并用户记忆与工作区记忆
+- 新增管理员 **Skills 管理中心**：支持搜索、预览说明与参数、启用 / 停用技能，以及查看技能运行记录
+- 新增模型能力自动探测、运行历史与任务恢复、上下文压缩预览和 MCP 连接健康状态
+
 
 ### v0.6.0 · 2026-07-12
 
@@ -73,9 +81,20 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ## 版本说明
 
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
-`v0.5.1` 是当前 README 记录的最新版本，在 `v0.5.0` 团队协作能力基础上，补充了上传、管理员上传大小限制、编辑器字体偏好、按文件恢复编辑位置、AI 停止/纠偏控制、Markdown 渲染、主题切换和自定义系统提示词等功能说明。
+`v0.6.1` 是当前 README 记录的最新版本，在 `v0.6.0` CrownForge 工作区体验基础上，补充了 Agent 上下文、MCP、记忆、Skills、运行恢复和管理中心能力。
 
 ## 功能特性
+
+### 本地验证与 Docker Smoke Test
+
+仓库提供可重复的本地验证脚本：
+
+```bash
+./scripts/verify.sh
+./scripts/docker-smoke.sh
+```
+
+`verify.sh` 会依次执行后端测试与类型检查、上下文性能基准、前端生产构建和差异检查；`docker-smoke.sh` 会构建镜像、启动一次性容器、检查 `/api/health`，并确认容器能够返回 CrownForge 前端页面。端口被占用时可以通过 `CROWNFORGE_SMOKE_PORT` 覆盖默认端口。
 
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
@@ -165,6 +184,18 @@ npm run dev
 
 本地开发模式下，通过管理员设置页保存的 LLM 配置默认会写入项目根目录的 `app-settings.json`。
 `users.json` 也会默认从项目根目录自动检测；每个工作区的历史对话会保存在 `<workspace>/.history/` 下。
+
+### Agent 工作区快捷键
+
+- `Cmd/Ctrl+P` — 快速打开文件
+- `Cmd/Ctrl+Shift+P` — 打开命令面板
+- `Cmd/Ctrl+Shift+F` — 搜索工作区
+- `Cmd/Ctrl+Alt+N` — 开始新任务
+- `Cmd/Ctrl+Alt+←/→` — 在任务线程之间切换
+- `Cmd/Ctrl+B` / `Cmd/Ctrl+J` / `Cmd/Ctrl+backtick` — 切换资源管理器 / AI 助手 / 终端
+- `Cmd/Ctrl+K` — 切换专注模式
+
+命令面板还可以直接打开设置、MCP 健康状态、Memory/Skills 管理、Git 变更和 Agent Board；Chat 顶部的 MCP 与 Memory/Skills 状态入口也可以直接点击进入管理界面。
 
 ### 编辑器高亮样例
 

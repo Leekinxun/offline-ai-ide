@@ -38,6 +38,11 @@ export interface OpenAIChoice {
 
 export interface OpenAIResponse {
   choices: OpenAIChoice[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 export interface FileSelectionRange {
@@ -55,6 +60,60 @@ export interface ToolFileUpdate {
 
 export type AgentMode = "ask" | "code" | "review" | "plan";
 
+export type AgentRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "stopped"
+  | "failed";
+
+export type AgentRunEventKind =
+  | "run_started"
+  | "model_call"
+  | "model_response"
+  | "tool_call"
+  | "tool_result"
+  | "context_compacted"
+  | "steering"
+  | "error"
+  | "run_finished";
+
+export interface AgentRunMetrics {
+  iterations: number;
+  modelCalls: number;
+  toolCalls: number;
+  toolErrors: number;
+  modelErrors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedTokensPeak: number;
+  compactionCount: number;
+  durationMs?: number;
+}
+
+export interface AgentRunEvent {
+  id: string;
+  timestamp: number;
+  kind: AgentRunEventKind;
+  label: string;
+  requestId?: string;
+  toolName?: string;
+  durationMs?: number;
+  isError?: boolean;
+  detail?: string;
+}
+
+export interface AgentRunEventInput {
+  kind: AgentRunEventKind;
+  label: string;
+  requestId?: string;
+  toolName?: string;
+  durationMs?: number;
+  isError?: boolean;
+  detail?: string;
+}
+
 // --- WebSocket message types (server -> client) ---
 
 export type WsServerMessage =
@@ -67,14 +126,33 @@ export type WsServerMessage =
       status: "queued" | "running" | "completed" | "stopped" | "failed";
     }
   | {
+      type: "run_state";
+      conversationId: string;
+      runId: string;
+      mode: AgentMode;
+      status: AgentRunStatus;
+      metrics: AgentRunMetrics;
+      event?: AgentRunEvent;
+    }
+  | {
       type: "context_state";
       requestId: string;
       estimatedTokens: number;
+      estimatedTokensAfter?: number;
       threshold: number;
       status: "ready" | "compacting" | "warning";
       compactionCount: number;
       lastCompactedAt?: number;
       transcriptPath?: string;
+      preview?: {
+        strategy: "summary";
+        estimatedTokensBefore: number;
+        estimatedTokensAfter: number;
+        transcriptPath: string;
+        protectedMessageCount: number;
+        compactedMessageCount: number;
+        preservedMessageCount: number;
+      };
       message?: string;
     }
   | {
@@ -83,6 +161,16 @@ export type WsServerMessage =
       status: "ready" | "warning";
       serverCount: number;
       toolCount: number;
+      servers?: Array<{
+        endpoint: string;
+        endpointKey: string;
+        ok: boolean;
+        toolCount: number;
+        latencyMs?: number;
+        attempts?: number;
+        lastCheckedAt?: number;
+        error?: string;
+      }>;
       message?: string;
     }
   | {
@@ -95,6 +183,8 @@ export type WsServerMessage =
       type: "summary";
       conversationId: string;
       requestId: string;
+      runId?: string;
+      metrics?: AgentRunMetrics;
       changedFiles: string[];
       toolCallCount: number;
       errorCount: number;

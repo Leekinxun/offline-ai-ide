@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { useI18n } from "../i18n";
 
@@ -9,6 +10,7 @@ interface TerminalProps {
   token: string;
   disabled?: boolean;
   disabledReason?: string | null;
+  onClose?: () => void;
 }
 
 export const Terminal: React.FC<TerminalProps> = ({
@@ -16,6 +18,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   token,
   disabled = false,
   disabledReason,
+  onClose,
 }) => {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,14 +143,21 @@ export const Terminal: React.FC<TerminalProps> = ({
   // Always render DOM so ref exists; toggle with display
   return (
     <div
-      className="terminal-panel"
+      className="terminal-panel panel-shell"
       style={visible ? undefined : { display: "none" }}
     >
       <div className="terminal-header">
         <div className="terminal-header-title"><span className="terminal-header-icon">›_</span>{t("terminal.title")}</div>
-        <div className={`terminal-header-status${connected ? " connected" : ""}`}>
-          <span />
-          {disabled ? t("terminal.offline") : connected ? t("terminal.connected") : t("terminal.offline")}
+        <div className="terminal-header-actions">
+          <div className={`terminal-header-status${connected ? " connected" : ""}`}>
+            <span />
+            {disabled ? t("terminal.offline") : connected ? t("terminal.connected") : t("terminal.offline")}
+          </div>
+          {onClose && (
+            <button type="button" className="terminal-close" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
+              <X size={14} />
+            </button>
+          )}
         </div>
       </div>
       {disabled ? (

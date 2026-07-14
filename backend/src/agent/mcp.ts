@@ -19,6 +19,9 @@ export interface McpServerPreview {
   ok: boolean;
   toolCount: number;
   tools: Array<{ name: string; description: string }>;
+  latencyMs?: number;
+  attempts?: number;
+  lastCheckedAt?: number;
   error?: string;
 }
 
@@ -82,21 +85,40 @@ class McpEndpointSession {
   private sessionId: string | undefined;
   private initialized = false;
   private requestId = 0;
+  private lastLatencyMs = 0;
+  private lastAttempts = 0;
+  private lastCheckedAt = 0;
 
-  constructor(public readonly baseUrl: string, private readonly timeoutMs: number) {}
+  constructor(
+    public readonly baseUrl: string,
+    private readonly timeoutMs: number,
+    private readonly connectTimeoutMs: number
+  ) {}
+
+  get health(): { latencyMs: number; attempts: number; lastCheckedAt: number } {
+    return {
+      latencyMs: this.lastLatencyMs,
+      attempts: this.lastAttempts,
+      lastCheckedAt: this.lastCheckedAt,
+    };
+  }
 
   async listTools(): Promise<McpRawTool[]> {
-    await this.ensureInitialized();
-    const response = await this.request("tools/list", {});
+    const initializationHealth = await this.ensureInitialized();
+    const response = await this.request("tools/list", {}, this.timeoutMs, true);
     if (response.error) {
       throw new Error(`MCP tools/list error: ${JSON.stringify(response.error)}`);
+    }
+    if (initializationHealth.attempts > 0) {
+      this.lastLatencyMs += initializationHealth.latencyMs;
+      this.lastAttempts += initializationHealth.attempts;
     }
     return Array.isArray(response.result?.tools) ? response.result.tools : [];
   }
 
   async callTool(name: string, arguments_: Record<string, unknown>): Promise<string> {
     await this.ensureInitialized();
-    const response = await this.request("tools/call", { name, arguments: arguments_ });
+    const response = await this.request("tools/call", { name, arguments: arguments_ }, this.timeoutMs, false);
     if (response.error) {
       throw new Error(`MCP tools/call error: ${JSON.stringify(response.error)}`);
     }
@@ -114,8 +136,8 @@ class McpEndpointSession {
     return response.result?.isError ? `[MCP Error] ${output}` : output;
   }
 
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return;
+  private async ensureInitialized(): Promise<{ latencyMs: number; attempts: number }> {
+    if (this.initialized) return { latencyMs: 0, attempts: 0 };
 
     const response = await this.request("initialize", {
       protocolVersion: MCP_PROTOCOL_VERSION,
@@ -124,46 +146,74 @@ class McpEndpointSession {
         name: MCP_CLIENT_NAME,
         version: MCP_CLIENT_VERSION,
       },
-    });
+    }, this.connectTimeoutMs, true);
     if (response.error) {
       throw new Error(`MCP initialize error: ${JSON.stringify(response.error)}`);
     }
     this.initialized = true;
+    return { latencyMs: this.lastLatencyMs, attempts: this.lastAttempts };
   }
 
-  private async request(method: string, params: Record<string, unknown>): Promise<JsonRpcResponse> {
+  private async request(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+    retryable: boolean
+  ): Promise<JsonRpcResponse> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
     };
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const response = await fetch(this.baseUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: ++this.requestId,
-          method,
-          params,
-        }),
-        signal: controller.signal,
-      });
+    const maxAttempts = retryable ? 3 : 1;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(this.baseUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: ++this.requestId,
+            method,
+            params,
+          }),
+          signal: controller.signal,
+        });
 
-      const sessionId = response.headers.get("mcp-session-id")?.trim();
-      if (sessionId) this.sessionId = sessionId;
+        const sessionId = response.headers.get("mcp-session-id")?.trim();
+        if (sessionId) this.sessionId = sessionId;
 
-      const body = await response.text();
-      if (!response.ok) {
-        throw new Error(`MCP request failed (${response.status}): ${body.slice(0, 500)}`);
+        const body = await response.text();
+        if (!response.ok) {
+          const error = new Error(`MCP request failed (${response.status}): ${body.slice(0, 500)}`);
+          if (retryable && attempt < maxAttempts && isRetryableStatus(response.status)) {
+            lastError = error;
+            await delay(150 * 2 ** (attempt - 1));
+            continue;
+          }
+          throw error;
+        }
+        this.lastLatencyMs = Date.now() - startedAt;
+        this.lastAttempts = attempt;
+        this.lastCheckedAt = Date.now();
+        return parseMcpResponse(body);
+      } catch (error) {
+        lastError = error;
+        if (retryable && attempt < maxAttempts && isRetryableNetworkError(error)) {
+          await delay(150 * 2 ** (attempt - 1));
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-      return parseMcpResponse(body);
-    } finally {
-      clearTimeout(timeout);
     }
+    throw lastError instanceof Error ? lastError : new Error("MCP request failed");
   }
 }
 
@@ -210,7 +260,7 @@ export class McpClient {
     const tools: OpenAIToolDef[] = [];
     const servers: McpServerPreview[] = [];
     for (const baseUrl of activeUrls) {
-      const session = this.getSession(baseUrl, settings.timeout);
+      const session = this.getSession(baseUrl, settings.timeout, settings.connectTimeout);
       const endpointKeyValue = endpointKey(baseUrl);
       try {
         const rawTools = await session.listTools();
@@ -248,6 +298,7 @@ export class McpClient {
           ok: true,
           toolCount: previewTools.length,
           tools: previewTools,
+          ...session.health,
         });
       } catch (error) {
         servers.push({
@@ -256,6 +307,7 @@ export class McpClient {
           ok: false,
           toolCount: 0,
           tools: [],
+          ...session.health,
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -289,7 +341,7 @@ export class McpClient {
       const key = endpointKey(baseUrl);
       if (endpointFilter && endpointFilter !== key) continue;
       try {
-        const tools = await this.getSession(baseUrl, settings.timeout).listTools();
+        const tools = await this.getSession(baseUrl, settings.timeout, settings.connectTimeout).listTools();
         for (const tool of tools) {
           const toolName = typeof tool.name === "string" ? tool.name.trim() : "";
           const description = typeof tool.description === "string" ? tool.description.trim() : "";
@@ -325,7 +377,7 @@ export class McpClient {
     );
     if (!baseUrl) throw new Error(`Lazy MCP endpoint not found: ${endpointKeyValue}`);
 
-    const available = await this.getSession(baseUrl, settings.timeout).listTools();
+    const available = await this.getSession(baseUrl, settings.timeout, settings.connectTimeout).listTools();
     const availableNames = new Set(
       available.map((tool) => (typeof tool.name === "string" ? tool.name.trim() : "")).filter(Boolean)
     );
@@ -342,10 +394,18 @@ export class McpClient {
     return binding.endpoint.callTool(binding.actualName, arguments_);
   }
 
-  private getSession(baseUrl: string, timeoutSeconds: number): McpEndpointSession {
+  private getSession(
+    baseUrl: string,
+    timeoutSeconds: number,
+    connectTimeoutSeconds: number
+  ): McpEndpointSession {
     const existing = this.sessions.get(baseUrl);
     if (existing) return existing;
-    const session = new McpEndpointSession(baseUrl, timeoutSeconds * 1000);
+    const session = new McpEndpointSession(
+      baseUrl,
+      timeoutSeconds * 1000,
+      connectTimeoutSeconds * 1000
+    );
     this.sessions.set(baseUrl, session);
     return session;
   }
@@ -410,4 +470,17 @@ function endpointKey(baseUrl: string): string {
 function scopedToolName(baseUrl: string, toolName: string): string {
   const safeName = toolName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32) || "tool";
   return `mcp_${endpointKey(baseUrl)}__${safeName}`;
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  return error.name === "AbortError" || /fetch|network|timeout|socket|ECONN/i.test(error.message);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

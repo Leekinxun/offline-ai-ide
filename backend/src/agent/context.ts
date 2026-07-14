@@ -7,12 +7,24 @@ export type ContextStatus = "ready" | "compacting" | "warning";
 
 export interface ContextState {
   estimatedTokens: number;
+  estimatedTokensAfter?: number;
   threshold: number;
   status: ContextStatus;
   compactionCount: number;
   lastCompactedAt?: number;
   transcriptPath?: string;
+  preview?: ContextCompactionPreview;
   message?: string;
+}
+
+export interface ContextCompactionPreview {
+  strategy: "summary";
+  estimatedTokensBefore: number;
+  estimatedTokensAfter: number;
+  transcriptPath: string;
+  protectedMessageCount: number;
+  compactedMessageCount: number;
+  preservedMessageCount: number;
 }
 
 export interface ContextCompactionResult {
@@ -20,6 +32,7 @@ export interface ContextCompactionResult {
   transcriptPath: string;
   estimatedTokensBefore: number;
   estimatedTokensAfter: number;
+  preview: ContextCompactionPreview;
 }
 
 const TRANSCRIPT_LIMIT = 80_000;
@@ -53,7 +66,7 @@ export function microcompactMessages(
 
   const clearedIndexes = new Set(toolIndexes.slice(0, -keepRecentToolResults));
   return messages.map((message, index) =>
-    clearedIndexes.has(index)
+    clearedIndexes.has(index) && !isImportantToolOutput(message)
       ? { ...message, content: "[cleared]" }
       : { ...message }
   );
@@ -61,14 +74,30 @@ export function microcompactMessages(
 
 /** Last-resort loss reduction if the summarization request itself fails. */
 export function safeTrimMessages(messages: OpenAIMessage[], keepRecent = 8): OpenAIMessage[] {
-  return messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+  const firstUser = messages.find((message) => message.role === "user");
+  const recentSource = messages.filter(
+    (message) => message.role === "user" || message.role === "assistant"
+  );
+  const recent = recentSource
     .slice(-keepRecent)
     .map((message) => ({
       ...message,
       tool_calls: undefined,
       tool_call_id: undefined,
     }));
+  const firstUserInRecent = firstUser ? recentSource.slice(-keepRecent).some((message) => message === firstUser) : false;
+  const combined = firstUser && !firstUserInRecent
+    ? [firstUser, ...recent]
+    : recent;
+  return combined.map((message) => ({
+    ...message,
+    tool_calls: undefined,
+    tool_call_id: undefined,
+  }));
+}
+
+function isImportantToolOutput(message: OpenAIMessage): boolean {
+  return /\b(error|failed|exception|warning|conflict|not found)\b/i.test(message.content || "");
 }
 
 function transcriptName(): string {
@@ -140,10 +169,29 @@ export async function compactMessages(options: {
     },
   ];
 
+  const preview: ContextCompactionPreview = {
+    strategy: "summary",
+    estimatedTokensBefore,
+    estimatedTokensAfter: estimateMessageTokens(messages),
+    transcriptPath,
+    protectedMessageCount: options.messages.filter(isProtectedMessage).length,
+    compactedMessageCount: Math.max(0, options.messages.length - messages.length),
+    preservedMessageCount: messages.length,
+  };
+
   return {
     messages,
     transcriptPath,
     estimatedTokensBefore,
-    estimatedTokensAfter: estimateMessageTokens(messages),
+    estimatedTokensAfter: preview.estimatedTokensAfter,
+    preview,
   };
+}
+
+function isProtectedMessage(message: OpenAIMessage): boolean {
+  if (message.role === "user") return true;
+  if (message.role === "assistant" && (Boolean(message.content) || Boolean(message.tool_calls?.length))) {
+    return true;
+  }
+  return message.role === "tool" && isImportantToolOutput(message);
 }

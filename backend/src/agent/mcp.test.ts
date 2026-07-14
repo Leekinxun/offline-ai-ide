@@ -100,3 +100,51 @@ test("keeps built-in agent operation possible when an MCP endpoint is unavailabl
   assert.equal(discovery.tools.length, 0);
   assert.equal(discovery.servers[0].ok, false);
 });
+
+test("retries transient MCP discovery failures and reports endpoint health", async () => {
+  let initializeAttempts = 0;
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const payload = JSON.parse(body) as { method: string };
+    response.setHeader("Content-Type", "application/json");
+
+    if (payload.method === "initialize" && initializeAttempts++ < 2) {
+      response.statusCode = 503;
+      response.end("temporarily unavailable");
+      return;
+    }
+    if (payload.method === "initialize") {
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }));
+      return;
+    }
+    if (payload.method === "tools/list") {
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }));
+      return;
+    }
+    response.statusCode = 400;
+    response.end(JSON.stringify({ error: { message: "unknown method" } }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const endpoint = `http://127.0.0.1:${address.port}/mcp`;
+
+  try {
+    const client = new McpClient(() => ({
+      baseUrls: [endpoint],
+      lazyUrls: [],
+      disabledUrls: [],
+      timeout: 1,
+      connectTimeout: 1,
+    }));
+    const discovery = await client.discoverTools(true);
+    assert.equal(discovery.servers[0].ok, true);
+    assert.equal(initializeAttempts, 3);
+    assert.equal(discovery.servers[0].attempts, 4);
+    assert.equal(typeof discovery.servers[0].lastCheckedAt, "number");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});

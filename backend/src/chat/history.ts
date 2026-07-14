@@ -35,6 +35,7 @@ interface ConversationMetaRecord {
   mode?: AgentMode;
   status?: ConversationStatus;
   summary?: ConversationRunSummary;
+  lastRunId?: string;
 }
 
 export type ConversationStatus = "queued" | "running" | "completed" | "stopped" | "failed";
@@ -54,6 +55,7 @@ export interface ConversationSummary {
   messageCount: number;
   mode: AgentMode;
   status: ConversationStatus;
+  lastRunId?: string;
   summary?: ConversationRunSummary;
 }
 
@@ -183,6 +185,9 @@ function normalizeConversationMeta(raw: unknown): ConversationMetaRecord | null 
       : {}),
     ...(candidate.summary && typeof candidate.summary === "object"
       ? { summary: candidate.summary as ConversationRunSummary }
+      : {}),
+    ...(typeof candidate.lastRunId === "string" && candidate.lastRunId
+      ? { lastRunId: candidate.lastRunId }
       : {}),
   };
 }
@@ -358,7 +363,12 @@ export function updateConversationTitle(
 export function updateConversationState(
   workspaceDir: string,
   conversationId: string,
-  state: { mode?: AgentMode; status?: ConversationStatus; summary?: ConversationRunSummary }
+  state: {
+    mode?: AgentMode;
+    status?: ConversationStatus;
+    summary?: ConversationRunSummary;
+    lastRunId?: string;
+  }
 ): Promise<void> {
   return queueConversationMutation(workspaceDir, conversationId, () => {
     const parsed = readConversationFile(workspaceDir, conversationId);
@@ -367,6 +377,7 @@ export function updateConversationState(
       ...(state.mode ? { mode: state.mode } : {}),
       ...(state.status ? { status: state.status } : {}),
       ...(state.summary ? { summary: state.summary } : {}),
+      ...(state.lastRunId ? { lastRunId: state.lastRunId } : {}),
       updatedAt: Date.now(),
     };
     writeConversationFile(workspaceDir, conversationId, parsed);
@@ -411,6 +422,7 @@ export function listConversationSummaries(
         messageCount: messages.length,
         mode: parsed.meta.mode || "code",
         status: parsed.meta.status || "completed",
+        ...(parsed.meta.lastRunId ? { lastRunId: parsed.meta.lastRunId } : {}),
         ...(parsed.meta.summary ? { summary: parsed.meta.summary } : {}),
       };
     });

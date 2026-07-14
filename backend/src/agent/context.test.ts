@@ -38,6 +38,20 @@ test("safe trim returns a valid recent user/assistant window", () => {
   ];
 
   const trimmed = safeTrimMessages(messages, 2);
-  assert.deepEqual(trimmed.map((message) => message.content), ["tool call", "latest"]);
+  assert.deepEqual(trimmed.map((message) => message.content), ["old", "tool call", "latest"]);
   assert.equal(trimmed[0].tool_calls, undefined);
+});
+
+test("keeps important tool failures during microcompaction", () => {
+  const messages: OpenAIMessage[] = [
+    { role: "user", content: "goal" },
+    { role: "tool", content: "Error: deployment failed", tool_call_id: "1" },
+    { role: "tool", content: "x".repeat(180), tool_call_id: "2" },
+    { role: "tool", content: "recent", tool_call_id: "3" },
+  ];
+
+  const compacted = microcompactMessages(messages, 1);
+  assert.equal(compacted[1].content, "Error: deployment failed");
+  assert.equal(compacted[2].content, "[cleared]");
+  assert.equal(compacted[3].content, "recent");
 });

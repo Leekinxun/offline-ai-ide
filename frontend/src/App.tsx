@@ -44,6 +44,7 @@ import {
   GitBranch,
   Bot,
   ChevronRight,
+  FileCode2,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -270,6 +271,8 @@ function AuthenticatedApp({
   const [focusMode, setFocusMode] = useState(false);
   const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode>("commands");
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
+  const [chatHistoryRequest, setChatHistoryRequest] = useState(0);
+  const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
   const [gitVisible, setGitVisible] = useState(false);
   const [agentsVisible, setAgentsVisible] = useState(false);
@@ -356,12 +359,86 @@ function AuthenticatedApp({
         case "chat":
           setChatVisible((value) => !value);
           break;
+        case "new-conversation":
+          setChatVisible(true);
+          setNewConversationRequest((value) => value + 1);
+          break;
+        case "history":
+          setChatVisible(true);
+          setChatHistoryRequest((value) => value + 1);
+          break;
+        case "settings":
+        case "mcp":
+        case "knowledge":
+          setSettingsVisible(true);
+          break;
+        case "git":
+          setGitVisible(true);
+          break;
+        case "agents":
+          setAgentsVisible(true);
+          break;
+        case "team":
+          setTeamVisible(true);
+          break;
         default:
           break;
       }
     },
     [toggleFocusMode]
   );
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      if (commandPaletteVisible) {
+        setCommandPaletteVisible(false);
+        return;
+      }
+      if (workspaceSearchVisible) {
+        setWorkspaceSearchVisible(false);
+        return;
+      }
+      if (settingsVisible) {
+        setSettingsVisible(false);
+        return;
+      }
+      if (diffViewerPath) {
+        setDiffViewerPath(null);
+        setMergeSelections({});
+        return;
+      }
+
+      // On narrow screens Escape dismisses the topmost workspace drawer.
+      if (window.innerWidth <= 860) {
+        if (chatVisible) {
+          setChatVisible(false);
+        } else if (agentsVisible) {
+          setAgentsVisible(false);
+        } else if (gitVisible) {
+          setGitVisible(false);
+        } else if (teamVisible) {
+          setTeamVisible(false);
+        } else if (sidebarVisible) {
+          setSidebarVisible(false);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [
+    agentsVisible,
+    chatVisible,
+    commandPaletteVisible,
+    diffViewerPath,
+    gitVisible,
+    settingsVisible,
+    sidebarVisible,
+    teamVisible,
+    workspaceSearchVisible,
+  ]);
 
 
   const handleEditorViewStateChange = useCallback(
@@ -559,6 +636,18 @@ function AuthenticatedApp({
   }, []);
 
   const chat = useChat(token, workspaceDir, handleAiFileUpdate);
+  const switchConversation = useCallback(
+    (direction: -1 | 1) => {
+      if (chat.isStreaming || chat.conversations.length === 0) return;
+      const currentIndex = chat.conversations.findIndex(
+        (conversation) => conversation.id === chat.currentConversationId
+      );
+      const startIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextIndex = (startIndex + direction + chat.conversations.length) % chat.conversations.length;
+      void chat.loadConversation(chat.conversations[nextIndex].id);
+    },
+    [chat]
+  );
   const team = useTeam(token, workspaceDir, (nextWorkspace) => {
     if (nextWorkspace !== workspaceDir) {
       void onChangeWorkspace(nextWorkspace);
@@ -1420,11 +1509,27 @@ function AuthenticatedApp({
       if (isShortcut && e.key.toLowerCase() === "k") {
         e.preventDefault();
         toggleFocusMode();
+        return;
+      }
+      if (isShortcut && e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setChatVisible(true);
+        setNewConversationRequest((value) => value + 1);
+        return;
+      }
+      if (isShortcut && e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        switchConversation(-1);
+        return;
+      }
+      if (isShortcut && e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        switchConversation(1);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [openCommandPalette, toggleFocusMode]);
+  }, [openCommandPalette, switchConversation, toggleFocusMode]);
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
@@ -1720,7 +1825,10 @@ function AuthenticatedApp({
           {activeFile && (
             <div className="editor-context-bar">
               <div className="editor-context-path" title={activeFile.path}>
-                <span>{workspaceLabel}</span>
+                <span className="editor-context-kicker">{t("editor.activeFile")}</span>
+                <FileCode2 size={13} />
+                <strong>{activeFile.name}</strong>
+                <span className="editor-context-workspace">{workspaceLabel}</span>
                 <ChevronRight size={12} />
                 <code>{activeFile.path}</code>
               </div>
@@ -1851,6 +1959,7 @@ function AuthenticatedApp({
                     {activePreviewMode !== "preview" && (
                       <div className="editor-workbench-pane">
                         <Editor
+                          key={`editor:${activeFile.path}`}
                           content={activeFile.content}
                           language={activeFile.language}
                           path={activeFile.path}
@@ -1896,6 +2005,7 @@ function AuthenticatedApp({
                 </div>
               ) : (
                 <Editor
+                  key={`editor:${activeFile.path}`}
                   content={activeFile.content}
                   language={activeFile.language}
                   path={activeFile.path}
@@ -1945,6 +2055,7 @@ function AuthenticatedApp({
             token={token}
             disabled={readOnlyWorkspace}
             disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
+            onClose={() => setTerminalVisible(false)}
           />
         </div>
 
@@ -2104,6 +2215,9 @@ function AuthenticatedApp({
           contextState={chat.contextState}
           mcpState={chat.mcpState}
           knowledgeState={chat.knowledgeState}
+          historyRequest={chatHistoryRequest}
+          newConversationRequest={newConversationRequest}
+          onOpenSettings={() => setSettingsVisible(true)}
           onOpenFile={openFile}
           historyLoading={chat.historyLoading}
           historyLoadingId={chat.historyLoadingId}
@@ -2117,6 +2231,12 @@ function AuthenticatedApp({
           onRetry={chat.retryLast}
           onLoadConversation={chat.loadConversation}
           onRefreshConversations={chat.refreshConversations}
+          runState={chat.runState}
+          runHistory={chat.runHistory}
+          runHistoryLoading={chat.runHistoryLoading}
+          runHistoryError={chat.runHistoryError}
+          onLoadRun={chat.loadRun}
+          onResumeRun={chat.resumeConversation}
           onApplyCode={handleApplyCode}
           onNavigateToFileUpdate={handleNavigateToFileUpdate}
           style={chatVisible ? { width: chatWidth } : undefined}
@@ -2142,23 +2262,28 @@ function AuthenticatedApp({
       {toast && <div className="toast">{toast}</div>}
 
       {diffViewerFile && diffViewerFile.remoteContent !== undefined && (
-        <div
-          className="settings-modal-overlay"
+          <div
+            className="settings-modal-overlay"
           onClick={() => {
             setDiffViewerPath(null);
             setMergeSelections({});
           }}
         >
           <div
-            className="settings-modal diff-modal"
+            className="settings-modal diff-modal panel-shell"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="diff-modal-title"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="settings-modal-header">
               <div className="settings-modal-title">
-                <h2>{t("app.diffViewerTitle")}</h2>
+                <h2 id="diff-modal-title">{t("app.diffViewerTitle")}</h2>
               </div>
               <button
                 className="settings-modal-close"
+                aria-label={t("common.close")}
+                title={t("common.close")}
                 onClick={() => {
                   setDiffViewerPath(null);
                   setMergeSelections({});

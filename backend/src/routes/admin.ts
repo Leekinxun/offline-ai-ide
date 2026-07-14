@@ -12,6 +12,19 @@ import {
   updateMcpSettings,
 } from "../config.js";
 import { getMcpClient } from "../agent/mcp.js";
+import { getModelCapabilities } from "../agent/modelCapabilities.js";
+import {
+  deleteMemory,
+  listMemoryEntries,
+  mergeMemory,
+  writeMemory,
+} from "../agent/memory.js";
+import {
+  getManagedWorkspaceSkill,
+  listManagedWorkspaceSkills,
+  listSkillUsage,
+  setWorkspaceSkillEnabled,
+} from "../agent/skills.js";
 
 export const adminRouter = Router();
 
@@ -96,6 +109,119 @@ adminRouter.get("/mcp/inspect", async (req, res) => {
     res.json({ servers });
   } catch (error: any) {
     res.status(502).json({ error: error.message });
+  }
+});
+
+adminRouter.get("/llm/capabilities", async (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  try {
+    const llm = getLlmSettings();
+    const capabilities = await getModelCapabilities(
+      {
+        apiUrl: llm.vllmApiUrl,
+        apiKey: llm.vllmApiKey,
+        modelName: llm.modelName,
+        fallbackMaxOutputTokens: llm.maxTokens,
+      },
+      req.query.refresh === "1"
+    );
+    res.json({ capabilities });
+  } catch (error: any) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+adminRouter.get("/memory", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    res.json({ memory: listMemoryEntries(session.workspaceDir) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+adminRouter.put("/memory/:scope", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  if (req.body?.content !== undefined && typeof req.body.content !== "string") {
+    return res.status(400).json({ error: "Memory content must be a string" });
+  }
+  try {
+    writeMemory(session.workspaceDir, req.params.scope, req.body?.content);
+    res.json({ memory: listMemoryEntries(session.workspaceDir) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.delete("/memory/:scope", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    deleteMemory(session.workspaceDir, req.params.scope);
+    res.json({ memory: listMemoryEntries(session.workspaceDir) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.post("/memory/merge", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    mergeMemory(session.workspaceDir, req.body?.sourceScope, req.body?.targetScope);
+    res.json({ memory: listMemoryEntries(session.workspaceDir) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.get("/skills", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    const skills = listManagedWorkspaceSkills(session.workspaceDir).filter((skill) => {
+      if (!query) return true;
+      return `${skill.name} ${skill.description} ${skill.trigger} ${skill.tags} ${Object.values(skill.metadata).join(" ")}`
+        .toLowerCase()
+        .includes(query);
+    });
+    res.json({ skills });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+adminRouter.get("/skills/:name/usage", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    res.json({ usage: listSkillUsage(session.workspaceDir, req.params.name) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.get("/skills/:name", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    res.json({ skill: getManagedWorkspaceSkill(session.workspaceDir, req.params.name) });
+  } catch (error: any) {
+    res.status(404).json({ error: error.message });
+  }
+});
+
+adminRouter.put("/skills/:name/enabled", (req, res) => {
+  const session = getAdminSession(req, res);
+  if (!session) return;
+  try {
+    res.json({ skill: setWorkspaceSkillEnabled(session.workspaceDir, req.params.name, req.body?.enabled) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
 });
 
@@ -274,15 +400,17 @@ adminRouter.put("/llm", (req, res) => {
     typeof req.body.vllmApiKey === "string" ? req.body.vllmApiKey : "";
   const modelName =
     typeof req.body.modelName === "string" ? req.body.modelName.trim() : "";
-  const maxTokens = normalizePositiveInteger(req.body.maxTokens);
+  const requestedMaxTokens =
+    req.body.maxTokens === undefined ? getLlmSettings().maxTokens : normalizePositiveInteger(req.body.maxTokens);
+  const maxTokens = requestedMaxTokens || getLlmSettings().maxTokens;
   const maxAgentIterations = normalizePositiveInteger(req.body.maxAgentIterations);
   const systemPrompt =
     typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : "";
 
-  if (!vllmApiUrl || !modelName || maxTokens === null || maxAgentIterations === null) {
+  if (!vllmApiUrl || !modelName || maxAgentIterations === null) {
     return res.status(400).json({
       error:
-        "vllmApiUrl, modelName, positive integer maxTokens and positive integer maxAgentIterations are required",
+        "vllmApiUrl, modelName and positive integer maxAgentIterations are required",
     });
   }
 

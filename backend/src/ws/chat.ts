@@ -13,6 +13,13 @@ import {
   type PersistedChatMessage,
 } from "../chat/history.js";
 import { generateConversationTitle } from "../chat/title.js";
+import {
+  AgentRunRecorder,
+  createRunId,
+  findLatestResumableRun,
+  readRunRecord,
+  RESUME_PROMPT,
+} from "../chat/runHistory.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -36,6 +43,102 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           ...(requestId ? { requestId } : {}),
           content: "Stopping current AI run...",
         });
+        return;
+      }
+
+      if (data.type === "resume") {
+        if (activeRun) {
+          wsSend(ws, { type: "error", content: "An AI run is already active" });
+          return;
+        }
+
+        const requestedConversationId =
+          typeof data.conversationId === "string" ? data.conversationId.trim() : "";
+        const requestedRunId =
+          typeof data.runId === "string" ? data.runId.trim() : "";
+        const resumableRun = requestedRunId
+          ? readRunRecord(session.workspaceDir, requestedRunId)
+          : requestedConversationId
+            ? findLatestResumableRun(session.workspaceDir, requestedConversationId)
+            : null;
+        if (!resumableRun) {
+          wsSend(ws, { type: "error", content: "No interrupted run is available to resume" });
+          return;
+        }
+        if (
+          requestedConversationId &&
+          resumableRun.conversationId !== requestedConversationId
+        ) {
+          wsSend(ws, { type: "error", content: "Run does not belong to this conversation" });
+          return;
+        }
+        if (
+          resumableRun.status !== "running" &&
+          resumableRun.status !== "stopped" &&
+          resumableRun.status !== "failed"
+        ) {
+          wsSend(ws, { type: "error", content: "Only interrupted runs can be resumed" });
+          return;
+        }
+
+        const conversationId = resumableRun.conversationId;
+        const requestId =
+          typeof data.requestId === "string" && data.requestId.trim()
+            ? data.requestId.trim()
+            : createTurnRequestId();
+        const runId = createRunId();
+        const recorder = new AgentRunRecorder(
+          session.workspaceDir,
+          runId,
+          conversationId,
+          resumableRun.mode,
+          resumableRun.runId
+        );
+        await recorder.start();
+        await updateConversationState(session.workspaceDir, conversationId, {
+          mode: resumableRun.mode,
+          status: "running",
+          lastRunId: runId,
+        });
+        await appendConversationMessage(session.workspaceDir, conversationId, {
+          role: "user",
+          content: RESUME_PROMPT,
+          timestamp: Date.now(),
+        });
+        wsSend(ws, { type: "conversation", conversationId, created: false });
+        wsSend(ws, {
+          type: "conversation_state",
+          conversationId,
+          mode: resumableRun.mode,
+          status: "running",
+        });
+        wsSend(ws, {
+          type: "run_state",
+          conversationId,
+          runId,
+          mode: resumableRun.mode,
+          status: "running",
+          metrics: recorder.snapshot().metrics,
+          event: recorder.snapshot().events.at(-1),
+        });
+
+        controlState.reset();
+        activeRun = processConversationQueue(
+          ws,
+          session,
+          {
+            requestId,
+            message: RESUME_PROMPT,
+            conversationId,
+            mode: resumableRun.mode,
+          },
+          steeringQueue,
+          controlState,
+          recorder
+        ).finally(() => {
+          activeRun = null;
+        });
+        await activeRun;
         return;
       }
 
@@ -122,13 +225,37 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         return;
       }
 
+      const runId = createRunId();
+      const recorder = new AgentRunRecorder(
+        session.workspaceDir,
+        runId,
+        conversationId,
+        mode
+      );
+      await recorder.start();
+      await updateConversationState(session.workspaceDir, conversationId, {
+        mode,
+        status: "running",
+        lastRunId: runId,
+      });
+      wsSend(ws, {
+        type: "run_state",
+        conversationId,
+        runId,
+        mode,
+        status: "running",
+        metrics: recorder.snapshot().metrics,
+        event: recorder.snapshot().events.at(-1),
+      });
+
       controlState.reset();
       activeRun = processConversationQueue(
         ws,
         session,
         pendingMessage,
         steeringQueue,
-        controlState
+        controlState,
+        recorder
       ).finally(() => {
         activeRun = null;
       });
@@ -152,11 +279,14 @@ async function processConversationQueue(
   session: UserSession,
   initialTurn: PendingUserMessage,
   steeringQueue: PendingUserMessage[],
-  controlState: RunControlState
+  controlState: RunControlState,
+  recorder: AgentRunRecorder
 ): Promise<void> {
   let activeConversationId = initialTurn.conversationId;
 
-  const assistantMessages = await runAgentLoop(
+  let assistantMessages: PersistedChatMessage[];
+  try {
+    assistantMessages = await runAgentLoop(
     ws,
     initialTurn.message,
     initialTurn.requestId,
@@ -183,20 +313,79 @@ async function processConversationQueue(
       isStopped: () => controlState.stopped,
       createAbortSignal: () => controlState.createAbortSignal(),
       mode: initialTurn.mode,
-    }
-  );
+      conversationId: activeConversationId,
+      runRecorder: recorder,
+      }
+    );
+  } catch (error) {
+    const currentMetrics = recorder.snapshot().metrics;
+    await recorder.event(
+      {
+        kind: "error",
+        label: "Agent run crashed",
+        isError: true,
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { modelErrors: currentMetrics.modelErrors + 1 }
+    );
+    const failedSummary = {
+      changedFiles: [],
+      toolCallCount: currentMetrics.toolCalls,
+      errorCount: currentMetrics.toolErrors + currentMetrics.modelErrors + 1,
+      commandCount: 0,
+    };
+    const finishedRecord = await recorder.finish("failed", {}, failedSummary);
+    await updateConversationState(session.workspaceDir, activeConversationId, {
+      mode: initialTurn.mode,
+      status: "failed",
+      summary: failedSummary,
+      lastRunId: recorder.runId,
+    });
+    wsSend(ws, {
+      type: "run_state",
+      conversationId: activeConversationId,
+      runId: recorder.runId,
+      mode: initialTurn.mode,
+      status: "failed",
+      metrics: finishedRecord.metrics,
+      event: finishedRecord.events.at(-1),
+    });
+    wsSend(ws, {
+      type: "error",
+      requestId: initialTurn.requestId,
+      content: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
 
   const summary = summarizeAssistantMessages(assistantMessages);
-  const finalStatus = controlState.stopped ? "stopped" : "completed";
+  const finalStatus = controlState.stopped
+    ? "stopped"
+    : summary.errorCount > 0 || ws.readyState !== WebSocket.OPEN
+      ? "failed"
+      : "completed";
+  const finishedRecord = await recorder.finish(finalStatus, {}, summary);
   await updateConversationState(session.workspaceDir, activeConversationId, {
     mode: initialTurn.mode,
     status: finalStatus,
     summary,
+    lastRunId: recorder.runId,
+  });
+  wsSend(ws, {
+    type: "run_state",
+    conversationId: activeConversationId,
+    runId: recorder.runId,
+    mode: initialTurn.mode,
+    status: finalStatus,
+    metrics: finishedRecord.metrics,
+    event: finishedRecord.events.at(-1),
   });
   wsSend(ws, {
     type: "summary",
     conversationId: activeConversationId,
     requestId: initialTurn.requestId,
+    runId: recorder.runId,
+    metrics: finishedRecord.metrics,
     ...summary,
   });
   wsSend(ws, {
@@ -213,8 +402,37 @@ async function processConversationQueue(
 
   const nextTurn = steeringQueue.shift();
   if (nextTurn) {
+    const nextRunId = createRunId();
+    const nextRecorder = new AgentRunRecorder(
+      session.workspaceDir,
+      nextRunId,
+      nextTurn.conversationId,
+      nextTurn.mode
+    );
+    await nextRecorder.start();
+    await updateConversationState(session.workspaceDir, nextTurn.conversationId, {
+      mode: nextTurn.mode,
+      status: "running",
+      lastRunId: nextRunId,
+    });
+    wsSend(ws, {
+      type: "run_state",
+      conversationId: nextTurn.conversationId,
+      runId: nextRunId,
+      mode: nextTurn.mode,
+      status: "running",
+      metrics: nextRecorder.snapshot().metrics,
+      event: nextRecorder.snapshot().events.at(-1),
+    });
     controlState.reset();
-    await processConversationQueue(ws, session, nextTurn, steeringQueue, controlState);
+    await processConversationQueue(
+      ws,
+      session,
+      nextTurn,
+      steeringQueue,
+      controlState,
+      nextRecorder
+    );
   }
 }
 

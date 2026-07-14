@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "test": "node --import tsx --test src/agent/*.test.ts",
+    "benchmark": "tsx src/agent/benchmark.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

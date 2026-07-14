@@ -1,0 +1,111 @@
+import React from "react";
+import {
+  GitCompare,
+  History,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import { AgentMode } from "../types";
+import { useI18n } from "../i18n";
+
+interface TaskHeaderProps {
+  agentMode: AgentMode;
+  connected: boolean;
+  currentConversationId: string | null;
+  isStreaming: boolean;
+  activeToolName?: string;
+  hasMessages: boolean;
+  historyOpen: boolean;
+  changesOpen: boolean;
+  onToggleHistory: () => void;
+  onToggleChanges: () => void;
+  onClear: () => void;
+}
+
+export const TaskHeader: React.FC<TaskHeaderProps> = ({
+  agentMode,
+  connected,
+  currentConversationId,
+  isStreaming,
+  activeToolName,
+  hasMessages,
+  historyOpen,
+  changesOpen,
+  onToggleHistory,
+  onToggleChanges,
+  onClear,
+}) => {
+  const { t } = useI18n();
+  const statusLabel = isStreaming
+    ? activeToolName
+      ? t("chat.runCurrentTool", { tool: activeToolName })
+      : t("chat.runPreparing")
+    : connected
+      ? t("chat.online")
+      : t("chat.offline");
+
+  return (
+    <header className="chat-header task-header">
+      <div className="task-header-main">
+        <div className="task-header-title-row">
+          <span className="task-header-icon" aria-hidden="true">
+            <Sparkles size={14} />
+          </span>
+          <div className="chat-header-heading">
+            <span className="chat-header-title">{t("chat.title")}</span>
+            <span className={`chat-header-mode mode-${agentMode}`}>
+              {t(`chat.mode.${agentMode}.label`)}
+            </span>
+          </div>
+        </div>
+        <div className="task-header-status" aria-live="polite">
+          <span
+            className={`task-header-status-dot${
+              isStreaming ? " running" : connected ? " connected" : ""
+            }`}
+          />
+          <span>{statusLabel}</span>
+          {currentConversationId && !isStreaming && (
+            <span className="task-header-continuing">
+              {t("chat.continuingConversation")}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="chat-header-actions task-header-actions">
+        <button
+          type="button"
+          className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
+          title={t("chat.tasks")}
+          aria-label={t("chat.tasks")}
+          onClick={onToggleHistory}
+          disabled={isStreaming}
+        >
+          <History size={14} />
+        </button>
+        <button
+          type="button"
+          className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
+          title={t("chat.changes")}
+          aria-label={t("chat.changes")}
+          onClick={onToggleChanges}
+        >
+          <GitCompare size={14} />
+        </button>
+        {hasMessages && (
+          <button
+            type="button"
+            className="sidebar-action-btn"
+            title={t("chat.clearChat")}
+            aria-label={t("chat.clearChat")}
+            onClick={onClear}
+            disabled={isStreaming}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
+    </header>
+  );
+};

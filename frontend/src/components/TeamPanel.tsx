@@ -126,7 +126,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   };
 
   return (
-    <div className="team-panel">
+    <div className="team-panel panel-shell">
       <div className="team-panel-header">
         <div className="team-panel-title">
           <Users size={15} />

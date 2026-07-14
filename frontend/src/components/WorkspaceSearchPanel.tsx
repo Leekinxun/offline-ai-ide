@@ -55,9 +55,10 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
 
   return (
     <div className="command-palette-overlay" onMouseDown={onClose}>
-      <div className="workspace-search-panel command-palette" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="workspace-search-panel command-palette" role="dialog" aria-modal="true" aria-labelledby="workspace-search-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="command-palette-input-row">
           <Search size={17} />
+          <span id="workspace-search-title" className="sr-only">{t("search.title")}</span>
           <input
             ref={inputRef}
             value={query}

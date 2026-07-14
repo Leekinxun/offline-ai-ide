@@ -22,11 +22,18 @@ export const TabBar: React.FC<TabBarProps> = ({
       {openFiles.map((file) => (
         <div
           key={file.path}
-          className={`tab${file.path === activeFilePath ? " active" : ""}`}
+          className={`tab${file.path === activeFilePath ? " active" : ""}${file.modified ? " modified" : ""}`}
           onClick={() => onSelectTab(file.path)}
           role="tab"
           aria-selected={file.path === activeFilePath}
           title={file.path}
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelectTab(file.path);
+            }
+          }}
         >
           {file.modified && <span className="tab-modified" />}
           {file.remoteUpdated && <span className="tab-remote-updated" />}

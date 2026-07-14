@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-12
+- Last refreshed: 2026-07-14
 - Primary product surfaces: 登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Agent Board、终端和设置
 - Evidence reviewed:
   - `frontend/src/App.tsx`：三栏工作区、顶部操作栏、面板开关、Focus Mode 和响应式布局
@@ -12,6 +12,104 @@
   - `frontend/src/components/GitPanel.tsx`、`AgentBoard.tsx`、`WorkspaceWelcome.tsx`、`CommandPalette.tsx`
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
+
+## Visual audit
+
+- Observed: 当前工作区已经具备三栏布局、品牌标识、命令入口、AI 模式、Git/Agent/终端面板和深浅色主题。
+- Observed: 顶部栏、左侧资源区和右侧 AI 区同时承载较多图标与状态，主次关系不够明显。
+- Observed: 空工作区欢迎页视觉中心明确，但进入真实任务后，AI 任务标题、运行阶段、变更摘要和下一步动作没有形成同一条稳定的视觉主线。
+- Observed: AI 面板已经有上下文、MCP、Memory/Skills 和运行历史状态，但多数状态仍以细小胶囊呈现，重要程度不足。
+- Inference: “高级感”不应来自更多渐变或装饰，而应来自更克制的表面层级、稳定的任务结构、清晰的状态语义和更少但更强的操作入口。
+- Inference: CrownForge 应从“IDE 三栏布局”进一步升级为“Agent Workbench”：编辑器是工作画布，任务是主线，面板是可调度的上下文工具。
+
+## Frontend redesign direction
+
+- Working name: **CrownForge Workbench**
+- Visual keywords: calm, dense, precise, warm-metal accent, studio-grade, trustworthy.
+- Core composition:
+  - **Workspace Header**：品牌、当前工作区、当前任务、全局搜索/命令入口和面板调度。
+  - **Activity Rail**：Explorer、Changes、Tasks、Agents、Terminal、Knowledge 等低噪声图标入口，统一激活态和计数。
+  - **Workbench Canvas**：编辑器或 Diff 为视觉主角，减少无意义背景和卡片包围。
+  - **Task Dock**：AI 任务标题、模式、运行阶段、上下文、变更摘要、验证结果和 Composer。
+  - **Status Bar**：连接、分支、变更、光标和后台任务等低优先级信息。
+- Interaction rule: 任何任务状态都要回答“现在做什么、做到哪一步、用户下一步能做什么”。
+- Surface rule: 普通面板使用低对比度表面和细边框；只有当前任务、主按钮和关键警告使用高对比度强调。
+
+## Advanced visual system
+
+- Color roles:
+  - Ink/background：深色主题以蓝黑和石墨灰为基础，浅色主题以冷白和雾灰为基础。
+  - Crown accent：金色仅用于品牌、完成、关键里程碑和少量高价值动作。
+  - Forge accent：青色用于 Agent/工具/流式运行等动态状态。
+  - Action accent：蓝色用于焦点、链接、主按钮和当前选择。
+  - Status colors：成功、警告、错误只表达状态，不用于大面积装饰。
+- Typography:
+  - 任务标题 20–24px；面板标题 12–14px；状态和元信息 10–12px。
+  - 用户内容和 AI 结论使用舒适行高；工具日志、路径、Token 和运行指标使用等宽字体。
+  - 减少全大写标签，使用短词和动词提高扫描速度。
+- Layout rhythm:
+  - 采用 4px 基础单位，主间距 8/12/16/24px。
+  - 工作区边界、面板头部、输入区和状态栏使用固定节奏，不在局部随意增加高度。
+  - 面板宽度优先保证任务内容和编辑器可读性，不以展示更多信息为目标。
+- Shape/elevation:
+  - 编辑器、Diff 和代码区保持平直；面板使用 10–14px 轻圆角；弹层使用单层阴影。
+  - 取消连续嵌套卡片，改用“标题 + 分隔线 + 内容”的工作台结构。
+- Motion:
+  - 只保留面板进出、运行状态、流式输出和成功反馈动画。
+  - 动画 120–220ms，可被打断，并完整遵守 `prefers-reduced-motion`。
+
+## Revised information hierarchy
+
+1. 当前任务：标题、模式、运行/等待/完成状态。
+2. 当前动作：Agent 正在做什么、是否需要用户输入、停止/继续/重试入口。
+3. 结果证据：变更文件、Diff、测试、Token/上下文和 MCP 工具状态。
+4. 辅助信息：完整工具日志、运行历史、Memory/Skills、配置和原始错误。
+
+The default view should show levels 1–3. Level 4 uses disclosure, drawers, or the Command Palette.
+
+## Redesign component contract
+
+- `WorkspaceHeader`: consolidate global actions and expose the active task without competing with the editor.
+- `ActivityRail`: replace scattered panel icons with one predictable navigation surface and badge semantics.
+- `TaskHeader`: unify Ask/Code/Review/Plan, run status, stop/resume/retry, and current workspace context.
+- `TaskTimeline`: show the current phase and recent evidence; collapse raw tool calls by default.
+- `ContextStrip`: show model capacity, context budget, MCP health, Memory/Skills and transcript recovery as readable status blocks rather than tiny badges.
+- `ChangeSummary`: one reusable surface for changed files, review findings, tests and next actions.
+- `Composer`: make mode, current file/selection, steering, attachments and send/stop state one coherent control group.
+- `PanelShell`: standardize title, close, refresh, empty, loading and error states across Git, Agent, Team, Terminal, Settings and Knowledge.
+- `KnowledgeCenter`: combine Memory and Skills management with search, scope, preview and recent usage while preserving the current admin boundary.
+
+## Redesign phases and acceptance criteria
+
+### Phase 0 — Token and shell foundation
+
+- Rework CSS tokens into explicit roles for surface, border, text, accent, status and focus.
+- Reduce top-bar control competition and establish a consistent activity rail.
+- Acceptance: no feature removal; light/dark themes preserve contrast; all existing entry points remain reachable.
+
+### Phase 1 — Task-first AI panel
+
+- Rebuild the Chat header and Composer around TaskHeader, TaskTimeline and ContextStrip.
+- Put conclusion, current phase, pending decision and next action above raw tool details.
+- Acceptance: a user can identify task mode, state, current action and next available action within three seconds.
+
+### Phase 2 — Editor and change canvas
+
+- Make editor/Diff the visual center; simplify tab, breadcrumb, Git and review surfaces.
+- Standardize ChangeSummary and make file/line navigation a first-class action.
+- Acceptance: AI result → changed file → Diff → editor takes at most two deliberate actions.
+
+### Phase 3 — Knowledge, Agent and settings surfaces
+
+- Apply PanelShell to Agent Board, Team, Terminal, Settings, Memory and Skills.
+- Turn MCP/Memory/Skills states into readable, actionable status blocks with clear ownership.
+- Acceptance: loading, empty, error, disabled and offline states are consistent across all panels.
+
+### Phase 4 — Responsive and visual regression
+
+- Validate 1440px, 1280px, 1024px and 768px layouts in both themes.
+- Add screenshot baselines for login, empty workspace, active task, running task, review, settings and narrow-screen drawers.
+- Acceptance: no overflow, no unreachable controls, keyboard focus remains visible, and reduced-motion mode is usable.
 
 ## Brand
 

@@ -95,7 +95,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({
   );
 
   return (
-    <aside className="git-panel">
+    <aside className="git-panel panel-shell">
       <div className="git-panel-header">
         <div className="git-panel-title"><GitBranch size={15} /><strong>{t("git.title")}</strong></div>
         <div className="git-panel-actions">

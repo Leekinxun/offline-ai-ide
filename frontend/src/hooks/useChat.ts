@@ -9,6 +9,10 @@ import {
   ContextState,
   McpState,
   KnowledgeState,
+  AgentRunEvent,
+  AgentRunMetrics,
+  AgentRunState,
+  AgentRunSummary,
 } from "../types";
 import { useI18n } from "../i18n";
 
@@ -23,6 +27,23 @@ interface ConversationDetailResponse {
   status?: string;
   summary?: ConversationRunSummary;
 }
+
+interface RunListResponse {
+  runs?: AgentRunSummary[];
+}
+
+const EMPTY_RUN_METRICS: AgentRunMetrics = {
+  iterations: 0,
+  modelCalls: 0,
+  toolCalls: 0,
+  toolErrors: 0,
+  modelErrors: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  estimatedTokensPeak: 0,
+  compactionCount: 0,
+};
 
 export function useChat(
   token: string,
@@ -57,6 +78,10 @@ export function useChat(
     memoryFiles: 0,
     skillCount: 0,
   });
+  const [runState, setRunState] = useState<AgentRunState | null>(null);
+  const [runHistory, setRunHistory] = useState<AgentRunSummary[]>([]);
+  const [runHistoryLoading, setRunHistoryLoading] = useState(false);
+  const [runHistoryError, setRunHistoryError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
@@ -95,6 +120,34 @@ export function useChat(
       setHistoryLoading(false);
     }
   }, [token]);
+
+  const refreshRunHistory = useCallback(
+    async (conversationId?: string | null) => {
+      setRunHistoryLoading(true);
+      setRunHistoryError(null);
+      try {
+        const query = conversationId
+          ? `?conversationId=${encodeURIComponent(conversationId)}`
+          : "";
+        const response = await fetch(`/api/chat/runs${query}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || "Failed to load agent runs");
+        }
+        const payload = (await response.json()) as RunListResponse;
+        setRunHistory(Array.isArray(payload.runs) ? payload.runs : []);
+      } catch (error) {
+        setRunHistoryError(
+          error instanceof Error ? error.message : "Failed to load agent runs"
+        );
+      } finally {
+        setRunHistoryLoading(false);
+      }
+    },
+    [token]
+  );
 
   const updateAssistantByRequestId = useCallback(
     (
@@ -184,6 +237,33 @@ export function useChat(
           }
           break;
 
+        case "run_state": {
+          const event = data.event as AgentRunEvent | undefined;
+          setRunState((previous) => {
+            const previousRun = previous?.runId === data.runId ? previous : null;
+            const events = previousRun ? [...previousRun.events] : [];
+            if (event && !events.some((entry) => entry.id === event.id)) {
+              events.push(event);
+            }
+            return {
+              runId: data.runId,
+              conversationId: data.conversationId,
+              mode: data.mode || previousRun?.mode || "code",
+              status: data.status || "running",
+              startedAt: previousRun?.startedAt || event?.timestamp || Date.now(),
+              updatedAt: event?.timestamp || Date.now(),
+              metrics: data.metrics || previousRun?.metrics || EMPTY_RUN_METRICS,
+              eventCount: events.length,
+              events,
+              ...(event ? { event } : {}),
+            };
+          });
+          if (data.status !== "running" && data.status !== "queued") {
+            void refreshRunHistory(data.conversationId);
+          }
+          break;
+        }
+
         case "summary":
           if (data.conversationId === currentConversationId || !currentConversationId) {
             setCurrentRunSummary(data);
@@ -193,11 +273,13 @@ export function useChat(
         case "context_state":
           setContextState({
             estimatedTokens: Number(data.estimatedTokens) || 0,
+            estimatedTokensAfter: Number(data.estimatedTokensAfter) || undefined,
             threshold: Number(data.threshold) || 60000,
             status: data.status || "ready",
             compactionCount: Number(data.compactionCount) || 0,
             lastCompactedAt: data.lastCompactedAt,
             transcriptPath: data.transcriptPath,
+            preview: data.preview,
             message: data.message,
           });
           break;
@@ -207,6 +289,7 @@ export function useChat(
             status: data.status || "ready",
             serverCount: Number(data.serverCount) || 0,
             toolCount: Number(data.toolCount) || 0,
+            servers: Array.isArray(data.servers) ? data.servers : undefined,
             message: data.message,
           });
           break;
@@ -323,8 +406,16 @@ export function useChat(
     });
     setMcpState({ status: "ready", serverCount: 0, toolCount: 0 });
     setKnowledgeState({ memoryFiles: 0, skillCount: 0 });
+    setRunState(null);
+    setRunHistory([]);
+    setRunHistoryError(null);
     void refreshConversations();
-  }, [refreshConversations, workspaceDir]);
+    void refreshRunHistory(null);
+  }, [refreshConversations, refreshRunHistory, workspaceDir]);
+
+  useEffect(() => {
+    void refreshRunHistory(currentConversationId);
+  }, [currentConversationId, refreshRunHistory]);
 
   const sendMessage = useCallback(
     (content: string, context?: FileContext, modeOverride?: AgentMode) => {
@@ -436,6 +527,9 @@ export function useChat(
     });
     setMcpState({ status: "ready", serverCount: 0, toolCount: 0 });
     setKnowledgeState({ memoryFiles: 0, skillCount: 0 });
+    setRunState(null);
+    setRunHistory([]);
+    setRunHistoryError(null);
   }, []);
 
   const retryLast = useCallback(() => {
@@ -482,6 +576,59 @@ export function useChat(
     [t, token]
   );
 
+  const loadRun = useCallback(
+    async (runId: string) => {
+      try {
+        const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || "Failed to load agent run");
+        }
+        const payload = (await response.json()) as AgentRunState;
+        setRunState(payload);
+        if (payload.conversationId !== currentConversationId) {
+          await loadConversation(payload.conversationId);
+        }
+      } catch (error) {
+        setRunHistoryError(
+          error instanceof Error ? error.message : "Failed to load agent run"
+        );
+      }
+    },
+    [currentConversationId, loadConversation, token]
+  );
+
+  const resumeConversation = useCallback(
+    async (conversationId: string, runId?: string) => {
+      if (
+        !wsRef.current ||
+        wsRef.current.readyState !== WebSocket.OPEN ||
+        activeRequestIds.length > 0
+      ) {
+        return;
+      }
+      if (conversationId !== currentConversationId) {
+        await loadConversation(conversationId);
+      }
+      const requestId = createRequestId();
+      const resumeMessage =
+        "Continue the interrupted task from the last recorded state. Do not repeat completed steps; inspect the current workspace and resume from the next step.";
+      setMessages((prev) => [
+        ...prev,
+        { requestId, role: "user", content: resumeMessage, timestamp: Date.now() },
+        { requestId, role: "assistant", content: "", timestamp: Date.now() },
+      ]);
+      setCurrentConversationId(conversationId);
+      setActiveRequestIds([requestId]);
+      wsRef.current.send(
+        JSON.stringify({ type: "resume", conversationId, runId, requestId })
+      );
+    },
+    [activeRequestIds.length, currentConversationId, loadConversation]
+  );
+
   return {
     messages,
     sendMessage,
@@ -505,6 +652,13 @@ export function useChat(
     contextState,
     mcpState,
     knowledgeState,
+    runState,
+    runHistory,
+    runHistoryLoading,
+    runHistoryError,
+    refreshRunHistory,
+    loadRun,
+    resumeConversation,
   };
 }
 

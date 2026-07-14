@@ -20,7 +20,6 @@ services:
       - WORKSPACE_DIR=/workspace
       # Agent tuning (optional)
       - MAX_AGENT_ITERATIONS=30
-      - AGENT_MAX_TOKENS=8192
       - AGENT_CONTEXT_COMPACT_THRESHOLD=60000
       # External MCP endpoints (comma-separated; can also be managed in admin Settings)
       - MCP_BASE_URLS=

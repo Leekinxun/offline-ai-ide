@@ -14,8 +14,16 @@ import {
 } from "lucide-react";
 import { useAdminSettings } from "../hooks/useAdminSettings";
 import { useI18n } from "../i18n";
-import { AdminSettings, AdminUser, LlmSettings, McpServerPreview, McpSettings } from "../types";
+import {
+  AdminSettings,
+  AdminUser,
+  LlmSettings,
+  McpServerPreview,
+  McpSettings,
+  ModelCapabilities,
+} from "../types";
 import { PluginManagerPanel } from "./PluginManagerPanel";
+import { KnowledgeManagerPanel } from "./KnowledgeManagerPanel";
 
 interface SettingsModalProps {
   token: string;
@@ -116,6 +124,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savingApp, setSavingApp] = useState(false);
   const [savingMcp, setSavingMcp] = useState(false);
   const [inspectingMcp, setInspectingMcp] = useState(false);
+  const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilities | null>(null);
+  const [loadingModelCapabilities, setLoadingModelCapabilities] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
@@ -136,6 +146,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const data = await adminSettings.fetchSettings();
       setSettings(data);
+      try {
+        setModelCapabilities(await adminSettings.fetchLlmCapabilities());
+      } catch {
+        setModelCapabilities(null);
+      }
       setLlmForm({
         vllmApiUrl: data.llm.vllmApiUrl,
         vllmApiKey: data.llm.vllmApiKey,
@@ -257,7 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     if (savingLlm) return;
 
-    const maxTokens = Number.parseInt(llmForm.maxTokens, 10);
+    const maxTokens = settings?.llm.maxTokens || Number.parseInt(llmForm.maxTokens, 10) || 8192;
     const maxAgentIterations = Number.parseInt(
       llmForm.maxAgentIterations,
       10
@@ -291,6 +306,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setError(null);
     try {
       const saved = await adminSettings.updateLlmSettings(payload);
+      try {
+        setModelCapabilities(await adminSettings.fetchLlmCapabilities(true));
+      } catch {
+        setModelCapabilities(null);
+      }
       setLlmForm({
         vllmApiUrl: saved.vllmApiUrl,
         vllmApiKey: saved.vllmApiKey,
@@ -305,6 +325,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setError(e instanceof Error ? e.message : t("settings.failedToSaveLlmSettings"));
     } finally {
       setSavingLlm(false);
+    }
+  };
+
+  const refreshModelCapabilities = async () => {
+    if (loadingModelCapabilities) return;
+    setLoadingModelCapabilities(true);
+    try {
+      setModelCapabilities(await adminSettings.fetchLlmCapabilities(true));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToDetectModelCapabilities"));
+    } finally {
+      setLoadingModelCapabilities(false);
     }
   };
 
@@ -410,13 +442,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <>
       <div className="settings-modal-overlay" onClick={onClose}>
-        <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="settings-modal panel-shell" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onClick={(e) => e.stopPropagation()}>
           <div className="settings-modal-header">
             <div className="settings-modal-title">
               <Settings size={18} />
-              <span>{t("settings.title")}</span>
+              <div>
+                <span id="settings-modal-title">{t("settings.title")}</span>
+                <small>{t("settings.subtitle")}</small>
+              </div>
             </div>
-            <button className="settings-modal-close" onClick={onClose}>
+            <button className="settings-modal-close" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
               <X size={16} />
             </button>
           </div>
@@ -469,6 +504,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </section>
 
             <PluginManagerPanel
+              visible={visible}
+              token={token}
+              isAdmin={isAdmin}
+              onShowToast={onShowToast}
+            />
+
+            <KnowledgeManagerPanel
               visible={visible}
               token={token}
               isAdmin={isAdmin}
@@ -719,7 +761,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="settings-mcp-row" key={server.endpointKey}>
                         <div className="settings-mcp-info">
                           <code>{server.endpoint}</code>
-                          <span>{server.ok ? t("settings.mcpServerReady") : server.error || t("settings.mcpServerFailed")}</span>
+                          <span>
+                            {server.ok ? t("settings.mcpServerReady") : server.error || t("settings.mcpServerFailed")}
+                            {server.ok && server.latencyMs !== undefined
+                              ? ` · ${server.latencyMs}ms${server.attempts && server.attempts > 1 ? ` · ${t("settings.mcpAttempts", { count: server.attempts })}` : ""}`
+                              : ""}
+                          </span>
                         </div>
                         <span className={`settings-mcp-badge${server.ok ? " ready" : " failed"}`}>
                           {server.ok ? t("settings.mcpToolCount", { count: server.toolCount }) : t("settings.mcpServerFailed")}
@@ -834,23 +881,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </label>
 
-                  <label className="settings-field settings-field-wide">
+                  <div className="settings-field settings-field-wide">
                     <span>{t("settings.maxTokens")}</span>
-                    <input
-                      className="settings-input"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={llmForm.maxTokens}
-                      onChange={(e) =>
-                        setLlmForm((prev) => ({
-                          ...prev,
-                          maxTokens: e.target.value,
-                        }))
-                      }
-                      placeholder="8192"
-                    />
-                  </label>
+                    <div className="settings-auto-value">
+                      <div>
+                        <strong>
+                          {modelCapabilities?.maxOutputTokens || llmForm.maxTokens || "—"} tokens
+                        </strong>
+                        <small>
+                          {modelCapabilities
+                            ? t(`settings.modelCapabilitySource.${modelCapabilities.source}`)
+                            : t("settings.modelCapabilityUnavailable")}
+                          {modelCapabilities?.contextWindow
+                            ? ` · ${t("settings.contextWindow", { count: modelCapabilities.contextWindow })}`
+                            : ""}
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="settings-inline-btn"
+                        onClick={() => void refreshModelCapabilities()}
+                        disabled={loadingModelCapabilities}
+                        title={t("settings.refreshModelCapabilities")}
+                      >
+                        <RefreshCw size={13} className={loadingModelCapabilities ? "chat-spin" : ""} />
+                        {t("settings.refreshModelCapabilities")}
+                      </button>
+                    </div>
+                    {modelCapabilities?.warning && (
+                      <small className="settings-help-text">{modelCapabilities.warning}</small>
+                    )}
+                  </div>
 
                   <label className="settings-field settings-field-wide">
                     <span>{t("settings.maxAgentIterations")}</span>

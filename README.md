@@ -26,6 +26,8 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Added MCP **lazy loading** with `eager`, `lazy`, and `disabled` endpoint modes; lazy endpoints expose search and activation controls first, loading only selected tool schemas into the next reasoning round to reduce context pressure
 - Added persistent **workspace and user memory** under `.codex/USER.md` and `.codex/MEMORY.md`, with `memory_read` / `memory_write` tools and memory context injected into new agent runs
 - Added reusable **workspace skills** discovered from `.codex/skills/*/SKILL.md` and `skills/*/SKILL.md`, with metadata-only catalog loading and on-demand `skill_load`
+- Added admin **Memory Management** for editing, clearing, and merging user/workspace memory files without leaving the Settings flow
+- Added admin **Skills Management** for searching, previewing metadata and instructions, enabling/disabling workflows, and reviewing skill run history
 - Added MCP, memory, skills, and context regression tests, plus matching admin settings, environment variables, status events, and documentation
 
 ### v0.6.0 · 2026-07-12
@@ -85,7 +87,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.6.1` is the current documented release and adds persistent agent context, external MCP connectivity with lazy tool loading, workspace/user memory, reusable skills, and regression coverage on top of the `v0.6.0` UI and workspace experience.
+`v0.6.1` is the current documented release and adds persistent agent context, external MCP connectivity with lazy tool loading, workspace/user memory, reusable skills, Memory/Skills management centers, and regression coverage on top of the `v0.6.0` UI and workspace experience.
 
 ## Features
 
@@ -101,7 +103,7 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
 - **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
-- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max tokens / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, and switch interface language between English and Simplified Chinese
+- **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
@@ -123,8 +125,19 @@ docker run -d --name ai-ide \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
   -e MODEL_NAME=your-model-name \
-  ai-ide
+ai-ide
 ```
+
+### Verification
+
+The repository includes repeatable local checks for the Agent harness and deployment image:
+
+```bash
+./scripts/verify.sh
+./scripts/docker-smoke.sh
+```
+
+`verify.sh` runs backend tests/typecheck, the context performance benchmark, the frontend production build, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
 
 Or use Docker Compose:
 
@@ -186,6 +199,18 @@ Open http://localhost:5173 (Vite dev server proxies API requests to the backend)
 In local development, admin-managed LLM settings are persisted to `app-settings.json` at the project root by default.
 `users.json` is also auto-detected from the project root by default, and each workspace stores its own chat history under `<workspace>/.history/`.
 
+### Agent Workspace Shortcuts
+
+- `Cmd/Ctrl+P` — Quick Open files
+- `Cmd/Ctrl+Shift+P` — Command Palette
+- `Cmd/Ctrl+Shift+F` — Search the workspace
+- `Cmd/Ctrl+Alt+N` — Start a new task
+- `Cmd/Ctrl+Alt+←/→` — Switch between task threads
+- `Cmd/Ctrl+B` / `Cmd/Ctrl+J` / `Cmd/Ctrl+backtick` — Toggle Explorer / AI Assistant / Terminal
+- `Cmd/Ctrl+K` — Toggle focus mode
+
+The Command Palette also opens Settings, MCP health, Memory/Skills management, Git changes, and the Agent Board. The MCP and Memory/Skills status chips in the Chat header are clickable shortcuts to their management surfaces.
+
 ### Editor Highlighting Samples
 
 Open the files under [`docs/editor-samples/`](docs/editor-samples/README.md) in the IDE when you want a quick manual regression pass for editor highlighting. The sample set currently covers Python semantic bindings, TypeScript semantics, React TSX, and Vue `<script setup lang="ts">` flows.
@@ -230,7 +255,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `WORKSPACE_DIR` | `/workspace` | Default workspace directory |
 | `PORT` | `3000` | Server port |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
-| `AGENT_MAX_TOKENS` | `8192` | Max tokens per AI response |
+| `AGENT_MAX_TOKENS` | `8192` | Legacy fallback only; output-token limits are detected automatically from model metadata when available |
 | `AGENT_CONTEXT_COMPACT_THRESHOLD` | `60000` | Estimated context-token threshold that triggers automatic compaction |
 | `MCP_BASE_URLS` | *(empty)* | Comma- or newline-separated HTTP/SSE MCP endpoints |
 | `MCP_LAZY_URLS` | *(empty)* | Endpoints whose tools are searched and activated on demand |
@@ -247,7 +272,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max tokens, max agent iterations, system prompt, MCP endpoints, plugin overrides, and upload size limits |
+| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max agent iterations, system prompt, MCP endpoints, plugin overrides, and upload size limits |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
 | `<workspace>/.codex/USER.md` | Stores durable user preferences and working conventions |
 | `<workspace>/.codex/MEMORY.md` | Stores durable project facts, decisions, and conventions |
@@ -291,7 +316,7 @@ If you edit `users.json` outside the app, restart the backend to reload it. Chan
 LLM runtime settings can be managed in two ways:
 
 - Preferred: use the admin **Settings** panel in the UI
-- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, `AGENT_MAX_TOKENS`, `MAX_AGENT_ITERATIONS`, and `SYSTEM_PROMPT` via environment variables
+- Alternative: provide `VLLM_API_URL`, `VLLM_API_KEY`, `MODEL_NAME`, `MAX_AGENT_ITERATIONS`, and `SYSTEM_PROMPT` via environment variables. The model output-token limit is detected automatically; `AGENT_MAX_TOKENS` remains only as a legacy fallback for providers that expose no capability metadata.
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately. The system prompt is included in this runtime configuration, so admins can customize the assistant behavior without rebuilding the image.
 

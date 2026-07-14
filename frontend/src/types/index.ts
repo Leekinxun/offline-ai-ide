@@ -61,6 +61,64 @@ export interface ChatMessage {
 export type AgentMode = "ask" | "code" | "review" | "plan";
 export type ConversationStatus = "queued" | "running" | "completed" | "stopped" | "failed";
 
+export type AgentRunStatus = ConversationStatus;
+
+export type AgentRunEventKind =
+  | "run_started"
+  | "model_call"
+  | "model_response"
+  | "tool_call"
+  | "tool_result"
+  | "context_compacted"
+  | "steering"
+  | "error"
+  | "run_finished";
+
+export interface AgentRunMetrics {
+  iterations: number;
+  modelCalls: number;
+  toolCalls: number;
+  toolErrors: number;
+  modelErrors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedTokensPeak: number;
+  compactionCount: number;
+  durationMs?: number;
+}
+
+export interface AgentRunEvent {
+  id: string;
+  timestamp: number;
+  kind: AgentRunEventKind;
+  label: string;
+  requestId?: string;
+  toolName?: string;
+  durationMs?: number;
+  isError?: boolean;
+  detail?: string;
+}
+
+export interface AgentRunSummary {
+  runId: string;
+  conversationId: string;
+  mode: AgentMode;
+  status: AgentRunStatus;
+  startedAt: number;
+  updatedAt: number;
+  endedAt?: number;
+  resumedFromRunId?: string;
+  metrics: AgentRunMetrics;
+  eventCount: number;
+  summary?: ConversationRunSummary;
+}
+
+export interface AgentRunState extends AgentRunSummary {
+  events: AgentRunEvent[];
+  event?: AgentRunEvent;
+}
+
 export interface ConversationRunSummary {
   changedFiles: string[];
   toolCallCount: number;
@@ -70,11 +128,21 @@ export interface ConversationRunSummary {
 
 export interface ContextState {
   estimatedTokens: number;
+  estimatedTokensAfter?: number;
   threshold: number;
   status: "ready" | "compacting" | "warning";
   compactionCount: number;
   lastCompactedAt?: number;
   transcriptPath?: string;
+  preview?: {
+    strategy: "summary";
+    estimatedTokensBefore: number;
+    estimatedTokensAfter: number;
+    transcriptPath: string;
+    protectedMessageCount: number;
+    compactedMessageCount: number;
+    preservedMessageCount: number;
+  };
   message?: string;
 }
 
@@ -83,6 +151,7 @@ export interface McpState {
   serverCount: number;
   toolCount: number;
   message?: string;
+  servers?: McpServerPreview[];
 }
 
 export interface KnowledgeState {
@@ -116,6 +185,7 @@ export interface ConversationSummary {
   messageCount: number;
   mode?: AgentMode;
   status?: ConversationStatus;
+  lastRunId?: string;
   summary?: ConversationRunSummary;
 }
 
@@ -147,6 +217,54 @@ export interface LlmSettings {
   systemPrompt?: string;
 }
 
+export interface ModelCapabilities {
+  modelName: string;
+  contextWindow?: number;
+  maxOutputTokens: number;
+  source: "model_metadata" | "context_window" | "fallback";
+  fetchedAt: number;
+  warning?: string;
+}
+
+export type MemoryScope = "user" | "workspace";
+
+export interface MemoryEntry {
+  scope: MemoryScope;
+  path: string;
+  content: string;
+  exists: boolean;
+  characters: number;
+  updatedAt?: number;
+  limit: number;
+}
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  trigger: string;
+  tags: string;
+  path: string;
+  metadata: Record<string, string>;
+  enabled: boolean;
+  characters: number;
+  updatedAt?: number;
+  usageCount: number;
+  lastUsedAt?: number;
+}
+
+export interface SkillDetail extends SkillSummary {
+  body: string;
+}
+
+export interface SkillUsageRecord {
+  runId: string;
+  conversationId: string;
+  mode: string;
+  status: string;
+  timestamp: number;
+  detail?: string;
+}
+
 export interface McpSettings {
   baseUrls: string[];
   lazyUrls: string[];
@@ -161,6 +279,9 @@ export interface McpServerPreview {
   ok: boolean;
   toolCount: number;
   tools: Array<{ name: string; description: string }>;
+  latencyMs?: number;
+  attempts?: number;
+  lastCheckedAt?: number;
   error?: string;
 }
 

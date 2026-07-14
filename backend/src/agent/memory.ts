@@ -16,6 +16,16 @@ export interface MemorySnapshot {
   workspacePath: string;
 }
 
+export interface MemoryManagementEntry {
+  scope: MemoryScope;
+  path: string;
+  content: string;
+  exists: boolean;
+  characters: number;
+  updatedAt?: number;
+  limit: number;
+}
+
 function memoryPath(workspaceDir: string, scope: MemoryScope): string {
   return path.join(workspaceDir, CODEX_DIR, scope === "user" ? USER_MEMORY_FILE : WORKSPACE_MEMORY_FILE);
 }
@@ -83,6 +93,57 @@ export function writeMemory(workspaceDir: string, scope: unknown, content: unkno
   fs.writeFileSync(tempPath, `${normalized}\n`, "utf-8");
   fs.renameSync(tempPath, filePath);
   return `${scopeLabel(normalizedScope)} updated at ${path.relative(workspaceDir, filePath)} (${normalized.length} chars).`;
+}
+
+export function listMemoryEntries(workspaceDir: string): MemoryManagementEntry[] {
+  return (["user", "workspace"] as MemoryScope[]).map((scope) => {
+    const filePath = memoryPath(workspaceDir, scope);
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      stat = undefined;
+    }
+    const content = readFileIfPresent(filePath);
+    return {
+      scope,
+      path: path.relative(workspaceDir, filePath),
+      content,
+      exists: Boolean(stat),
+      characters: content.length,
+      ...(stat ? { updatedAt: stat.mtimeMs } : {}),
+      limit: scope === "user" ? USER_MEMORY_LIMIT : WORKSPACE_MEMORY_LIMIT,
+    };
+  });
+}
+
+export function deleteMemory(workspaceDir: string, scope: unknown): string {
+  const normalizedScope = normalizeScope(scope);
+  const filePath = memoryPath(workspaceDir, normalizedScope);
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return `${scopeLabel(normalizedScope)} cleared.`;
+}
+
+export function mergeMemory(
+  workspaceDir: string,
+  sourceScope: unknown,
+  targetScope: unknown
+): string {
+  const source = normalizeScope(sourceScope);
+  const target = normalizeScope(targetScope);
+  if (source === target) throw new Error("Source and target memory scopes must differ");
+
+  const sourceContent = readFileIfPresent(memoryPath(workspaceDir, source));
+  if (!sourceContent) throw new Error(`${scopeLabel(source)} is empty`);
+  const targetContent = readFileIfPresent(memoryPath(workspaceDir, target));
+  const heading = `\n\n## Imported from ${scopeLabel(source)}\n`;
+  const merged = targetContent ? `${targetContent}${heading}${sourceContent}` : sourceContent;
+  writeMemory(workspaceDir, target, merged);
+  return `${scopeLabel(source)} merged into ${scopeLabel(target)}.`;
 }
 
 function normalizeScope(scope: unknown): MemoryScope {

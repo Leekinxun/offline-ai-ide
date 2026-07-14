@@ -7,6 +7,7 @@ import {
   ToolFileUpdate,
   WsServerMessage,
   wsSend,
+  AgentRunEventInput,
 } from "./types.js";
 import { callChatCompletion } from "./llm.js";
 import { getAllTools, MCP_CONTROL_TOOLS, TOOL_DISPATCH } from "./tools.js";
@@ -20,10 +21,13 @@ import { loadMemorySnapshot } from "./memory.js";
 import { listWorkspaceSkills } from "./skills.js";
 import {
   compactMessages,
+  type ContextCompactionPreview,
   estimateMessageTokens,
   microcompactMessages,
   safeTrimMessages,
 } from "./context.js";
+import { AgentRunRecorder } from "../chat/runHistory.js";
+import { resolveMaxOutputTokens } from "./modelCapabilities.js";
 
 /**
  * Extract <think>...</think> blocks from LLM output.
@@ -114,7 +118,25 @@ export async function runAgentLoop(
   let compactionCount = 0;
   let lastCompactedAt: number | undefined;
   let lastTranscriptPath: string | undefined;
+  let lastCompactionPreview: ContextCompactionPreview | undefined;
   let knowledgeStateSent = false;
+
+  const recordRunEvent = async (
+    event: AgentRunEventInput,
+    metricsPatch: Record<string, number> = {}
+  ): Promise<void> => {
+    if (!control?.runRecorder) return;
+    const snapshot = await control.runRecorder.event(event, metricsPatch);
+    emit({
+      type: "run_state",
+      conversationId: control.conversationId || control.runRecorder.conversationId,
+      runId: control.runRecorder.runId,
+      mode,
+      status: "running",
+      metrics: snapshot.metrics,
+      event: snapshot.events[snapshot.events.length - 1],
+    });
+  };
 
   const emitContextState = (
     status: "ready" | "compacting" | "warning",
@@ -124,11 +146,13 @@ export async function runAgentLoop(
       type: "context_state",
       requestId: currentRequestId,
       estimatedTokens: estimateMessageTokens(messages),
+      estimatedTokensAfter: lastCompactionPreview?.estimatedTokensAfter,
       threshold: config.contextCompactThreshold,
       status,
       compactionCount,
       lastCompactedAt,
       transcriptPath: lastTranscriptPath,
+      preview: lastCompactionPreview,
       message,
     });
   };
@@ -154,9 +178,30 @@ export async function runAgentLoop(
       compactionCount += 1;
       lastCompactedAt = Date.now();
       lastTranscriptPath = result.transcriptPath;
+      lastCompactionPreview = result.preview;
+      await recordRunEvent(
+        {
+          kind: "context_compacted",
+          label: "Context compacted",
+          detail: `${estimatedTokens} estimated tokens before compaction`,
+        },
+        {
+          compactionCount,
+          estimatedTokensPeak: Math.max(
+            control?.runRecorder?.snapshot().metrics.estimatedTokensPeak || 0,
+            estimatedTokens
+          ),
+        }
+      );
       emitContextState("ready");
     } catch (error) {
       messages = safeTrimMessages(messages);
+      await recordRunEvent({
+        kind: "error",
+        label: "Context compaction failed",
+        isError: true,
+        detail: error instanceof Error ? error.message : "unknown error",
+      });
       emitContextState(
         "warning",
         `Context summary failed; retained a recent message window (${error instanceof Error ? error.message : "unknown error"}).`
@@ -189,6 +234,12 @@ export async function runAgentLoop(
     }
 
     pendingTurns = [...pendingTurns, ...steeringTurns];
+    await recordRunEvent({
+      kind: "steering",
+      label: "Correction queued for the current run",
+      requestId: steeringTurns[0]?.requestId,
+      detail: `${steeringTurns.length} pending instruction(s)`,
+    });
     emit({ type: "done", requestId: currentRequestId, interrupted: true });
     await flushAssistantTurn(
       currentAssistantMessage,
@@ -224,6 +275,25 @@ export async function runAgentLoop(
       }
 
       await compactContextIfNeeded();
+
+      const modelCallStartedAt = Date.now();
+      const currentMetrics = control?.runRecorder?.snapshot().metrics;
+      const estimatedTokensBeforeCall = estimateMessageTokens(messages);
+      await recordRunEvent(
+        {
+          kind: "model_call",
+          label: "Model request started",
+          requestId: currentRequestId,
+        },
+        {
+          iterations: i + 1,
+          modelCalls: (currentMetrics?.modelCalls || 0) + 1,
+          estimatedTokensPeak: Math.max(
+            currentMetrics?.estimatedTokensPeak || 0,
+            estimatedTokensBeforeCall
+          ),
+        }
+      );
 
       const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
         readOnlyWorkspace,
@@ -263,6 +333,7 @@ export async function runAgentLoop(
           status: failedServers.length > 0 ? "warning" : "ready",
           serverCount: mcpDiscovery.servers.filter((server) => server.ok).length,
           toolCount: mcpDiscovery.tools.length,
+          servers: mcpDiscovery.servers,
           message:
             failedServers.length > 0
               ? failedServers.map((server) => `${server.endpoint}: ${server.error}`).join(" | ")
@@ -277,6 +348,12 @@ export async function runAgentLoop(
       // Non-streaming call for tool-use rounds
       let resp: Response;
       try {
+        const maxOutputTokens = await resolveMaxOutputTokens({
+          apiUrl: config.vllmApiUrl,
+          apiKey: config.vllmApiKey,
+          modelName: config.modelName,
+          fallbackMaxOutputTokens: config.agentMaxTokens,
+        });
         resp = await callChatCompletion({
           apiUrl: config.vllmApiUrl,
           apiKey: config.vllmApiKey,
@@ -284,7 +361,7 @@ export async function runAgentLoop(
           systemPrompt,
           messages,
           tools: availableTools,
-          maxTokens: config.agentMaxTokens,
+          maxTokens: maxOutputTokens,
           temperature: 0.3,
           stream: false,
           signal: control?.createAbortSignal(),
@@ -294,6 +371,19 @@ export async function runAgentLoop(
           await stopCurrentTurn(currentAssistantMessage);
           return persistedAssistantMessages;
         }
+        await recordRunEvent(
+          {
+            kind: "error",
+            label: "Model request failed",
+            requestId: currentRequestId,
+            isError: true,
+            durationMs: Date.now() - modelCallStartedAt,
+            detail: e?.message || String(e),
+          },
+          {
+            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
+          }
+        );
         emit({
           type: "error",
           requestId: currentRequestId,
@@ -314,6 +404,19 @@ export async function runAgentLoop(
 
       if (!resp.ok) {
         const errText = await resp.text();
+        await recordRunEvent(
+          {
+            kind: "error",
+            label: "Model returned an error",
+            requestId: currentRequestId,
+            isError: true,
+            durationMs: Date.now() - modelCallStartedAt,
+            detail: `HTTP ${resp.status}: ${errText.slice(0, 300)}`,
+          },
+          {
+            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
+          }
+        );
         emit({
           type: "error",
           requestId: currentRequestId,
@@ -331,6 +434,19 @@ export async function runAgentLoop(
       try {
         data = (await resp.json()) as OpenAIResponse;
       } catch (e: any) {
+        await recordRunEvent(
+          {
+            kind: "error",
+            label: "Model response could not be parsed",
+            requestId: currentRequestId,
+            isError: true,
+            durationMs: Date.now() - modelCallStartedAt,
+            detail: e?.message || String(e),
+          },
+          {
+            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
+          }
+        );
         emit({
           type: "error",
           requestId: currentRequestId,
@@ -346,6 +462,18 @@ export async function runAgentLoop(
 
       const choice = data.choices?.[0];
       if (!choice) {
+        await recordRunEvent(
+          {
+            kind: "error",
+            label: "Model returned no choice",
+            requestId: currentRequestId,
+            isError: true,
+            durationMs: Date.now() - modelCallStartedAt,
+          },
+          {
+            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
+          }
+        );
         emit({ type: "error", requestId: currentRequestId, content: "No response from LLM" });
         await flushAssistantTurn(
           currentAssistantMessage,
@@ -354,6 +482,32 @@ export async function runAgentLoop(
         );
         return persistedAssistantMessages;
       }
+
+      const usage = data.usage || {};
+      const promptTokens =
+        typeof usage.prompt_tokens === "number" ? Math.max(0, usage.prompt_tokens) : 0;
+      const completionTokens =
+        typeof usage.completion_tokens === "number"
+          ? Math.max(0, usage.completion_tokens)
+          : 0;
+      const totalTokens =
+        typeof usage.total_tokens === "number"
+          ? Math.max(0, usage.total_tokens)
+          : promptTokens + completionTokens;
+      await recordRunEvent(
+        {
+          kind: "model_response",
+          label: "Model response received",
+          requestId: currentRequestId,
+          durationMs: Date.now() - modelCallStartedAt,
+          detail: `finish_reason=${choice.finish_reason || "unknown"}`,
+        },
+        {
+          promptTokens: (currentMetrics?.promptTokens || 0) + promptTokens,
+          completionTokens: (currentMetrics?.completionTokens || 0) + completionTokens,
+          totalTokens: (currentMetrics?.totalTokens || 0) + totalTokens,
+        }
+      );
 
       const assistantMsg = choice.message;
       const finishReason = choice.finish_reason;
@@ -401,6 +555,22 @@ export async function runAgentLoop(
             compressRequested = true;
           }
           const args = parseToolArgs(toolCall.function.arguments);
+          const toolStartedAt = Date.now();
+          const toolMetrics = control?.runRecorder?.snapshot().metrics;
+          await recordRunEvent(
+            {
+              kind: "tool_call",
+              label: "Tool execution started",
+              requestId: currentRequestId,
+              toolName: toolCall.function.name,
+              ...(toolCall.function.name === "skill_load" && typeof args.name === "string"
+                ? { detail: args.name }
+                : {}),
+            },
+            {
+              toolCalls: (toolMetrics?.toolCalls || 0) + 1,
+            }
+          );
           emit({
             type: "tool_call",
             requestId: currentRequestId,
@@ -459,6 +629,22 @@ export async function runAgentLoop(
             isError = true;
             fileUpdate = undefined;
           }
+
+          const afterToolMetrics = control?.runRecorder?.snapshot().metrics;
+          await recordRunEvent(
+            {
+              kind: "tool_result",
+              label: isError ? "Tool failed" : "Tool completed",
+              requestId: currentRequestId,
+              toolName: toolCall.function.name,
+              durationMs: Date.now() - toolStartedAt,
+              isError,
+              detail: isError ? result.slice(0, 500) : undefined,
+            },
+            {
+              toolErrors: (afterToolMetrics?.toolErrors || 0) + (isError ? 1 : 0),
+            }
+          );
 
           currentAssistantMessage.toolCalls = [
             ...(currentAssistantMessage.toolCalls || []).filter(
@@ -559,6 +745,19 @@ export async function runAgentLoop(
     }
 
     // Max iterations
+    const iterationMetrics = control?.runRecorder?.snapshot().metrics;
+    await recordRunEvent(
+      {
+        kind: "error",
+        label: "Agent iteration limit reached",
+        requestId: currentRequestId,
+        isError: true,
+        detail: `Maximum iterations: ${config.maxAgentIterations}`,
+      },
+      {
+        modelErrors: (iterationMetrics?.modelErrors || 0) + 1,
+      }
+    );
     emit({
       type: "error",
       requestId: currentRequestId,
@@ -586,6 +785,8 @@ export interface AgentLoopControl {
   isStopped: () => boolean;
   createAbortSignal: () => AbortSignal | undefined;
   mode?: AgentMode;
+  conversationId?: string;
+  runRecorder?: AgentRunRecorder;
 }
 
 function buildUserContent(
