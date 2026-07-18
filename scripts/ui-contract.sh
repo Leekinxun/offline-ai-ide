@@ -39,5 +39,8 @@ assert_contains "$BUILTIN_PLUGIN_FILE" "jsonPreviewPlugin" "builtin JSON visuali
 assert_contains "$JSON_PREVIEW_FILE" "builtin.json-preview" "builtin JSON visualizer manifest"
 assert_contains "$JSON_PREVIEW_FILE" "role=\"tree\"" "accessible JSON tree"
 assert_contains "$CSS_FILE" ".json-preview" "JSON visualizer theme surface"
+assert_contains "$CSS_FILE" ".terminal-resize-handle" "resizable terminal handle"
+assert_contains "$APP_FILE" "aria-valuenow={terminalHeight}" "keyboard-accessible terminal resize"
+assert_contains "$CSS_FILE" "landing-scroll" "scrollable landing page root"
 
 echo "CrownForge UI contract passed."

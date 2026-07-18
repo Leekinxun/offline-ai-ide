@@ -4182,6 +4182,42 @@ select:focus-visible,
   background: var(--surface-panel);
 }
 
+.terminal-resize-handle {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  height: 9px;
+  flex: 0 0 9px;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+  cursor: row-resize;
+  outline: none;
+}
+
+.terminal-resize-handle::before {
+  width: 42px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  content: "";
+  transition: background var(--transition), width var(--transition);
+}
+
+.terminal-resize-handle:hover,
+.terminal-resize-handle.dragging,
+.terminal-resize-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-workbench));
+}
+
+.terminal-resize-handle:hover::before,
+.terminal-resize-handle.dragging::before,
+.terminal-resize-handle:focus-visible::before {
+  width: 56px;
+  background: var(--accent);
+}
+
 .terminal-disabled {
   flex: 1;
   display: flex;
@@ -6046,6 +6082,15 @@ select:focus-visible,
 html {
   background: var(--bg-primary);
   scroll-behavior: smooth;
+}
+
+html.landing-scroll,
+body.landing-scroll,
+#root.landing-scroll {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 body {

@@ -11,6 +11,7 @@ interface TerminalProps {
   disabled?: boolean;
   disabledReason?: string | null;
   onClose?: () => void;
+  style?: React.CSSProperties;
 }
 
 export const Terminal: React.FC<TerminalProps> = ({
@@ -19,12 +20,14 @@ export const Terminal: React.FC<TerminalProps> = ({
   disabled = false,
   disabledReason,
   onClose,
+  style,
 }) => {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
   const [connected, setConnected] = useState(false);
   const disconnectLabelRef = useRef(t("terminal.disconnected"));
@@ -119,9 +122,16 @@ export const Terminal: React.FC<TerminalProps> = ({
 
     const handleResize = () => fitAddon.fit();
     window.addEventListener("resize", handleResize);
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(handleResize)
+      : null;
+    if (resizeObserver && panelRef.current) {
+      resizeObserver.observe(panelRef.current);
+    }
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      resizeObserver?.disconnect();
       ws.close();
       setConnected(false);
       xterm.dispose();
@@ -143,8 +153,9 @@ export const Terminal: React.FC<TerminalProps> = ({
   // Always render DOM so ref exists; toggle with display
   return (
     <div
+      ref={panelRef}
       className="terminal-panel panel-shell"
-      style={visible ? undefined : { display: "none" }}
+      style={{ ...style, ...(visible ? undefined : { display: "none" }) }}
     >
       <div className="terminal-header">
         <div className="terminal-header-title"><span className="terminal-header-icon">›_</span>{t("terminal.title")}</div>

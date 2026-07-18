@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Bot,
@@ -54,14 +54,34 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const [mode, setMode] = useState<Mode>("code");
   const copy = useMemo(() => MODE_COPY[mode][isZh ? "zh" : "en"], [isZh, mode]);
 
+  useEffect(() => {
+    const scrollTargets = [document.documentElement, document.body, document.getElementById("root")];
+    scrollTargets.forEach((target) => target?.classList.add("landing-scroll"));
+    return () => {
+      scrollTargets.forEach((target) => target?.classList.remove("landing-scroll"));
+      window.scrollTo({ top: 0, behavior: "auto" });
+    };
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  };
+
   const goTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = document.getElementById(id);
+    if (!target) return;
+    const navHeight = document.querySelector<HTMLElement>(".landing-nav")?.offsetHeight || 0;
+    const scrollContainer = document.scrollingElement || document.documentElement;
+    const top = Math.max(0, target.getBoundingClientRect().top + scrollContainer.scrollTop - navHeight - 12);
+    scrollContainer.scrollTo({ top, behavior: "smooth" });
   };
 
   return (
     <div className="landing-page">
       <header className="landing-nav">
-        <button className="landing-brand-button" type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
+        <button className="landing-brand-button" type="button" onClick={scrollToTop}>
           <BrandMark size={28} title={PRODUCT_NAME} />
         </button>
         <nav className="landing-nav-links" aria-label={isZh ? "首页导航" : "Landing navigation"}>

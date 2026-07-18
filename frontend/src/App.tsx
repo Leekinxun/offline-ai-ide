@@ -324,6 +324,7 @@ function AuthenticatedApp({
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [chatWidth, setChatWidth] = useState(380);
+  const [terminalHeight, setTerminalHeight] = useState(260);
   const [previewModes, setPreviewModes] = useState<Record<string, FilePreviewMode>>(
     {}
   );
@@ -335,14 +336,16 @@ function AuthenticatedApp({
   const lastWorkspaceMtimeRef = useRef(0);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const draggingRef = useRef<"sidebar" | "chat" | null>(null);
+  const draggingRef = useRef<"sidebar" | "chat" | "terminal" | null>(null);
   const navigationRequestRef = useRef(0);
   const highlightRequestRef = useRef(0);
   const editorViewStatesRef = useRef<
     Record<string, monaco.editor.ICodeEditorViewState | null>
   >({});
   const startXRef = useRef(0);
+  const startYRef = useRef(0);
   const startWidthRef = useRef(0);
+  const startHeightRef = useRef(0);
   const layoutBeforeFocusRef = useRef({ sidebar: true, chat: true, team: true });
   const fs = useFileSystem(token);
 
@@ -499,14 +502,56 @@ function AuthenticatedApp({
     [sidebarWidth, chatWidth]
   );
 
+  const handleTerminalResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      draggingRef.current = "terminal";
+      startYRef.current = e.clientY;
+      startHeightRef.current = terminalHeight;
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    },
+    [terminalHeight]
+  );
+
+  const adjustTerminalHeight = useCallback((delta: number) => {
+    const maxHeight = Math.max(260, Math.min(680, window.innerHeight - 140));
+    setTerminalHeight((height) => Math.max(160, Math.min(maxHeight, height + delta)));
+  }, []);
+
+  const handleTerminalResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        adjustTerminalHeight(24);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        adjustTerminalHeight(-24);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setTerminalHeight(160);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setTerminalHeight(Math.max(260, Math.min(680, window.innerHeight - 140)));
+      }
+    },
+    [adjustTerminalHeight]
+  );
+
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!draggingRef.current) return;
       const delta = e.clientX - startXRef.current;
       if (draggingRef.current === "sidebar") {
         setSidebarWidth(Math.max(150, Math.min(500, startWidthRef.current + delta)));
-      } else {
+      } else if (draggingRef.current === "chat") {
         setChatWidth(Math.max(250, Math.min(600, startWidthRef.current - delta)));
+      } else {
+        const verticalDelta = startYRef.current - e.clientY;
+        const maxHeight = Math.max(260, Math.min(680, window.innerHeight - 140));
+        setTerminalHeight(
+          Math.max(160, Math.min(maxHeight, startHeightRef.current + verticalDelta))
+        );
       }
     };
     const onMouseUp = () => {
@@ -2107,9 +2152,24 @@ function AuthenticatedApp({
             )}
             </Suspense>
           </div>
+          {terminalVisible && (
+            <div
+              className={`terminal-resize-handle${draggingRef.current === "terminal" ? " dragging" : ""}`}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label={t("terminal.resize")}
+              aria-valuemin={160}
+              aria-valuemax={680}
+              aria-valuenow={terminalHeight}
+              tabIndex={0}
+              onMouseDown={handleTerminalResizeStart}
+              onKeyDown={handleTerminalResizeKeyDown}
+            />
+          )}
           <Terminal
             key={workspaceDir}
             visible={terminalVisible}
+            style={{ height: terminalHeight }}
             token={token}
             disabled={readOnlyWorkspace}
             disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
