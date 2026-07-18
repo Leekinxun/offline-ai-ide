@@ -6,6 +6,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
+import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
@@ -36,15 +37,12 @@ import {
   Settings,
   Moon,
   Sun,
-  Users,
-  Search,
   Command,
-  Maximize2,
-  Minimize2,
   GitBranch,
   Bot,
   ChevronRight,
   FileCode2,
+  Files,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -108,6 +106,9 @@ export default function App() {
     const saved = localStorage.getItem("editorFont");
     return saved || EDITOR_FONT_OPTIONS[0].family;
   });
+  const [publicView, setPublicView] = useState<"landing" | "login">(() =>
+    window.location.pathname === "/login" ? "login" : "landing"
+  );
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -123,8 +124,29 @@ export default function App() {
     localStorage.setItem("editorFont", fontFamily);
   }, []);
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setPublicView(window.location.pathname === "/login" ? "login" : "landing");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const showPublicView = useCallback((view: "landing" | "login") => {
+    const path = view === "login" ? "/login" : "/";
+    window.history.pushState({}, "", path);
+    setPublicView(view);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    auth.logout();
+    window.history.replaceState({}, "", "/login");
+    setPublicView("login");
+  }, [auth]);
+
   // Show loading while validating token
-  if (auth.loading) {
+  if (auth.loading && auth.token) {
     return (
       <div className="login-page">
         <div className="login-card" style={{ textAlign: "center", padding: 40 }}>
@@ -142,7 +164,23 @@ export default function App() {
 
   // Show login if not authenticated
   if (!auth.token || !auth.user) {
-    return <LoginPage onLogin={auth.login} />;
+    if (publicView === "landing") {
+      return (
+        <LandingPage
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onEnter={() => showPublicView("login")}
+        />
+      );
+    }
+    return (
+      <LoginPage
+        onLogin={auth.login}
+        onBack={() => showPublicView("landing")}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
   }
 
   return (
@@ -151,7 +189,7 @@ export default function App() {
       username={auth.user.username}
       workspaceDir={auth.user.workspaceDir}
       isAdmin={auth.user.isAdmin}
-      onLogout={auth.logout}
+      onLogout={handleLogout}
       onChangeWorkspace={auth.changeWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
@@ -268,7 +306,7 @@ function AuthenticatedApp({
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [teamVisible, setTeamVisible] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [, setFocusMode] = useState(false);
   const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode>("commands");
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
   const [chatHistoryRequest, setChatHistoryRequest] = useState(0);
@@ -284,8 +322,8 @@ function AuthenticatedApp({
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(260);
-  const [chatWidth, setChatWidth] = useState(340);
+  const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [chatWidth, setChatWidth] = useState(380);
   const [previewModes, setPreviewModes] = useState<Record<string, FilePreviewMode>>(
     {}
   );
@@ -1642,121 +1680,85 @@ function AuthenticatedApp({
     showToast(t("app.mergeApplied"));
   }, [diffViewerFile, mergedConflictContent, showToast, t]);
 
+  const activeConversationTitle = chat.currentConversationId
+    ? chat.conversations.find((conversation) => conversation.id === chat.currentConversationId)?.title
+    : null;
+  const workbenchTaskTitle = chat.isStreaming
+    ? t("chat.runInProgress")
+    : activeConversationTitle || activeFile?.name || t("app.openFileToStart");
+
   return (
     <div className="app">
       {/* Title Bar */}
       <div className="titlebar">
         <div className="titlebar-left">
           <BrandMark
-            size={22}
+            size={26}
             title={PRODUCT_NAME}
-            subtitle={t("app.offline")}
+            subtitle={workspaceDir}
             className="titlebar-brand"
           />
-          <div className="workspace-breadcrumb" title={workspaceDir}>
-            <span className="workspace-breadcrumb-label">{t("app.workspace")}</span>
-            <strong>{workspaceLabel}</strong>
-          </div>
+        </div>
+        <div className="workbench-task-pill" aria-live="polite">
+          <span className="workbench-task-mode">
+            {t(`chat.mode.${chat.agentMode}.label`)}
+          </span>
+          <span className="workbench-task-title">
+            {workbenchTaskTitle}
+          </span>
+          <span className={`workbench-task-state${chat.isStreaming ? " running" : ""}`}>
+            <i />
+            {chat.isStreaming ? t("chat.runPreparing") : chat.connected ? t("chat.online") : t("chat.offline")}
+          </span>
         </div>
         <div className="titlebar-command-bar">
-          <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("files")}>
-            <Search size={14} />
-            <span>{t("command.quickOpen")}</span>
-            <kbd>⌘P</kbd>
-          </button>
           <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("commands")}>
             <Command size={14} />
-            <span>{t("command.commandPalette")}</span>
+            <span>{t("command.commandPalette")}…</span>
             <kbd>⌘⇧P</kbd>
-          </button>
-          <button type="button" className="titlebar-command-btn" onClick={() => setWorkspaceSearchVisible(true)}>
-            <Search size={14} />
-            <span>{t("search.title")}</span>
-            <kbd>⌘⇧F</kbd>
           </button>
         </div>
         <div className="titlebar-right">
-          <div className="titlebar-context-actions">
-            <span className="user-badge">{username}</span>
-            <button
-              className={`titlebar-btn${focusMode ? " active" : ""}`}
-              onClick={toggleFocusMode}
-              title={t(focusMode ? "app.exitFocusMode" : "app.focusMode")}
-            >
-              {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
-            </button>
-            <button
-              className={`titlebar-btn${settingsVisible ? " active" : ""}`}
-              onClick={() => setSettingsVisible(true)}
-              title={t("app.settings")}
-            >
-              <Settings size={17} />
-            </button>
-            <button
-              className="titlebar-btn"
-              onClick={onToggleTheme}
-              title={
-                theme === "light"
-                  ? t("app.switchToDarkTheme")
-                  : t("app.switchToLightTheme")
-              }
-            >
-              {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
-            </button>
-          </div>
-          <div className="titlebar-panel-actions">
-            <button
-              className={`titlebar-btn${teamVisible ? " active" : ""}`}
-              onClick={() => setTeamVisible((v) => !v)}
-              title={t("team.title")}
-            >
-              <Users size={17} />
-            </button>
-            <button
-              className={`titlebar-btn${gitVisible ? " active" : ""}`}
-              onClick={() => setGitVisible((value) => !value)}
-              title={t("git.title")}
-            >
-              <GitBranch size={17} />
-            </button>
-            <button
-              className={`titlebar-btn${agentsVisible ? " active" : ""}`}
-              onClick={() => setAgentsVisible((value) => !value)}
-              title={t("agents.title")}
-            >
-              <Bot size={17} />
-            </button>
-            <button
-              className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
-              onClick={() => setSidebarVisible((v) => !v)}
-              title={t("app.toggleSidebar")}
-            >
-              <PanelLeft size={17} />
-            </button>
-            <button
-              className={`titlebar-btn${terminalVisible ? " active" : ""}`}
-              onClick={() => setTerminalVisible((v) => !v)}
-              title={t("app.toggleTerminal")}
-            >
-              <TerminalSquare size={17} />
-            </button>
-            <button
-              className={`titlebar-btn${chatVisible ? " active" : ""}`}
-              onClick={() => setChatVisible((v) => !v)}
-              title={t("app.toggleAiChat")}
-            >
-              <MessageSquare size={17} />
-            </button>
-          </div>
-          <div className="titlebar-session-actions">
-            <button
-              className="titlebar-btn"
-              onClick={onLogout}
-              title={t("app.logout")}
-            >
-              <LogOut size={17} />
-            </button>
-          </div>
+          <button
+            className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
+            onClick={() => setSidebarVisible((visible) => !visible)}
+            title={t("app.toggleSidebar")}
+            aria-pressed={sidebarVisible}
+          >
+            <PanelLeft size={17} />
+          </button>
+          <button
+            className={`titlebar-btn${chatVisible ? " active" : ""}`}
+            onClick={() => setChatVisible((visible) => !visible)}
+            title={t("app.toggleAiChat")}
+            aria-pressed={chatVisible}
+          >
+            <MessageSquare size={17} />
+          </button>
+          <details className="titlebar-user-menu">
+            <summary className="user-chip" title={username}>
+              <span className="user-avatar" aria-hidden="true">
+                {username.slice(0, 1).toUpperCase()}
+              </span>
+              <span>{username}</span>
+            </summary>
+            <div className="titlebar-user-popover">
+              <button type="button" onClick={onToggleTheme}>
+                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+                <span>
+                  {t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
+                </span>
+              </button>
+              <button type="button" onClick={() => setSettingsVisible(true)}>
+                <Settings size={15} />
+                <span>{t("app.settings")}</span>
+              </button>
+              <button type="button" onClick={onLogout}>
+                <LogOut size={15} />
+                <span>{t("app.logout")}</span>
+              </button>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -1791,6 +1793,62 @@ function AuthenticatedApp({
             }}
           />
         )}
+        <nav className="activity-rail" aria-label={t("app.workspace")}>
+          <button
+            type="button"
+            className={`activity-rail-btn${sidebarVisible ? " active" : ""}`}
+            onClick={() => setSidebarVisible((value) => !value)}
+            title={t("sidebar.explorer")}
+            aria-label={t("sidebar.explorer")}
+            aria-pressed={sidebarVisible}
+          >
+            <Files size={18} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${gitVisible ? " active" : ""}`}
+            onClick={() => setGitVisible((value) => !value)}
+            title={t("git.title")}
+            aria-label={t("git.title")}
+            aria-pressed={gitVisible}
+          >
+            <GitBranch size={18} />
+            {(chat.currentRunSummary?.changedFiles.length || 0) > 0 && (
+              <span className="activity-rail-badge">{chat.currentRunSummary?.changedFiles.length}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${agentsVisible ? " active" : ""}`}
+            onClick={() => setAgentsVisible((value) => !value)}
+            title={t("agents.title")}
+            aria-label={t("agents.title")}
+            aria-pressed={agentsVisible}
+          >
+            <Bot size={18} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${terminalVisible ? " active" : ""}`}
+            onClick={() => setTerminalVisible((value) => !value)}
+            title={t("app.toggleTerminal")}
+            aria-label={t("app.toggleTerminal")}
+            aria-pressed={terminalVisible}
+          >
+            <TerminalSquare size={18} />
+          </button>
+          <span className="activity-rail-spacer" />
+          <button
+            type="button"
+            className={`activity-rail-btn${settingsVisible ? " active" : ""}`}
+            onClick={() => setSettingsVisible(true)}
+            title={t("app.settings")}
+            aria-label={t("app.settings")}
+            aria-pressed={settingsVisible}
+          >
+            <Settings size={18} />
+          </button>
+        </nav>
         <Sidebar
           tree={fileTree}
           activeFilePath={activeFilePath}
@@ -2210,6 +2268,7 @@ function AuthenticatedApp({
           visible={chatVisible}
           focusRequest={chatFocusNonce}
           agentMode={chat.agentMode}
+          taskTitle={workbenchTaskTitle}
           onAgentModeChange={chat.setAgentMode}
           currentRunSummary={chat.currentRunSummary}
           contextState={chat.contextState}

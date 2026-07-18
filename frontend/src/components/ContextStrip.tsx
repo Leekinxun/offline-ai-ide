@@ -1,5 +1,4 @@
 import React from "react";
-import { BookOpen, PlugZap, Sparkles } from "lucide-react";
 import { ContextState, KnowledgeState, McpState } from "../types";
 import { useI18n } from "../i18n";
 
@@ -35,9 +34,7 @@ export const ContextStrip: React.FC<ContextStripProps> = ({
     <div className="context-strip" aria-label={t("chat.contextStrip")}>
       <div className={`context-strip-card context-${contextState.status}`}>
         <div className="context-strip-card-head">
-          <span className="context-strip-label">
-            <Sparkles size={12} /> {t("chat.contextLabel")}
-          </span>
+          <span className="context-strip-label">{t("chat.contextLabel")}</span>
           <span className="context-strip-value">{contextValue}</span>
         </div>
         <div className="context-strip-progress" aria-hidden="true">
@@ -56,9 +53,7 @@ export const ContextStrip: React.FC<ContextStripProps> = ({
         onClick={onOpenSettings}
         title={mcpState.message || t("chat.mcpHint")}
       >
-        <span className="context-strip-label">
-          <PlugZap size={12} /> {t("chat.integrationsLabel")}
-        </span>
+        <span className="context-strip-label">MCP</span>
         <strong>{t("chat.mcpTools", { count: mcpState.toolCount })}</strong>
         <span className="context-strip-detail">
           {t("chat.mcpServers", { count: mcpState.serverCount })}
@@ -71,14 +66,24 @@ export const ContextStrip: React.FC<ContextStripProps> = ({
         onClick={onOpenSettings}
         title={t("chat.knowledgeHint")}
       >
-        <span className="context-strip-label">
-          <BookOpen size={12} /> {t("chat.knowledgeLabel")}
-        </span>
-        <strong>{t("chat.knowledge", {
-          memory: knowledgeState.memoryFiles,
-          skills: knowledgeState.skillCount,
-        })}</strong>
+        <span className="context-strip-label">{t("chat.memoryLabel")}</span>
+        <strong>
+          {knowledgeState.memoryFiles > 0
+            ? t("chat.memoryLoaded", { count: knowledgeState.memoryFiles })
+            : t("chat.memoryEmpty")}
+        </strong>
         <span className="context-strip-detail">{t("chat.knowledgeDetail")}</span>
+      </button>
+
+      <button
+        type="button"
+        className="context-strip-card context-strip-action"
+        onClick={onOpenSettings}
+        title={t("chat.knowledgeHint")}
+      >
+        <span className="context-strip-label">{t("chat.skillsLabel")}</span>
+        <strong>{t("chat.skillsAvailable", { count: knowledgeState.skillCount })}</strong>
+        <span className="context-strip-detail">{t("settings.skillsManagement")}</span>
       </button>
     </div>
   );

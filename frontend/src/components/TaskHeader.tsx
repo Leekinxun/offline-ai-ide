@@ -5,11 +5,10 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { AgentMode } from "../types";
 import { useI18n } from "../i18n";
 
 interface TaskHeaderProps {
-  agentMode: AgentMode;
+  taskTitle: string;
   connected: boolean;
   currentConversationId: string | null;
   isStreaming: boolean;
@@ -23,7 +22,7 @@ interface TaskHeaderProps {
 }
 
 export const TaskHeader: React.FC<TaskHeaderProps> = ({
-  agentMode,
+  taskTitle,
   connected,
   currentConversationId,
   isStreaming,
@@ -52,10 +51,7 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             <Sparkles size={14} />
           </span>
           <div className="chat-header-heading">
-            <span className="chat-header-title">{t("chat.title")}</span>
-            <span className={`chat-header-mode mode-${agentMode}`}>
-              {t(`chat.mode.${agentMode}.label`)}
-            </span>
+            <span className="chat-header-title" title={taskTitle}>{taskTitle}</span>
           </div>
         </div>
         <div className="task-header-status" aria-live="polite">

@@ -483,7 +483,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <FolderUp size={15} />
           </button>
           <button
-            className="sidebar-action-btn"
+            className="sidebar-action-btn workbench-refresh"
             title={t("common.refresh")}
             aria-label={t("common.refresh")}
             onClick={onRefreshTree}

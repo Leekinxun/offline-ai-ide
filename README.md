@@ -29,6 +29,8 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Added a repeatable **UI Contract** check to `scripts/verify.sh` covering responsive breakpoints, focus states, dialog semantics, `PanelShell`, and reduced-motion support
 - Increased the Workbench typography baseline and normalized panel, status, and metadata sizing for better readability on remote browser sessions
 - Reworked the **Explorer** with a visible workspace identity card, inline file filtering, file/folder counts, grouped creation actions, keyboard-accessible tree items, and clearer empty / no-match states
+- Added a builtin **JSON Visualizer** with searchable and collapsible trees, node statistics, JSONPath/value copy actions, invalid-file feedback, and full light/dark theme support
+- Aligned the live React Workbench with the approved `workbench.html` baseline at 1440×900: a 52px header, 52px activity rail, 272px Explorer, 380px Task Dock, and 26px status bar, while keeping authentication, file, command, Git, Agent, Team, terminal, settings, and chat flows reachable
 
 ### v0.6.1 · 2026-07-14
 
@@ -100,6 +102,18 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 This repository now documents releases in a lightweight GitHub-style changelog format.
 `v0.7.0` is the current documented release and completes the CrownForge Workbench frontend redesign with task context surfaces, responsive panels, readable typography, a more capable Explorer, per-file editor state restoration, accessible keyboard interactions, and repeatable UI contract verification on top of the `v0.6.1` Agent context and MCP capabilities.
 
+## Workbench Design Baseline
+
+The live frontend uses the approved `workbench.html` visual reference for the desktop workbench. At the 1440×900 acceptance viewport, the shell is organized as:
+
+- **Workspace Header** — CrownForge identity, workspace path, active task, command palette, panel toggles, and a compact user menu
+- **Activity Rail** — Explorer, Changes, Agents, Terminal, and Settings with low-noise active states
+- **Editor Canvas** — tabs, breadcrumbs, Monaco or file preview, and the primary code workspace
+- **Task Dock** — task title, Ask / Code / Review / Plan modes, Context / MCP / Memory / Skills status, messages, run evidence, and composer
+- **Status Bar** — connection, branch, change, cursor, language, and background task metadata
+
+The implementation keeps real workspace data and existing interaction flows behind this shell; the reference file supplies layout, hierarchy, spacing, and visual density rather than mock content.
+
 ## Features
 
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
@@ -107,6 +121,7 @@ This repository now documents releases in a lightweight GitHub-style changelog f
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
 - **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
+- **JSON Visualization** — JSON files open in a builtin searchable tree preview with statistics, expand/collapse controls, JSONPath/value copy actions, and clear parse-error feedback
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
 - **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, interruptible steering, automatic context compaction with preserved `.transcripts/`, lazy-loaded external MCP tools, and honors team read-only roles
@@ -233,10 +248,11 @@ The frontend now supports a lightweight plugin architecture inspired by VS Code:
 - Builtin plugins ship inside the app bundle and can be enabled/disabled from Settings
 - External plugins are discovered from the local `plugins/` directory and installed fully offline
 - Plugins declare explicit permissions and derived scopes before activation
-- Editor highlighting and chat Markdown rendering are implemented as builtin plugins
+- Editor highlighting, chat Markdown rendering, and JSON visualization are implemented as builtin plugins
 - Markdown file preview ships as a working external sample plugin in `plugins/markdown-file-preview/`
 
 Open a Markdown file in the IDE to use the preview toolbar with `Edit`, `Preview`, and `Split` modes.
+Open a JSON file to enter the builtin visual tree by default; use the same toolbar to switch back to editing or split view.
 Docker images now also include the shipped `plugins/` directory by default, and the provided `docker-compose.yml` mounts local `./plugins` to `/app/plugins` so external plugins work out of the box.
 
 See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest format, host APIs, permissions, and offline installation flow.

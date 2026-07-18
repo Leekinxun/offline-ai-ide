@@ -3,15 +3,28 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-14
-- Primary product surfaces: 登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Agent Board、终端和设置
+- Last refreshed: 2026-07-18
+- Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Agent Board、终端和设置
 - Evidence reviewed:
+  - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
+  - `../brand-spec.md`：现代极简、hairline 边框、单一蓝色强调色和任务状态优先的品牌规范
   - `frontend/src/App.tsx`：三栏工作区、顶部操作栏、面板开关、Focus Mode 和响应式布局
   - `frontend/src/App.css`：现有浅色/深色 token、间距、面板和弹层样式
   - `frontend/src/components/ChatPanel.tsx`：Ask/Code/Review/Plan 模式、任务状态、工具调用和输入区
+  - `frontend/src/plugins/builtin/jsonPreviewPlugin.tsx`：JSON 文件的搜索、折叠、统计、复制和错误态可视化
   - `frontend/src/components/GitPanel.tsx`、`AgentBoard.tsx`、`WorkspaceWelcome.tsx`、`CommandPalette.tsx`
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
+
+## Approved 2026 redesign baseline
+
+- Visual source of truth: 仓库根目录的 `index.html`、`login.html`、`workbench.html`，默认桌面验收视口为 1440×900。
+- Landing: 大留白、强排版层级、极少装饰；首屏突出“本地、离线、可控”，产品能力、任务主线和四种模式依次展开。
+- Login: 左侧品牌/产品叙事与右侧登录卡并置；桌面端保留预览画布，窄屏收敛为单列登录流。
+- Workbench: 56px 工作区 Header + 48px Activity Rail + Explorer + Editor Canvas + Task Dock + 22px Status Bar；编辑器永远是主视觉中心。
+- Theme contract: 所有新增页面和工作台表面都必须消费同一组语义 token；亮色、暗色均为一等主题，主题偏好保存在本地并同步 Monaco。
+- Interaction parity: 保留现有认证、文件、搜索、命令、Git、Agent、Team、终端、设置、AI 对话、面板拖拽和响应式抽屉能力。
+- Visual acceptance: 首页、登录页、工作台在 1440×900 下与批准基线保持相同的信息层级、布局比例、密度和交互分组；允许使用仓库内真实数据替换原型假数据。
 
 ## Visual audit
 
@@ -81,6 +94,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
 - `PanelShell`: standardize title, close, refresh, empty, loading and error states across Git, Agent, Team, Terminal, Settings and Knowledge.
 - `KnowledgeCenter`: combine Memory and Skills management with search, scope, preview and recent usage while preserving the current admin boundary.
 - `Explorer`: keep the workspace identity visible, provide an inline tree filter, group primary creation actions, and make selection mode and item states legible without relying on tiny icon-only controls.
+- `JsonPreview`: render valid JSON as a searchable, collapsible tree with node statistics and copy actions; keep invalid JSON in a clear error state and preserve parity across light and dark themes.
 
 ## Redesign phases and acceptance criteria
 
@@ -223,6 +237,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - `TaskHeader`：统一 AI 模式、任务标题、运行状态、停止/重试/继续操作
   - `ChangeSummary`：统一变更文件、Diff、Review 结果和下一步操作
   - `PanelShell`：统一面板标题、工具栏、空状态、错误状态和关闭行为
+  - `JsonPreview`：作为 `builtin.json-preview` 内置插件，为 JSON 文件提供树形预览、搜索、统计、展开/折叠、路径/值复制和格式错误反馈
 - Variants and states:
   - default / hover / active / disabled / loading / error / empty / success
   - task: idle / running / waiting-for-input / completed / failed / stopped

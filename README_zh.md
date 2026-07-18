@@ -29,6 +29,8 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - 新增可重复执行的 **UI Contract** 检查，并纳入 `scripts/verify.sh`，覆盖响应式断点、焦点状态、Dialog 语义、`PanelShell` 和 reduced-motion 支持
 - 提升 Workbench 全局字号，并统一面板、状态和元信息层级，改善远程服务器浏览器中的阅读体验
 - 重构 **资源管理器**：新增工作区身份卡、文件筛选、文件 / 文件夹统计、分组创建操作、可键盘操作的文件树，以及更清晰的空工作区 / 无匹配状态
+- 新增内置 **JSON 可视化插件**：支持树形搜索、节点统计、全部展开/折叠、JSONPath/值复制、格式错误反馈，并完整适配浅色与深色主题
+- 按批准的 `workbench.html` 基线对齐真实 React 工作台（1440×900）：52px Header、52px Activity Rail、272px Explorer、380px Task Dock 和 26px Status Bar，同时保留认证、文件、命令、Git、Agent、Team、终端、设置和 AI 对话入口
 
 ### v0.6.1 · 2026-07-14
 
@@ -94,6 +96,18 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
 `v0.7.0` 是当前 README 记录的最新版本，完成 CrownForge Workbench 前端改造，补充任务上下文、响应式面板、可读字号、增强版资源管理器、按文件编辑器状态恢复、键盘无障碍交互和可重复的 UI Contract 验证，并延续 `v0.6.1` 的 Agent 上下文与 MCP 能力。
 
+## 工作台设计基线
+
+真实前端以批准的 `workbench.html` 作为桌面工作台视觉参考，默认验收视口为 1440×900。工作台由以下区域组成：
+
+- **Workspace Header** — CrownForge 品牌、工作区路径、当前任务、命令面板、面板切换和紧凑用户菜单
+- **Activity Rail** — 资源管理器、变更、智能体、终端和设置，使用低噪声激活态
+- **Editor Canvas** — 标签页、面包屑、Monaco 或文件预览，以及作为主视觉中心的代码工作区
+- **Task Dock** — 任务标题、Ask / Code / Review / Plan 模式、Context / MCP / Memory / Skills 状态、消息、运行证据和输入区
+- **Status Bar** — 连接、分支、变更、光标、语言和后台任务等辅助信息
+
+实现保留真实工作区数据和现有交互流程；参考文件只定义布局、层级、间距和信息密度，不替换真实业务内容。
+
 ## 功能特性
 
 ### 本地验证与 Docker Smoke Test
@@ -111,6 +125,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
 - **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、编辑器字体选择、按文件恢复光标/滚动位置、Ctrl/Cmd 点击符号跳转、协作提示，以及带版本感知的更安全保存流程
 - **Markdown 渲染** — AI 对话内容通过内置插件渲染 Markdown，Markdown 文件可通过仓库自带的外部预览插件查看
+- **JSON 可视化** — JSON 文件默认以可搜索的树形结构预览，支持节点统计、展开/折叠、JSONPath/值复制和清晰的解析错误提示
 - **浅色 / 深色主题** — 用户可从标题栏切换界面主题；主题偏好会保存在本地，并与 Monaco 编辑器主题同步
 - **插件系统** — 提供类似 VS Code 的轻量插件模式，支持内置/外部插件、显式权限与作用域、本地 `plugins/` 离线安装、界面内插件管理，以及仓库内自带的 Markdown 预览示例插件
 - **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令；支持通过停止和纠偏控制在运行中打断或追加 follow-up / steering 消息，并会自动遵守团队只读角色权限
@@ -219,10 +234,11 @@ npm run dev
 - 内置插件随应用一起发布，可在设置中启用/禁用
 - 外部插件从本地 `plugins/` 目录发现并加载，无需联网安装
 - 插件在激活前必须声明显式权限，并自动推导展示作用域
-- 当前的编辑器高亮和聊天 Markdown 渲染已经迁移为内置插件
+- 当前的编辑器高亮、聊天 Markdown 渲染和 JSON 可视化已经迁移为内置插件
 - Markdown 文件预览作为可直接复制修改的外部示例插件放在 `plugins/markdown-file-preview/`
 
 直接在 IDE 中打开 Markdown 文件，即可通过顶部的 `编辑 / 预览 / 分栏` 切换按钮使用预览能力。
+打开 JSON 文件时会默认进入内置树形预览，也可以通过同一组按钮切回编辑或分栏模式。
 现在 Docker 镜像也会默认打包仓库里的 `plugins/` 目录，仓库内提供的 `docker-compose.yml` 还会把本地 `./plugins` 挂载到 `/app/plugins`，因此外部插件开箱即用。
 
 插件清单格式、宿主 API、权限模型和离线安装方式请参考 [`docs/plugins/README.md`](docs/plugins/README.md)。

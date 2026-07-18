@@ -77,6 +77,7 @@ interface ChatPanelProps {
   visible: boolean;
   focusRequest?: number;
   agentMode: AgentMode;
+  taskTitle: string;
   onAgentModeChange: (mode: AgentMode) => void;
   currentRunSummary: ConversationRunSummary | null;
   contextState: ContextState;
@@ -119,6 +120,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   visible,
   focusRequest,
   agentMode,
+  taskTitle,
   onAgentModeChange,
   currentRunSummary,
   contextState,
@@ -276,7 +278,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   return (
     <div className="chat-panel panel-shell" style={style}>
       <TaskHeader
-        agentMode={agentMode}
+        taskTitle={taskTitle}
         connected={connected}
         currentConversationId={currentConversationId}
         isStreaming={isStreaming}
