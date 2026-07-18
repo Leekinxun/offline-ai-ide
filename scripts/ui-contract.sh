@@ -42,5 +42,7 @@ assert_contains "$CSS_FILE" ".json-preview" "JSON visualizer theme surface"
 assert_contains "$CSS_FILE" ".terminal-resize-handle" "resizable terminal handle"
 assert_contains "$APP_FILE" "aria-valuenow={terminalHeight}" "keyboard-accessible terminal resize"
 assert_contains "$CSS_FILE" "landing-scroll" "scrollable landing page root"
+assert_contains "$APP_FILE" "editor-compare-workbench" "side-by-side file comparison workspace"
+assert_contains "$CSS_FILE" ".editor-compare-workbench" "responsive comparison layout"
 
 echo "CrownForge UI contract passed."

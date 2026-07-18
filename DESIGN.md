@@ -238,10 +238,12 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - `ChangeSummary`：统一变更文件、Diff、Review 结果和下一步操作
   - `PanelShell`：统一面板标题、工具栏、空状态、错误状态和关闭行为
   - `JsonPreview`：作为 `builtin.json-preview` 内置插件，为 JSON 文件提供树形预览、搜索、统计、展开/折叠、路径/值复制和格式错误反馈
+  - `Editor comparison workspace`：从已打开标签中选择第二个文件，在同一画布内并排显示主编辑器与只读参考文件；窄屏改为上下分栏
 - Variants and states:
   - default / hover / active / disabled / loading / error / empty / success
   - task: idle / running / waiting-for-input / completed / failed / stopped
   - panel: docked / collapsed / drawer / modal
+  - editor: standard / preview / split-preview / file-comparison
 - Token/component ownership:
   - 全局颜色、字号、间距、圆角、阴影由 `frontend/src/App.css` token 统一维护
   - 组件只消费 token，不在局部重复定义品牌色和状态色

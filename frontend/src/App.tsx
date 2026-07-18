@@ -41,8 +41,10 @@ import {
   GitBranch,
   Bot,
   ChevronRight,
+  Columns2,
   FileCode2,
   Files,
+  X,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -301,6 +303,7 @@ function AuthenticatedApp({
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
+  const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 860);
   const [chatVisible, setChatVisible] = useState(true);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
@@ -336,6 +339,7 @@ function AuthenticatedApp({
   const lastWorkspaceMtimeRef = useRef(0);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const draggingRef = useRef<"sidebar" | "chat" | "terminal" | null>(null);
   const navigationRequestRef = useRef(0);
   const highlightRequestRef = useRef(0);
@@ -1074,10 +1078,13 @@ function AuthenticatedApp({
             filtered.length > 0 ? filtered[filtered.length - 1].path : null
           );
         }
+        if (compareFilePath === path) {
+          setCompareFilePath(null);
+        }
         return filtered;
       });
     },
-    [activeFilePath]
+    [activeFilePath, compareFilePath]
   );
 
   const handleEditorChange = useCallback(
@@ -1616,6 +1623,26 @@ function AuthenticatedApp({
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
+  const compareFile =
+    compareFilePath && compareFilePath !== activeFilePath
+      ? openFiles.find((file) => file.path === compareFilePath) || null
+      : null;
+
+  useEffect(() => {
+    if (compareFilePath && !compareFile) {
+      setCompareFilePath(null);
+    }
+  }, [compareFile, compareFilePath]);
+
+  const handleSelectTab = useCallback(
+    (path: string) => {
+      if (path === compareFilePath && activeFilePath) {
+        setCompareFilePath(activeFilePath);
+      }
+      setActiveFilePath(path);
+    },
+    [activeFilePath, compareFilePath]
+  );
   const activePreviewRenderer = activeFile
     ? getMatchingFilePreviewRenderer({
         path: activeFile.path,
@@ -1922,7 +1949,7 @@ function AuthenticatedApp({
           <TabBar
             openFiles={openFiles}
             activeFilePath={activeFilePath}
-            onSelectTab={setActiveFilePath}
+            onSelectTab={handleSelectTab}
             onCloseTab={closeTab}
           />
           {activeFile && (
@@ -1935,17 +1962,50 @@ function AuthenticatedApp({
                 <ChevronRight size={12} />
                 <code>{activeFile.path}</code>
               </div>
-              <div className="editor-context-statuses">
-                {activeFile.modified && (
-                  <span className="editor-context-status modified">
-                    {t("editor.unsaved")}
-                  </span>
+              <div className="editor-context-actions">
+                {openFiles.length > 1 && (
+                  <label className="editor-compare-picker">
+                    <Columns2 size={13} aria-hidden="true" />
+                    <span>{t("editor.compareWith")}</span>
+                    <select
+                      aria-label={t("editor.compareWith")}
+                      value={compareFilePath || ""}
+                      onChange={(event) => setCompareFilePath(event.target.value || null)}
+                    >
+                      <option value="">{t("editor.compareNone")}</option>
+                      {openFiles
+                        .filter((file) => file.path !== activeFile.path)
+                        .map((file) => (
+                          <option key={file.path} value={file.path}>
+                            {file.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
                 )}
-                {activeFile.remoteUpdated && (
-                  <span className="editor-context-status remote">
-                    {t("editor.remoteUpdated")}
-                  </span>
+                {compareFile && (
+                  <button
+                    type="button"
+                    className="editor-compare-close"
+                    onClick={() => setCompareFilePath(null)}
+                    title={t("editor.stopCompare")}
+                    aria-label={t("editor.stopCompare")}
+                  >
+                    <X size={13} />
+                  </button>
                 )}
+                <div className="editor-context-statuses">
+                  {activeFile.modified && (
+                    <span className="editor-context-status modified">
+                      {t("editor.unsaved")}
+                    </span>
+                  )}
+                  {activeFile.remoteUpdated && (
+                    <span className="editor-context-status remote">
+                      {t("editor.remoteUpdated")}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -2020,7 +2080,85 @@ function AuthenticatedApp({
               )}
             <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
             {activeFile ? (
-              activePreviewRenderer ? (
+              compareFile ? (
+                <div className="editor-compare-workbench" aria-label={t("editor.compareView")}>
+                  <section className="editor-compare-pane" aria-label={t("editor.comparePrimary")}>
+                    <div className="editor-compare-pane-header">
+                      <span>{t("editor.comparePrimary")}</span>
+                      <strong title={activeFile.path}>{activeFile.name}</strong>
+                    </div>
+                    <Editor
+                      key={`editor:${activeFile.path}`}
+                      content={activeFile.content}
+                      language={activeFile.language}
+                      path={activeFile.path}
+                      theme={theme}
+                      fontFamily={editorFont}
+                      readOnly={readOnlyWorkspace}
+                      openFiles={openFiles}
+                      refreshNonce={treeRefreshNonce}
+                      viewState={editorViewStatesRef.current[activeFile.path] || null}
+                      onViewStateChange={handleEditorViewStateChange}
+                      onChange={handleEditorChange}
+                      onSave={saveFile}
+                      onSelectionChange={handleSelectionChange}
+                      onNavigateToLocation={handleNavigateToLocation}
+                      onFindDefinition={handleFindDefinition}
+                      editorRef={editorRef}
+                      navigationTarget={
+                        editorNavigationTarget?.path === activeFile.path
+                          ? editorNavigationTarget
+                          : null
+                      }
+                      highlightTarget={
+                        editorHighlightTarget?.path === activeFile.path
+                          ? editorHighlightTarget
+                          : null
+                      }
+                      onNavigationComplete={handleNavigationComplete}
+                      onHighlightComplete={handleHighlightComplete}
+                    />
+                  </section>
+                  <div className="editor-compare-divider" aria-hidden="true" />
+                  <section className="editor-compare-pane" aria-label={t("editor.compareReference")}>
+                    <div className="editor-compare-pane-header">
+                      <span>{t("editor.compareReference")}</span>
+                      <strong title={compareFile.path}>{compareFile.name}</strong>
+                    </div>
+                    <Editor
+                      key={`compare:${compareFile.path}`}
+                      content={compareFile.content}
+                      language={compareFile.language}
+                      path={compareFile.path}
+                      theme={theme}
+                      fontFamily={editorFont}
+                      readOnly
+                      openFiles={openFiles}
+                      refreshNonce={treeRefreshNonce}
+                      viewState={editorViewStatesRef.current[compareFile.path] || null}
+                      onViewStateChange={handleEditorViewStateChange}
+                      onChange={() => undefined}
+                      onSave={() => undefined}
+                      onSelectionChange={() => undefined}
+                      onNavigateToLocation={handleNavigateToLocation}
+                      onFindDefinition={handleFindDefinition}
+                      editorRef={compareEditorRef}
+                      navigationTarget={
+                        editorNavigationTarget?.path === compareFile.path
+                          ? editorNavigationTarget
+                          : null
+                      }
+                      highlightTarget={
+                        editorHighlightTarget?.path === compareFile.path
+                          ? editorHighlightTarget
+                          : null
+                      }
+                      onNavigationComplete={handleNavigationComplete}
+                      onHighlightComplete={handleHighlightComplete}
+                    />
+                  </section>
+                </div>
+              ) : activePreviewRenderer ? (
                 <div className="editor-workbench">
                   <div className="editor-workbench-toolbar">
                     <div className="editor-workbench-segmented">
