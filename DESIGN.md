@@ -239,6 +239,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - `PanelShell`：统一面板标题、工具栏、空状态、错误状态和关闭行为
   - `JsonPreview`：作为 `builtin.json-preview` 内置插件，为 JSON 文件提供树形预览、搜索、统计、展开/折叠、路径/值复制和格式错误反馈
   - `Editor comparison workspace`：从已打开标签中选择第二个文件，在同一画布内并排显示主编辑器与只读参考文件；窄屏改为上下分栏
+  - `Explorer` 根目录上下文菜单：文件树空白处提供新建文件、文件夹、上传文件、上传文件夹和刷新，与顶部操作保持一致
 - Variants and states:
   - default / hover / active / disabled / loading / error / empty / success
   - task: idle / running / waiting-for-input / completed / failed / stopped

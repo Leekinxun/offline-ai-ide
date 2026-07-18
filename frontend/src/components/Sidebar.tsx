@@ -131,7 +131,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    node: FileNode;
+    node: FileNode | null;
   } | null>(null);
   const [folderBrowser, setFolderBrowser] = useState<{
     currentPath: string;
@@ -177,6 +177,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedPathSet.size > 0 && !selectedPathSet.has(node.path)) {
         setSelectedPaths([node.path]);
       }
@@ -184,6 +185,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     [selectedPathSet]
   );
+
+  const handleRootContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, node: null });
+  }, []);
 
   const handleCreateFile = useCallback(
     (parentPath: string = "") => {
@@ -572,7 +578,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
-      <div className="file-tree" role="tree" aria-label={t("sidebar.explorer")}>
+      <div
+        className="file-tree"
+        role="tree"
+        aria-label={t("sidebar.explorer")}
+        onContextMenu={handleRootContextMenu}
+      >
         {filteredTree.length > 0 ? (
           <FileTree
             nodes={filteredTree}
@@ -606,67 +617,119 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              handleToggleSelection(
-                contextMenu.node.path,
-                !selectedPathSet.has(contextMenu.node.path)
-              );
-              setMultiSelectEnabled(true);
-              setContextMenu(null);
-            }}
-          >
-            <CheckSquare size={14} />{" "}
-            {selectedPathSet.has(contextMenu.node.path)
-              ? t("sidebar.unselectItem")
-              : t("sidebar.selectItem")}
-          </button>
-          <div className="context-menu-separator" />
-          {contextMenu.node.type === "directory" && (
+          {contextMenu.node ? (
             <>
               <button
                 className="context-menu-item"
-                onClick={() => handleCreateFile(contextMenu.node.path)}
+                onClick={() => {
+                  handleToggleSelection(
+                    contextMenu.node!.path,
+                    !selectedPathSet.has(contextMenu.node!.path)
+                  );
+                  setMultiSelectEnabled(true);
+                  setContextMenu(null);
+                }}
+              >
+                <CheckSquare size={14} />{" "}
+                {selectedPathSet.has(contextMenu.node.path)
+                  ? t("sidebar.unselectItem")
+                  : t("sidebar.selectItem")}
+              </button>
+              <div className="context-menu-separator" />
+              {contextMenu.node.type === "directory" && (
+                <>
+                  <button
+                    className="context-menu-item"
+                    onClick={() => handleCreateFile(contextMenu.node!.path)}
+                    disabled={!canEditWorkspace}
+                  >
+                    <FilePlus size={14} /> {t("sidebar.newFile")}
+                  </button>
+                  <button
+                    className="context-menu-item"
+                    onClick={() => handleCreateFolder(contextMenu.node!.path)}
+                    disabled={!canEditWorkspace}
+                  >
+                    <FolderPlus size={14} /> {t("sidebar.newFolder")}
+                  </button>
+                  <div className="context-menu-separator" />
+                </>
+              )}
+              <button
+                className="context-menu-item"
+                onClick={() =>
+                  void handleDownload(contextMenu.node!.path, contextMenu.node!.type)
+                }
+              >
+                <Download size={14} />{" "}
+                {contextMenu.node.type === "directory"
+                  ? t("sidebar.downloadFolder")
+                  : t("sidebar.downloadFile")}
+              </button>
+              <button
+                className="context-menu-item"
+                onClick={() => handleRename(contextMenu.node!)}
+                disabled={!canEditWorkspace}
+              >
+                <Pencil size={14} /> {t("common.rename")}
+              </button>
+              <button
+                className="context-menu-item danger"
+                onClick={() => handleDelete(contextMenu.node!)}
+                disabled={!canEditWorkspace}
+              >
+                <Trash2 size={14} /> {t("common.delete")}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="context-menu-item"
+                onClick={() => handleCreateFile()}
                 disabled={!canEditWorkspace}
               >
                 <FilePlus size={14} /> {t("sidebar.newFile")}
               </button>
               <button
                 className="context-menu-item"
-                onClick={() => handleCreateFolder(contextMenu.node.path)}
+                onClick={() => handleCreateFolder()}
                 disabled={!canEditWorkspace}
               >
                 <FolderPlus size={14} /> {t("sidebar.newFolder")}
               </button>
               <div className="context-menu-separator" />
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  fileUploadInputRef.current?.click();
+                  setContextMenu(null);
+                }}
+                disabled={!canEditWorkspace}
+              >
+                <FileUp size={14} /> {t("sidebar.uploadFiles")}
+              </button>
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  folderUploadInputRef.current?.click();
+                  setContextMenu(null);
+                }}
+                disabled={!canEditWorkspace}
+              >
+                <FolderUp size={14} /> {t("sidebar.uploadFolder")}
+              </button>
+              <div className="context-menu-separator" />
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  onRefreshTree();
+                  setContextMenu(null);
+                }}
+              >
+                <RefreshCw size={14} /> {t("common.refresh")}
+              </button>
             </>
           )}
-          <button
-            className="context-menu-item"
-            onClick={() =>
-              void handleDownload(contextMenu.node.path, contextMenu.node.type)
-            }
-          >
-            <Download size={14} />{" "}
-            {contextMenu.node.type === "directory"
-              ? t("sidebar.downloadFolder")
-              : t("sidebar.downloadFile")}
-          </button>
-          <button
-            className="context-menu-item"
-            onClick={() => handleRename(contextMenu.node)}
-            disabled={!canEditWorkspace}
-          >
-            <Pencil size={14} /> {t("common.rename")}
-          </button>
-          <button
-            className="context-menu-item danger"
-            onClick={() => handleDelete(contextMenu.node)}
-            disabled={!canEditWorkspace}
-          >
-            <Trash2 size={14} /> {t("common.delete")}
-          </button>
         </div>
       )}
 
