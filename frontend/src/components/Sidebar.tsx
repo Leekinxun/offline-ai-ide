@@ -31,7 +31,7 @@ interface SidebarProps {
   onDownloadEntry: (path: string, type: FileNode["type"]) => Promise<void>;
   onUploadEntries: (
     files: UploadedFileInput[],
-    overwrite?: boolean
+    options?: { overwrite?: boolean; targetPath?: string }
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
   workspaceDir: string;
@@ -141,9 +141,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const [treeQuery, setTreeQuery] = useState("");
+  const [rootDropActive, setRootDropActive] = useState(false);
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetPathRef = useRef("");
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
   useEffect(() => {
@@ -290,7 +292,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const handleUploadFiles = useCallback(
-    async (fileList: FileList | null, preserveRelativePath: boolean) => {
+    async (
+      fileList: FileList | null,
+      preserveRelativePath: boolean,
+      targetPath = ""
+    ) => {
       if (!canEditWorkspace || !fileList || fileList.length === 0) return;
 
       try {
@@ -303,7 +309,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }));
 
         try {
-          await onUploadEntries(files);
+          await onUploadEntries(files, { targetPath });
           onRefreshTree();
         } catch (e) {
           const uploadError = e as Error & { code?: string; conflicts?: string[] };
@@ -320,7 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
           if (!confirmed) return;
 
-          await onUploadEntries(files, true);
+          await onUploadEntries(files, { overwrite: true, targetPath });
           onRefreshTree();
         }
       } catch (e) {
@@ -335,6 +341,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
     },
     [canEditWorkspace, onRefreshTree, onUploadEntries, t]
+  );
+
+  const openUploadPicker = useCallback(
+    (targetPath: string, preserveRelativePath: boolean) => {
+      if (!canEditWorkspace) return;
+      uploadTargetPathRef.current = targetPath;
+      const input = preserveRelativePath
+        ? folderUploadInputRef.current
+        : fileUploadInputRef.current;
+      input?.click();
+      setContextMenu(null);
+    },
+    [canEditWorkspace]
+  );
+
+  const handleDroppedFiles = useCallback(
+    (targetPath: string, fileList: FileList) => {
+      setRootDropActive(false);
+      void handleUploadFiles(fileList, false, targetPath);
+    },
+    [handleUploadFiles]
   );
 
   const handleDialogSubmit = useCallback(async () => {
@@ -432,14 +459,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-hidden-file-input"
             type="file"
             multiple
-            onChange={(e) => void handleUploadFiles(e.target.files, false)}
+            onChange={(e) =>
+              void handleUploadFiles(
+                e.target.files,
+                false,
+                uploadTargetPathRef.current
+              )
+            }
           />
           <input
             ref={folderUploadInputRef}
             className="sidebar-hidden-file-input"
             type="file"
             multiple
-            onChange={(e) => void handleUploadFiles(e.target.files, true)}
+            onChange={(e) =>
+              void handleUploadFiles(
+                e.target.files,
+                true,
+                uploadTargetPathRef.current
+              )
+            }
           />
           <div className="sidebar-action-group sidebar-action-group-primary">
             <button
@@ -474,7 +513,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-action-btn"
             title={t("sidebar.uploadFiles")}
             aria-label={t("sidebar.uploadFiles")}
-            onClick={() => fileUploadInputRef.current?.click()}
+            onClick={() => openUploadPicker("", false)}
             disabled={!canEditWorkspace}
           >
             <FileUp size={15} />
@@ -483,7 +522,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-action-btn"
             title={t("sidebar.uploadFolder")}
             aria-label={t("sidebar.uploadFolder")}
-            onClick={() => folderUploadInputRef.current?.click()}
+            onClick={() => openUploadPicker("", true)}
             disabled={!canEditWorkspace}
           >
             <FolderUp size={15} />
@@ -579,11 +618,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
       <div
-        className="file-tree"
+        className={`file-tree${rootDropActive ? " drop-target" : ""}`}
         role="tree"
         aria-label={t("sidebar.explorer")}
         onContextMenu={handleRootContextMenu}
+        onDragOver={(event) => {
+          if (!canEditWorkspace || !event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          setRootDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          ) {
+            return;
+          }
+          setRootDropActive(false);
+        }}
+        onDrop={(event) => {
+          if (!canEditWorkspace || event.dataTransfer.files.length === 0) return;
+          event.preventDefault();
+          setRootDropActive(false);
+          handleDroppedFiles("", event.dataTransfer.files);
+        }}
       >
+        {rootDropActive && (
+          <div className="sidebar-drop-hint" aria-hidden="true">
+            <FileUp size={16} /> {t("sidebar.dropFilesHere")}
+          </div>
+        )}
         {filteredTree.length > 0 ? (
           <FileTree
             nodes={filteredTree}
@@ -598,6 +663,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onToggleSelect={handleToggleSelection}
             onDownload={handleDownload}
             onContextMenu={handleContextMenu}
+            onDropFiles={handleDroppedFiles}
           />
         ) : (
           <div className="sidebar-tree-empty">
@@ -652,6 +718,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <FolderPlus size={14} /> {t("sidebar.newFolder")}
                   </button>
+                  <button
+                    className="context-menu-item"
+                    onClick={() => openUploadPicker(contextMenu.node!.path, false)}
+                    disabled={!canEditWorkspace}
+                  >
+                    <FileUp size={14} /> {t("sidebar.uploadFiles")}
+                  </button>
+                  <button
+                    className="context-menu-item"
+                    onClick={() => openUploadPicker(contextMenu.node!.path, true)}
+                    disabled={!canEditWorkspace}
+                  >
+                    <FolderUp size={14} /> {t("sidebar.uploadFolder")}
+                  </button>
                   <div className="context-menu-separator" />
                 </>
               )}
@@ -700,20 +780,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="context-menu-separator" />
               <button
                 className="context-menu-item"
-                onClick={() => {
-                  fileUploadInputRef.current?.click();
-                  setContextMenu(null);
-                }}
+                onClick={() => openUploadPicker("", false)}
                 disabled={!canEditWorkspace}
               >
                 <FileUp size={14} /> {t("sidebar.uploadFiles")}
               </button>
               <button
                 className="context-menu-item"
-                onClick={() => {
-                  folderUploadInputRef.current?.click();
-                  setContextMenu(null);
-                }}
+                onClick={() => openUploadPicker("", true)}
                 disabled={!canEditWorkspace}
               >
                 <FolderUp size={14} /> {t("sidebar.uploadFolder")}

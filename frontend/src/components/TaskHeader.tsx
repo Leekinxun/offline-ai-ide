@@ -1,5 +1,7 @@
 import React from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   GitCompare,
   History,
   Sparkles,
@@ -16,8 +18,10 @@ interface TaskHeaderProps {
   hasMessages: boolean;
   historyOpen: boolean;
   changesOpen: boolean;
+  detailsCollapsed: boolean;
   onToggleHistory: () => void;
   onToggleChanges: () => void;
+  onToggleDetails: () => void;
   onClear: () => void;
 }
 
@@ -30,8 +34,10 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   hasMessages,
   historyOpen,
   changesOpen,
+  detailsCollapsed,
   onToggleHistory,
   onToggleChanges,
+  onToggleDetails,
   onClear,
 }) => {
   const { t } = useI18n();
@@ -44,7 +50,9 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
       : t("chat.offline");
 
   return (
-    <header className="chat-header task-header">
+    <header
+      className={`chat-header task-header${detailsCollapsed ? " collapsed" : ""}`}
+    >
       <div className="task-header-main">
         <div className="task-header-title-row">
           <span className="task-header-icon" aria-hidden="true">
@@ -70,26 +78,30 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
       </div>
 
       <div className="chat-header-actions task-header-actions">
-        <button
-          type="button"
-          className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
-          title={t("chat.tasks")}
-          aria-label={t("chat.tasks")}
-          onClick={onToggleHistory}
-          disabled={isStreaming}
-        >
-          <History size={14} />
-        </button>
-        <button
-          type="button"
-          className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
-          title={t("chat.changes")}
-          aria-label={t("chat.changes")}
-          onClick={onToggleChanges}
-        >
-          <GitCompare size={14} />
-        </button>
-        {hasMessages && (
+        {!detailsCollapsed && (
+          <>
+            <button
+              type="button"
+              className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
+              title={t("chat.tasks")}
+              aria-label={t("chat.tasks")}
+              onClick={onToggleHistory}
+              disabled={isStreaming}
+            >
+              <History size={14} />
+            </button>
+            <button
+              type="button"
+              className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
+              title={t("chat.changes")}
+              aria-label={t("chat.changes")}
+              onClick={onToggleChanges}
+            >
+              <GitCompare size={14} />
+            </button>
+          </>
+        )}
+        {hasMessages && !detailsCollapsed && (
           <button
             type="button"
             className="sidebar-action-btn"
@@ -101,6 +113,16 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             <Trash2 size={14} />
           </button>
         )}
+        <button
+          type="button"
+          className="sidebar-action-btn task-header-collapse"
+          title={t(detailsCollapsed ? "chat.showDetails" : "chat.hideDetails")}
+          aria-label={t(detailsCollapsed ? "chat.showDetails" : "chat.hideDetails")}
+          aria-expanded={!detailsCollapsed}
+          onClick={onToggleDetails}
+        >
+          {detailsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        </button>
       </div>
     </header>
   );

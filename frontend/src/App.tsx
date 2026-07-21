@@ -1376,9 +1376,9 @@ function AuthenticatedApp({
   const handleUploadEntries = useCallback(
     async (
       files: { path: string; file: File }[],
-      overwrite = false
+      options?: { overwrite?: boolean; targetPath?: string }
     ) => {
-      const result = await fs.uploadEntries(files, { overwrite });
+      const result = await fs.uploadEntries(files, options);
       showToast(t("app.uploaded", { count: result.uploaded }));
       return result;
     },

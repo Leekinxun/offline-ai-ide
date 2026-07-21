@@ -13,6 +13,7 @@ interface FileTreeProps {
   onToggleSelect: (path: string, selected: boolean) => void;
   onDownload: (path: string, type: FileNode["type"]) => void;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onDropFiles: (targetPath: string, files: FileList) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery?: string;
@@ -29,6 +30,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onToggleSelect,
   onDownload,
   onContextMenu,
+  onDropFiles,
   claims,
   presence,
   filterQuery = "",
@@ -48,6 +50,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           onToggleSelect={onToggleSelect}
           onDownload={onDownload}
           onContextMenu={onContextMenu}
+          onDropFiles={onDropFiles}
           claims={claims}
           presence={presence}
           filterQuery={filterQuery}
@@ -68,6 +71,7 @@ interface FileTreeItemProps {
   onToggleSelect: (path: string, selected: boolean) => void;
   onDownload: (path: string, type: FileNode["type"]) => void;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onDropFiles: (targetPath: string, files: FileList) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery: string;
@@ -84,13 +88,15 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   onToggleSelect,
   onDownload,
   onContextMenu,
+  onDropFiles,
   claims,
   presence,
   filterQuery,
   depth,
 }) => {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(depth < 1);
+  const [expanded, setExpanded] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
 
   const activateNode = useCallback((event?: React.MouseEvent) => {
     if (multiSelectEnabled || event?.ctrlKey || event?.metaKey) {
@@ -119,10 +125,46 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   return (
     <div>
       <div
-        className={`tree-item${isActive ? " active" : ""}${isSelected ? " selected" : ""}`}
+        className={`tree-item${isActive ? " active" : ""}${isSelected ? " selected" : ""}${dropActive ? " drop-target" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, node)}
+        onDragOver={(event) => {
+          if (
+            !canEditWorkspace ||
+            node.type !== "directory" ||
+            !event.dataTransfer.types.includes("Files")
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "copy";
+          setDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          if (node.type !== "directory") return;
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          ) {
+            return;
+          }
+          setDropActive(false);
+        }}
+        onDrop={(event) => {
+          if (
+            !canEditWorkspace ||
+            node.type !== "directory" ||
+            event.dataTransfer.files.length === 0
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          setDropActive(false);
+          onDropFiles(node.path, event.dataTransfer.files);
+        }}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
@@ -135,7 +177,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
       >
         {node.type === "directory" && (
           <ChevronRight
-            className={`tree-chevron${expanded ? " open" : ""}`}
+            className={`tree-chevron${isExpanded ? " open" : ""}`}
             size={14}
           />
         )}
@@ -189,6 +231,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onToggleSelect={onToggleSelect}
             onDownload={onDownload}
             onContextMenu={onContextMenu}
+            onDropFiles={onDropFiles}
             claims={claims}
             presence={presence}
             filterQuery={filterQuery}

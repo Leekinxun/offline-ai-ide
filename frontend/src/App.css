@@ -1085,10 +1085,36 @@ select:focus-visible,
 }
 
 .file-tree {
+  position: relative;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px 6px 12px 4px;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.file-tree.drop-target {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent);
+}
+
+.sidebar-drop-hint {
+  position: sticky;
+  top: 2px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 2px 6px;
+  padding: 7px 8px;
+  color: var(--accent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 56%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-light) 88%, var(--surface-panel));
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 .file-tree::-webkit-scrollbar {
@@ -1134,6 +1160,12 @@ select:focus-visible,
 .tree-item.active.selected {
   background: var(--accent-light);
   box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.12);
+}
+
+.tree-item.drop-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .tree-item-icon {
@@ -2563,6 +2595,24 @@ select:focus-visible,
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.chat-details-region {
+  display: flex;
+  min-height: 0;
+  max-height: 56%;
+  flex: 0 1 auto;
+  flex-direction: column;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.chat-details-region > :last-child {
+  border-bottom: 0;
+}
+
+.chat-details-region[hidden] {
+  display: none;
 }
 
 .chat-mode-switcher {
@@ -7528,6 +7578,35 @@ body {
   min-height: 62px;
   padding: 10px 12px;
   background: var(--surface-panel-strong);
+}
+
+.task-header.collapsed {
+  min-height: 42px;
+  align-items: center;
+  padding: 6px 10px;
+}
+
+.task-header.collapsed .task-header-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-header.collapsed .task-header-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.task-header.collapsed .task-header-status {
+  flex: 0 1 auto;
+}
+
+.task-header.collapsed .task-header-continuing {
+  display: none;
+}
+
+.task-header-collapse {
+  flex: 0 0 auto;
 }
 
 .task-header-icon {

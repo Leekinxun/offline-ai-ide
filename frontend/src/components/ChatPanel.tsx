@@ -157,10 +157,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(messages.length > 0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const handledNewConversationRef = useRef(0);
+  const previousMessageCountRef = useRef(messages.length);
+  const previousConversationIdRef = useRef(currentConversationId);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -173,8 +176,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [visible]);
 
   useEffect(() => {
-    if (historyRequest) setHistoryOpen(true);
+    if (historyRequest) {
+      setHistoryOpen(true);
+      setDetailsCollapsed(false);
+    }
   }, [historyRequest]);
+
+  useEffect(() => {
+    const conversationChanged =
+      previousConversationIdRef.current !== currentConversationId;
+    const conversationStarted =
+      previousMessageCountRef.current === 0 && messages.length > 0;
+
+    if (conversationChanged || conversationStarted) {
+      setDetailsCollapsed(messages.length > 0);
+      setHistoryOpen(false);
+      setChangesOpen(false);
+    } else if (messages.length === 0) {
+      setDetailsCollapsed(false);
+    }
+
+    previousConversationIdRef.current = currentConversationId;
+    previousMessageCountRef.current = messages.length;
+  }, [currentConversationId, messages.length]);
 
   useEffect(() => {
     if (!newConversationRequest || handledNewConversationRef.current === newConversationRequest) return;
@@ -182,6 +206,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (isStreaming) return;
     onClear();
     setHistoryOpen(false);
+    setChangesOpen(false);
+    setDetailsCollapsed(false);
   }, [isStreaming, newConversationRequest, onClear]);
 
   useEffect(() => {
@@ -198,11 +224,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     } else {
       onSend(trimmed);
     }
+    setDetailsCollapsed(true);
+    setHistoryOpen(false);
+    setChangesOpen(false);
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "38px";
     }
   }, [connected, input, isStreaming, onSend, onSteer]);
+
+  const handleToggleDetails = useCallback(() => {
+    setDetailsCollapsed((collapsed) => {
+      const nextCollapsed = !collapsed;
+      if (nextCollapsed) {
+        setHistoryOpen(false);
+        setChangesOpen(false);
+      }
+      return nextCollapsed;
+    });
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -286,11 +326,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         hasMessages={messages.length > 0}
         historyOpen={historyOpen}
         changesOpen={changesOpen}
+        detailsCollapsed={detailsCollapsed}
         onToggleHistory={() => setHistoryOpen((open) => !open)}
         onToggleChanges={() => setChangesOpen((open) => !open)}
+        onToggleDetails={handleToggleDetails}
         onClear={onClear}
       />
 
+      <div className="chat-details-region" hidden={detailsCollapsed}>
       <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>
         <div className="chat-mode-switcher-heading">
           <span>{t("chat.modeLabel")}</span>
@@ -577,6 +620,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           )}
         </div>
       )}
+      </div>
 
       <div className="chat-messages">
         {messages.length === 0 && (

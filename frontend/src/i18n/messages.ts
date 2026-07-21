@@ -89,6 +89,8 @@ export const EN_MESSAGES: LocaleMessageDictionary = {
   "chat.skillsLabel": "Skills",
   "chat.skillsAvailable": "{count} available",
   "chat.clearChat": "Clear chat",
+  "chat.showDetails": "Show task controls",
+  "chat.hideDetails": "Hide task controls",
   "chat.history": "History",
   "chat.tasks": "Tasks",
   "chat.newConversation": "New chat",
@@ -375,6 +377,7 @@ export const EN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.newFolder": "New Folder",
   "sidebar.uploadFiles": "Upload Files",
   "sidebar.uploadFolder": "Upload Folder",
+  "sidebar.dropFilesHere": "Drop files to upload",
   "sidebar.uploadFailed": "Upload failed",
   "sidebar.uploadComplete": "Uploaded {count} file(s)",
   "sidebar.confirmUploadOverwrite":
@@ -638,6 +641,8 @@ export const ZH_CN_MESSAGES: LocaleMessageDictionary = {
   "chat.skillsLabel": "Skills",
   "chat.skillsAvailable": "{count} 可用",
   "chat.clearChat": "清空对话",
+  "chat.showDetails": "展开任务控制",
+  "chat.hideDetails": "收起任务控制",
   "chat.history": "历史对话",
   "chat.tasks": "任务",
   "chat.newConversation": "新对话",
@@ -915,6 +920,7 @@ export const ZH_CN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.newFolder": "新建文件夹",
   "sidebar.uploadFiles": "上传文件",
   "sidebar.uploadFolder": "上传文件夹",
+  "sidebar.dropFilesHere": "松开以上传到当前目录",
   "sidebar.uploadFailed": "上传失败",
   "sidebar.uploadComplete": "已上传 {count} 个文件",
   "sidebar.confirmUploadOverwrite":
