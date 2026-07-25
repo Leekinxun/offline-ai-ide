@@ -25,7 +25,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Added permission-aware **tool approval** for file writes and shell execution, including one-time decisions, session-scoped directory trust for file tools, and hard safety-policy blocks for protected metadata, credentials, destructive commands, and workspace escapes
 - Added a unified **Problems** surface that combines Monaco markers with persistent TypeScript, Ruff, and Cargo diagnostics, supports severity filtering, and navigates directly to file locations
 - Added an allowlisted, cancellable **Run & Test Center** with live output, duration and status history, parsed failure locations, timeout/cancellation states, and direct editor navigation
-- Expanded **Run & Debug** to support both Node Inspector and Python `pdb`, with workspace breakpoints, pause/continue, step controls, call-stack frames, runtime labels, and explicit session lifecycle states
+- Expanded **Run & Debug** to support both Node Inspector and Python `debugpy`/DAP, with workspace breakpoints, pause/continue, step controls, call-stack frames, runtime labels, actionable startup errors, and explicit session lifecycle states
 - Added a stable **Change Summary** bridge across AI results, structured review findings, Git changes, Monaco Diff, editor locations, conflict groups, and keyboard-accessible file tabs
 - Standardized Agent, Team, Terminal, and utility-panel behavior with shared panel chrome, responsive single-drawer layouts, focus return, reconnect actions, narrow-screen command access, and reduced-motion handling
 - Upgraded the builtin **JSON Visualizer** to **JSON Parser**, supporting searchable hierarchy editing, object-key rename, object/array child insertion, primitive value editing, confirmed deletion, duplicate-key/number validation, and local undo/redo
@@ -227,6 +227,9 @@ services:
 ### Local Development
 
 ```bash
+# Python debug adapter (once per development environment)
+python3 -m pip install -r requirements.txt
+
 # Backend
 cd backend
 npm install
@@ -299,6 +302,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `MODEL_NAME` | `default` | Model name to use |
 | `WORKSPACE_DIR` | `/workspace` | Default workspace directory |
 | `PYTHON_EXECUTABLE` | `python3` (`python` on Windows) | Fallback Python interpreter for debugging when the workspace has no `.venv` or `venv` interpreter |
+| `DEBUGPY_PYTHON_EXECUTABLE` | `PYTHON_EXECUTABLE` | Python interpreter where `debugpy==1.8.21` is installed; the Docker image configures this automatically |
 | `PORT` | `3000` | Server port |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Legacy fallback only; output-token limits are detected automatically from model metadata when available |

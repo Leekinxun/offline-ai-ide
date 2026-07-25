@@ -25,8 +25,8 @@ debugRouter.post("/command", async (req, res) => {
   catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : "Debug command failed" }); }
 });
 
-debugRouter.delete("/", (req, res) => {
+debugRouter.delete("/", async (req, res) => {
   if (!canWriteActiveWorkspace(session(req))) return res.status(403).json({ error: "Workspace is read-only" });
-  try { res.json({ session: stopDebugSession(session(req).workspaceDir) }); }
+  try { res.json({ session: await stopDebugSession(session(req).workspaceDir) }); }
   catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : "Failed to stop debugger" }); }
 });

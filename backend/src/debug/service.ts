@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { spawn, type ChildProcess } from "child_process";
 import { WebSocket } from "ws";
 import { config } from "../config.js";
+import { DapClient, type DapEvent } from "./dapClient.js";
 
 export type DebugStatus = "starting" | "running" | "paused" | "stopped" | "failed";
 export type DebugRuntime = "node" | "python";
@@ -44,19 +45,16 @@ interface ActiveNodeDebugSession extends ActiveDebugSessionBase {
   scriptPaths: Map<string, string>;
 }
 
-interface PythonPendingCommand {
-  resolve: (output: string) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
 interface ActivePythonDebugSession extends ActiveDebugSessionBase {
   runtime: "python";
   absoluteTarget: string;
-  promptBuffer: string;
-  pendingCommand?: PythonPendingCommand;
-  initialized: boolean;
-  initializing: boolean;
+  dap: DapClient;
+  targetPython: string;
+  threadId?: number;
+  initializedEvent: Promise<void>;
+  resolveInitialized: () => void;
+  capabilities: Record<string, unknown>;
+  stopping: boolean;
 }
 
 type ActiveDebugSession = ActiveNodeDebugSession | ActivePythonDebugSession;
@@ -324,141 +322,167 @@ function workspacePythonExecutable(workspaceDir: string): string {
   return config.pythonExecutable;
 }
 
-function sendPythonPromptCommand(
-  active: ActivePythonDebugSession,
-  command: string
-): Promise<string> {
-  if (active.pendingCommand) {
-    return Promise.reject(new Error("Python debugger is busy"));
-  }
-  if (!active.child.stdin?.writable) {
-    return Promise.reject(new Error("Python debugger input is unavailable"));
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (active.pendingCommand?.timer !== timer) return;
-      active.pendingCommand = undefined;
-      reject(new Error(`Python debugger command timed out: ${command}`));
-    }, 10_000);
-    timer.unref?.();
-    active.pendingCommand = { resolve, reject, timer };
-    active.child.stdin!.write(`${command}\n`);
-  });
+function failPythonSession(active: ActivePythonDebugSession, error: unknown): void {
+  if (active.stopping || active.state.status === "stopped") return;
+  const message = error instanceof Error ? error.message : String(error);
+  active.state.status = "failed";
+  active.state.error = /No module named ['\"]?debugpy/i.test(active.state.stderr)
+    ? `debugpy is not installed for ${config.debugpyPythonExecutable}. Install debugpy==1.8.21 or set DEBUGPY_PYTHON_EXECUTABLE.`
+    : message;
+  active.state.frames = [];
+  active.state.updatedAt = Date.now();
+  stopChild(active);
 }
 
-function pythonFrames(workspaceDir: string, output: string): DebugFrame[] {
-  const frames: DebugFrame[] = [];
-  const pattern = /^[ >]\s*(.+?)\((\d+)\)([^\r\n]*)$/gm;
-  for (const match of output.matchAll(pattern)) {
-    const rawPath = match[1].trim();
-    const line = Number(match[2]);
-    const functionName = match[3].trim().replace(/\(\)$/, "") || "<module>";
-    const resolvedPath = rawPath.startsWith("<")
-      ? rawPath
-      : framePath(workspaceDir, rawPath);
-    frames.push({
-      id: `python:${frames.length}:${resolvedPath}:${line}`,
-      functionName,
-      path: resolvedPath,
-      line,
-      column: 1,
-    });
-  }
-  return frames.reverse().slice(0, 30);
-}
-
-async function capturePythonPause(
-  active: ActivePythonDebugSession,
-  promptOutput: string
-): Promise<void> {
+async function capturePythonFrames(active: ActivePythonDebugSession, requestedThreadId?: number): Promise<void> {
   try {
-    const stackOutput = await sendPythonPromptCommand(active, "where");
-    const frames = pythonFrames(active.workspaceDir, stackOutput);
-    active.state.frames = frames.length > 0
-      ? frames
-      : pythonFrames(active.workspaceDir, promptOutput);
+    let threadId = requestedThreadId;
+    if (!threadId) {
+      const result = await active.dap.request("threads");
+      threadId = Number(result?.threads?.[0]?.id || 0);
+    }
+    if (!threadId) throw new Error("debugpy did not provide a paused thread");
+    active.threadId = threadId;
+    const result = await active.dap.request("stackTrace", {
+      threadId,
+      startFrame: 0,
+      levels: 30,
+    });
+    active.state.frames = (result?.stackFrames || []).map((frame: any) => ({
+      id: String(frame.id || crypto.randomUUID()),
+      functionName: String(frame.name || "<module>"),
+      path: frame.source?.path
+        ? framePath(active.workspaceDir, String(frame.source.path))
+        : String(frame.source?.name || ""),
+      line: Number(frame.line || 1),
+      column: Number(frame.column || 1),
+    }));
     active.state.status = "paused";
     active.state.updatedAt = Date.now();
   } catch (error) {
-    active.state.status = "failed";
-    active.state.error = error instanceof Error ? error.message : String(error);
-    active.state.updatedAt = Date.now();
-    stopChild(active);
+    failPythonSession(active, error);
   }
 }
 
-async function initializePythonSession(
-  active: ActivePythonDebugSession,
-  initialPromptOutput: string
-): Promise<void> {
-  active.initializing = true;
-  try {
-    clearTimeout(active.connectTimer);
-    for (const breakpoint of active.state.breakpoints) {
-      const output = await sendPythonPromptCommand(
-        active,
-        `break ${active.absoluteTarget}:${breakpoint.line}`
-      );
-      const resolved = output.match(/Breakpoint \d+ at .*:(\d+)/);
-      breakpoint.verified = Boolean(resolved);
-      if (resolved) breakpoint.line = Number(resolved[1]);
+function handlePythonDapEvent(active: ActivePythonDebugSession, event: DapEvent): void {
+  const body = event.body || {};
+  if (event.event === "initialized") {
+    active.resolveInitialized();
+    return;
+  }
+  if (event.event === "output") {
+    const output = String(body.output || "");
+    if (body.category === "stdout") active.state.stdout = appendOutput(active.state.stdout, output);
+    if (body.category === "stderr" || body.category === "important") {
+      active.state.stderr = appendOutput(active.state.stderr, output);
     }
-    active.initialized = true;
-    const initialFrame = pythonFrames(active.workspaceDir, initialPromptOutput)[0];
-    const startsAtBreakpoint = initialFrame
-      ? active.state.breakpoints.some(
-          (breakpoint) =>
-            breakpoint.verified &&
-            breakpoint.path === initialFrame.path &&
-            breakpoint.line === initialFrame.line
-        )
-      : false;
-    if (startsAtBreakpoint) {
-      await capturePythonPause(active, initialPromptOutput);
-    } else {
+    active.state.updatedAt = Date.now();
+    return;
+  }
+  if (event.event === "stopped") {
+    active.state.status = "paused";
+    active.state.frames = [];
+    active.state.updatedAt = Date.now();
+    void capturePythonFrames(active, Number(body.threadId || 0));
+    return;
+  }
+  if (event.event === "continued") {
+    active.state.status = "running";
+    active.state.frames = [];
+    active.state.updatedAt = Date.now();
+    return;
+  }
+  if (event.event === "breakpoint") {
+    const resolved = body.breakpoint;
+    const resolvedPath = resolved?.source?.path
+      ? framePath(active.workspaceDir, String(resolved.source.path))
+      : active.state.path;
+    const breakpoint = active.state.breakpoints.find(
+      (item) => item.path === resolvedPath && item.line === Number(resolved?.line || 0)
+    );
+    if (breakpoint) breakpoint.verified = Boolean(resolved?.verified);
+    active.state.updatedAt = Date.now();
+    return;
+  }
+  if (event.event === "exited") {
+    active.state.status = "stopped";
+    active.state.frames = [];
+    active.state.updatedAt = Date.now();
+    return;
+  }
+  if (event.event === "terminated") {
+    active.stopping = true;
+    active.state.status = "stopped";
+    active.state.frames = [];
+    active.state.updatedAt = Date.now();
+    void active.dap.request("disconnect", { restart: false, terminateDebuggee: false }, 1_500)
+      .catch(() => undefined)
+      .finally(() => {
+        active.dap.dispose();
+        stopChild(active);
+      });
+  }
+}
+
+function waitForPythonInitialized(active: ActivePythonDebugSession): Promise<void> {
+  return Promise.race([
+    active.initializedEvent,
+    new Promise<void>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("debugpy did not enter configuration mode")), 15_000);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+async function initializePythonSession(active: ActivePythonDebugSession): Promise<void> {
+  try {
+    active.capabilities = await active.dap.request("initialize", {
+      clientID: "crownforge",
+      clientName: "CrownForge",
+      adapterID: "debugpy",
+      pathFormat: "path",
+      linesStartAt1: true,
+      columnsStartAt1: true,
+      locale: "en-US",
+      supportsRunInTerminalRequest: false,
+      supportsVariableType: true,
+      supportsVariablePaging: true,
+    });
+    const launch = active.dap.request("launch", {
+      name: "CrownForge Python",
+      type: "debugpy",
+      request: "launch",
+      program: active.absoluteTarget,
+      cwd: active.workspaceDir,
+      python: [active.targetPython],
+      console: "internalConsole",
+      redirectOutput: true,
+      justMyCode: true,
+      subProcess: false,
+      stopOnEntry: false,
+      env: { NO_COLOR: "1", FORCE_COLOR: "0", PYTHONUNBUFFERED: "1" },
+    }, 30_000);
+    await waitForPythonInitialized(active);
+    const breakpointResult = await active.dap.request("setBreakpoints", {
+      source: { name: path.basename(active.absoluteTarget), path: active.absoluteTarget },
+      breakpoints: active.state.breakpoints.map((breakpoint) => ({ line: breakpoint.line })),
+      sourceModified: false,
+    });
+    active.state.breakpoints = (breakpointResult?.breakpoints || []).map((breakpoint: any, index: number) => ({
+      path: active.state.path,
+      line: Number(breakpoint.line || active.state.breakpoints[index]?.line || 1),
+      verified: Boolean(breakpoint.verified),
+    }));
+    await active.dap.request("setExceptionBreakpoints", { filters: [] });
+    await active.dap.request("configurationDone");
+    await launch;
+    clearTimeout(active.connectTimer);
+    if (active.state.status === "starting") {
       active.state.status = "running";
       active.state.updatedAt = Date.now();
-      active.child.stdin?.write("continue\n");
     }
   } catch (error) {
-    active.state.status = "failed";
-    active.state.error = error instanceof Error ? error.message : String(error);
-    active.state.updatedAt = Date.now();
-    stopChild(active);
-  } finally {
-    active.initializing = false;
-  }
-}
-
-function handlePythonOutput(active: ActivePythonDebugSession, chunk: Buffer | string): void {
-  const text = chunk.toString();
-  active.state.stdout = appendOutput(active.state.stdout, text);
-  active.state.updatedAt = Date.now();
-  active.promptBuffer += text;
-  if (active.promptBuffer.length > MAX_OUTPUT) {
-    active.promptBuffer = active.promptBuffer.slice(-MAX_OUTPUT);
-  }
-
-  let promptIndex = active.promptBuffer.indexOf("(Pdb) ");
-  while (promptIndex >= 0) {
-    const promptOutput = active.promptBuffer.slice(0, promptIndex);
-    active.promptBuffer = active.promptBuffer.slice(promptIndex + "(Pdb) ".length);
-    const pending = active.pendingCommand;
-    if (pending) {
-      active.pendingCommand = undefined;
-      clearTimeout(pending.timer);
-      pending.resolve(promptOutput);
-    } else if (!active.initialized && !active.initializing) {
-      void initializePythonSession(active, promptOutput);
-    } else if (/The program finished and will be restarted/i.test(promptOutput)) {
-      active.state.status = "stopped";
-      active.state.frames = [];
-      active.state.updatedAt = Date.now();
-      active.child.stdin?.write("quit\n");
-    } else if (active.initialized) {
-      void capturePythonPause(active, promptOutput);
-    }
-    promptIndex = active.promptBuffer.indexOf("(Pdb) ");
+    failPythonSession(active, error);
   }
 }
 
@@ -468,63 +492,70 @@ function startPythonDebugSession(
   lines: number[]
 ): DebugSessionState {
   const state = createDebugState(workspaceDir, absoluteTarget, "python", lines);
+  const targetPython = workspacePythonExecutable(workspaceDir);
   const child = spawn(
-    workspacePythonExecutable(workspaceDir),
-    ["-u", "-m", "pdb", absoluteTarget],
+    config.debugpyPythonExecutable,
+    ["-u", "-m", "debugpy.adapter"],
     {
-      cwd: workspaceDir,
+      cwd: process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", PYTHONUNBUFFERED: "1" },
+      env: { ...process.env, PYTHONUNBUFFERED: "1" },
       detached: process.platform !== "win32",
     }
   );
+  if (!child.stdin || !child.stdout) throw new Error("Failed to open debugpy adapter streams");
+  const dap = new DapClient(child.stdout, child.stdin);
+  let resolveInitialized: () => void = () => {};
+  const initializedEvent = new Promise<void>((resolve) => { resolveInitialized = resolve; });
   const active: ActivePythonDebugSession = {
     runtime: "python",
     workspaceDir,
     absoluteTarget,
     child,
     state,
-    promptBuffer: "",
-    initialized: false,
-    initializing: false,
-    connectTimer: setTimeout(() => undefined, 10_000),
+    dap,
+    targetPython,
+    initializedEvent,
+    resolveInitialized,
+    capabilities: {},
+    stopping: false,
+    connectTimer: setTimeout(() => undefined, 15_000),
   };
   clearTimeout(active.connectTimer);
   active.connectTimer = setTimeout(() => {
     if (state.status !== "starting") return;
     state.status = "failed";
-    state.error = "Python debugger did not become ready";
+    state.error = "debugpy did not become ready";
     state.updatedAt = Date.now();
     stopChild(active);
-  }, 10_000);
+  }, 15_000);
   active.connectTimer.unref?.();
   sessions.set(workspaceDir, active);
-  child.stdout?.on("data", (chunk) => handlePythonOutput(active, chunk));
+  dap.on("event", (event: DapEvent) => handlePythonDapEvent(active, event));
+  dap.on("close", (error: Error) => {
+    if (!["failed", "stopped"].includes(state.status)) failPythonSession(active, error);
+  });
   child.stderr?.on("data", (chunk) => {
     state.stderr = appendOutput(state.stderr, chunk);
     state.updatedAt = Date.now();
+    if (/No module named ['\"]?debugpy/i.test(state.stderr)) {
+      failPythonSession(active, new Error("debugpy is not installed"));
+    }
   });
   child.once("error", (error) => {
     clearTimeout(active.connectTimer);
-    active.pendingCommand?.reject(error);
-    if (active.pendingCommand) clearTimeout(active.pendingCommand.timer);
-    active.pendingCommand = undefined;
-    state.status = "failed";
-    state.error = error.message;
-    state.updatedAt = Date.now();
+    failPythonSession(active, error);
   });
   child.once("close", () => {
     clearTimeout(active.connectTimer);
-    const pending = active.pendingCommand;
-    if (pending) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("Python debug process exited"));
-      active.pendingCommand = undefined;
+    dap.dispose(new Error("debugpy adapter exited"));
+    if (!["failed", "stopped"].includes(state.status)) {
+      failPythonSession(active, new Error("debugpy adapter exited before the session completed"));
     }
-    if (state.status !== "failed") state.status = "stopped";
     state.frames = [];
     state.updatedAt = Date.now();
   });
+  void initializePythonSession(active);
   return publicState(active)!;
 }
 
@@ -541,18 +572,29 @@ export async function debugCommand(workspaceDir: string, action: "continue" | "s
   const active = sessions.get(workspaceDir);
   if (!active || active.state.status !== "paused") throw new Error("Debugger is not paused");
   if (active.runtime === "python") {
-    if (active.pendingCommand) throw new Error("Python debugger is busy");
     const commands = {
       continue: "continue",
       step_over: "next",
-      step_into: "step",
-      step_out: "return",
+      step_into: "stepIn",
+      step_out: "stepOut",
     } as const;
+    const threadId = active.threadId;
+    if (!threadId) throw new Error("debugpy did not provide a paused thread");
     active.state.status = "running";
     active.state.frames = [];
     active.state.updatedAt = Date.now();
-    active.child.stdin?.write(`${commands[action]}\n`);
-    return publicState(active)!;
+    try {
+      await active.dap.request(commands[action], {
+        threadId,
+        ...(action === "continue" ? {} : { singleThread: false }),
+      });
+      return publicState(active)!;
+    } catch (error) {
+      active.state.status = "paused";
+      active.state.error = error instanceof Error ? error.message : String(error);
+      active.state.updatedAt = Date.now();
+      throw error;
+    }
   }
   const methods = { continue: "Debugger.resume", step_over: "Debugger.stepOver", step_into: "Debugger.stepInto", step_out: "Debugger.stepOut" } as const;
   await sendInspector(active, methods[action]);
@@ -562,11 +604,25 @@ export async function debugCommand(workspaceDir: string, action: "continue" | "s
   return publicState(active)!;
 }
 
-export function stopDebugSession(workspaceDir: string): DebugSessionState {
+export async function stopDebugSession(workspaceDir: string): Promise<DebugSessionState> {
   const active = sessions.get(workspaceDir);
   if (!active) throw new Error("No debug session exists");
-  if (active.runtime === "node") active.inspector?.close();
-  else active.child.stdin?.write("quit\n");
+  if (active.runtime === "node") {
+    active.inspector?.close();
+  } else {
+    active.stopping = true;
+    const command = active.capabilities.supportsTerminateRequest ? "terminate" : "disconnect";
+    try {
+      await active.dap.request(
+        command,
+        command === "disconnect" ? { restart: false, terminateDebuggee: true } : {},
+        3_000
+      );
+    } catch {
+      // The process group termination below is the final fallback.
+    }
+    active.dap.dispose();
+  }
   stopChild(active);
   active.state.status = "stopped";
   active.state.frames = [];

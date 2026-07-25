@@ -96,6 +96,7 @@ assert_contains "$DEBUG_FILE" "debug.command(\"step_over\")" "debugger step cont
 assert_contains "$DEBUG_FILE" "debug.session.frames" "debugger call stack"
 assert_contains "$DEBUG_FILE" 'return "python"' "Python debug target recognition"
 assert_contains "$DEBUG_FILE" "debug.status.startingPython" "Python debugger status feedback"
+assert_contains "$DEBUG_FILE" "debug.noTarget" "actionable empty debug target feedback"
 assert_contains "$APPROVAL_FILE" "allow_session" "session-scoped tool approval"
 assert_contains "$APPROVAL_FILE" "allow_once" "per-action tool approval"
 assert_contains "$CSS_FILE" ".checkpoint-panel" "checkpoint panel responsive surface"

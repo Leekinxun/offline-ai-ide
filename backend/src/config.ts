@@ -183,6 +183,10 @@ export const config = {
   staticDir: process.env.STATIC_DIR || "static",
   pythonExecutable:
     process.env.PYTHON_EXECUTABLE || (process.platform === "win32" ? "python" : "python3"),
+  debugpyPythonExecutable:
+    process.env.DEBUGPY_PYTHON_EXECUTABLE ||
+    process.env.PYTHON_EXECUTABLE ||
+    (process.platform === "win32" ? "python" : "python3"),
   maxAgentIterations: parsePositiveInteger(process.env.MAX_AGENT_ITERATIONS, 30),
   contextCompactThreshold: parsePositiveInteger(
     process.env.AGENT_CONTEXT_COMPACT_THRESHOLD,

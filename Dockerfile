@@ -64,8 +64,10 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
 # Install Python tooling in the default Conda environment used by the web terminal
-RUN /opt/conda/bin/python -m pip install --no-cache-dir ruff && \
-    /opt/conda/bin/ruff --version
+COPY requirements.txt ./requirements.txt
+RUN /opt/conda/bin/python -m pip install --no-cache-dir ruff -r requirements.txt && \
+    /opt/conda/bin/ruff --version && \
+    /opt/conda/bin/python -c "import debugpy; print(debugpy.__version__)"
 
 # Initialize conda for bash so terminal users get conda ready
 RUN conda init bash && \
@@ -91,6 +93,7 @@ RUN mkdir -p /workspace /app/plugins
 EXPOSE 3000
 
 ENV WORKSPACE_DIR=/workspace
+ENV DEBUGPY_PYTHON_EXECUTABLE=/opt/conda/bin/python
 ENV VLLM_API_URL=http://host.docker.internal:8000/v1
 ENV VLLM_API_KEY=
 ENV MODEL_NAME=default

@@ -54,8 +54,9 @@ export const DebugPanel: React.FC<DebugPanelProps> = ({ visible, token, activeFi
       <label><span>{t("debug.target")}</span><input value={targetPath} onChange={(event) => { setTargetPath(event.target.value); setBreakpoints([]); }} disabled={!!active} placeholder="src/main.py" /></label>
       <div className="debug-launch-actions">
         <button type="button" className="dialog-btn" onClick={toggleBreakpoint} disabled={!!active || activeFilePath !== targetPath}><CircleDot size={12} />{t("debug.toggleBreakpoint", { line: cursorLine })}</button>
-        {active ? <button type="button" className="dialog-btn danger" onClick={() => void debug.stop()} disabled={debug.busy}><Square size={12} />{t("debug.stop")}</button> : <button type="button" className="dialog-btn primary" onClick={() => void debug.start(targetPath, breakpoints)} disabled={debug.busy || !supported}><Play size={12} />{t("debug.start")}</button>}
+        {active ? <button type="button" className="dialog-btn danger" onClick={() => void debug.stop()} disabled={debug.busy}><Square size={12} />{t("debug.stop")}</button> : <button type="button" className="dialog-btn primary" onClick={() => void debug.start(targetPath, breakpoints)} disabled={debug.busy || !supported} title={!targetPath ? t("debug.noTarget") : undefined}><Play size={12} />{t("debug.start")}</button>}
       </div>
+      {!targetPath && <small className="debug-hint is-info">{t("debug.noTarget")}</small>}
       {!supported && targetPath && <small className="debug-hint">{t("debug.supportedTargets")}</small>}
     </div>
     <div className={`debug-status status-${status}`}>

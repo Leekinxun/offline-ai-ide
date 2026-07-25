@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { config } from "../config.js";
 import { debugCommand, getDebugSession, startDebugSession, stopDebugSession } from "./service.js";
+
+const debugpyAvailable = spawnSync(
+  config.debugpyPythonExecutable,
+  ["-c", "import debugpy"],
+  { stdio: "ignore", timeout: 5_000 }
+).status === 0;
 
 async function waitForStatus(workspace: string, status: string, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
@@ -25,10 +33,10 @@ test("Node debugger pauses at a configured breakpoint and exposes workspace fram
     "}",
     "console.log(add(2, 3));",
   ].join("\n"));
-  t.after(() => {
+  t.after(async () => {
     const current = getDebugSession(workspace);
     if (current && current.status !== "stopped") {
-      try { stopDebugSession(workspace); } catch { /* already exited */ }
+      try { await stopDebugSession(workspace); } catch { /* already exited */ }
     }
     fs.rmSync(workspace, { recursive: true, force: true });
   });
@@ -46,7 +54,9 @@ test("Node debugger pauses at a configured breakpoint and exposes workspace fram
   assert.match(stopped.stdout, /5/);
 });
 
-test("Python debugger pauses, steps, exposes frames and stops after completion", async (t) => {
+test("Python debugger pauses, steps, exposes frames and stops after completion", {
+  skip: debugpyAvailable ? false : `debugpy is not installed for ${config.debugpyPythonExecutable}`,
+}, async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-python-debug-"));
   fs.writeFileSync(path.join(workspace, "target.py"), [
     "def add(left, right):",
@@ -55,10 +65,10 @@ test("Python debugger pauses, steps, exposes frames and stops after completion",
     "",
     "print(add(2, 3))",
   ].join("\n"));
-  t.after(() => {
+  t.after(async () => {
     const current = getDebugSession(workspace);
     if (current && current.status !== "stopped") {
-      try { stopDebugSession(workspace); } catch { /* already exited */ }
+      try { await stopDebugSession(workspace); } catch { /* already exited */ }
     }
     fs.rmSync(workspace, { recursive: true, force: true });
   });
@@ -80,7 +90,7 @@ test("Python debugger pauses, steps, exposes frames and stops after completion",
   await debugCommand(workspace, "step_out");
   const steppedOut = await waitForStatus(workspace, "paused");
   assert.equal(steppedOut.frames[0]?.path, "target.py");
-  assert.equal(steppedOut.frames[0]?.line, 3);
+  assert.equal(steppedOut.frames[0]?.line, 5);
 
   await debugCommand(workspace, "continue");
   const stopped = await waitForStatus(workspace, "stopped");
