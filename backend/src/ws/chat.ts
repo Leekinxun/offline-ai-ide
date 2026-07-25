@@ -20,6 +20,10 @@ import {
   readRunRecord,
   RESUME_PROMPT,
 } from "../chat/runHistory.js";
+import { createCheckpoint } from "../chat/checkpoints.js";
+import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
+import { parseReviewFindings } from "../chat/reviewFindings.js";
+import { readGitStatus } from "../files/gitStatus.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -28,15 +32,32 @@ function normalizeAgentMode(value: unknown): AgentMode {
 export function handleChatWs(ws: WebSocket, session: UserSession): void {
   const steeringQueue: PendingUserMessage[] = [];
   const controlState = createRunControlState();
+  const approvals = new ToolApprovalSession((request) => {
+    wsSend(ws, { type: "tool_approval_request", ...request });
+  });
   let activeRun: Promise<void> | null = null;
+
+  ws.on("close", () => approvals.cancelAll());
 
   ws.on("message", async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
+      if (data.type === "tool_approval") {
+        const approvalId = typeof data.approvalId === "string" ? data.approvalId : "";
+        const decision: ToolApprovalDecision =
+          data.decision === "allow_once" || data.decision === "allow_session"
+            ? data.decision
+            : "deny";
+        if (!approvalId || !approvals.resolve(approvalId, decision)) {
+          wsSend(ws, { type: "error", content: "Tool approval request is no longer active" });
+        }
+        return;
+      }
       if (data.type === "stop") {
         const requestId =
           typeof data.requestId === "string" ? data.requestId.trim() : "";
         controlState.stop(requestId || undefined);
+        approvals.cancelAll();
         steeringQueue.splice(0, steeringQueue.length);
         wsSend(ws, {
           type: "stopped",
@@ -134,7 +155,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           },
           steeringQueue,
           controlState,
-          recorder
+          recorder,
+          approvals
         ).finally(() => {
           activeRun = null;
         });
@@ -255,7 +277,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         pendingMessage,
         steeringQueue,
         controlState,
-        recorder
+        recorder,
+        approvals
       ).finally(() => {
         activeRun = null;
       });
@@ -280,12 +303,27 @@ async function processConversationQueue(
   initialTurn: PendingUserMessage,
   steeringQueue: PendingUserMessage[],
   controlState: RunControlState,
-  recorder: AgentRunRecorder
+  recorder: AgentRunRecorder,
+  approvals: ToolApprovalSession
 ): Promise<void> {
   let activeConversationId = initialTurn.conversationId;
 
   let assistantMessages: PersistedChatMessage[];
   try {
+    if (initialTurn.mode === "code") {
+      const checkpoint = createCheckpoint(session.workspaceDir, {
+        label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
+        conversationId: initialTurn.conversationId,
+        runId: recorder.runId,
+      });
+      await recorder.event({
+        kind: "tool_result",
+        label: "Workspace checkpoint created",
+        requestId: initialTurn.requestId,
+        toolName: "workspace_checkpoint",
+        detail: `${checkpoint.id} · ${checkpoint.fileCount} files`,
+      });
+    }
     assistantMessages = await runAgentLoop(
     ws,
     initialTurn.message,
@@ -315,7 +353,8 @@ async function processConversationQueue(
       mode: initialTurn.mode,
       conversationId: activeConversationId,
       runRecorder: recorder,
-      }
+      requestToolApproval: (input) => approvals.request(input),
+    }
     );
   } catch (error) {
     const currentMetrics = recorder.snapshot().metrics;
@@ -358,7 +397,7 @@ async function processConversationQueue(
     return;
   }
 
-  const summary = summarizeAssistantMessages(assistantMessages);
+  const summary = summarizeAssistantMessages(assistantMessages, initialTurn.mode, session.workspaceDir);
   const finalStatus = controlState.stopped
     ? "stopped"
     : summary.errorCount > 0 || ws.readyState !== WebSocket.OPEN
@@ -431,12 +470,13 @@ async function processConversationQueue(
       nextTurn,
       steeringQueue,
       controlState,
-      nextRecorder
+      nextRecorder,
+      approvals
     );
   }
 }
 
-function summarizeAssistantMessages(messages: PersistedChatMessage[]) {
+function summarizeAssistantMessages(messages: PersistedChatMessage[], mode: AgentMode, workspaceDir: string) {
   const changedFiles = new Set<string>();
   let toolCallCount = 0;
   let errorCount = 0;
@@ -451,11 +491,23 @@ function summarizeAssistantMessages(messages: PersistedChatMessage[]) {
     }
   }
 
+  const reviewFindings = mode === "review"
+    ? parseReviewFindings(messages.map((message) => message.content).join("\n"))
+    : [];
+  if (mode === "review") {
+    try {
+      for (const entry of readGitStatus(workspaceDir).entries) changedFiles.add(entry.path);
+    } catch {
+      for (const finding of reviewFindings) changedFiles.add(finding.path);
+    }
+  }
+
   return {
     changedFiles: Array.from(changedFiles).sort(),
     toolCallCount,
     errorCount,
     commandCount,
+    ...(mode === "review" ? { reviewFindings } : {}),
   };
 }
 

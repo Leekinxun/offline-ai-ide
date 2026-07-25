@@ -3,6 +3,7 @@ export const PLUGIN_PERMISSIONS = [
   "editor.setup",
   "editor.mount",
   "editor.preview",
+  "editor.modify",
   "command.register",
   "ui.messages",
 ] as const;

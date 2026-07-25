@@ -92,6 +92,8 @@ export interface FilePreviewMatchContext {
 export interface FilePreviewRenderContext extends FilePreviewMatchContext {
   React: typeof React;
   theme: "light" | "dark";
+  readOnly: boolean;
+  onChange?: (content: string) => void;
 }
 
 export interface FilePreviewRenderer {

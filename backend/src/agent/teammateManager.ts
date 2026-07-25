@@ -8,6 +8,7 @@ import { TaskManager } from "./taskManager.js";
 import { safePath } from "../utils/safePath.js";
 import { callChatCompletion } from "./llm.js";
 import { resolveMaxOutputTokens } from "./modelCapabilities.js";
+import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
 const POLL_INTERVAL = 5000; // ms
 const IDLE_TIMEOUT = 60000; // ms
@@ -22,8 +23,6 @@ const TEAMMATE_TOOLS: OpenAIToolDef[] = [
   { type: "function", function: { name: "claim_task", description: "Claim task by ID.", parameters: { type: "object", properties: { task_id: { type: "integer" } }, required: ["task_id"] } } },
 ];
 
-const DANGEROUS_PATTERNS = ["rm -rf /", "sudo ", "shutdown", "reboot", "> /dev/"];
-
 function dispatchTeammateTool(
   name: string,
   args: Record<string, unknown>,
@@ -35,7 +34,8 @@ function dispatchTeammateTool(
   switch (name) {
     case "bash": {
       const cmd = args.command as string;
-      if (DANGEROUS_PATTERNS.some((d) => cmd.includes(d))) return "Error: Dangerous command blocked";
+      const decision = evaluateShellCommand(cmd);
+      if (!decision.allowed) return `Error: ${decision.reason || "Command blocked by workspace policy"}`;
       try {
         const out = execSync(cmd, { cwd, timeout: 120_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
         return (out.trim() || "(no output)").slice(0, 50000);
@@ -47,6 +47,10 @@ function dispatchTeammateTool(
       try { return fs.readFileSync(safePath(args.path as string, cwd), "utf-8").slice(0, 50000); }
       catch (e: any) { return `Error: ${e.message}`; }
     case "write_file":
+      {
+        const decision = evaluateWorkspaceWrite(args.path as string);
+        if (!decision.allowed) return `Error: ${decision.reason || "Write blocked by workspace policy"}`;
+      }
       try {
         const full = safePath(args.path as string, cwd);
         fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -54,6 +58,10 @@ function dispatchTeammateTool(
         return `Wrote ${(args.content as string).length} bytes`;
       } catch (e: any) { return `Error: ${e.message}`; }
     case "edit_file":
+      {
+        const decision = evaluateWorkspaceWrite(args.path as string);
+        if (!decision.allowed) return `Error: ${decision.reason || "Edit blocked by workspace policy"}`;
+      }
       try {
         const full = safePath(args.path as string, cwd);
         const c = fs.readFileSync(full, "utf-8");

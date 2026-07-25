@@ -49,6 +49,20 @@ export interface ToolCallStep {
   fileUpdate?: FileUpdate;
 }
 
+export interface ToolApprovalRequest {
+  approvalId: string;
+  requestId: string;
+  toolCallId: string;
+  name: string;
+  input: Record<string, unknown>;
+  risk: "medium" | "high";
+  reason: string;
+  scope: string;
+  canAllowSession: boolean;
+}
+
+export type ToolApprovalDecision = "allow_once" | "allow_session" | "deny";
+
 export interface ChatMessage {
   requestId?: string;
   role: "user" | "assistant";
@@ -124,6 +138,18 @@ export interface ConversationRunSummary {
   toolCallCount: number;
   errorCount: number;
   commandCount: number;
+  reviewFindings?: ReviewFinding[];
+}
+
+export type ReviewSeverity = "critical" | "error" | "warning" | "info";
+
+export interface ReviewFinding {
+  id: string;
+  severity: ReviewSeverity;
+  path: string;
+  line: number;
+  column?: number;
+  message: string;
 }
 
 export interface ContextState {
@@ -164,7 +190,18 @@ export interface GitStatusEntry {
   previousPath?: string;
   indexStatus: string;
   worktreeStatus: string;
-  kind: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
+}
+
+export interface GitDiffPayload {
+  path: string;
+  diff: string;
+  hasChanges: boolean;
+  original: string;
+  modified: string;
+  isBinary: boolean;
+  isTooLarge: boolean;
+  updatedAt: number;
 }
 
 export interface GitStatus {

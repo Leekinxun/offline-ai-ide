@@ -8,7 +8,13 @@ interface StatusBarProps {
   teamName?: string | null;
   teamOnlineCount?: number;
   teamRole?: string | null;
+  onOpenTeam?: () => void;
   readOnlyWorkspace?: boolean;
+  errorCount?: number;
+  warningCount?: number;
+  onOpenProblems?: () => void;
+  activeRunLabel?: string | null;
+  onOpenRunCenter?: () => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -18,7 +24,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   teamName,
   teamOnlineCount,
   teamRole,
+  onOpenTeam,
   readOnlyWorkspace,
+  errorCount = 0,
+  warningCount = 0,
+  onOpenProblems,
+  activeRunLabel,
+  onOpenRunCenter,
 }) => {
   const { t } = useI18n();
   return (
@@ -37,12 +49,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         )}
       </div>
       <div className="statusbar-right">
+        {(errorCount > 0 || warningCount > 0) && (
+          <button type="button" className="statusbar-action" onClick={onOpenProblems} disabled={!onOpenProblems} title={t("statusBar.openProblems")}>
+            <span className="statusbar-problem error">× {errorCount}</span>
+            <span className="statusbar-problem warning">△ {warningCount}</span>
+          </button>
+        )}
+        {activeRunLabel && (
+          <button type="button" className="statusbar-action running" onClick={onOpenRunCenter} disabled={!onOpenRunCenter} title={t("statusBar.openRunCenter")}>
+            <i /> {activeRunLabel}
+          </button>
+        )}
         {teamName && (
-          <span>
+          <button type="button" className="statusbar-action" onClick={onOpenTeam} disabled={!onOpenTeam} title={t("team.openPanel")} aria-label={t("team.openPanel")}>
             {teamName}
             {typeof teamOnlineCount === "number" ? ` · ${teamOnlineCount}` : ""}
             {teamRole ? ` · ${teamRole}` : ""}
-          </span>
+          </button>
         )}
         {readOnlyWorkspace && <span>{t("team.readOnlyBadge")}</span>}
         {activeFile && <span>{activeFile.language.toUpperCase()}</span>}

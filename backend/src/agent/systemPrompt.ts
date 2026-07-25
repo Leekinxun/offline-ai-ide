@@ -53,7 +53,7 @@ export function buildSystemPrompt(
     ? `\n\n## Workspace Mode\n- The active team role is viewer, so this workspace is read-only for this turn.\n- Do not attempt to modify files, run shell commands, manage teammates, or change persisted tasks.\n- Focus on inspection, explanation, and planning.`
     : "";
   const mode = options?.mode || "code";
-  const modeNotice = `\n\n## Interaction Mode: ${mode.toUpperCase()}\n- ASK: inspect and explain; do not modify files.\n- REVIEW: inspect changes and run focused checks; do not modify files.\n- PLAN: produce an ordered implementation plan and persist task items when useful; do not modify source files.\n- CODE: implement the requested change, run verification, and summarize evidence.`;
+  const modeNotice = `\n\n## Interaction Mode: ${mode.toUpperCase()}\n- ASK: inspect and explain; do not modify files.\n- REVIEW: inspect changes and run focused checks; do not modify files. Put every actionable, file-locatable finding on its own line using exactly \`- [critical|error|warning|info] relative/path:line:column — concise finding\`. Order findings by severity. If there are no actionable findings, write \`No findings.\`.\n- PLAN: produce an ordered implementation plan and persist task items when useful; do not modify source files.\n- CODE: implement the requested change, run verification, and summarize evidence.`;
   const workspaceGuidance = loadWorkspaceGuidance(workspaceDir);
   const persistentContext = loadPersistentContext(workspaceDir);
 

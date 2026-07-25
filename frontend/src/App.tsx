@@ -14,6 +14,11 @@ import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
 import { GitPanel } from "./components/GitPanel";
 import { AgentBoard } from "./components/AgentBoard";
+import { CheckpointPanel } from "./components/CheckpointPanel";
+import { ProblemsPanel } from "./components/ProblemsPanel";
+import { RunCenterPanel } from "./components/RunCenterPanel";
+import { DebugPanel } from "./components/DebugPanel";
+import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat } from "./hooks/useChat";
@@ -40,10 +45,15 @@ import {
   Command,
   GitBranch,
   Bot,
+  CircleAlert,
   ChevronRight,
   Columns2,
   FileCode2,
   Files,
+  ShieldCheck,
+  TestTube2,
+  Bug,
+  Users,
   X,
 } from "lucide-react";
 import { useI18n } from "./i18n";
@@ -299,13 +309,15 @@ function AuthenticatedApp({
   onEditorFontChange,
 }: AuthenticatedAppProps) {
   const { t } = useI18n();
+  const editorProblems = useEditorProblems();
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
-  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 860);
-  const [chatVisible, setChatVisible] = useState(true);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
+  const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [teamVisible, setTeamVisible] = useState(false);
@@ -316,7 +328,14 @@ function AuthenticatedApp({
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
   const [gitVisible, setGitVisible] = useState(false);
+  const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number } | null>(null);
   const [agentsVisible, setAgentsVisible] = useState(false);
+  const [checkpointsVisible, setCheckpointsVisible] = useState(false);
+  const [problemsVisible, setProblemsVisible] = useState(false);
+  const [runCenterVisible, setRunCenterVisible] = useState(false);
+  const [debugVisible, setDebugVisible] = useState(false);
+  const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
+  const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
   const [mergeSelections, setMergeSelections] = useState<Record<string, "local" | "remote">>(
@@ -350,7 +369,19 @@ function AuthenticatedApp({
   const startYRef = useRef(0);
   const startWidthRef = useRef(0);
   const startHeightRef = useRef(0);
-  const layoutBeforeFocusRef = useRef({ sidebar: true, chat: true, team: true });
+  const drawerTriggerRef = useRef<HTMLElement | null>(null);
+  const previousDrawerRef = useRef<string | null>(null);
+  const layoutBeforeFocusRef = useRef({
+    sidebar: true,
+    chat: true,
+    team: false,
+    git: false,
+    agents: false,
+    checkpoints: false,
+    problems: false,
+    runCenter: false,
+    debug: false,
+  });
   const fs = useFileSystem(token);
 
   // --- Toast ---
@@ -359,25 +390,77 @@ function AuthenticatedApp({
     setTimeout(() => setToast(null), 2500);
   }, []);
 
+  const compactWorkspace = viewportWidth <= 1100;
+  const narrowWorkspace = viewportWidth <= 860;
+
+  useEffect(() => {
+    const handleViewportResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", handleViewportResize);
+    return () => window.removeEventListener("resize", handleViewportResize);
+  }, []);
+
+  const captureDrawerTrigger = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      drawerTriggerRef.current = document.activeElement;
+    }
+  }, []);
+
+  const closeUtilityPanels = useCallback(() => {
+    setGitVisible(false);
+    setAgentsVisible(false);
+    setCheckpointsVisible(false);
+    setProblemsVisible(false);
+    setRunCenterVisible(false);
+    setDebugVisible(false);
+  }, []);
+
   const toggleFocusMode = useCallback(() => {
     setFocusMode((current) => {
       if (current) {
         setSidebarVisible(layoutBeforeFocusRef.current.sidebar);
         setChatVisible(layoutBeforeFocusRef.current.chat);
         setTeamVisible(layoutBeforeFocusRef.current.team);
+        setGitVisible(layoutBeforeFocusRef.current.git);
+        setAgentsVisible(layoutBeforeFocusRef.current.agents);
+        setCheckpointsVisible(layoutBeforeFocusRef.current.checkpoints);
+        setProblemsVisible(layoutBeforeFocusRef.current.problems);
+        setRunCenterVisible(layoutBeforeFocusRef.current.runCenter);
+        setDebugVisible(layoutBeforeFocusRef.current.debug);
       } else {
         layoutBeforeFocusRef.current = {
           sidebar: sidebarVisible,
           chat: chatVisible,
           team: teamVisible,
+          git: gitVisible,
+          agents: agentsVisible,
+          checkpoints: checkpointsVisible,
+          problems: problemsVisible,
+          runCenter: runCenterVisible,
+          debug: debugVisible,
         };
         setSidebarVisible(false);
         setChatVisible(false);
         setTeamVisible(false);
+        setGitVisible(false);
+        setAgentsVisible(false);
+        setCheckpointsVisible(false);
+        setProblemsVisible(false);
+        setRunCenterVisible(false);
+        setDebugVisible(false);
       }
       return !current;
     });
-  }, [chatVisible, sidebarVisible, teamVisible]);
+  }, [
+    agentsVisible,
+    chatVisible,
+    checkpointsVisible,
+    gitVisible,
+    problemsVisible,
+    runCenterVisible,
+    debugVisible,
+    sidebarVisible,
+    teamVisible,
+  ]);
 
   const openCommandPalette = useCallback((mode: CommandPaletteMode) => {
     setCommandPaletteMode(mode);
@@ -385,9 +468,105 @@ function AuthenticatedApp({
   }, []);
 
   const focusChat = useCallback(() => {
+    if (window.innerWidth <= 860) {
+      captureDrawerTrigger();
+      setSidebarVisible(false);
+      setTeamVisible(false);
+      setTerminalVisible(false);
+      closeUtilityPanels();
+    }
     setChatVisible(true);
     setChatFocusNonce((value) => value + 1);
-  }, []);
+  }, [captureDrawerTrigger, closeUtilityPanels]);
+
+  const toggleChatPanel = useCallback(() => {
+    const nextOpen = !chatVisible;
+    if (nextOpen && window.innerWidth <= 860) {
+      captureDrawerTrigger();
+      setSidebarVisible(false);
+      setTeamVisible(false);
+      setTerminalVisible(false);
+      closeUtilityPanels();
+    }
+    setChatVisible(nextOpen);
+  }, [captureDrawerTrigger, chatVisible, closeUtilityPanels]);
+
+  const toggleExplorerPanel = useCallback(() => {
+    const utilityOpen =
+      gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible;
+    const nextOpen = utilityOpen ? true : !sidebarVisible;
+    if (nextOpen && window.innerWidth <= 1100) {
+      captureDrawerTrigger();
+      setTeamVisible(false);
+      setTerminalVisible(false);
+      if (window.innerWidth <= 860) setChatVisible(false);
+    }
+    closeUtilityPanels();
+    setSidebarVisible(nextOpen);
+  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, sidebarVisible]);
+
+  const toggleUtilityPanel = useCallback(
+    (
+      panel: "git" | "agents" | "checkpoints" | "problems" | "run-center" | "debug",
+      forceOpen = false
+    ) => {
+      const isOpen =
+        panel === "git"
+          ? gitVisible
+          : panel === "agents"
+            ? agentsVisible
+            : panel === "checkpoints"
+              ? checkpointsVisible
+              : panel === "problems"
+                ? problemsVisible
+                : panel === "run-center"
+                  ? runCenterVisible
+                  : debugVisible;
+      const nextOpen = forceOpen || !isOpen;
+      if (nextOpen) {
+        setSidebarVisible(false);
+        if (window.innerWidth <= 1100) {
+          captureDrawerTrigger();
+          setTeamVisible(false);
+          setTerminalVisible(false);
+        }
+        if (window.innerWidth <= 860) {
+          setChatVisible(false);
+        }
+      }
+      setGitVisible(panel === "git" && nextOpen);
+      setAgentsVisible(panel === "agents" && nextOpen);
+      setCheckpointsVisible(panel === "checkpoints" && nextOpen);
+      setProblemsVisible(panel === "problems" && nextOpen);
+      setRunCenterVisible(panel === "run-center" && nextOpen);
+      setDebugVisible(panel === "debug" && nextOpen);
+    },
+    [agentsVisible, captureDrawerTrigger, checkpointsVisible, debugVisible, gitVisible, problemsVisible, runCenterVisible]
+  );
+
+  const toggleTeamPanel = useCallback((forceOpen = false) => {
+    const nextOpen = forceOpen || !teamVisible;
+    if (nextOpen && window.innerWidth <= 1100) {
+      captureDrawerTrigger();
+      setSidebarVisible(false);
+      setTerminalVisible(false);
+      closeUtilityPanels();
+      if (window.innerWidth <= 860) setChatVisible(false);
+    }
+    setTeamVisible(nextOpen);
+  }, [captureDrawerTrigger, closeUtilityPanels, teamVisible]);
+
+  const toggleTerminalPanel = useCallback((forceOpen = false) => {
+    const nextOpen = forceOpen || !terminalVisible;
+    if (nextOpen && window.innerWidth <= 1100) {
+      captureDrawerTrigger();
+      setSidebarVisible(false);
+      setTeamVisible(false);
+      closeUtilityPanels();
+      if (window.innerWidth <= 860) setChatVisible(false);
+    }
+    setTerminalVisible(nextOpen);
+  }, [captureDrawerTrigger, closeUtilityPanels, terminalVisible]);
 
   const runPaletteCommand = useCallback(
     (command: string) => {
@@ -396,13 +575,13 @@ function AuthenticatedApp({
           toggleFocusMode();
           break;
         case "explorer":
-          setSidebarVisible((value) => !value);
+          toggleExplorerPanel();
           break;
         case "terminal":
-          setTerminalVisible((value) => !value);
+          toggleTerminalPanel();
           break;
         case "chat":
-          setChatVisible((value) => !value);
+          toggleChatPanel();
           break;
         case "new-conversation":
           setChatVisible(true);
@@ -418,20 +597,97 @@ function AuthenticatedApp({
           setSettingsVisible(true);
           break;
         case "git":
-          setGitVisible(true);
+          toggleUtilityPanel("git", true);
           break;
         case "agents":
-          setAgentsVisible(true);
+          toggleUtilityPanel("agents", true);
+          break;
+        case "checkpoints":
+          toggleUtilityPanel("checkpoints", true);
+          break;
+        case "problems":
+          toggleUtilityPanel("problems", true);
+          break;
+        case "run-center":
+          toggleUtilityPanel("run-center", true);
+          break;
+        case "debug":
+          toggleUtilityPanel("debug", true);
           break;
         case "team":
-          setTeamVisible(true);
+          toggleTeamPanel(true);
           break;
         default:
           break;
       }
     },
-    [toggleFocusMode]
+    [toggleChatPanel, toggleExplorerPanel, toggleFocusMode, toggleTeamPanel, toggleTerminalPanel, toggleUtilityPanel]
   );
+
+  const activeWorkspaceDrawer = compactWorkspace
+    ? terminalVisible
+      ? "terminal"
+      : teamVisible
+        ? "team"
+        : agentsVisible
+          ? "agents"
+          : gitVisible
+            ? "git"
+            : checkpointsVisible
+              ? "checkpoints"
+              : problemsVisible
+                ? "problems"
+                : runCenterVisible
+                  ? "run-center"
+                  : debugVisible
+                    ? "debug"
+                    : sidebarVisible
+                      ? "sidebar"
+                      : narrowWorkspace && chatVisible
+                        ? "chat"
+                        : null
+    : null;
+  const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
+
+  const closeWorkspaceDrawers = useCallback(() => {
+    setSidebarVisible(false);
+    setTeamVisible(false);
+    setTerminalVisible(false);
+    closeUtilityPanels();
+    if (window.innerWidth <= 860) setChatVisible(false);
+  }, [closeUtilityPanels]);
+
+  useEffect(() => {
+    const previousDrawer = previousDrawerRef.current;
+    previousDrawerRef.current = activeWorkspaceDrawer;
+
+    if (activeWorkspaceDrawer && activeWorkspaceDrawer !== previousDrawer) {
+      requestAnimationFrame(() => {
+        const drawer = document.querySelector<HTMLElement>(
+          `[data-workspace-drawer="${activeWorkspaceDrawer}"]`
+        );
+        drawer?.focus();
+      });
+      return;
+    }
+
+    if (!activeWorkspaceDrawer && previousDrawer) {
+      requestAnimationFrame(() => {
+        const storedTrigger = drawerTriggerRef.current && document.contains(drawerTriggerRef.current)
+          ? drawerTriggerRef.current
+          : null;
+        const matchingTriggers = Array.from(
+          document.querySelectorAll<HTMLElement>(`[data-drawer-trigger="${previousDrawer}"]`)
+        );
+        const trigger = storedTrigger && storedTrigger.offsetParent !== null
+          ? storedTrigger
+          : matchingTriggers.find((candidate) => candidate.offsetParent !== null)
+            || document.querySelector<HTMLElement>(".titlebar-mobile-command");
+        trigger?.focus();
+        drawerTriggerRef.current = null;
+      });
+    }
+  }, [activeWorkspaceDrawer]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -454,20 +710,25 @@ function AuthenticatedApp({
         setMergeSelections({});
         return;
       }
+      if (checkpointsVisible) {
+        setCheckpointsVisible(false);
+        return;
+      }
+      if (runCenterVisible) {
+        setRunCenterVisible(false);
+        return;
+      }
+      if (debugVisible) {
+        setDebugVisible(false);
+        return;
+      }
+      if (problemsVisible) {
+        setProblemsVisible(false);
+        return;
+      }
 
-      // On narrow screens Escape dismisses the topmost workspace drawer.
-      if (window.innerWidth <= 860) {
-        if (chatVisible) {
-          setChatVisible(false);
-        } else if (agentsVisible) {
-          setAgentsVisible(false);
-        } else if (gitVisible) {
-          setGitVisible(false);
-        } else if (teamVisible) {
-          setTeamVisible(false);
-        } else if (sidebarVisible) {
-          setSidebarVisible(false);
-        }
+      if (workspaceDrawerOpen) {
+        closeWorkspaceDrawers();
       }
     };
 
@@ -476,13 +737,19 @@ function AuthenticatedApp({
   }, [
     agentsVisible,
     chatVisible,
+    checkpointsVisible,
+    problemsVisible,
+    runCenterVisible,
+    debugVisible,
     commandPaletteVisible,
+    closeWorkspaceDrawers,
     diffViewerPath,
     gitVisible,
     settingsVisible,
     sidebarVisible,
     teamVisible,
     workspaceSearchVisible,
+    workspaceDrawerOpen,
   ]);
 
 
@@ -1532,6 +1799,11 @@ function AuthenticatedApp({
     );
   }, [chat, focusChat]);
 
+  const handleOpenGitDiff = useCallback((path: string) => {
+    setGitDiffRequest((current) => ({ path, id: (current?.id || 0) + 1 }));
+    toggleUtilityPanel("git", true);
+  }, [toggleUtilityPanel]);
+
   // --- Track cursor position ---
   useEffect(() => {
     const editor = editorRef.current;
@@ -1584,17 +1856,22 @@ function AuthenticatedApp({
         setWorkspaceSearchVisible(true);
         return;
       }
+      if (isShortcut && e.shiftKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        toggleUtilityPanel("problems");
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
         e.preventDefault();
-        setSidebarVisible((v) => !v);
+        toggleExplorerPanel();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();
-        setChatVisible((v) => !v);
+        toggleChatPanel();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "`") {
         e.preventDefault();
-        setTerminalVisible((v) => !v);
+        toggleTerminalPanel();
       }
       if (isShortcut && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -1619,7 +1896,7 @@ function AuthenticatedApp({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [openCommandPalette, switchConversation, toggleFocusMode]);
+  }, [openCommandPalette, switchConversation, toggleChatPanel, toggleExplorerPanel, toggleFocusMode, toggleTerminalPanel, toggleUtilityPanel]);
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
@@ -1676,6 +1953,8 @@ function AuthenticatedApp({
           content: activeFile.content,
           language: activeFile.language,
           theme,
+          readOnly: readOnlyWorkspace,
+          onChange: handleEditorChange,
         })
       : null;
   const activeConflictFile =
@@ -1792,18 +2071,31 @@ function AuthenticatedApp({
         </div>
         <div className="titlebar-right">
           <button
+            className="titlebar-btn titlebar-mobile-command"
+            onClick={() => openCommandPalette("commands")}
+            title={t("command.commandPalette")}
+            aria-label={t("command.commandPalette")}
+            data-drawer-trigger="command"
+          >
+            <Command size={17} />
+          </button>
+          <button
             className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
-            onClick={() => setSidebarVisible((visible) => !visible)}
+            onClick={toggleExplorerPanel}
             title={t("app.toggleSidebar")}
+            aria-label={t("app.toggleSidebar")}
             aria-pressed={sidebarVisible}
+            data-drawer-trigger="sidebar"
           >
             <PanelLeft size={17} />
           </button>
           <button
             className={`titlebar-btn${chatVisible ? " active" : ""}`}
-            onClick={() => setChatVisible((visible) => !visible)}
+            onClick={toggleChatPanel}
             title={t("app.toggleAiChat")}
+            aria-label={t("app.toggleAiChat")}
             aria-pressed={chatVisible}
+            data-drawer-trigger="chat"
           >
             <MessageSquare size={17} />
           </button>
@@ -1850,39 +2142,34 @@ function AuthenticatedApp({
 
       {/* Main Layout */}
       <div className="main-layout">
-        {(sidebarVisible || chatVisible || teamVisible || gitVisible || agentsVisible || terminalVisible) && (
+        {workspaceDrawerOpen && (
           <button
             type="button"
             className="mobile-drawer-scrim"
-            aria-label={t("common.close")}
-            onClick={() => {
-              setSidebarVisible(false);
-              setChatVisible(false);
-              setTeamVisible(false);
-              setGitVisible(false);
-              setAgentsVisible(false);
-              setTerminalVisible(false);
-            }}
+            aria-label={t("app.closeDrawer")}
+            onClick={closeWorkspaceDrawers}
           />
         )}
         <nav className="activity-rail" aria-label={t("app.workspace")}>
           <button
             type="button"
             className={`activity-rail-btn${sidebarVisible ? " active" : ""}`}
-            onClick={() => setSidebarVisible((value) => !value)}
+            onClick={toggleExplorerPanel}
             title={t("sidebar.explorer")}
             aria-label={t("sidebar.explorer")}
             aria-pressed={sidebarVisible}
+            data-drawer-trigger="sidebar"
           >
             <Files size={18} />
           </button>
           <button
             type="button"
             className={`activity-rail-btn${gitVisible ? " active" : ""}`}
-            onClick={() => setGitVisible((value) => !value)}
+            onClick={() => toggleUtilityPanel("git")}
             title={t("git.title")}
             aria-label={t("git.title")}
             aria-pressed={gitVisible}
+            data-drawer-trigger="git"
           >
             <GitBranch size={18} />
             {(chat.currentRunSummary?.changedFiles.length || 0) > 0 && (
@@ -1892,20 +2179,81 @@ function AuthenticatedApp({
           <button
             type="button"
             className={`activity-rail-btn${agentsVisible ? " active" : ""}`}
-            onClick={() => setAgentsVisible((value) => !value)}
+            onClick={() => toggleUtilityPanel("agents")}
             title={t("agents.title")}
             aria-label={t("agents.title")}
             aria-pressed={agentsVisible}
+            data-drawer-trigger="agents"
           >
             <Bot size={18} />
           </button>
           <button
             type="button"
+            className={`activity-rail-btn${teamVisible ? " active" : ""}`}
+            onClick={() => toggleTeamPanel()}
+            title={t("team.title")}
+            aria-label={t("team.title")}
+            aria-pressed={teamVisible}
+            data-drawer-trigger="team"
+          >
+            <Users size={18} />
+            {team.activeTeam && team.activeTeam.onlineCount > 0 && (
+              <span className="activity-rail-badge">{team.activeTeam.onlineCount}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${checkpointsVisible ? " active" : ""}`}
+            onClick={() => toggleUtilityPanel("checkpoints")}
+            title={t("checkpoint.aria")}
+            aria-label={t("checkpoint.aria")}
+            aria-pressed={checkpointsVisible}
+            data-drawer-trigger="checkpoints"
+          >
+            <ShieldCheck size={18} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${problemsVisible ? " active" : ""}`}
+            onClick={() => toggleUtilityPanel("problems")}
+            title={t("problems.title")}
+            aria-label={t("problems.title")}
+            aria-pressed={problemsVisible}
+            data-drawer-trigger="problems"
+          >
+            <CircleAlert size={18} />
+            {(problemCounts.errors + problemCounts.warnings) > 0 && <span className="activity-rail-badge">{problemCounts.errors + problemCounts.warnings}</span>}
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${runCenterVisible ? " active" : ""}`}
+            onClick={() => toggleUtilityPanel("run-center")}
+            title={t("runCenter.aria")}
+            aria-label={t("runCenter.aria")}
+            aria-pressed={runCenterVisible}
+            data-drawer-trigger="run-center"
+          >
+            <TestTube2 size={18} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${debugVisible ? " active" : ""}`}
+            onClick={() => toggleUtilityPanel("debug")}
+            title={t("debug.aria")}
+            aria-label={t("debug.aria")}
+            aria-pressed={debugVisible}
+            data-drawer-trigger="debug"
+          >
+            <Bug size={18} />
+          </button>
+          <button
+            type="button"
             className={`activity-rail-btn${terminalVisible ? " active" : ""}`}
-            onClick={() => setTerminalVisible((value) => !value)}
+            onClick={() => toggleTerminalPanel()}
             title={t("app.toggleTerminal")}
             aria-label={t("app.toggleTerminal")}
             aria-pressed={terminalVisible}
+            data-drawer-trigger="terminal"
           >
             <TerminalSquare size={18} />
           </button>
@@ -2284,13 +2632,13 @@ function AuthenticatedApp({
                 openFiles={openFiles}
                 onQuickOpen={() => openCommandPalette("files")}
                 onFocusChat={focusChat}
-                onOpenTerminal={() => setTerminalVisible(true)}
+                onOpenTerminal={() => toggleTerminalPanel(true)}
                 onOpenFile={openFile}
               />
             )}
             </Suspense>
           </div>
-          {terminalVisible && (
+          {terminalVisible && !compactWorkspace && (
             <div
               className={`terminal-resize-handle${draggingRef.current === "terminal" ? " dragging" : ""}`}
               role="separator"
@@ -2307,16 +2655,17 @@ function AuthenticatedApp({
           <Terminal
             key={workspaceDir}
             visible={terminalVisible}
-            style={{ height: terminalHeight }}
+            style={compactWorkspace ? undefined : { height: terminalHeight }}
             token={token}
             disabled={readOnlyWorkspace}
             disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
+            drawerMode={compactWorkspace}
             onClose={() => setTerminalVisible(false)}
           />
         </div>
 
         {teamVisible && (
-          <div className="team-sidebar" role="complementary" aria-label={t("team.title")}>
+          <div className="team-sidebar workspace-drawer-host">
             <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
               <TeamPanel
               teams={team.teams}
@@ -2326,6 +2675,7 @@ function AuthenticatedApp({
               loading={team.loading}
               error={team.error}
               activeFilePath={activeFilePath}
+              drawerMode={compactWorkspace}
               onClose={() => setTeamVisible(false)}
               onRefresh={team.refresh}
               onCreateTeam={async (name) => {
@@ -2441,6 +2791,9 @@ function AuthenticatedApp({
           visible={gitVisible}
           token={token}
           workspaceDir={workspaceDir}
+          theme={theme}
+          requestedDiffPath={gitDiffRequest?.path}
+          requestedDiffId={gitDiffRequest?.id}
           onOpenFile={openFile}
           onAskReview={handleGitReview}
           onClose={() => setGitVisible(false)}
@@ -2448,7 +2801,61 @@ function AuthenticatedApp({
         <AgentBoard
           visible={agentsVisible}
           token={token}
+          drawerMode={compactWorkspace}
           onClose={() => setAgentsVisible(false)}
+        />
+        <CheckpointPanel
+          visible={checkpointsVisible}
+          token={token}
+          conversationId={chat.currentConversationId}
+          runId={chat.runState?.runId || null}
+          onClose={() => setCheckpointsVisible(false)}
+          onRestored={async () => {
+            setOpenFiles([]);
+            setActiveFilePath(null);
+            setCompareFilePath(null);
+            setTreeRefreshNonce((value) => value + 1);
+            await loadTree();
+          }}
+          onNotify={showToast}
+        />
+        <ProblemsPanel
+          visible={problemsVisible}
+          token={token}
+          editorProblems={editorProblems.problems}
+          onCountsChange={setProblemCounts}
+          onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
+            startLine: problem.line,
+            startColumn: problem.column,
+            endLine: problem.line,
+            endColumn: problem.column + 1,
+          })}
+          onClose={() => setProblemsVisible(false)}
+        />
+        <RunCenterPanel
+          visible={runCenterVisible}
+          token={token}
+          onRunningChange={setActiveRunLabel}
+          onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
+            startLine: failure.line,
+            startColumn: failure.column,
+            endLine: failure.line,
+            endColumn: failure.column + 1,
+          })}
+          onClose={() => setRunCenterVisible(false)}
+        />
+        <DebugPanel
+          visible={debugVisible}
+          token={token}
+          activeFilePath={activeFilePath}
+          cursorLine={cursorPos.line}
+          onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
+            startLine: frame.line,
+            startColumn: frame.column,
+            endLine: frame.line,
+            endColumn: frame.column + 1,
+          })}
+          onClose={() => setDebugVisible(false)}
         />
 
         <div
@@ -2476,6 +2883,13 @@ function AuthenticatedApp({
           newConversationRequest={newConversationRequest}
           onOpenSettings={() => setSettingsVisible(true)}
           onOpenFile={openFile}
+          onOpenDiff={handleOpenGitDiff}
+          onOpenReviewFinding={(finding) => void handleNavigateToLocation(finding.path, {
+            startLine: finding.line,
+            startColumn: finding.column || 1,
+            endLine: finding.line,
+            endColumn: (finding.column || 1) + 1,
+          })}
           historyLoading={chat.historyLoading}
           historyLoadingId={chat.historyLoadingId}
           historyError={chat.historyError}
@@ -2496,6 +2910,8 @@ function AuthenticatedApp({
           onResumeRun={chat.resumeConversation}
           onApplyCode={handleApplyCode}
           onNavigateToFileUpdate={handleNavigateToFileUpdate}
+          pendingApprovals={chat.pendingApprovals}
+          onToolApproval={chat.respondToToolApproval}
           style={chatVisible ? { width: chatWidth } : undefined}
         />
       </div>
@@ -2512,7 +2928,13 @@ function AuthenticatedApp({
         teamName={team.activeTeam?.name || null}
         teamOnlineCount={team.activeTeam?.onlineCount}
         teamRole={team.activeTeam?.role || null}
+        onOpenTeam={() => toggleTeamPanel(true)}
         readOnlyWorkspace={readOnlyWorkspace}
+        errorCount={problemCounts.errors}
+        warningCount={problemCounts.warnings}
+        onOpenProblems={() => toggleUtilityPanel("problems", true)}
+        activeRunLabel={activeRunLabel}
+        onOpenRunCenter={() => toggleUtilityPanel("run-center", true)}
       />
 
       {/* Toast */}

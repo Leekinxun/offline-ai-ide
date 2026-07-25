@@ -6,6 +6,7 @@ import { safePath } from "../utils/safePath.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { callChatCompletion } from "./llm.js";
 import { resolveMaxOutputTokens } from "./modelCapabilities.js";
+import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
 const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
   {
@@ -68,10 +69,9 @@ const SUB_TOOLS_WRITE: OpenAIToolDef[] = [
   },
 ];
 
-const DANGEROUS_PATTERNS = ["rm -rf /", "sudo ", "shutdown", "reboot", "> /dev/"];
-
 function subBash(command: string, cwd: string): string {
-  if (DANGEROUS_PATTERNS.some((d) => command.includes(d))) return "Error: Dangerous command blocked";
+  const decision = evaluateShellCommand(command);
+  if (!decision.allowed) return `Error: ${decision.reason || "Command blocked by workspace policy"}`;
   try {
     const output = execSync(command, { cwd, timeout: 120_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     return (output.trim() || "(no output)").slice(0, 50000);
@@ -89,6 +89,8 @@ function subRead(filePath: string, cwd: string): string {
 }
 
 function subWrite(filePath: string, content: string, cwd: string): string {
+  const decision = evaluateWorkspaceWrite(filePath);
+  if (!decision.allowed) return `Error: ${decision.reason || "Write blocked by workspace policy"}`;
   try {
     const full = safePath(filePath, cwd);
     fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -100,6 +102,8 @@ function subWrite(filePath: string, content: string, cwd: string): string {
 }
 
 function subEdit(filePath: string, oldText: string, newText: string, cwd: string): string {
+  const decision = evaluateWorkspaceWrite(filePath);
+  if (!decision.allowed) return `Error: ${decision.reason || "Edit blocked by workspace policy"}`;
   try {
     const full = safePath(filePath, cwd);
     const c = fs.readFileSync(full, "utf-8");

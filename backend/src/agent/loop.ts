@@ -28,6 +28,7 @@ import {
 } from "./context.js";
 import { AgentRunRecorder } from "../chat/runHistory.js";
 import { resolveMaxOutputTokens } from "./modelCapabilities.js";
+import { classifyToolApproval, type ToolApprovalDecision } from "./toolApproval.js";
 
 /**
  * Extract <think>...</think> blocks from LLM output.
@@ -579,18 +580,43 @@ export async function runAgentLoop(
             input: args,
           });
 
-          let result: string;
+          let result = "";
           let isError = false;
           let fileUpdate: ToolFileUpdate | undefined;
           const handler = TOOL_DISPATCH[toolCall.function.name];
-          if (toolCall.function.name === "search_lazy_mcp_tools") {
+          const approval = classifyToolApproval(toolCall.function.name, args);
+          let shouldExecute = true;
+          if (approval.kind === "blocked") {
+            result = `Error: Tool blocked by safety policy: ${approval.reason}`;
+            isError = true;
+            shouldExecute = false;
+          } else if (approval.kind === "approval") {
+            const decision = await control?.requestToolApproval?.({
+              requestId: currentRequestId,
+              toolCallId: toolCall.id,
+              name: toolCall.function.name,
+              input: args,
+              risk: approval.risk,
+              reason: approval.reason,
+              scope: approval.scope,
+              canAllowSession: approval.canAllowSession,
+              sessionKey: approval.sessionKey,
+            }) || "deny";
+            if (decision === "deny" || control?.isStopped()) {
+              result = "Error: Tool execution was denied or cancelled before approval";
+              isError = true;
+              shouldExecute = false;
+            }
+          }
+
+          if (shouldExecute && toolCall.function.name === "search_lazy_mcp_tools") {
             try {
               result = await mcpClient.searchLazyTools(args.query, args.endpoint_key);
             } catch (e: any) {
               result = `Error: ${e.message}`;
               isError = true;
             }
-          } else if (toolCall.function.name === "activate_lazy_mcp_tools") {
+          } else if (shouldExecute && toolCall.function.name === "activate_lazy_mcp_tools") {
             try {
               result = await mcpClient.activateLazyTools(
                 mcpSelection,
@@ -601,14 +627,14 @@ export async function runAgentLoop(
               result = `Error: ${e.message}`;
               isError = true;
             }
-          } else if (toolCall.function.name.startsWith("mcp_")) {
+          } else if (shouldExecute && toolCall.function.name.startsWith("mcp_")) {
             try {
               result = await mcpClient.callTool(toolCall.function.name, args);
             } catch (e: any) {
               result = `[MCP Error] ${e.message}`;
               isError = true;
             }
-          } else if (handler) {
+          } else if (shouldExecute && handler) {
             try {
               const execution = await handler(args, toolCtx);
               if (typeof execution === "string") {
@@ -621,7 +647,7 @@ export async function runAgentLoop(
               result = `Error: ${e.message}`;
               isError = true;
             }
-          } else {
+          } else if (shouldExecute) {
             result = `Unknown tool: ${toolCall.function.name}`;
             isError = true;
           }
@@ -787,6 +813,17 @@ export interface AgentLoopControl {
   mode?: AgentMode;
   conversationId?: string;
   runRecorder?: AgentRunRecorder;
+  requestToolApproval?: (input: {
+    requestId: string;
+    toolCallId: string;
+    name: string;
+    input: Record<string, unknown>;
+    risk: "medium" | "high";
+    reason: string;
+    scope: string;
+    canAllowSession: boolean;
+    sessionKey?: string;
+  }) => Promise<ToolApprovalDecision>;
 }
 
 function buildUserContent(

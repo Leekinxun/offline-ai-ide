@@ -201,6 +201,18 @@ export type WsServerMessage =
       input: Record<string, unknown>;
     }
   | {
+      type: "tool_approval_request";
+      approvalId: string;
+      requestId: string;
+      toolCallId: string;
+      name: string;
+      input: Record<string, unknown>;
+      risk: "medium" | "high";
+      reason: string;
+      scope: string;
+      canAllowSession: boolean;
+    }
+  | {
       type: "tool_result";
       requestId: string;
       toolCallId: string;

@@ -41,6 +41,7 @@ interface RegisteredEditorMountHandler {
 
 interface RegisteredFilePreviewRenderer extends FilePreviewRenderer {
   pluginId: string;
+  canModifyContent: boolean;
 }
 
 const chatTextRenderers: RegisteredChatTextRenderer[] = [];
@@ -107,7 +108,7 @@ function registerEditorMountHandler(
 }
 
 function registerFilePreviewRenderer(
-  pluginId: string,
+  manifest: RuntimePluginManifest,
   renderer: FilePreviewRenderer
 ): void {
   if (!renderer.id.trim()) {
@@ -117,7 +118,8 @@ function registerFilePreviewRenderer(
   filePreviewRenderers.push({
     ...renderer,
     id: renderer.id.trim(),
-    pluginId,
+    pluginId: manifest.id,
+    canModifyContent: manifest.permissions.includes("editor.modify"),
   });
   filePreviewRenderers.sort(
     (left, right) =>
@@ -256,7 +258,7 @@ function createActivationContext(
       },
       registerPreviewRenderer(renderer) {
         ensurePermission(manifest, "editor.preview");
-        registerFilePreviewRenderer(manifest.id, renderer);
+        registerFilePreviewRenderer(manifest, renderer);
       },
     },
     commands: {
@@ -543,7 +545,14 @@ export function renderFilePreview(
   context: Omit<FilePreviewRenderContext, "React">
 ): React.ReactNode | null {
   try {
-    return renderer.render({ ...context, React });
+    const registered = renderer as RegisteredFilePreviewRenderer;
+    const canModifyContent = registered.canModifyContent && !context.readOnly;
+    return renderer.render({
+      ...context,
+      React,
+      readOnly: !canModifyContent,
+      onChange: canModifyContent ? context.onChange : undefined,
+    });
   } catch (error) {
     console.error("[plugin-runtime] file preview renderer failed", error);
     return null;

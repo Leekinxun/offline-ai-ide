@@ -8,7 +8,7 @@ import type {
   AgentRunMetrics,
   AgentRunStatus,
 } from "../agent/types.js";
-import type { ConversationRunSummary } from "./history.js";
+import { normalizeConversationRunSummary, type ConversationRunSummary } from "./history.js";
 
 const RUNS_DIR_NAME = "runs";
 const RUN_FILE_EXTENSION = ".json";
@@ -170,6 +170,7 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     ? value.events.map(normalizeEvent).filter((event): event is AgentRunEvent => event !== null)
     : [];
   const startedAt = typeof value.startedAt === "number" ? value.startedAt : Date.now();
+  const summary = normalizeConversationRunSummary(value.summary);
   return {
     runId: value.runId,
     conversationId: value.conversationId,
@@ -180,7 +181,7 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     ...(typeof value.endedAt === "number" ? { endedAt: value.endedAt } : {}),
     ...(typeof value.resumedFromRunId === "string" ? { resumedFromRunId: value.resumedFromRunId } : {}),
     metrics: normalizeMetrics(value.metrics),
-    ...(value.summary && typeof value.summary === "object" ? { summary: value.summary as ConversationRunSummary } : {}),
+    ...(summary ? { summary } : {}),
     events: events.slice(-MAX_STORED_EVENTS),
   };
 }

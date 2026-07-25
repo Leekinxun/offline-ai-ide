@@ -19,8 +19,63 @@ import {
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
+import { readGitStatus } from "../files/gitStatus.js";
 
 export const filesRouter = Router();
+
+const MAX_DIFF_SOURCE_BYTES = 2 * 1024 * 1024;
+
+interface DiffSource {
+  content: string;
+  binary: boolean;
+  tooLarge: boolean;
+}
+
+function decodeDiffSource(buffer: Buffer): DiffSource {
+  if (buffer.byteLength > MAX_DIFF_SOURCE_BYTES) {
+    return { content: "", binary: false, tooLarge: true };
+  }
+  if (buffer.includes(0)) {
+    return { content: "", binary: true, tooLarge: false };
+  }
+  return { content: buffer.toString("utf-8"), binary: false, tooLarge: false };
+}
+
+function readWorkspaceDiffSource(fullPath: string): DiffSource {
+  if (!fs.existsSync(fullPath)) {
+    return { content: "", binary: false, tooLarge: false };
+  }
+  const stat = fs.lstatSync(fullPath);
+  if (stat.isSymbolicLink()) {
+    return { content: fs.readlinkSync(fullPath), binary: false, tooLarge: false };
+  }
+  if (!stat.isFile()) return { content: "", binary: false, tooLarge: false };
+  return decodeDiffSource(fs.readFileSync(fullPath));
+}
+
+function readHeadDiffSource(workspaceDir: string, relPath: string): DiffSource {
+  try {
+    const sizeText = execFileSync("git", ["cat-file", "-s", `HEAD:${relPath}`], {
+      cwd: workspaceDir,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (Number(sizeText) > MAX_DIFF_SOURCE_BYTES) {
+      return { content: "", binary: false, tooLarge: true };
+    }
+    const content = execFileSync("git", ["show", `HEAD:${relPath}`], {
+      cwd: workspaceDir,
+      encoding: "buffer",
+      timeout: 10_000,
+      maxBuffer: MAX_DIFF_SOURCE_BYTES + 1,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return decodeDiffSource(content);
+  } catch {
+    return { content: "", binary: false, tooLarge: false };
+  }
+}
 
 function createUploadMiddleware() {
   return multer({
@@ -294,52 +349,7 @@ filesRouter.get("/tree", (req, res) => {
 filesRouter.get("/git-status", (req, res) => {
   const workspaceDir = getWorkspace(req);
   try {
-    const output = execFileSync("git", ["status", "--porcelain=v1", "-b"], {
-      cwd: workspaceDir,
-      encoding: "utf-8",
-      timeout: 10_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const lines = output.split(/\r?\n/).filter(Boolean);
-    const branchLine = lines.find((line) => line.startsWith("## ")) || "## HEAD";
-    const branchDescription = branchLine.slice(3).trim();
-    const branch = branchDescription.split("...")[0] || "HEAD";
-    const upstreamMatch = branchDescription.match(/\.\.\.([^ ]+)/);
-    const aheadMatch = branchDescription.match(/ahead (\d+)/);
-    const behindMatch = branchDescription.match(/behind (\d+)/);
-    const entries = lines
-      .filter((line) => !line.startsWith("## "))
-      .map((line) => {
-        const indexStatus = line[0] || " ";
-        const worktreeStatus = line[1] || " ";
-        const rawPath = line.slice(3).trim();
-        const pathParts = rawPath.split(" -> ");
-        return {
-          path: pathParts[pathParts.length - 1] || rawPath,
-          previousPath: pathParts.length > 1 ? pathParts[0] : undefined,
-          indexStatus,
-          worktreeStatus,
-          kind: indexStatus === "?" && worktreeStatus === "?"
-            ? "untracked"
-            : indexStatus === "A" || worktreeStatus === "A"
-              ? "added"
-              : indexStatus === "D" || worktreeStatus === "D"
-                ? "deleted"
-                : indexStatus === "R"
-                  ? "renamed"
-                  : "modified",
-        };
-      });
-
-    return res.json({
-      isRepo: true,
-      branch,
-      upstream: upstreamMatch?.[1] || null,
-      ahead: Number(aheadMatch?.[1] || 0),
-      behind: Number(behindMatch?.[1] || 0),
-      entries,
-      updatedAt: Date.now(),
-    });
+    return res.json(readGitStatus(workspaceDir));
   } catch {
     return res.json({
       isRepo: false,
@@ -380,10 +390,17 @@ filesRouter.get("/git-diff", (req, res) => {
       diff = diff.replaceAll(fullPath, relPath);
     }
 
+    const original = readHeadDiffSource(workspaceDir, relPath);
+    const modified = readWorkspaceDiffSource(fullPath);
+
     return res.json({
       path: relPath,
       diff,
       hasChanges: Boolean(diff.trim()),
+      original: original.content,
+      modified: modified.content,
+      isBinary: original.binary || modified.binary,
+      isTooLarge: original.tooLarge || modified.tooLarge,
       updatedAt: Date.now(),
     });
   } catch (error: any) {

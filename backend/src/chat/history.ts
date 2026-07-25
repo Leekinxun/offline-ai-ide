@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import type { ToolFileUpdate } from "../agent/types.js";
 import type { AgentMode } from "../agent/types.js";
+import type { ReviewFinding } from "./reviewFindings.js";
 
 const HISTORY_DIR_NAME = ".history";
 const CONVERSATION_FILE_EXTENSION = ".jsonl";
@@ -45,6 +46,55 @@ export interface ConversationRunSummary {
   toolCallCount: number;
   errorCount: number;
   commandCount: number;
+  reviewFindings?: ReviewFinding[];
+}
+
+export function normalizeConversationRunSummary(raw: unknown): ConversationRunSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as Partial<ConversationRunSummary>;
+  const count = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  const changedFiles = Array.isArray(candidate.changedFiles)
+    ? candidate.changedFiles
+        .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+        .map((value) => value.trim().slice(0, 1000))
+        .slice(0, 500)
+    : [];
+  const severities = new Set(["critical", "error", "warning", "info"]);
+  const reviewFindings = Array.isArray(candidate.reviewFindings)
+    ? candidate.reviewFindings.flatMap((value, index) => {
+        if (!value || typeof value !== "object") return [];
+        const finding = value as Partial<ReviewFinding>;
+        if (
+          !severities.has(String(finding.severity)) ||
+          typeof finding.path !== "string" ||
+          !finding.path.trim() ||
+          typeof finding.message !== "string" ||
+          !finding.message.trim() ||
+          typeof finding.line !== "number" ||
+          !Number.isSafeInteger(finding.line) ||
+          finding.line < 1
+        ) return [];
+        return [{
+          id: typeof finding.id === "string" && finding.id ? finding.id.slice(0, 120) : `review-${index + 1}`,
+          severity: finding.severity as ReviewFinding["severity"],
+          path: finding.path.trim().slice(0, 1000),
+          line: finding.line,
+          ...(typeof finding.column === "number" && Number.isSafeInteger(finding.column) && finding.column > 0
+            ? { column: finding.column }
+            : {}),
+          message: finding.message.trim().slice(0, 2000),
+        }];
+      }).slice(0, 100)
+    : [];
+
+  return {
+    changedFiles,
+    toolCallCount: count(candidate.toolCallCount),
+    errorCount: count(candidate.errorCount),
+    commandCount: count(candidate.commandCount),
+    ...(reviewFindings.length > 0 || Array.isArray(candidate.reviewFindings) ? { reviewFindings } : {}),
+  };
 }
 
 export interface ConversationSummary {
@@ -163,6 +213,7 @@ function normalizeConversationMeta(raw: unknown): ConversationMetaRecord | null 
   if (candidate.type !== "meta") {
     return null;
   }
+  const summary = normalizeConversationRunSummary(candidate.summary);
 
   return {
     type: "meta",
@@ -183,9 +234,7 @@ function normalizeConversationMeta(raw: unknown): ConversationMetaRecord | null 
     ...(candidate.status === "queued" || candidate.status === "running" || candidate.status === "completed" || candidate.status === "stopped" || candidate.status === "failed"
       ? { status: candidate.status }
       : {}),
-    ...(candidate.summary && typeof candidate.summary === "object"
-      ? { summary: candidate.summary as ConversationRunSummary }
-      : {}),
+    ...(summary ? { summary } : {}),
     ...(typeof candidate.lastRunId === "string" && candidate.lastRunId
       ? { lastRunId: candidate.lastRunId }
       : {}),

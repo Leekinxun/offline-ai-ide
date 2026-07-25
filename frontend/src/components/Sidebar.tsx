@@ -440,14 +440,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     fetchDirectories(parent);
   }, [folderBrowser, fetchDirectories]);
 
-  if (!visible) return null;
-
   const workspaceName = workspaceDir.split("/").pop() || workspaceDir;
   const filteredTree = useMemo(() => filterTree(tree, treeQuery), [tree, treeQuery]);
   const treeStats = useMemo(() => countTreeNodes(filteredTree), [filteredTree]);
 
+  if (!visible) return null;
+
   return (
-    <div className="sidebar" style={style}>
+    <div className="sidebar workspace-drawer" style={style} tabIndex={-1} data-workspace-drawer="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-heading">
           <span className="sidebar-eyebrow">{t("sidebar.workspaceLabel")}</span>

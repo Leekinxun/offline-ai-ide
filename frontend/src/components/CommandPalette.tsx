@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Bot, Command, FileCode2, GitBranch, History, Search, Settings, Sparkles, TerminalSquare, Users, X, Plus } from "lucide-react";
+import { BookOpen, Bot, Bug, CircleAlert, Command, FileCode2, GitBranch, History, Search, Settings, ShieldCheck, Sparkles, TerminalSquare, TestTube2, Users, X, Plus } from "lucide-react";
 import { FileNode } from "../types";
 import { useI18n } from "../i18n";
 
@@ -139,6 +139,34 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         hint: t("command.openGitHint"),
         icon: <GitBranch size={15} />,
         action: () => onRunCommand("git"),
+      },
+      {
+        id: "checkpoints",
+        label: t("command.openCheckpoints"),
+        hint: t("command.openCheckpointsHint"),
+        icon: <ShieldCheck size={15} />,
+        action: () => onRunCommand("checkpoints"),
+      },
+      {
+        id: "problems",
+        label: t("command.openProblems"),
+        hint: "Cmd/Ctrl+Shift+M",
+        icon: <CircleAlert size={15} />,
+        action: () => onRunCommand("problems"),
+      },
+      {
+        id: "run-center",
+        label: t("command.openRunCenter"),
+        hint: t("command.openRunCenterHint"),
+        icon: <TestTube2 size={15} />,
+        action: () => onRunCommand("run-center"),
+      },
+      {
+        id: "debug",
+        label: t("command.openDebug"),
+        hint: t("command.openDebugHint"),
+        icon: <Bug size={15} />,
+        action: () => onRunCommand("debug"),
       },
       {
         id: "agents",

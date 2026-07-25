@@ -16,6 +16,7 @@ import { runSubagent } from "./subagent.js";
 import { recordKnownFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
+import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
 // ---- Tool handler type ----
 
@@ -35,8 +36,6 @@ export type ToolHandler = (
 ) => Promise<string | ToolExecutionResult>;
 
 // ---- Core tool implementations ----
-
-const DANGEROUS_PATTERNS = ["rm -rf /", "sudo ", "shutdown", "reboot", "> /dev/"];
 
 function offsetToPosition(text: string, offset: number): { line: number; column: number } {
   const safeOffset = Math.max(0, Math.min(offset, text.length));
@@ -63,9 +62,8 @@ function createSelectionRange(
 }
 
 async function runBash(command: string, cwd: string): Promise<string> {
-  if (DANGEROUS_PATTERNS.some((d) => command.includes(d))) {
-    return "Error: Dangerous command blocked";
-  }
+  const policy = evaluateShellCommand(command);
+  if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
   try {
     const output = execSync(command, {
       cwd,
@@ -108,6 +106,8 @@ async function runWriteFile(
   actorName?: string
 ): Promise<string | ToolExecutionResult> {
   try {
+    const policy = evaluateWorkspaceWrite(filePath);
+    if (!policy.allowed) return `Error: Write blocked by workspace policy: ${policy.reason}`;
     const full = safePath(filePath, cwd);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
@@ -140,6 +140,8 @@ async function runEditFile(
   actorName?: string
 ): Promise<string | ToolExecutionResult> {
   try {
+    const policy = evaluateWorkspaceWrite(filePath);
+    if (!policy.allowed) return `Error: Edit blocked by workspace policy: ${policy.reason}`;
     const full = safePath(filePath, cwd);
     const content = fs.readFileSync(full, "utf-8");
     const matchOffset = content.indexOf(oldText);

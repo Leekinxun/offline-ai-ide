@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> Current Version: `v0.7.0`
+> Current Version: `v0.8.0`
 >
-> Release Date: `2026-07-14`
+> Release Date: `2026-07-25`
 
 CrownForge is a fully offline, self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,19 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.8.0 · 2026-07-25
+
+- Added automatic **pre-code workspace checkpoints** and a Checkpoints panel with manual snapshots, explicit restore confirmation, workspace refresh, and safe editor-state cleanup after recovery
+- Added permission-aware **tool approval** for file writes and shell execution, including one-time decisions, session-scoped directory trust for file tools, and hard safety-policy blocks for protected metadata, credentials, destructive commands, and workspace escapes
+- Added a unified **Problems** surface that combines Monaco markers with persistent TypeScript, Ruff, and Cargo diagnostics, supports severity filtering, and navigates directly to file locations
+- Added an allowlisted, cancellable **Run & Test Center** with live output, duration and status history, parsed failure locations, timeout/cancellation states, and direct editor navigation
+- Added a Node.js **Run & Debug** MVP using the Inspector protocol, with workspace breakpoints, pause/continue, step controls, call-stack frames, and explicit session lifecycle states
+- Added a stable **Change Summary** bridge across AI results, structured review findings, Git changes, Monaco Diff, editor locations, conflict groups, and keyboard-accessible file tabs
+- Standardized Agent, Team, Terminal, and utility-panel behavior with shared panel chrome, responsive single-drawer layouts, focus return, reconnect actions, narrow-screen command access, and reduced-motion handling
+- Upgraded the builtin **JSON Visualizer** to **JSON Parser**, supporting searchable hierarchy editing, object-key rename, object/array child insertion, primitive value editing, confirmed deletion, duplicate-key/number validation, and local undo/redo
+- Added the permission-gated `editor.modify` plugin capability so preview plugins only receive editor write-back access when explicitly declared; team viewer roles remain read-only
+- Added repeatable JSON mutation tests, expanded backend/UI contracts, visual regression baselines, and production verification across backend tests, typechecks, frontend builds, UI contracts, and whitespace checks
 
 ### v0.7.0 · 2026-07-14
 
@@ -100,7 +113,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.7.0` is the current documented release and completes the CrownForge Workbench frontend redesign with task context surfaces, responsive panels, readable typography, a more capable Explorer, per-file editor state restoration, accessible keyboard interactions, and repeatable UI contract verification on top of the `v0.6.1` Agent context and MCP capabilities.
+`v0.8.0` is the current documented release. It turns the redesigned CrownForge Workbench into a safer, more complete IDE workflow with recoverable checkpoints, permission-gated tool execution, persistent diagnostics, cancellable run/test tasks, Node debugging, structured review navigation, responsive collaboration surfaces, and an editable JSON hierarchy plugin.
 
 ## Workbench Design Baseline
 
@@ -121,7 +134,12 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
 - **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
-- **JSON Visualization** — JSON files open in a builtin searchable tree preview with statistics, expand/collapse controls, JSONPath/value copy actions, and clear parse-error feedback
+- **JSON Parser** — JSON files open in a builtin searchable hierarchy editor with statistics, expand/collapse controls, JSONPath/value copy actions, reversible add/edit/rename/delete operations, validation, read-only enforcement, and clear parse-error feedback
+- **Checkpoints & Recovery** — Code tasks create a workspace checkpoint before tool execution; users can also create, inspect, and explicitly restore snapshots from the Checkpoints panel
+- **Problems & Diagnostics** — Monaco markers and persistent TypeScript/Ruff/Cargo checks share one filterable Problems surface with direct file/line navigation
+- **Run, Test & Debug** — Discover allowlisted project tasks, stream and cancel executions, navigate parsed failures, and debug Node.js programs with breakpoints, stepping, and call stacks
+- **Tool Approval & Safety Policy** — Side-effecting file and shell tools pause for an explicit decision while protected metadata, secrets, destructive commands, and workspace escapes remain non-bypassable
+- **Structured Review & Diff** — AI review findings, changed-file summaries, Git groups, conflict states, and Monaco Diff share a consistent navigation path back to the editor
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
 - **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, interruptible steering, automatic context compaction with preserved `.transcripts/`, lazy-loaded external MCP tools, and honors team read-only roles
@@ -163,7 +181,7 @@ The repository includes repeatable local checks for the Agent harness and deploy
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` runs backend tests/typecheck, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
+`verify.sh` runs backend tests/typecheck, JSON hierarchy mutation tests, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
 
 Or use Docker Compose:
 
@@ -235,7 +253,7 @@ In local development, admin-managed LLM settings are persisted to `app-settings.
 - `Cmd/Ctrl+B` / `Cmd/Ctrl+J` / `Cmd/Ctrl+backtick` — Toggle Explorer / AI Assistant / Terminal
 - `Cmd/Ctrl+K` — Toggle focus mode
 
-The Command Palette also opens Settings, MCP health, Memory/Skills management, Git changes, and the Agent Board. The MCP and Memory/Skills status chips in the Chat header are clickable shortcuts to their management surfaces.
+The Command Palette also opens Settings, MCP health, Memory/Skills management, Git changes, Checkpoints, Problems, Run/Test, Run/Debug, and the Agent Board. The MCP and Memory/Skills status chips in the Chat header are clickable shortcuts to their management surfaces.
 
 ### Editor Highlighting Samples
 
@@ -248,11 +266,11 @@ The frontend now supports a lightweight plugin architecture inspired by VS Code:
 - Builtin plugins ship inside the app bundle and can be enabled/disabled from Settings
 - External plugins are discovered from the local `plugins/` directory and installed fully offline
 - Plugins declare explicit permissions and derived scopes before activation
-- Editor highlighting, chat Markdown rendering, and JSON visualization are implemented as builtin plugins
+- Editor highlighting, chat Markdown rendering, and JSON hierarchy editing are implemented as builtin plugins
 - Markdown file preview ships as a working external sample plugin in `plugins/markdown-file-preview/`
 
 Open a Markdown file in the IDE to use the preview toolbar with `Edit`, `Preview`, and `Split` modes.
-Open a JSON file to enter the builtin visual tree by default; use the same toolbar to switch back to editing or split view.
+Open a JSON file to enter the builtin JSON Parser by default. Use node actions to add, edit, rename, or delete hierarchy entries, use local undo/redo for structural changes, and switch the editor toolbar between Edit, Preview, and Split modes. The plugin writes through the editor buffer, so normal dirty-tab, save, conflict, and team read-only rules still apply.
 Docker images now also include the shipped `plugins/` directory by default, and the provided `docker-compose.yml` mounts local `./plugins` to `/app/plugins` so external plugins work out of the box.
 
 See [`docs/plugins/README.md`](docs/plugins/README.md) for the plugin manifest format, host APIs, permissions, and offline installation flow.

@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { TeamDetails, TeamRole, TeamSummary } from "../types";
 import { useI18n } from "../i18n";
-import { Copy, Plus, RefreshCw, Users, X } from "lucide-react";
+import { Copy, Plus, Users } from "lucide-react";
+import { PanelHeader, PanelState } from "./PanelChrome";
 
 interface TeamPanelProps {
   teams: TeamSummary[];
@@ -11,6 +12,7 @@ interface TeamPanelProps {
   loading: boolean;
   error: string | null;
   activeFilePath: string | null;
+  drawerMode?: boolean;
   onClose?: () => void;
   onRefresh: () => void;
   onCreateTeam: (name: string) => Promise<void>;
@@ -32,6 +34,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   loading,
   error,
   activeFilePath,
+  drawerMode = false,
   onClose,
   onRefresh,
   onCreateTeam,
@@ -52,6 +55,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const [joining, setJoining] = useState(false);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [lastInvite, setLastInvite] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const activeClaim = useMemo(
     () => activeTeam?.claims.find((claim) => claim.path === activeFilePath) || null,
@@ -60,8 +64,15 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const canManageTeam = activeTeam?.role === "owner" || activeTeam?.role === "admin";
   const canClaimFile = activeTeam?.role !== "viewer";
   const currentRole = activeTeam?.role || null;
+  const visibleError = !activeTeam && error?.trim().toLowerCase() === "no active team" ? null : error;
   const inviteRoleOptions: TeamRole[] =
     currentRole === "owner" ? ["member", "viewer", "admin"] : ["member", "viewer"];
+
+  useEffect(() => {
+    if (drawerMode) {
+      requestAnimationFrame(() => panelRef.current?.focus());
+    }
+  }, [drawerMode]);
 
   const canManageMember = (memberUsername: string, memberRole: TeamRole) => {
     if (!activeTeam) return false;
@@ -126,37 +137,43 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   };
 
   return (
-    <div className="team-panel panel-shell">
-      <div className="team-panel-header">
-        <div className="team-panel-title">
-          <Users size={15} />
-          <span>{t("team.title")}</span>
-        </div>
-        <div className="team-panel-header-actions">
-          <button type="button" className="sidebar-action-btn" onClick={onRefresh} title={t("team.refresh")}>
-            <RefreshCw size={14} />
-          </button>
-          {onClose && (
-            <button type="button" className="sidebar-action-btn" onClick={onClose} title={t("common.close")}>
-              <X size={14} />
-            </button>
-          )}
-        </div>
+    <div
+      ref={panelRef}
+      className="team-panel panel-shell workspace-drawer"
+      role={drawerMode ? "dialog" : "complementary"}
+      aria-modal={drawerMode || undefined}
+      aria-labelledby="team-panel-title"
+      tabIndex={-1}
+      data-workspace-drawer="team"
+    >
+      <PanelHeader
+        titleId="team-panel-title"
+        icon={<Users size={15} />}
+        title={t("team.title")}
+        status={connected ? t("team.connected") : t("team.disconnected")}
+        statusTone={connected ? "success" : "warning"}
+        refreshing={loading}
+        refreshLabel={t("team.refresh")}
+        closeLabel={t("common.close")}
+        onRefresh={onRefresh}
+        onClose={onClose}
+      />
+
+      <div className="collaboration-summary" aria-live="polite">
+        <span><strong>{activeTeam?.onlineCount || 0}</strong>{t("team.onlineSummary")}</span>
+        <span><strong>{activeTeam?.memberCount || 0}</strong>{t("team.memberSummary")}</span>
+        <span className={currentRole === "viewer" ? "is-read-only" : ""}>
+          <strong>{currentRole || "—"}</strong>{t("team.roleSummary")}
+        </span>
       </div>
 
-      <div className="team-panel-section">
-        <div className="team-panel-status">
-          <span
-            className={`team-dot${connected ? " online" : ""}`}
-          />
-          <span>{connected ? t("team.connected") : t("team.disconnected")}</span>
-        </div>
-        {error && <div className="team-panel-error">{error}</div>}
-      </div>
+      {visibleError && <PanelState tone="error" title={t("team.loadFailed")} detail={visibleError} actionLabel={t("team.refresh")} onAction={onRefresh} />}
+      {loading && teams.length === 0 && !activeTeam && !visibleError && <PanelState tone="loading" title={t("team.loadingTitle")} detail={t("team.loadingHint")} />}
 
       <div className="team-panel-section">
-        <div className="team-panel-label">{t("team.switcher")}</div>
+        <label className="team-panel-label" htmlFor="team-switcher">{t("team.switcher")}</label>
         <select
+          id="team-switcher"
           className="team-panel-select"
           value={activeTeam?.id || ""}
           onChange={(e) => {
@@ -175,34 +192,40 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
       </div>
 
       <div className="team-panel-section">
-        <div className="team-panel-label">{t("team.create")}</div>
+        <label className="team-panel-label" htmlFor="team-create-name">{t("team.create")}</label>
         <div className="team-panel-inline">
           <input
+            id="team-create-name"
             className="dialog-input team-panel-input"
             value={teamName}
             onChange={(e) => setTeamName(e.target.value)}
             placeholder={t("team.teamNamePlaceholder")}
           />
           <button
+            type="button"
             className="team-panel-btn primary"
             onClick={handleCreate}
             disabled={!teamName.trim() || creating}
+            title={t("team.create")}
+            aria-label={t("team.create")}
           >
-            <Plus size={14} />
+            <Plus size={14} aria-hidden="true" />
           </button>
         </div>
       </div>
 
       <div className="team-panel-section">
-        <div className="team-panel-label">{t("team.joinByInvite")}</div>
+        <label className="team-panel-label" htmlFor="team-invite-code">{t("team.joinByInvite")}</label>
         <div className="team-panel-inline">
           <input
+            id="team-invite-code"
             className="dialog-input team-panel-input"
             value={inviteCode}
             onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
             placeholder={t("team.inviteCodePlaceholder")}
           />
           <button
+            type="button"
             className="team-panel-btn"
             onClick={handleJoin}
             disabled={!inviteCode.trim() || joining}
@@ -211,6 +234,10 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {!loading && !visibleError && !activeTeam && (
+        <PanelState title={t("team.emptyTitle")} detail={t("team.emptyHint")} />
+      )}
 
       {activeTeam && (
         <>
@@ -223,7 +250,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
               </div>
               <div className="team-panel-meta mono">{activeTeam.workspaceDir}</div>
               <div className="team-panel-inline team-panel-actions">
-                <button className="team-panel-btn danger" onClick={() => void onLeaveTeam()}>
+                <button type="button" className="team-panel-btn danger" onClick={() => void onLeaveTeam()}>
                   {t("team.leaveTeam")}
                 </button>
               </div>
@@ -247,12 +274,13 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                   ))}
                 </select>
                 <button
+                  type="button"
                   className="team-panel-btn"
                   onClick={handleInvite}
                   disabled={inviteBusy || !canManageTeam}
                   title={!canManageTeam ? t("team.inviteRestricted") : undefined}
                 >
-                  <Copy size={13} />
+                  <Copy size={13} aria-hidden="true" />
                   {t("team.createInvite")}
                 </button>
               </div>
@@ -280,7 +308,8 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                     <div key={member.username} className="team-member-row">
                       <div className="team-member-main team-member-main-wrap">
                         <div className="team-member-identity">
-                          <span className={`team-dot${presence?.online ? " online" : ""}`} />
+                          <span className={`team-dot${presence?.online ? " online" : ""}`} aria-hidden="true" />
+                          <span className="sr-only">{presence?.online ? t("team.memberOnline") : t("team.memberOffline")}</span>
                           <span>{member.username}</span>
                           {isSelf && (
                             <span className="team-self-badge">{t("team.you")}</span>
@@ -306,6 +335,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                               ))}
                             </select>
                             <button
+                              type="button"
                               className="team-panel-btn danger"
                               onClick={() => void onRemoveMember(member.username)}
                             >
@@ -313,6 +343,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                             </button>
                             {currentRole === "owner" && member.role !== "owner" ? (
                               <button
+                                type="button"
                                 className="team-panel-btn"
                                 onClick={() => void onTransferOwnership(member.username)}
                               >
@@ -339,6 +370,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
               <div className="team-panel-section-head">
                 <div className="team-panel-label">{t("team.fileClaim")}</div>
                 <button
+                  type="button"
                   className="team-panel-btn"
                   onClick={() =>
                     void onToggleClaim(activeFilePath, activeClaim?.username ? false : true)
@@ -382,7 +414,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
         </>
       )}
 
-      {loading && <div className="team-panel-loading">{t("common.loading")}</div>}
+      {loading && (teams.length > 0 || activeTeam) && <div className="team-panel-loading" role="status" aria-live="polite">{t("common.loading")}</div>}
     </div>
   );
 };

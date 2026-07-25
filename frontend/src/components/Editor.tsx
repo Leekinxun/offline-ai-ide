@@ -207,6 +207,13 @@ function rangesMatch(left: monaco.IRange, right: monaco.IRange): boolean {
   );
 }
 
+function getCssColor(token: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim() || fallback;
+}
+
 export const Editor: React.FC<EditorProps> = ({
   content,
   language,
@@ -289,7 +296,10 @@ export const Editor: React.FC<EditorProps> = ({
         source === "ai"
           ? "editor-ai-highlight-range"
           : "editor-navigation-highlight-range";
-      const overviewColor = source === "ai" ? "#34c75955" : "#ff950055";
+      const overviewColor =
+        source === "ai"
+          ? getCssColor("--editor-ai-overview", "rgba(52, 199, 89, 0.33)")
+          : getCssColor("--editor-navigation-overview", "rgba(255, 149, 0, 0.33)");
 
       highlightDecorationIdsRef.current = editor.deltaDecorations([], [
         {
@@ -411,7 +421,10 @@ export const Editor: React.FC<EditorProps> = ({
             ? {
                 inlineClassName: "editor-symbol-highlight-current",
                 overviewRuler: {
-                  color: "#007aff44",
+                  color: getCssColor(
+                    "--editor-symbol-overview",
+                    "rgba(40, 103, 214, 0.27)"
+                  ),
                   position: monaco.editor.OverviewRulerLane.Center,
                 },
               }

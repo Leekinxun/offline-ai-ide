@@ -1,15 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { X } from "lucide-react";
+import { RotateCw, TerminalSquare, Trash2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { useI18n } from "../i18n";
+import { PanelHeader, PanelState } from "./PanelChrome";
 
 interface TerminalProps {
   visible: boolean;
   token: string;
   disabled?: boolean;
   disabledReason?: string | null;
+  drawerMode?: boolean;
   onClose?: () => void;
   style?: React.CSSProperties;
 }
@@ -19,6 +21,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   token,
   disabled = false,
   disabledReason,
+  drawerMode = false,
   onClose,
   style,
 }) => {
@@ -30,6 +33,8 @@ export const Terminal: React.FC<TerminalProps> = ({
   const panelRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectionGeneration, setConnectionGeneration] = useState(0);
   const disconnectLabelRef = useRef(t("terminal.disconnected"));
 
   disconnectLabelRef.current = t("terminal.disconnected");
@@ -39,6 +44,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     if (disabled) return;
     if (!visible || initialized.current || !containerRef.current) return;
     initialized.current = true;
+    setConnecting(true);
 
     const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2563eb";
 
@@ -69,7 +75,7 @@ export const Terminal: React.FC<TerminalProps> = ({
       fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
       fontSize: 13,
       lineHeight: 1.4,
-      cursorBlink: true,
+      cursorBlink: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       convertEol: true,
     });
 
@@ -85,6 +91,7 @@ export const Terminal: React.FC<TerminalProps> = ({
 
     ws.onopen = () => {
       setConnected(true);
+      setConnecting(false);
       xterm.focus();
       ws.send(
         JSON.stringify({
@@ -101,6 +108,7 @@ export const Terminal: React.FC<TerminalProps> = ({
 
     ws.onclose = () => {
       setConnected(false);
+      setConnecting(false);
       xterm.write(`\r\n\x1b[90m${disconnectLabelRef.current}\x1b[0m\r\n`);
     };
 
@@ -134,10 +142,11 @@ export const Terminal: React.FC<TerminalProps> = ({
       resizeObserver?.disconnect();
       ws.close();
       setConnected(false);
+      setConnecting(false);
       xterm.dispose();
       initialized.current = false;
     };
-  }, [disabled, visible]);
+  }, [connectionGeneration, disabled, token, visible]);
 
   // Re-fit when toggled back to visible
   useEffect(() => {
@@ -154,29 +163,64 @@ export const Terminal: React.FC<TerminalProps> = ({
   return (
     <div
       ref={panelRef}
-      className="terminal-panel panel-shell"
+      className="terminal-panel panel-shell workspace-drawer"
       style={{ ...style, ...(visible ? undefined : { display: "none" }) }}
+      role={drawerMode ? "dialog" : "region"}
+      aria-modal={drawerMode || undefined}
+      aria-labelledby="terminal-panel-title"
+      tabIndex={-1}
+      data-workspace-drawer="terminal"
+      onKeyDownCapture={(event) => {
+        if (drawerMode && event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose?.();
+        }
+      }}
     >
-      <div className="terminal-header">
-        <div className="terminal-header-title"><span className="terminal-header-icon">›_</span>{t("terminal.title")}</div>
-        <div className="terminal-header-actions">
-          <div className={`terminal-header-status${connected ? " connected" : ""}`}>
-            <span />
-            {disabled ? t("terminal.offline") : connected ? t("terminal.connected") : t("terminal.offline")}
-          </div>
-          {onClose && (
-            <button type="button" className="terminal-close" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
-              <X size={14} />
+      <PanelHeader
+        titleId="terminal-panel-title"
+        icon={<TerminalSquare size={15} />}
+        title={t("terminal.title")}
+        status={disabled ? t("terminal.readOnly") : connecting ? t("terminal.connecting") : connected ? t("terminal.connected") : t("terminal.offline")}
+        statusTone={disabled ? "warning" : connected ? "success" : connecting ? "working" : "danger"}
+        closeLabel={t("common.close")}
+        onClose={onClose}
+        actions={
+          <>
+            <button
+              type="button"
+              className="sidebar-action-btn"
+              onClick={() => xtermRef.current?.clear()}
+              title={t("terminal.clear")}
+              aria-label={t("terminal.clear")}
+              disabled={!connected}
+            >
+              <Trash2 size={14} aria-hidden="true" />
             </button>
-          )}
-        </div>
-      </div>
+            {!disabled && !connected && !connecting && (
+              <button
+                type="button"
+                className="sidebar-action-btn"
+                onClick={() => setConnectionGeneration((value) => value + 1)}
+                title={t("terminal.reconnect")}
+                aria-label={t("terminal.reconnect")}
+              >
+                <RotateCw size={14} aria-hidden="true" />
+              </button>
+            )}
+          </>
+        }
+      />
       {disabled ? (
-        <div className="terminal-disabled">
-          {disabledReason || t("terminal.readOnlyDisabled")}
-        </div>
+        <PanelState
+          tone="disabled"
+          icon={<TerminalSquare size={26} />}
+          title={t("terminal.readOnly")}
+          detail={disabledReason || t("terminal.readOnlyDisabled")}
+        />
       ) : (
-        <div className="terminal-body" ref={containerRef} />
+        <div className="terminal-body" ref={containerRef} role="region" aria-label={t("terminal.session")} />
       )}
     </div>
   );

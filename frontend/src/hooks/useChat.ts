@@ -13,6 +13,8 @@ import {
   AgentRunMetrics,
   AgentRunState,
   AgentRunSummary,
+  ToolApprovalRequest,
+  ToolApprovalDecision,
 } from "../types";
 import { useI18n } from "../i18n";
 
@@ -82,6 +84,7 @@ export function useChat(
   const [runHistory, setRunHistory] = useState<AgentRunSummary[]>([]);
   const [runHistoryLoading, setRunHistoryLoading] = useState(false);
   const [runHistoryError, setRunHistoryError] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<ToolApprovalRequest[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
@@ -329,7 +332,17 @@ export function useChat(
           }));
           break;
 
+        case "tool_approval_request":
+          setPendingApprovals((previous) => [
+            ...previous.filter((item) => item.approvalId !== data.approvalId),
+            data as ToolApprovalRequest,
+          ]);
+          break;
+
         case "tool_result":
+          setPendingApprovals((previous) =>
+            previous.filter((item) => item.toolCallId !== data.toolCallId)
+          );
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             toolCalls: (msg.toolCalls || []).map((tc) =>
@@ -349,11 +362,19 @@ export function useChat(
           break;
 
         case "done":
+          setPendingApprovals((previous) =>
+            previous.filter((item) => item.requestId !== data.requestId)
+          );
           finishRequest(data.requestId);
           void refreshConversations();
           break;
 
         case "stopped":
+          setPendingApprovals((previous) =>
+            data.requestId
+              ? previous.filter((item) => item.requestId !== data.requestId)
+              : []
+          );
           if (data.requestId) {
             updateAssistantByRequestId(data.requestId, (msg) => ({
               ...msg,
@@ -375,6 +396,11 @@ export function useChat(
             content: msg.content || `Error: ${data.content}`,
           }));
           finishRequest(data.requestId);
+          if (data.requestId) {
+            setPendingApprovals((previous) =>
+              previous.filter((item) => item.requestId !== data.requestId)
+            );
+          }
           void refreshConversations();
           break;
       }
@@ -409,6 +435,7 @@ export function useChat(
     setRunState(null);
     setRunHistory([]);
     setRunHistoryError(null);
+    setPendingApprovals([]);
     void refreshConversations();
     void refreshRunHistory(null);
   }, [refreshConversations, refreshRunHistory, workspaceDir]);
@@ -421,6 +448,7 @@ export function useChat(
     (content: string, context?: FileContext, modeOverride?: AgentMode) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
       const requestId = createRequestId();
+      const requestedMode = modeOverride || agentMode;
 
       const userMsg: ChatMessage = {
         requestId,
@@ -445,6 +473,10 @@ export function useChat(
         content: m.content,
       }));
 
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        finishRequest(requestId);
+        return;
+      }
       wsRef.current.send(
         JSON.stringify({
           requestId,
@@ -452,11 +484,11 @@ export function useChat(
           context,
           history,
           conversationId: currentConversationId,
-          mode: modeOverride || agentMode,
+          mode: requestedMode,
         })
       );
     },
-    [agentMode, currentConversationId, messages]
+    [agentMode, currentConversationId, finishRequest, messages]
   );
 
   const sendSteering = useCallback(
@@ -506,6 +538,7 @@ export function useChat(
       })
     );
     setActiveRequestIds([]);
+    setPendingApprovals([]);
     if (latestRequestId) {
       updateAssistantByRequestId(latestRequestId, (msg) => ({
         ...msg,
@@ -530,7 +563,23 @@ export function useChat(
     setRunState(null);
     setRunHistory([]);
     setRunHistoryError(null);
+    setPendingApprovals([]);
   }, []);
+
+  const respondToToolApproval = useCallback(
+    (approvalId: string, decision: ToolApprovalDecision) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      wsRef.current.send(JSON.stringify({
+        type: "tool_approval",
+        approvalId,
+        decision,
+      }));
+      setPendingApprovals((previous) =>
+        previous.filter((item) => item.approvalId !== approvalId)
+      );
+    },
+    []
+  );
 
   const retryLast = useCallback(() => {
     const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
@@ -659,6 +708,8 @@ export function useChat(
     refreshRunHistory,
     loadRun,
     resumeConversation,
+    pendingApprovals,
+    respondToToolApproval,
   };
 }
 

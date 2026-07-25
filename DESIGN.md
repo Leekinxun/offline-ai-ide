@@ -3,8 +3,8 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-18
-- Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Agent Board、终端和设置
+- Last refreshed: 2026-07-25
+- Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
   - `../brand-spec.md`：现代极简、hairline 边框、单一蓝色强调色和任务状态优先的品牌规范
@@ -13,6 +13,8 @@
   - `frontend/src/components/ChatPanel.tsx`：Ask/Code/Review/Plan 模式、任务状态、工具调用和输入区
   - `frontend/src/plugins/builtin/jsonPreviewPlugin.tsx`：JSON 文件的搜索、折叠、统计、复制和错误态可视化
   - `frontend/src/components/GitPanel.tsx`、`AgentBoard.tsx`、`WorkspaceWelcome.tsx`、`CommandPalette.tsx`
+  - `frontend/src/components/CheckpointPanel.tsx`、`ProblemsPanel.tsx`、`RunCenterPanel.tsx`：IDE 工作流升级的三类新工作台表面
+  - `backend/src/chat/checkpoints.ts`、`diagnostics/service.ts`、`run/service.ts`：可恢复、可定位、可验证的后端能力边界
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
@@ -36,6 +38,43 @@
 - Observed: AI 面板已经有上下文、MCP、Memory/Skills 和运行历史状态，但多数状态仍以细小胶囊呈现，重要程度不足。
 - Inference: “高级感”不应来自更多渐变或装饰，而应来自更克制的表面层级、稳定的任务结构、清晰的状态语义和更少但更强的操作入口。
 - Inference: CrownForge 应从“IDE 三栏布局”进一步升级为“Agent Workbench”：编辑器是工作画布，任务是主线，面板是可调度的上下文工具。
+
+## IDE workflow upgrade — 2026-07-24
+
+- Safety and review: 每次 Code 任务在任何 Agent 工具执行前建立工作区 Checkpoint；恢复操作必须明确确认，并在完成后关闭失效编辑器状态、刷新文件树。直接写入 Git、Checkpoint、团队、Codex/OMX 元数据和密钥文件的工具调用必须被策略层拒绝。
+- Problems and diagnostics: Monaco 实时 marker 与工作区 TypeScript/Ruff/Cargo 检查汇总到同一 Problems 表面；每条问题包含严重级别、来源、文件、行列，并可一步定位到编辑器。
+- Run and test: 只发现项目声明的 npm、Cargo 和 Python 任务，不接受来自浏览器的任意命令；运行结果保留状态、耗时、输出与可导航失败位置。
+- Navigation contract: Explorer、Git、Agent、Checkpoints、Problems、Run/Test 是 Activity Rail、Command Palette 和 Status Bar 共享的工作台入口；这些上下文面板互斥打开，避免压缩编辑器成为仪表盘。
+- Interaction contract: 新面板复用 `PanelShell` 的标题、刷新、关闭、空、加载和错误状态；窄屏一次只展示一个抽屉，并通过标题栏紧凑命令入口保持所有面板可达；所有图标操作必须有本地化名称与可见焦点。
+- First-stage scope: 第一阶段提供本地 Checkpoint 恢复、拒绝式安全策略、统一 Problems 和声明式 Run/Test 入口。
+
+### JSON parser plugin contract — 2026-07-25
+
+- Product surface: 现有内置 `JSON Visualizer` 升级为 `JSON Parser`，避免同一文件出现两个竞争性的树视图插件；搜索、统计、折叠和复制能力继续保留。
+- Hierarchy editing: 用户可以在树中编辑基础值、重命名对象键、向对象或数组添加子节点、删除非根节点；对象新增与重命名必须阻止空键和重复键，数字输入必须经过有限数值校验。
+- Safe write boundary: 插件不得直接写入文件系统。每次结构修改只通过受权限控制的编辑器内容回调生成格式化 JSON，复用现有 dirty tab、保存、远端版本冲突和团队只读角色策略。
+- Permission model: 修改内容需要独立的 `editor.modify` 权限；只有声明该权限的预览渲染器可以收到写回能力，普通 `editor.preview` 插件保持只读。
+- Reversibility: 插件内的结构操作提供撤销和重做；切换文件或检测到插件外部内容更新时清空本地历史，避免把一个文档的历史应用到另一个文档。
+- Interaction and accessibility: 节点操作在 hover 与键盘 focus 时可见；编辑通过具备标题、说明、校验反馈和明确取消/确认动作的对话框完成；只读工作区显示原因并禁用所有修改入口。
+- Acceptance: 在有效 JSON 中完成“添加子节点 → 编辑值 → 重命名键 → 删除节点 → 撤销/重做”后，源码编辑器内容与树视图一致且文件标记为未保存；无效 JSON 保持错误态，不提供破坏性修复捷径。
+
+### Phase 2 workflow contract
+
+- Tool approval: `write_file`、`edit_file` 和可执行 shell 命令在执行前暂停 Agent，并展示工具、参数摘要、风险等级和影响范围。用户可以“仅本次允许”或拒绝；文件写入可以在当前 WebSocket 会话内按工具与目录放行，shell 命令永远逐次审批。被安全策略硬拦截的命令不可通过审批绕过，断线、停止任务和超时都视为拒绝。
+- Background diagnostics: 工作区诊断从一次性按钮升级为可启动、可停止、可观察的后台会话；文件变化经过防抖后自动刷新 TypeScript、Ruff 和 Cargo 结果。Problems 标题区显示 watching/running/idle/error 和最近完成时间，但后台服务不得抢占编辑器焦点或制造重复通知。该阶段实现“常驻诊断生命周期”，不把编译器轮询伪装成完整 LSP 协议。
+- Cancellable tasks: Run/Test 采用异步子进程和任务记录；运行中必须显示状态、开始时间和实时输出，并提供 Stop。停止先发送 `SIGTERM`，短暂宽限后再终止进程组；历史记录区分 passed、failed、cancelled 和 timed_out，浏览器不能提交任意命令。
+- Debug session MVP: 调试工作台提供 Node.js JavaScript 会话，复用 Node Inspector 协议管理启动、断点、暂停、继续、单步进入/越过/跳出和停止；断点绑定工作区文件与行号，暂停时显示当前栈帧。首版不宣称 Python/Rust 调试或完整 DAP 兼容。
+- Navigation and state: Debug 与 Run/Test、Problems、Checkpoints 一样通过 Activity Rail 和 Command Palette 可达；运行、调试、诊断和审批都必须在窄屏抽屉中可操作，且关闭面板不终止后台任务。
+- Phase 2 acceptance: 未经批准的副作用工具不执行；运行任务能在完成前取消且留下 cancelled 记录；修改源文件后诊断会话自动产生新一代结果；Node 调试会话可在断点暂停并完成至少一次 continue/step；所有新状态具备本地化名称、键盘焦点和错误恢复入口。
+
+### Phase 3 review contract
+
+- Stable change bridge: `ChangeSummary` 是 AI 结果、Git 变更和编辑器之间唯一的摘要表面；同一轮任务不重复渲染两套文件统计。摘要始终先回答结果状态、发现数量和变更范围，再按需展开文件与原始细节。
+- Structured review findings: Review 模式采用可解析的严重级别、文件、行列和结论结构；critical/error/warning/info 使用固定语义，文件位置是可聚焦按钮，并可一步回到编辑器。无法定位的自然语言仍保留在回复正文，但不伪装成结构化发现。
+- Change navigation: Git 变更按冲突、已跟踪和未跟踪分组；每行提供明确的“查看 Diff”和“打开文件”动作，Tab 对同名文件显示最短可辨识路径并支持方向键、Home/End 和关闭键。
+- Diff surface: Git Diff 复用 Monaco 并排审阅画布，增加 added/modified/deleted/untracked/conflicted 状态、打开文件和复制补丁；原始 patch 收入可展开区域。新增文件以空基线比较，删除文件以空工作区版本比较，二进制或过大内容必须给出可理解的降级状态。
+- Conflict continuity: Git 冲突与远端版本冲突保持各自的决策能力，但共享相同的状态术语、文件定位和退出行为；冲突不得仅依赖颜色或单字母状态表达。
+- Phase 3 acceptance: AI Review 发现到文件行号最多一次操作，变更摘要到指定 Diff 最多一次操作；无变更、未跟踪、删除和冲突均有解释与下一步；桌面与窄屏可使用键盘完成 Tab、变更列表和 Diff 的主要动作。
 
 ## Frontend redesign direction
 
@@ -94,7 +133,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
 - `PanelShell`: standardize title, close, refresh, empty, loading and error states across Git, Agent, Team, Terminal, Settings and Knowledge.
 - `KnowledgeCenter`: combine Memory and Skills management with search, scope, preview and recent usage while preserving the current admin boundary.
 - `Explorer`: keep the workspace identity visible, provide an inline tree filter, group primary creation actions, and make selection mode and item states legible without relying on tiny icon-only controls.
-- `JsonPreview`: render valid JSON as a searchable, collapsible tree with node statistics and copy actions; keep invalid JSON in a clear error state and preserve parity across light and dark themes.
+- `JsonPreview`: render valid JSON as a searchable, collapsible and permission-aware hierarchy editor with node statistics, reversible add/edit/rename/delete actions and copy actions; keep invalid JSON in a clear error state and preserve parity across light and dark themes.
 
 ## Redesign phases and acceptance criteria
 
@@ -145,7 +184,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - 用稳定的视觉语言承载 Ask、Code、Review、Plan 和多 Agent 协作
   - 保持桌面端高效率，同时让窄屏下的面板切换可用
 - Non-goals:
-  - 本阶段不修改认证、权限、命令执行边界或其他安全实现
+  - 不绕过认证、团队只读角色、工作区路径约束或工具执行策略
   - 不为了视觉重构引入新的 UI 框架或第三方设计系统
   - 不把所有面板同时展示，避免工作区变成信息仪表盘
 - Success signals:
@@ -241,6 +280,9 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - `Editor comparison workspace`：从已打开标签中选择第二个文件，在同一画布内并排显示主编辑器与只读参考文件；窄屏改为上下分栏
   - `Explorer`：文件树默认仅展示最外层；根目录和文件夹右键菜单均提供上传入口，并允许将本地文件拖放到明确高亮的目标文件夹
   - `Chat details region`：任务模式、上下文、历史、变更和运行摘要统一进入可收起区域；开始对话后自动收起，优先保留 AI 回复和输入区
+  - `CheckpointPanel`：展示自动/手动工作区快照、范围元数据和显式恢复操作
+  - `ProblemsPanel`：合并编辑器 marker 与项目诊断，按严重级别筛选并导航至源代码
+  - `RunCenterPanel`：发现可信项目任务，展示运行状态、失败位置和完整输出
 - Variants and states:
   - default / hover / active / disabled / loading / error / empty / success
   - task: idle / running / waiting-for-input / completed / failed / stopped
@@ -305,7 +347,9 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
 
 - [ ] 是否将“任务”作为默认主导航实体，还是继续以当前对话为主？影响顶部导航和历史列表
 - [ ] 是否需要持久化用户的面板开关、宽度和主题偏好？影响本地设置和跨设备体验
-- [ ] Review 结果是否需要专门的结构化发现列表与编辑器行号跳转？影响 Diff 和 AI 输出组件设计
+- [x] Review/诊断结果使用结构化 Problems 列表并支持编辑器行号跳转；Phase 3 将 AI Review 发现并入统一 `ChangeSummary`
+- [x] Agent 工具审批采用文件写入按工具与路径的当前会话信任，shell 命令逐次审批；拒绝式安全策略不可绕过
+- [x] Phase 2 采用常驻诊断生命周期与 Node Inspector 调试 MVP；完整 LSP/DAP 和跨语言调试矩阵留待后续
 - [ ] 是否需要提供预置主题/品牌色配置？影响 token 暴露范围和设置页复杂度
 
 ## Implementation roadmap
@@ -338,9 +382,28 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
 - 补齐键盘焦点、Esc 关闭、tooltip、aria 和 reduced-motion 行为
 - 验收：1280px、1024px、768px 三组视口完成冒烟与截图检查
 
+#### Phase 4 implementation contract
+
+- `AgentBoard`、`TeamPanel`、`Terminal` 必须复用同一组面板头部、状态条和空/加载/错误状态语义；标题、连接状态、刷新和关闭操作的位置保持稳定。
+- Agent 状态以“执行中 / 空闲 / 已停止”呈现，Team 状态同时说明连接、当前角色、在线人数和文件认领能力，终端状态区分连接中、已连接、离线、只读禁用，并提供可发现的重连入口。
+- 1280px 保留桌面工作台的并排上下文；1024px 优先保证编辑器和 AI Composer 宽度，协作表面以单个右侧抽屉覆盖；768px 只允许一个工作区抽屉打开，终端改为全高抽屉而非压缩编辑器。
+- 窄屏抽屉使用 `dialog` 语义并标注标题，打开后焦点进入面板，关闭或按 Escape 后焦点回到触发按钮；scrim 只在窄屏可交互，并关闭当前最上层抽屉。
+- 所有图标按钮同时提供 tooltip 和 `aria-label`；异步状态使用 `aria-live`，错误使用 `role="alert"`，装饰性状态点对辅助技术隐藏。
+- 动画仅用于抽屉进入、连接/执行状态和反馈，持续 120–220ms；`prefers-reduced-motion` 下取消位移、脉冲和光标闪烁，不影响状态识别。
+- 验收证据包含 1280px、1024px、768px 三组视口截图，至少覆盖 Agent、Team、Terminal 三种协作表面，以及 Escape、焦点回归、无水平溢出和 reduced-motion 冒烟。
+
 ### Phase 5 — 视觉回归与细节收口
 
 - 建立关键页面截图基线：登录、空工作区、编辑中、AI 运行中、Review、Diff、窄屏
 - 清理重复 CSS 和局部颜色，处理 Monaco chunk warning 可行的进一步拆分
 - 完成构建、浏览器冒烟、主题和 i18n 回归
 - 验收：无阻塞错误、无明显布局溢出、关键交互可用、现有安全边界未变
+
+#### Phase 5 implementation contract
+
+- 截图基线存放在 `docs/screenshots/baseline/`，使用稳定的视口、主题、工作区和状态命名；基线索引必须说明可复现步骤、动态内容边界与最后验证日期。
+- 至少覆盖登录、空工作区、编辑中、Review/Diff、Settings、AI 运行态和 768px 协作抽屉；无法由离线环境自然触发的状态必须标记为确定性视觉夹具，不得伪装成真实运行证据。
+- CSS 收口以最终计算样式不变为前提：合并重复主题 token，保留响应式和状态变体，删除被后置规则完全覆盖的声明；业务状态颜色必须复用现有 `--status-*`、`--accent-*` 和 surface token。
+- Monaco 优化不得删除已支持语言、编辑命令、Diff、主题、worker 或插件挂载能力；优先通过稳定的 Rollup 分包边界隔离编辑器核心、语言服务与 Markdown/终端依赖，不为消除告警而提高告警阈值。
+- 视觉回归以仓库基线和 `visual-verdict` 为双重证据；浅色/深色至少各覆盖登录或工作台一种关键状态，1280px、1024px、768px 均不得出现水平溢出或不可达操作。
+- 最终验收必须运行后端测试与类型检查、前端生产构建、UI contract、Diff whitespace 检查，并记录仍不可消除的第三方包体积警告。

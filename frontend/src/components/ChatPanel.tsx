@@ -10,6 +10,7 @@ import {
   ConversationSummary,
   AgentMode,
   ConversationRunSummary,
+  ReviewFinding,
   FileUpdate,
   SelectionInfo,
   ContextState,
@@ -17,6 +18,8 @@ import {
   KnowledgeState,
   AgentRunState,
   AgentRunSummary,
+  ToolApprovalRequest,
+  ToolApprovalDecision,
 } from "../types";
 import {
   Send,
@@ -27,7 +30,6 @@ import {
   Plus,
   RefreshCw,
   Square,
-  GitCompare,
   Sparkles,
   Activity,
   RotateCcw,
@@ -37,6 +39,8 @@ import { TaskHeader } from "./TaskHeader";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
+import { ToolApprovalCard } from "./ToolApprovalCard";
+import { ChangeSummary } from "./ChangeSummary";
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
@@ -87,6 +91,8 @@ interface ChatPanelProps {
   newConversationRequest?: number;
   onOpenSettings: () => void;
   onOpenFile: (path: string) => void;
+  onOpenDiff: (path: string) => void;
+  onOpenReviewFinding: (finding: ReviewFinding) => void;
   historyLoading: boolean;
   historyLoadingId: string | null;
   historyError: string | null;
@@ -107,6 +113,8 @@ interface ChatPanelProps {
   onResumeRun: (conversationId: string, runId?: string) => Promise<void> | void;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
+  pendingApprovals: ToolApprovalRequest[];
+  onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
   style?: React.CSSProperties;
 }
 
@@ -130,6 +138,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   newConversationRequest,
   onOpenSettings,
   onOpenFile,
+  onOpenDiff,
+  onOpenReviewFinding,
   historyLoading,
   historyLoadingId,
   historyError,
@@ -150,6 +160,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onResumeRun,
   onApplyCode,
   onNavigateToFileUpdate,
+  pendingApprovals,
+  onToolApproval,
   style,
 }) => {
   const { locale, t } = useI18n();
@@ -316,7 +328,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="chat-panel panel-shell" style={style}>
+    <div className="chat-panel panel-shell workspace-drawer" style={style} tabIndex={-1} data-workspace-drawer="chat">
       <TaskHeader
         taskTitle={taskTitle}
         connected={connected}
@@ -373,27 +385,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <span>{t("chat.contextCompactedMessages", { count: contextState.preview.compactedMessageCount })}</span>
             <span>{t("chat.contextRecoverable")}</span>
           </div>
-        </div>
-      )}
-
-      {changesOpen && (
-        <div className="chat-changes-panel">
-          <div className="chat-changes-header">
-            <strong>{t("chat.changes")}</strong>
-            <span>{currentRunSummary?.changedFiles.length || 0}</span>
-          </div>
-          {currentRunSummary?.changedFiles.length ? (
-            <div className="chat-changes-list">
-              {currentRunSummary.changedFiles.map((path) => (
-                <button type="button" key={path} onClick={() => onOpenFile(path)}>
-                  <GitCompare size={12} />
-                  <code>{path}</code>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="chat-changes-empty">{t("chat.noChanges")}</div>
-          )}
         </div>
       )}
 
@@ -547,42 +538,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       )}
 
-      {!isStreaming && currentRunSummary && (
-        <div className="chat-completion-summary">
-          <div className="chat-completion-summary-head">
-            <strong>{t("chat.completionSummary")}</strong>
-            <span className={`chat-summary-status${currentRunSummary.errorCount > 0 ? " failed" : " completed"}`}>
-              {t(`chat.taskStatus.${currentRunSummary.errorCount > 0 ? "failed" : "completed"}`)}
-            </span>
-          </div>
-          {currentRunSummary.errorCount > 0 && (
-            <span className="chat-summary-warning">
-              {t("chat.summaryErrors", { count: currentRunSummary.errorCount })}
-            </span>
-          )}
-          <div className="chat-completion-summary-stats">
-            <span>{t("chat.summaryFiles", { count: currentRunSummary.changedFiles.length })}</span>
-            <span>{t("chat.summaryCommands", { count: currentRunSummary.commandCount })}</span>
-            <span>{t("chat.summaryTools", { count: currentRunSummary.toolCallCount })}</span>
-          </div>
-          {currentRunSummary.changedFiles.length > 0 && (
-            <div className="chat-completion-files">
-              {currentRunSummary.changedFiles.slice(0, 4).map((path) => (
-                <button type="button" className="chat-completion-file" key={path} onClick={() => onOpenFile(path)}>
-                  <GitCompare size={11} />
-                  <code>{path}</code>
-                </button>
-              ))}
-            </div>
-          )}
-          {currentRunSummary.errorCount > 0 && (
-            <button type="button" className="chat-summary-retry" onClick={onRetry}>
-              {t("chat.retryTask")}
-            </button>
-          )}
-        </div>
-      )}
-
       {runState && !isStreaming && (
         <div className="chat-run-telemetry">
           <button
@@ -622,6 +577,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       )}
       </div>
 
+      {!isStreaming && currentRunSummary && (
+        <ChangeSummary
+          summary={currentRunSummary}
+          expanded={changesOpen}
+          onToggle={() => setChangesOpen((open) => !open)}
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
+          onOpenLocation={onOpenReviewFinding}
+          onRetry={onRetry}
+        />
+      )}
+
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty-state">
@@ -646,6 +613,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         ))}
         <div ref={messagesEndRef} />
       </div>
+
+      {pendingApprovals.length > 0 && (
+        <div className="tool-approval-stack">
+          {pendingApprovals.map((request) => (
+            <ToolApprovalCard key={request.approvalId} request={request} onRespond={onToolApproval} />
+          ))}
+        </div>
+      )}
 
       <div className="chat-input-area">
         <div className="chat-composer-context">
