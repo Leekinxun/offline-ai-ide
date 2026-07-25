@@ -181,6 +181,8 @@ export const config = {
   modelName: persistedLlmSettings.modelName || process.env.MODEL_NAME || "default",
   systemPrompt: persistedLlmSettings.systemPrompt || process.env.SYSTEM_PROMPT || "",
   staticDir: process.env.STATIC_DIR || "static",
+  pythonExecutable:
+    process.env.PYTHON_EXECUTABLE || (process.platform === "win32" ? "python" : "python3"),
   maxAgentIterations: parsePositiveInteger(process.env.MAX_AGENT_ITERATIONS, 30),
   contextCompactThreshold: parsePositiveInteger(
     process.env.AGENT_CONTEXT_COMPACT_THRESHOLD,

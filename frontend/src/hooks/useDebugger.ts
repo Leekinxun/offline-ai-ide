@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export interface DebugBreakpoint { path: string; line: number; verified: boolean; }
 export interface DebugFrame { id: string; functionName: string; path: string; line: number; column: number; }
-export interface DebugSession { id: string; path: string; status: "starting" | "running" | "paused" | "stopped" | "failed"; startedAt: number; updatedAt: number; breakpoints: DebugBreakpoint[]; frames: DebugFrame[]; stdout: string; stderr: string; error?: string; }
+export interface DebugSession { id: string; path: string; runtime: "node" | "python"; status: "starting" | "running" | "paused" | "stopped" | "failed"; startedAt: number; updatedAt: number; breakpoints: DebugBreakpoint[]; frames: DebugFrame[]; stdout: string; stderr: string; error?: string; }
 export type DebugAction = "continue" | "step_over" | "step_into" | "step_out";
 
 export function useDebugger(token: string, visible: boolean) {

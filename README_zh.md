@@ -124,6 +124,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
 - **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、编辑器字体选择、按文件恢复光标/滚动位置、Ctrl/Cmd 点击符号跳转、协作提示，以及带版本感知的更安全保存流程
+- **运行、测试与调试** — 发现项目声明的可信任务，流式展示并可停止运行，支持错误定位，并可使用断点、继续、单步和调用栈调试 Node.js 与 Python 文件
 - **Markdown 渲染** — AI 对话内容通过内置插件渲染 Markdown，Markdown 文件可通过仓库自带的外部预览插件查看
 - **JSON 可视化** — JSON 文件默认以可搜索的树形结构预览，支持节点统计、展开/折叠、JSONPath/值复制和清晰的解析错误提示
 - **浅色 / 深色主题** — 用户可从标题栏切换界面主题；主题偏好会保存在本地，并与 Monaco 编辑器主题同步
@@ -266,6 +267,7 @@ npm run dev
 | `VLLM_API_KEY` | *（空）* | LLM 接口的 API Key |
 | `MODEL_NAME` | `default` | 使用的模型名称 |
 | `WORKSPACE_DIR` | `/workspace` | 默认工作区目录 |
+| `PYTHON_EXECUTABLE` | `python3`（Windows 为 `python`） | 工作区没有 `.venv` 或 `venv` 解释器时用于调试的 Python 解释器 |
 | `PORT` | `3000` | 服务端口 |
 | `MAX_AGENT_ITERATIONS` | `30` | 每次 AI 回复的最大工具调用轮数 |
 | `AGENT_MAX_TOKENS` | `8192` | 每次 AI 回复的最大 Token 数 |

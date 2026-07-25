@@ -35,6 +35,7 @@ test("Node debugger pauses at a configured breakpoint and exposes workspace fram
 
   const started = startDebugSession(workspace, "target.js", [2]);
   assert.equal(started.status, "starting");
+  assert.equal(started.runtime, "node");
   const paused = await waitForStatus(workspace, "paused");
   assert.equal(paused.breakpoints[0]?.verified, true);
   assert.equal(paused.frames[0]?.path, "target.js");
@@ -43,4 +44,55 @@ test("Node debugger pauses at a configured breakpoint and exposes workspace fram
   await debugCommand(workspace, "continue");
   const stopped = await waitForStatus(workspace, "stopped");
   assert.match(stopped.stdout, /5/);
+});
+
+test("Python debugger pauses, steps, exposes frames and stops after completion", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-python-debug-"));
+  fs.writeFileSync(path.join(workspace, "target.py"), [
+    "def add(left, right):",
+    "    total = left + right",
+    "    return total",
+    "",
+    "print(add(2, 3))",
+  ].join("\n"));
+  t.after(() => {
+    const current = getDebugSession(workspace);
+    if (current && current.status !== "stopped") {
+      try { stopDebugSession(workspace); } catch { /* already exited */ }
+    }
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const started = startDebugSession(workspace, "target.py", [2]);
+  assert.equal(started.status, "starting");
+  assert.equal(started.runtime, "python");
+
+  const paused = await waitForStatus(workspace, "paused");
+  assert.equal(paused.breakpoints[0]?.verified, true);
+  assert.equal(paused.frames[0]?.path, "target.py");
+  assert.equal(paused.frames[0]?.line, 2);
+
+  await debugCommand(workspace, "step_over");
+  const stepped = await waitForStatus(workspace, "paused");
+  assert.equal(stepped.frames[0]?.path, "target.py");
+  assert.equal(stepped.frames[0]?.line, 3);
+
+  await debugCommand(workspace, "step_out");
+  const steppedOut = await waitForStatus(workspace, "paused");
+  assert.equal(steppedOut.frames[0]?.path, "target.py");
+  assert.equal(steppedOut.frames[0]?.line, 3);
+
+  await debugCommand(workspace, "continue");
+  const stopped = await waitForStatus(workspace, "stopped");
+  assert.match(stopped.stdout, /5/);
+
+  const entryStarted = startDebugSession(workspace, "target.py", [1]);
+  assert.equal(entryStarted.status, "starting");
+  const entryPaused = await waitForStatus(workspace, "paused");
+  assert.equal(entryPaused.breakpoints[0]?.verified, true);
+  assert.equal(entryPaused.frames[0]?.path, "target.py");
+  assert.equal(entryPaused.frames[0]?.line, 1);
+
+  await debugCommand(workspace, "continue");
+  await waitForStatus(workspace, "stopped");
 });

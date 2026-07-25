@@ -5,6 +5,17 @@ import path from "node:path";
 import test from "node:test";
 import { discoverRunTasks, executeRunTask, startRunTask, stopRunTask, waitForRun } from "./service.js";
 
+async function waitForOutput(record: { stdout: string }, expected: RegExp, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (expected.test(record.stdout)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for run output matching ${expected}`);
+}
+
 test("run center discovers allowlisted package scripts and records failures", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
@@ -38,7 +49,7 @@ test("running tasks can be cancelled and retain partial output", async (t) => {
   }));
   const record = startRunTask(workspace, "npm:watch");
   assert.equal(record.status, "running");
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await waitForOutput(record, /started/);
   stopRunTask(workspace, record.id);
   const finished = await waitForRun(workspace, record.id);
   assert.equal(finished.status, "cancelled");

@@ -25,7 +25,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Added permission-aware **tool approval** for file writes and shell execution, including one-time decisions, session-scoped directory trust for file tools, and hard safety-policy blocks for protected metadata, credentials, destructive commands, and workspace escapes
 - Added a unified **Problems** surface that combines Monaco markers with persistent TypeScript, Ruff, and Cargo diagnostics, supports severity filtering, and navigates directly to file locations
 - Added an allowlisted, cancellable **Run & Test Center** with live output, duration and status history, parsed failure locations, timeout/cancellation states, and direct editor navigation
-- Added a Node.js **Run & Debug** MVP using the Inspector protocol, with workspace breakpoints, pause/continue, step controls, call-stack frames, and explicit session lifecycle states
+- Expanded **Run & Debug** to support both Node Inspector and Python `pdb`, with workspace breakpoints, pause/continue, step controls, call-stack frames, runtime labels, and explicit session lifecycle states
 - Added a stable **Change Summary** bridge across AI results, structured review findings, Git changes, Monaco Diff, editor locations, conflict groups, and keyboard-accessible file tabs
 - Standardized Agent, Team, Terminal, and utility-panel behavior with shared panel chrome, responsive single-drawer layouts, focus return, reconnect actions, narrow-screen command access, and reduced-motion handling
 - Upgraded the builtin **JSON Visualizer** to **JSON Parser**, supporting searchable hierarchy editing, object-key rename, object/array child insertion, primitive value editing, confirmed deletion, duplicate-key/number validation, and local undo/redo
@@ -113,7 +113,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.8.0` is the current documented release. It turns the redesigned CrownForge Workbench into a safer, more complete IDE workflow with recoverable checkpoints, permission-gated tool execution, persistent diagnostics, cancellable run/test tasks, Node debugging, structured review navigation, responsive collaboration surfaces, and an editable JSON hierarchy plugin.
+`v0.8.0` is the current documented release. It turns the redesigned CrownForge Workbench into a safer, more complete IDE workflow with recoverable checkpoints, permission-gated tool execution, persistent diagnostics, cancellable run/test tasks, Node.js and Python debugging, structured review navigation, responsive collaboration surfaces, and an editable JSON hierarchy plugin.
 
 ## Workbench Design Baseline
 
@@ -137,7 +137,7 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **JSON Parser** — JSON files open in a builtin searchable hierarchy editor with statistics, expand/collapse controls, JSONPath/value copy actions, reversible add/edit/rename/delete operations, validation, read-only enforcement, and clear parse-error feedback
 - **Checkpoints & Recovery** — Code tasks create a workspace checkpoint before tool execution; users can also create, inspect, and explicitly restore snapshots from the Checkpoints panel
 - **Problems & Diagnostics** — Monaco markers and persistent TypeScript/Ruff/Cargo checks share one filterable Problems surface with direct file/line navigation
-- **Run, Test & Debug** — Discover allowlisted project tasks, stream and cancel executions, navigate parsed failures, and debug Node.js programs with breakpoints, stepping, and call stacks
+- **Run, Test & Debug** — Discover allowlisted project tasks, stream and cancel executions, navigate parsed failures, and debug Node.js or Python programs with breakpoints, stepping, runtime-aware status, and call stacks
 - **Tool Approval & Safety Policy** — Side-effecting file and shell tools pause for an explicit decision while protected metadata, secrets, destructive commands, and workspace escapes remain non-bypassable
 - **Structured Review & Diff** — AI review findings, changed-file summaries, Git groups, conflict states, and Monaco Diff share a consistent navigation path back to the editor
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
@@ -298,6 +298,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `VLLM_API_KEY` | *(empty)* | API key for the LLM endpoint |
 | `MODEL_NAME` | `default` | Model name to use |
 | `WORKSPACE_DIR` | `/workspace` | Default workspace directory |
+| `PYTHON_EXECUTABLE` | `python3` (`python` on Windows) | Fallback Python interpreter for debugging when the workspace has no `.venv` or `venv` interpreter |
 | `PORT` | `3000` | Server port |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Legacy fallback only; output-token limits are detected automatically from model metadata when available |
