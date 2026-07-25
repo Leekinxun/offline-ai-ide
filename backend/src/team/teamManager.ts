@@ -47,6 +47,7 @@ export interface TeamActivityRecord {
     | "invite_created"
     | "file_saved"
     | "entry_created"
+    | "entry_copied"
     | "entry_deleted"
     | "entry_renamed"
     | "claim_updated";
@@ -247,6 +248,7 @@ export class TeamManager {
                 activity.type === "invite_created" ||
                 activity.type === "file_saved" ||
                 activity.type === "entry_created" ||
+                activity.type === "entry_copied" ||
                 activity.type === "entry_deleted" ||
                 activity.type === "entry_renamed" ||
                 activity.type === "claim_updated"

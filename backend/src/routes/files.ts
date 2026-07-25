@@ -20,6 +20,7 @@ import {
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
 import { readGitStatus } from "../files/gitStatus.js";
+import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
 
 export const filesRouter = Router();
 
@@ -107,7 +108,8 @@ function maybeRecordTeamActivity(
       | "file_saved"
       | "entry_created"
       | "entry_deleted"
-      | "entry_renamed";
+      | "entry_renamed"
+      | "entry_copied";
     payload: Record<string, unknown>;
   }
 ): void {
@@ -757,6 +759,35 @@ filesRouter.post("/create", (req, res) => {
     res.json({ status: "ok" });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
+  }
+});
+
+// POST /copy  { source_path, target_directory }
+filesRouter.post("/copy", (req, res) => {
+  if (!requireWorkspaceWrite(req, res)) return;
+  const sourcePath = typeof req.body?.source_path === "string" ? req.body.source_path : "";
+  const targetDirectory =
+    typeof req.body?.target_directory === "string" ? req.body.target_directory : "";
+
+  try {
+    const result = copyWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    maybeRecordTeamActivity(req, {
+      type: "entry_copied",
+      payload: {
+        sourcePath: result.sourcePath,
+        path: result.path,
+        isDirectory: result.type === "directory",
+      },
+    });
+    return res.json({ status: "ok", ...result });
+  } catch (error) {
+    if (error instanceof CopyEntryError) {
+      return res.status(error.status).json({ detail: error.message, code: error.code });
+    }
+    const message = error instanceof Error ? error.message : "Copy failed";
+    return res
+      .status(message === "Path traversal denied" ? 403 : 500)
+      .json({ detail: message });
   }
 });
 

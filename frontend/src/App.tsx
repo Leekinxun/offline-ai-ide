@@ -1506,6 +1506,15 @@ function AuthenticatedApp({
     [fs]
   );
 
+  const handleCopyEntry = useCallback(
+    async (sourcePath: string, targetDirectory: string) => {
+      const result = await fs.copyEntry(sourcePath, targetDirectory);
+      showToast(t("app.copiedEntry", { path: result.path }));
+      return result;
+    },
+    [fs, showToast, t]
+  );
+
   const removeDeletedEntriesFromState = useCallback((deletedPaths: string[]) => {
     setOpenFiles((prev) => {
       const filtered = prev.filter(
@@ -2275,6 +2284,7 @@ function AuthenticatedApp({
           visible={sidebarVisible}
           onFileSelect={openFile}
           onCreateEntry={handleCreateEntry}
+          onCopyEntry={handleCopyEntry}
           onDeleteEntry={handleDeleteEntry}
           onDeleteEntries={handleDeleteEntries}
           onRenameEntry={handleRenameEntry}

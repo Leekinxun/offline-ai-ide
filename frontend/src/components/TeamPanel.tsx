@@ -466,6 +466,11 @@ function describeActivity(
       return t("team.activityCreatedEntry", {
         path: String(entry.payload?.path || ""),
       });
+    case "entry_copied":
+      return t("team.activityCopiedEntry", {
+        sourcePath: String(entry.payload?.sourcePath || ""),
+        path: String(entry.payload?.path || ""),
+      });
     case "entry_deleted":
       return t("team.activityDeletedEntry", {
         path: String(entry.payload?.path || ""),

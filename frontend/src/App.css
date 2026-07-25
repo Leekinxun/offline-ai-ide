@@ -1381,6 +1381,44 @@ select:focus-visible,
   background: var(--accent-light);
 }
 
+.sidebar-clipboard-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.sidebar-clipboard-bar > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-clipboard-bar > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-clipboard-bar > button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .sidebar-selection-text {
   font-size: 13px;
   font-weight: 600;
@@ -4871,6 +4909,8 @@ select:focus-visible,
   padding: 4px;
   z-index: 999;
   min-width: 160px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .context-menu-item {

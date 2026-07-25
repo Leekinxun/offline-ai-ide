@@ -386,6 +386,7 @@ export interface TeamActivity {
     | "invite_created"
     | "file_saved"
     | "entry_created"
+    | "entry_copied"
     | "entry_deleted"
     | "entry_renamed"
     | "claim_updated";

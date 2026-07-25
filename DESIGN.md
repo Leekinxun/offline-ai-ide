@@ -58,6 +58,15 @@
 - Interaction and accessibility: 节点操作在 hover 与键盘 focus 时可见；编辑通过具备标题、说明、校验反馈和明确取消/确认动作的对话框完成；只读工作区显示原因并禁用所有修改入口。
 - Acceptance: 在有效 JSON 中完成“添加子节点 → 编辑值 → 重命名键 → 删除节点 → 撤销/重做”后，源码编辑器内容与树视图一致且文件标记为未保存；无效 JSON 保持错误态，不提供破坏性修复捷径。
 
+### Explorer copy and paste contract — 2026-07-25
+
+- Source and destination: 文件或文件夹通过自身右键菜单进入单项资源管理器剪贴板；粘贴入口只出现在目标文件夹与工作区根目录的右键菜单中，目标语义始终明确。
+- Clipboard feedback: Explorer 在剪贴板非空时显示紧凑状态条，标明已复制的项目并允许清除；切换工作区时必须清空剪贴板，避免跨工作区使用失效路径。
+- Safe copy semantics: 粘贴只执行复制，不隐式移动或覆盖；目标中存在同名项目时返回明确冲突反馈，文件夹不得复制到自身或其后代目录。
+- Permission and path boundary: viewer 团队角色不可复制或粘贴；服务端重新解析源与目标路径，并继续以工作区安全路径边界为最终权限依据。
+- Completion feedback: 复制成功后刷新文件树、显示目标路径，并记录可读的团队活动；失败状态需区分同名冲突、自包含目标与一般复制失败。
+- Acceptance: 用户可将文件和含嵌套内容的文件夹复制到另一个文件夹或工作区根目录；源项目保持不变，目标完整出现，重名、自包含、只读与越界操作均不会修改文件系统。
+
 ### Phase 2 workflow contract
 
 - Tool approval: `write_file`、`edit_file` 和可执行 shell 命令在执行前暂停 Agent，并展示工具、参数摘要、风险等级和影响范围。用户可以“仅本次允许”或拒绝；文件写入可以在当前 WebSocket 会话内按工具与目录放行，shell 命令永远逐次审批。被安全策略硬拦截的命令不可通过审批绕过，断线、停止任务和超时都视为拒绝。
@@ -278,7 +287,7 @@ The default view should show levels 1–3. Level 4 uses disclosure, drawers, or 
   - `PanelShell`：统一面板标题、工具栏、空状态、错误状态和关闭行为
   - `JsonPreview`：作为 `builtin.json-preview` 内置插件，为 JSON 文件提供树形预览、搜索、统计、展开/折叠、路径/值复制和格式错误反馈
   - `Editor comparison workspace`：从已打开标签中选择第二个文件，在同一画布内并排显示主编辑器与只读参考文件；窄屏改为上下分栏
-  - `Explorer`：文件树默认仅展示最外层；根目录和文件夹右键菜单均提供上传入口，并允许将本地文件拖放到明确高亮的目标文件夹
+  - `Explorer`：文件树默认仅展示最外层；根目录和文件夹右键菜单均提供上传入口，并允许将本地文件拖放到明确高亮的目标文件夹；文件和文件夹支持右键复制，并可在目标文件夹或工作区根目录右键粘贴
   - `Chat details region`：任务模式、上下文、历史、变更和运行摘要统一进入可收起区域；开始对话后自动收起，优先保留 AI 回复和输入区
   - `CheckpointPanel`：展示自动/手动工作区快照、范围元数据和显式恢复操作
   - `ProblemsPanel`：合并编辑器 marker 与项目诊断，按严重级别筛选并导航至源代码

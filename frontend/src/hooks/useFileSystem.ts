@@ -15,6 +15,12 @@ export interface WorkspaceSearchResult {
   preview: string;
 }
 
+export interface CopyEntryResult {
+  sourcePath: string;
+  path: string;
+  type: FileNode["type"];
+}
+
 function fallbackDownloadName(path: string, type: FileNode["type"]): string {
   const baseName = path.split("/").pop() || "download";
   return type === "directory" ? `${baseName}.zip` : baseName;
@@ -194,6 +200,36 @@ export function useFileSystem(token: string) {
     }
   }, [authHeaders]);
 
+  const copyEntry = useCallback(
+    async (sourcePath: string, targetDirectory: string): Promise<CopyEntryResult> => {
+      const res = await fetch(`${API}/copy`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          source_path: sourcePath,
+          target_directory: targetDirectory,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const error = new Error(data.detail || "Failed to copy") as Error & {
+          code?: string;
+        };
+        if (typeof data.code === "string") {
+          error.code = data.code;
+        }
+        throw error;
+      }
+      const data = await res.json();
+      return {
+        sourcePath: data.sourcePath,
+        path: data.path,
+        type: data.type,
+      };
+    },
+    [authHeaders]
+  );
+
   const deleteEntry = useCallback(async (path: string) => {
     const res = await fetch(`${API}/delete?path=${encodeURIComponent(path)}`, {
       method: "DELETE",
@@ -301,6 +337,7 @@ export function useFileSystem(token: string) {
       findDefinition,
       writeFile,
       createEntry,
+      copyEntry,
       deleteEntry,
       renameEntry,
       downloadEntry,
@@ -316,6 +353,7 @@ export function useFileSystem(token: string) {
       findDefinition,
       writeFile,
       createEntry,
+      copyEntry,
       deleteEntry,
       renameEntry,
       downloadEntry,

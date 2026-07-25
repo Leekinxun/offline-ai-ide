@@ -16,7 +16,10 @@ import {
   CheckSquare,
   Search,
   X,
+  Copy,
+  ClipboardPaste,
 } from "lucide-react";
+import type { CopyEntryResult } from "../hooks/useFileSystem";
 import { useI18n } from "../i18n";
 
 interface SidebarProps {
@@ -25,6 +28,7 @@ interface SidebarProps {
   visible: boolean;
   onFileSelect: (path: string) => void;
   onCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
+  onCopyEntry: (sourcePath: string, targetDirectory: string) => Promise<CopyEntryResult>;
   onDeleteEntry: (path: string) => Promise<void>;
   onDeleteEntries: (paths: string[]) => Promise<void>;
   onRenameEntry: (oldPath: string, newPath: string) => Promise<void>;
@@ -107,6 +111,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   visible,
   onFileSelect,
   onCreateEntry,
+  onCopyEntry,
   onDeleteEntry,
   onDeleteEntries,
   onRenameEntry,
@@ -142,6 +147,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const [treeQuery, setTreeQuery] = useState("");
   const [rootDropActive, setRootDropActive] = useState(false);
+  const [clipboardItem, setClipboardItem] = useState<FileNode | null>(null);
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
@@ -169,6 +175,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSelectedPaths([]);
     setMultiSelectEnabled(false);
     setTreeQuery("");
+    setClipboardItem(null);
   }, [workspaceDir]);
 
   useEffect(() => {
@@ -289,6 +296,58 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
     },
     [onDownloadEntry, t]
+  );
+
+  const handleCopy = useCallback(
+    (node: FileNode) => {
+      if (!canEditWorkspace) return;
+      setClipboardItem({ name: node.name, path: node.path, type: node.type });
+      setContextMenu(null);
+    },
+    [canEditWorkspace]
+  );
+
+  const handlePaste = useCallback(
+    async (targetDirectory: string) => {
+      if (!canEditWorkspace || !clipboardItem) return;
+      setContextMenu(null);
+      try {
+        await onCopyEntry(clipboardItem.path, targetDirectory);
+        onRefreshTree();
+      } catch (error) {
+        const copyError = error as Error & { code?: string };
+        if (copyError.code === "COPY_CONFLICT") {
+          alert(
+            t("sidebar.copyConflict", {
+              name: clipboardItem.name,
+              target: targetDirectory || t("sidebar.workspaceRoot"),
+            })
+          );
+          return;
+        }
+        if (copyError.code === "COPY_INTO_SELF") {
+          alert(t("sidebar.copyIntoSelf"));
+          return;
+        }
+        if (copyError.code === "COPY_SOURCE_NOT_FOUND") {
+          alert(t("sidebar.copySourceMissing"));
+          return;
+        }
+        if (
+          copyError.code === "COPY_TARGET_NOT_FOUND" ||
+          copyError.code === "COPY_TARGET_NOT_DIRECTORY"
+        ) {
+          alert(t("sidebar.copyTargetMissing"));
+          return;
+        }
+        if (copyError.code === "COPY_UNSUPPORTED_ENTRY") {
+          alert(t("sidebar.copyUnsupported"));
+          return;
+        }
+        alert(copyError.message || t("sidebar.copyFailed"));
+      }
+    },
+    [canEditWorkspace, clipboardItem, onCopyEntry, onRefreshTree, t]
   );
 
   const handleUploadFiles = useCallback(
@@ -595,6 +654,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span>{treeStats.files} {t("sidebar.files")}</span>
         </div>
       </div>
+      {clipboardItem && (
+        <div className="sidebar-clipboard-bar" role="status">
+          <Copy size={14} aria-hidden="true" />
+          <span title={clipboardItem.path}>
+            {t("sidebar.clipboardItem", { name: clipboardItem.name })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setClipboardItem(null)}
+            title={t("sidebar.clearClipboard")}
+            aria-label={t("sidebar.clearClipboard")}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
       {selectedPaths.length > 0 && (
         <div className="sidebar-selection-bar">
           <span className="sidebar-selection-text">
@@ -737,6 +812,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
               <button
                 className="context-menu-item"
+                onClick={() => handleCopy(contextMenu.node!)}
+                disabled={!canEditWorkspace}
+              >
+                <Copy size={14} /> {t("sidebar.copyItem")}
+              </button>
+              {contextMenu.node.type === "directory" && (
+                <button
+                  className="context-menu-item"
+                  onClick={() => void handlePaste(contextMenu.node!.path)}
+                  disabled={!canEditWorkspace || !clipboardItem}
+                >
+                  <ClipboardPaste size={14} /> {t("sidebar.pasteItem")}
+                </button>
+              )}
+              <div className="context-menu-separator" />
+              <button
+                className="context-menu-item"
                 onClick={() =>
                   void handleDownload(contextMenu.node!.path, contextMenu.node!.type)
                 }
@@ -777,7 +869,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <FolderPlus size={14} /> {t("sidebar.newFolder")}
               </button>
-              <div className="context-menu-separator" />
               <button
                 className="context-menu-item"
                 onClick={() => openUploadPicker("", false)}
@@ -793,6 +884,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <FolderUp size={14} /> {t("sidebar.uploadFolder")}
               </button>
               <div className="context-menu-separator" />
+              <button
+                className="context-menu-item"
+                onClick={() => void handlePaste("")}
+                disabled={!canEditWorkspace || !clipboardItem}
+              >
+                <ClipboardPaste size={14} /> {t("sidebar.pasteItem")}
+              </button>
               <button
                 className="context-menu-item"
                 onClick={() => {
