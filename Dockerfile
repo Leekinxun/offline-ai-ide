@@ -27,6 +27,10 @@ RUN npx tsc
 FROM node:20-slim
 
 ARG TARGETARCH
+ARG PIP_INDEX_URL
+ARG PIP_EXTRA_INDEX_URL
+ARG PIP_TRUSTED_HOST
+ARG RUFF_VERSION=0.15.22
 
 WORKDIR /app
 
@@ -63,10 +67,26 @@ ENV PATH="/opt/conda/bin:$PATH"
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
-# Install Python tooling in the default Conda environment used by the web terminal
+# Install Python tooling in the default Conda environment used by the web
+# terminal. Ruff is downloaded directly from the official PyPI file host so a
+# partial internal package index cannot hide its platform wheels.
 COPY requirements.txt ./requirements.txt
-RUN /opt/conda/bin/python -m pip install --no-cache-dir ruff -r requirements.txt && \
-    /opt/conda/bin/ruff --version && \
+RUN set -eu; \
+    /opt/conda/bin/python -m pip install --no-cache-dir -r requirements.txt; \
+    if [ "$TARGETARCH" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then \
+      RUFF_WHEEL="ruff-${RUFF_VERSION}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"; \
+      RUFF_URL="https://files.pythonhosted.org/packages/1e/cc/44eaaf0844e028182f2d0a8f2190d0f359159aed0a9e5ab861d892f1ae2a/$RUFF_WHEEL"; \
+      RUFF_SHA256="742a29cf29bddb7c8327895d6a10e0e6c5b38a96dd407af9b5d0857f809c0576"; \
+    else \
+      RUFF_WHEEL="ruff-${RUFF_VERSION}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"; \
+      RUFF_URL="https://files.pythonhosted.org/packages/f6/f9/a0d4871d12fae702eb1f41b686caf05f1f8b124dc6db6f784f53d74918fa/$RUFF_WHEEL"; \
+      RUFF_SHA256="365523eb91d9224e1bcb03b022fbf0facb8f9e23792a2c53d9d4b3924bdbdebb"; \
+    fi; \
+    wget -qO "/tmp/$RUFF_WHEEL" "$RUFF_URL"; \
+    echo "$RUFF_SHA256  /tmp/$RUFF_WHEEL" | sha256sum -c -; \
+    /opt/conda/bin/python -m pip install --no-cache-dir --no-index "/tmp/$RUFF_WHEEL"; \
+    rm "/tmp/$RUFF_WHEEL"; \
+    /opt/conda/bin/ruff --version; \
     /opt/conda/bin/python -c "import debugpy; print(debugpy.__version__)"
 
 # Initialize conda for bash so terminal users get conda ready

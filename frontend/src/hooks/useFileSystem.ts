@@ -171,6 +171,23 @@ export function useFileSystem(token: string) {
     [authHeaders]
   );
 
+  const formatPythonDocument = useCallback(
+    async (path: string, content: string): Promise<{ content: string; changed: boolean }> => {
+      const res = await fetch("/api/diagnostics/format", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path, content }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to format Python document");
+      }
+      const data = await res.json();
+      return { content: String(data.content ?? ""), changed: Boolean(data.changed) };
+    },
+    [authHeaders]
+  );
+
   const findDefinition = useCallback(
     async (symbol: string, currentPath: string): Promise<DefinitionLocation | null> => {
       const params = new URLSearchParams({
@@ -336,6 +353,7 @@ export function useFileSystem(token: string) {
       readFile,
       findDefinition,
       writeFile,
+      formatPythonDocument,
       createEntry,
       copyEntry,
       deleteEntry,
@@ -352,6 +370,7 @@ export function useFileSystem(token: string) {
       readFile,
       findDefinition,
       writeFile,
+      formatPythonDocument,
       createEntry,
       copyEntry,
       deleteEntry,

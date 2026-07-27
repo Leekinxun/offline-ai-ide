@@ -46,34 +46,92 @@ function relativePath(workspaceDir: string, candidate: string): string | null {
   return relative;
 }
 
-interface CommandResult { stdout: string; stderr: string; missing: boolean; }
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+  missing: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
+}
 
-function run(command: string, args: string[], workspaceDir: string): Promise<CommandResult> {
+function run(command: string, args: string[], workspaceDir: string, input?: string): Promise<CommandResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: workspaceDir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const finish = (missing = false) => {
+    const finish = (result: Pick<CommandResult, "missing" | "exitCode" | "timedOut">) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      resolve({ stdout: stdout.slice(-8 * 1024 * 1024), stderr: stderr.slice(-8 * 1024 * 1024), missing });
+      resolve({
+        stdout: stdout.slice(-8 * 1024 * 1024),
+        stderr: stderr.slice(-8 * 1024 * 1024),
+        ...result,
+      });
     };
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
-      finish(false);
+      finish({ missing: false, exitCode: null, timedOut: true });
     }, 60_000);
     timeout.unref?.();
     child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.once("error", (error: NodeJS.ErrnoException) => finish(error.code === "ENOENT"));
-    child.once("close", () => finish(false));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      finish({ missing: error.code === "ENOENT", exitCode: null, timedOut: false });
+    });
+    child.once("close", (exitCode) => finish({ missing: false, exitCode, timedOut: false }));
+    if (input !== undefined) child.stdin?.end(input);
   });
+}
+
+export class DocumentFormatError extends Error {
+  constructor(
+    message: string,
+    readonly code: "INVALID_PATH" | "UNSUPPORTED_FILE" | "RUFF_MISSING" | "FORMAT_TIMEOUT" | "FORMAT_FAILED"
+  ) {
+    super(message);
+    this.name = "DocumentFormatError";
+  }
+}
+
+export interface DocumentFormatResult {
+  content: string;
+  changed: boolean;
+  tool: "ruff";
+}
+
+export async function formatPythonDocument(
+  workspaceDir: string,
+  candidatePath: string,
+  content: string,
+  executable = process.env.RUFF_EXECUTABLE || "ruff"
+): Promise<DocumentFormatResult> {
+  const root = path.resolve(workspaceDir);
+  const absolute = path.resolve(root, candidatePath);
+  const relative = path.relative(root, absolute).split(path.sep).join("/");
+  if (!candidatePath.trim() || !relative || relative === "." || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    throw new DocumentFormatError("Invalid workspace file path", "INVALID_PATH");
+  }
+  if (![".py", ".pyi"].includes(path.extname(relative).toLowerCase())) {
+    throw new DocumentFormatError("Ruff formatting supports Python files only", "UNSUPPORTED_FILE");
+  }
+
+  const result = await run(executable, ["format", "--stdin-filename", absolute, "-"], root, content);
+  if (result.missing) {
+    throw new DocumentFormatError("Ruff formatter is not installed", "RUFF_MISSING");
+  }
+  if (result.timedOut) {
+    throw new DocumentFormatError("Ruff formatting timed out", "FORMAT_TIMEOUT");
+  }
+  if (result.exitCode !== 0) {
+    throw new DocumentFormatError(result.stderr.trim() || "Ruff formatting failed", "FORMAT_FAILED");
+  }
+  return { content: result.stdout, changed: result.stdout !== content, tool: "ruff" };
 }
 
 function parseTypeScript(workspaceDir: string, output: string): WorkspaceDiagnostic[] {

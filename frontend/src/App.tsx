@@ -572,6 +572,9 @@ function AuthenticatedApp({
   const runPaletteCommand = useCallback(
     (command: string) => {
       switch (command) {
+        case "format-document":
+          void editorRef.current?.getAction("format-python-document")?.run();
+          break;
         case "focus":
           toggleFocusMode();
           break;
@@ -1370,6 +1373,22 @@ function AuthenticatedApp({
       );
     },
     [activeFilePath, readOnlyWorkspace]
+  );
+
+  const formatPythonDocument = useCallback(
+    async (path: string, content: string): Promise<string> => {
+      try {
+        const result = await fs.formatPythonDocument(path, content);
+        showToast(t(result.changed ? "app.fileFormatted" : "app.fileAlreadyFormatted"));
+        return result.content;
+      } catch (error) {
+        showToast(t("app.failedToFormatFile", {
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        throw error;
+      }
+    },
+    [fs, showToast, t]
   );
 
   const saveFile = useCallback(async () => {
@@ -2463,6 +2482,7 @@ function AuthenticatedApp({
                       onViewStateChange={handleEditorViewStateChange}
                       onChange={handleEditorChange}
                       onSave={saveFile}
+                      onFormat={formatPythonDocument}
                       onSelectionChange={handleSelectionChange}
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
@@ -2501,6 +2521,7 @@ function AuthenticatedApp({
                       onViewStateChange={handleEditorViewStateChange}
                       onChange={() => undefined}
                       onSave={() => undefined}
+                      onFormat={formatPythonDocument}
                       onSelectionChange={() => undefined}
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
@@ -2577,6 +2598,7 @@ function AuthenticatedApp({
                           onViewStateChange={handleEditorViewStateChange}
                           onChange={handleEditorChange}
                           onSave={saveFile}
+                          onFormat={formatPythonDocument}
                           onSelectionChange={handleSelectionChange}
                           onNavigateToLocation={handleNavigateToLocation}
                           onFindDefinition={handleFindDefinition}
@@ -2621,6 +2643,7 @@ function AuthenticatedApp({
                   onViewStateChange={handleEditorViewStateChange}
                   onChange={handleEditorChange}
                   onSave={saveFile}
+                  onFormat={formatPythonDocument}
                   onSelectionChange={handleSelectionChange}
                   onNavigateToLocation={handleNavigateToLocation}
                   onFindDefinition={handleFindDefinition}
@@ -3140,6 +3163,7 @@ function AuthenticatedApp({
         onClose={() => setCommandPaletteVisible(false)}
         onOpenFile={openFile}
         onRunCommand={runPaletteCommand}
+        canFormatDocument={Boolean(activeFile?.language === "python" && !readOnlyWorkspace)}
       />
       <WorkspaceSearchPanel
         visible={workspaceSearchVisible}

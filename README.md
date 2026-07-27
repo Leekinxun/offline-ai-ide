@@ -145,7 +145,7 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, interruptible steering, automatic context compaction with preserved `.transcripts/`, lazy-loaded external MCP tools, and honors team read-only roles
 - **Persistent Agent Context** — Workspace-local `.codex/USER.md` and `.codex/MEMORY.md` are loaded into new agent runs, while reusable `.codex/skills/*/SKILL.md` workflows are catalogued and can be loaded on demand
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
-- **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
+- **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, Ruff diagnostics, and Python document formatting
 - **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh, and session-isolated "Open Folder" switching that reloads the file tree, terminal, AI context, and Git status for the selected directory
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
@@ -169,7 +169,36 @@ docker run -d --name ai-ide \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
   -e MODEL_NAME=your-model-name \
-ai-ide
+  ai-ide
+```
+
+The image installs `debugpy` for Python debugging and Ruff for Python
+diagnostics and formatting. The Dockerfile selects the Ruff `0.15.22` Linux
+wheel for x86_64 or ARM64, downloads it directly from the official PyPI file
+host, verifies its SHA-256 digest, and installs it with `--no-index`. This avoids
+committing large wheel files and does not depend on Ruff being mirrored by the
+configured Python package index.
+
+```bash
+docker build -t ai-ide .
+# or
+docker compose build
+```
+
+Open a Python file and use **Format Python Document** from the command palette,
+the editor context menu, or press `Shift+Alt+F`. Formatting runs against the
+unsaved editor content, honors the workspace's `pyproject.toml` / `ruff.toml`,
+and remains undoable before saving.
+
+`debugpy` is still installed from `requirements.txt`. For an internal Python
+package mirror, pass its URL as a build argument (do not embed credentials in
+the Dockerfile or commit them):
+
+```bash
+docker build \
+  --build-arg PIP_INDEX_URL=http://pypi.example.local/simple \
+  --build-arg PIP_TRUSTED_HOST=pypi.example.local \
+  -t ai-ide .
 ```
 
 ### Verification

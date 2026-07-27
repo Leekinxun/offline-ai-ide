@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Bot, Bug, CircleAlert, Command, FileCode2, GitBranch, History, Search, Settings, ShieldCheck, Sparkles, TerminalSquare, TestTube2, Users, X, Plus } from "lucide-react";
+import { BookOpen, Bot, Bug, CircleAlert, Command, FileCode2, GitBranch, History, Search, Settings, ShieldCheck, Sparkles, TerminalSquare, TestTube2, Users, WandSparkles, X, Plus } from "lucide-react";
 import { FileNode } from "../types";
 import { useI18n } from "../i18n";
 
@@ -12,6 +12,7 @@ interface CommandPaletteProps {
   onClose: () => void;
   onOpenFile: (path: string) => void;
   onRunCommand: (command: string) => void;
+  canFormatDocument: boolean;
 }
 
 interface PaletteItem {
@@ -37,6 +38,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose,
   onOpenFile,
   onRunCommand,
+  canFormatDocument,
 }) => {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -70,6 +72,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     }
 
     const commands: PaletteItem[] = [
+      ...(canFormatDocument ? [{
+        id: "format-document",
+        label: t("command.formatDocument"),
+        hint: "Shift+Alt+F",
+        icon: <WandSparkles size={15} />,
+        action: () => onRunCommand("format-document"),
+      }] : []),
       {
         id: "focus",
         label: t("command.focusMode"),
@@ -187,7 +196,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     return commands.filter((item) =>
       `${item.label} ${item.hint}`.toLowerCase().includes(normalized)
     );
-  }, [mode, onOpenFile, onRunCommand, query, t, tree]);
+  }, [canFormatDocument, mode, onOpenFile, onRunCommand, query, t, tree]);
 
   useEffect(() => {
     setSelectedIndex((current) => Math.min(current, Math.max(items.length - 1, 0)));

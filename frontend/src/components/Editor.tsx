@@ -38,6 +38,7 @@ interface EditorProps {
   ) => void;
   onChange: (value: string) => void;
   onSave: () => void;
+  onFormat: (path: string, content: string) => Promise<string>;
   onSelectionChange: (selection: SelectionInfo | null) => void;
   onNavigateToLocation: (
     path: string,
@@ -227,6 +228,7 @@ export const Editor: React.FC<EditorProps> = ({
   onViewStateChange,
   onChange,
   onSave,
+  onFormat,
   onSelectionChange,
   onNavigateToLocation,
   onFindDefinition,
@@ -237,6 +239,7 @@ export const Editor: React.FC<EditorProps> = ({
   onHighlightComplete,
 }) => {
   const onSaveRef = useRef(onSave);
+  const onFormatRef = useRef(onFormat);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const suppressChangeRef = useRef(false);
   const highlightDecorationIdsRef = useRef<string[]>([]);
@@ -246,6 +249,7 @@ export const Editor: React.FC<EditorProps> = ({
   const { locale, t } = useI18n();
 
   onSaveRef.current = onSave;
+  onFormatRef.current = onFormat;
   onSelectionChangeRef.current = onSelectionChange;
 
   const saveCurrentViewState = useCallback(
@@ -492,6 +496,33 @@ export const Editor: React.FC<EditorProps> = ({
         run: () => onSaveRef.current(),
       });
 
+      if (language === "python" && !readOnly) {
+        editor.addAction({
+          id: "format-python-document",
+          label: t("editor.formatDocument"),
+          keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF],
+          contextMenuGroupId: "modification",
+          contextMenuOrder: 1.5,
+          run: async (activeEditor) => {
+            const model = activeEditor.getModel();
+            if (!model) return;
+            try {
+              const formatted = await onFormatRef.current(path, model.getValue());
+              if (formatted === model.getValue()) return;
+              activeEditor.pushUndoStop();
+              activeEditor.executeEdits("ruff-format", [{
+                range: model.getFullModelRange(),
+                text: formatted,
+                forceMoveMarkers: true,
+              }]);
+              activeEditor.pushUndoStop();
+            } catch (error) {
+              console.warn("Failed to format Python document:", error);
+            }
+          },
+        });
+      }
+
       // Track selection changes
       editor.onDidChangeCursorSelection(() => {
         const selection = editor.getSelection();
@@ -579,6 +610,7 @@ export const Editor: React.FC<EditorProps> = ({
       language,
       navigationTarget,
       path,
+      readOnly,
       saveCurrentViewState,
       t,
       viewState,
