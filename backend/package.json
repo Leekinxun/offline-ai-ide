@@ -5,16 +5,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "test": "node --import tsx --test src/agent/*.test.ts src/chat/*.test.ts src/debug/*.test.ts src/diagnostics/*.test.ts src/files/*.test.ts src/plugins/*.test.ts src/run/*.test.ts",
+    "test": "node --import tsx --test src/agent/*.test.ts src/auth/*.test.ts src/chat/*.test.ts src/debug/*.test.ts src/diagnostics/*.test.ts src/files/*.test.ts src/plugins/*.test.ts src/run/*.test.ts",
     "benchmark": "tsx src/agent/benchmark.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.21.0",
+    "express": "^4.22.2",
     "multer": "^2.2.0",
     "node-pty": "^1.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

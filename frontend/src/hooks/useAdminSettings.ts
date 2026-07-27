@@ -88,6 +88,43 @@ export function useAdminSettings(token: string) {
     [authHeaders]
   );
 
+  const approveRegistration = useCallback(
+    async (username: string, defaultWorkspace?: string) => {
+      const res = await fetch(
+        `${API}/registrations/${encodeURIComponent(username)}/approve`,
+        {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ defaultWorkspace }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to approve registration");
+      }
+      return res.json();
+    },
+    [authHeaders]
+  );
+
+  const rejectRegistration = useCallback(
+    async (username: string) => {
+      const res = await fetch(
+        `${API}/registrations/${encodeURIComponent(username)}`,
+        {
+          method: "DELETE",
+          headers: authHeaders(),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to reject registration");
+      }
+      return res.json();
+    },
+    [authHeaders]
+  );
+
   const updateLlmSettings = useCallback(
     async (settings: LlmSettings) => {
       const res = await fetch(`${API}/llm`, {
@@ -263,6 +300,8 @@ export function useAdminSettings(token: string) {
       createUser,
       updateUserPassword,
       deleteUser,
+      approveRegistration,
+      rejectRegistration,
       updateLlmSettings,
       fetchLlmCapabilities,
       updateAppSettings,
@@ -282,6 +321,8 @@ export function useAdminSettings(token: string) {
       createUser,
       updateUserPassword,
       deleteUser,
+      approveRegistration,
+      rejectRegistration,
       updateLlmSettings,
       fetchLlmCapabilities,
       updateAppSettings,

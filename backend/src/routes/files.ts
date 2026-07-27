@@ -19,7 +19,7 @@ import {
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
-import { readGitStatus } from "../files/gitStatus.js";
+import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
 
 export const filesRouter = Router();
@@ -56,7 +56,8 @@ function readWorkspaceDiffSource(fullPath: string): DiffSource {
 
 function readHeadDiffSource(workspaceDir: string, relPath: string): DiffSource {
   try {
-    const sizeText = execFileSync("git", ["cat-file", "-s", `HEAD:${relPath}`], {
+    const repositoryPath = toRepositoryRelativePath(workspaceDir, relPath);
+    const sizeText = execFileSync("git", ["cat-file", "-s", `HEAD:${repositoryPath}`], {
       cwd: workspaceDir,
       encoding: "utf-8",
       timeout: 10_000,
@@ -65,7 +66,7 @@ function readHeadDiffSource(workspaceDir: string, relPath: string): DiffSource {
     if (Number(sizeText) > MAX_DIFF_SOURCE_BYTES) {
       return { content: "", binary: false, tooLarge: true };
     }
-    const content = execFileSync("git", ["show", `HEAD:${relPath}`], {
+    const content = execFileSync("git", ["show", `HEAD:${repositoryPath}`], {
       cwd: workspaceDir,
       encoding: "buffer",
       timeout: 10_000,

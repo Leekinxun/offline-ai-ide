@@ -39,7 +39,7 @@ interface SidebarProps {
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
   workspaceDir: string;
-  onChangeWorkspace: (path: string) => Promise<void>;
+  onChangeWorkspace: (path: string) => Promise<boolean>;
   token: string;
   activeTeam?: TeamDetails | null;
   style?: React.CSSProperties;
@@ -142,7 +142,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     currentPath: string;
     entries: { name: string; path: string }[];
     loading: boolean;
+    switching: boolean;
+    selectable: boolean;
+    error: string | null;
   } | null>(null);
+  const [folderPathInput, setFolderPathInput] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const [treeQuery, setTreeQuery] = useState("");
@@ -450,7 +454,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         currentPath: dir,
         entries: prev?.entries || [],
         loading: true,
+        switching: false,
+        selectable: false,
+        error: null,
       }));
+      setFolderPathInput(dir);
       try {
         const res = await fetch(
           `/api/auth/workspace/list?path=${encodeURIComponent(dir)}`,
@@ -459,13 +467,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         if (!res.ok) throw new Error(t("sidebar.failedToListDirectories"));
         const data = await res.json();
         setFolderBrowser({
-          currentPath: dir,
+          currentPath: data.path || dir,
           entries: data.entries,
           loading: false,
+          switching: false,
+          selectable: Boolean(data.selectable),
+          error: null,
         });
-      } catch {
+        setFolderPathInput(data.path || dir);
+      } catch (error) {
         setFolderBrowser((prev) =>
-          prev ? { ...prev, entries: [], loading: false } : null
+          prev
+            ? {
+                ...prev,
+                entries: [],
+                loading: false,
+                selectable: false,
+                error: error instanceof Error
+                  ? error.message
+                  : t("sidebar.failedToListDirectories"),
+              }
+            : null
         );
       }
     },
@@ -480,10 +502,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleFolderSelect = useCallback(
     async (path: string) => {
-      setFolderBrowser(null);
-      await onChangeWorkspace(path);
+      setFolderBrowser((current) => current
+        ? { ...current, switching: true, error: null }
+        : current);
+      const changed = await onChangeWorkspace(path);
+      if (changed) {
+        setFolderBrowser(null);
+        return;
+      }
+      setFolderBrowser((current) => current
+        ? {
+            ...current,
+            switching: false,
+            error: t("sidebar.workspaceSwitchFailed"),
+          }
+        : current);
     },
-    [onChangeWorkspace]
+    [onChangeWorkspace, t]
   );
 
   const handleFolderNavigate = useCallback(
@@ -617,7 +652,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
       </div>
-      <div className="sidebar-workspace-card" title={workspaceDir}>
+      <button
+        type="button"
+        className="sidebar-workspace-card"
+        title={t("sidebar.openFolder")}
+        onClick={openFolderBrowser}
+      >
         <div className="sidebar-workspace-icon" aria-hidden="true">
           <FolderOpen size={16} />
         </div>
@@ -626,7 +666,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <strong>{workspaceName}</strong>
           <span>{workspaceDir}</span>
         </div>
-      </div>
+        <ChevronRight size={14} className="sidebar-workspace-open" aria-hidden="true" />
+      </button>
       <div className="sidebar-tools">
         <label className="sidebar-search">
           <Search size={15} aria-hidden="true" />
@@ -962,10 +1003,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 ..
               </button>
-              <span className="folder-browser-path">
-                {folderBrowser.currentPath}
-              </span>
+              <input
+                className="folder-browser-path"
+                value={folderPathInput}
+                aria-label={t("sidebar.workspacePath")}
+                onChange={(event) => setFolderPathInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && folderPathInput.trim()) {
+                    void fetchDirectories(folderPathInput.trim());
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="folder-browser-go"
+                onClick={() => void fetchDirectories(folderPathInput.trim())}
+                disabled={!folderPathInput.trim() || folderBrowser.loading}
+              >
+                {t("sidebar.goToPath")}
+              </button>
             </div>
+            {folderBrowser.error && (
+              <div className="folder-browser-error" role="alert">{folderBrowser.error}</div>
+            )}
             <div className="folder-browser-list">
               {folderBrowser.loading ? (
                 <div className="folder-browser-loading">{t("common.loading")}</div>
@@ -995,8 +1055,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 className="dialog-btn primary"
                 onClick={() => handleFolderSelect(folderBrowser.currentPath)}
+                disabled={!folderBrowser.selectable || folderBrowser.loading || folderBrowser.switching}
               >
-                {t("sidebar.openThisFolder")}
+                {folderBrowser.switching ? t("sidebar.switchingWorkspace") : t("sidebar.openThisFolder")}
               </button>
             </div>
           </div>

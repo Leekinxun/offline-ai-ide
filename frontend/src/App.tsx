@@ -188,6 +188,7 @@ export default function App() {
     return (
       <LoginPage
         onLogin={auth.login}
+        onRegister={auth.register}
         onBack={() => showPublicView("landing")}
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -873,6 +874,8 @@ function AuthenticatedApp({
     setOpenFiles([]);
     setActiveFilePath(null);
     setPreviewModes({});
+    setProblemCounts({ errors: 0, warnings: 0 });
+    setActiveRunLabel(null);
     editorViewStatesRef.current = {};
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
@@ -1840,13 +1843,14 @@ function AuthenticatedApp({
 
   // --- Handle workspace change ---
   const handleChangeWorkspace = useCallback(
-    async (path: string) => {
+    async (path: string): Promise<boolean> => {
       const ok = await onChangeWorkspace(path);
       if (ok) {
         showToast(t("app.workspaceChanged"));
       } else {
         showToast(t("app.failedToChangeWorkspace"));
       }
+      return ok;
     },
     [onChangeWorkspace, showToast, t]
   );
@@ -2798,6 +2802,7 @@ function AuthenticatedApp({
         )}
 
         <GitPanel
+          key={`git:${workspaceDir}`}
           visible={gitVisible}
           token={token}
           workspaceDir={workspaceDir}
@@ -2809,12 +2814,14 @@ function AuthenticatedApp({
           onClose={() => setGitVisible(false)}
         />
         <AgentBoard
+          key={`agents:${workspaceDir}`}
           visible={agentsVisible}
           token={token}
           drawerMode={compactWorkspace}
           onClose={() => setAgentsVisible(false)}
         />
         <CheckpointPanel
+          key={`checkpoints:${workspaceDir}`}
           visible={checkpointsVisible}
           token={token}
           conversationId={chat.currentConversationId}
@@ -2830,6 +2837,7 @@ function AuthenticatedApp({
           onNotify={showToast}
         />
         <ProblemsPanel
+          key={`problems:${workspaceDir}`}
           visible={problemsVisible}
           token={token}
           editorProblems={editorProblems.problems}
@@ -2843,6 +2851,7 @@ function AuthenticatedApp({
           onClose={() => setProblemsVisible(false)}
         />
         <RunCenterPanel
+          key={`run:${workspaceDir}`}
           visible={runCenterVisible}
           token={token}
           onRunningChange={setActiveRunLabel}
@@ -2855,6 +2864,7 @@ function AuthenticatedApp({
           onClose={() => setRunCenterVisible(false)}
         />
         <DebugPanel
+          key={`debug:${workspaceDir}`}
           visible={debugVisible}
           token={token}
           activeFilePath={activeFilePath}

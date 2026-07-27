@@ -66,6 +66,26 @@ export function useAuth() {
     }
   }, []);
 
+  const register = useCallback(async (
+    username: string,
+    password: string
+  ): Promise<string | null> => {
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return data.error || "Registration failed";
+      }
+      return null;
+    } catch {
+      return "Network error";
+    }
+  }, []);
+
   const logout = useCallback(() => {
     const stored = localStorage.getItem(TOKEN_KEY);
     if (stored) {
@@ -99,5 +119,5 @@ export function useAuth() {
     }
   }, [token]);
 
-  return { token, user, loading, login, logout, changeWorkspace };
+  return { token, user, loading, login, register, logout, changeWorkspace };
 }

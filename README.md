@@ -146,9 +146,9 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **Persistent Agent Context** — Workspace-local `.codex/USER.md` and `.codex/MEMORY.md` are loaded into new agent runs, while reusable `.codex/skills/*/SKILL.md` workflows are catalogued and can be loaded on demand
 - **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, and `ruff` out of the box
-- **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh on file changes, a manual refresh button, improved multi-select UX, and "Open Folder" (switch workspace at runtime)
+- **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh, and session-isolated "Open Folder" switching that reloads the file tree, terminal, AI context, and Git status for the selected directory
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
-- **Multi-User Auth** — Login page with username/password, backed by `users.json` and the in-app admin settings panel; each user gets isolated sessions (separate workspace, terminal, AI context)
+- **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
 - **Task Board** — Create, assign, and track tasks across agents with clearer workspace status and task-oriented UI context
@@ -344,6 +344,7 @@ Example `users.json`:
 ```json
 {
   "allowedRoots": ["/workspace", "/home"],
+  "pendingRegistrations": [],
   "users": [
     { "username": "admin", "password": "admin123", "defaultWorkspace": "/workspace", "isAdmin": true },
     { "username": "alice", "password": "securepass", "defaultWorkspace": "/workspace/alice", "isAdmin": false }
@@ -354,12 +355,17 @@ Example `users.json`:
 | Field | Description |
 |-------|-------------|
 | `allowedRoots` | Directory prefixes users are allowed to open via the folder browser |
+| `pendingRegistrations` | Registration requests waiting for administrator approval; managed automatically by CrownForge |
 | `username` | Login username |
 | `password` | Login password |
 | `defaultWorkspace` | The workspace directory opened after login |
 | `isAdmin` | Whether the user can open the admin settings panel |
 
 If you edit `users.json` outside the app, restart the backend to reload it. Changes made from the admin settings UI are applied immediately.
+
+Users can open the **Register** tab on the login card and submit a username and password. The request remains local and cannot sign in until an administrator opens **Settings → User Management** and approves it. Approval creates a non-admin account with a default workspace under the first configured `allowedRoots` entry; rejection removes the request.
+
+Every login receives a separate CrownForge session. Switching folders from Explorer only changes that browser session, and immediately resets the open editors and reloads the selected directory's file tree, terminal, conversation context, and Git panel. The directory must already exist and remain within `allowedRoots`.
 
 ### LLM Management
 

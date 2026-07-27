@@ -245,6 +245,11 @@ export interface AdminUser {
   isAdmin: boolean;
 }
 
+export interface AdminRegistrationRequest {
+  username: string;
+  requestedAt: number;
+}
+
 export interface LlmSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
@@ -332,6 +337,7 @@ export interface AppSettings {
 
 export interface AdminSettings {
   users: AdminUser[];
+  pendingRegistrations: AdminRegistrationRequest[];
   allowedRoots: string[];
   llm: LlmSettings;
   mcp: McpSettings;

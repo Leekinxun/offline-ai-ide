@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-25
+- Last refreshed: 2026-07-27
 - Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
@@ -15,6 +15,7 @@
   - `frontend/src/components/GitPanel.tsx`、`AgentBoard.tsx`、`WorkspaceWelcome.tsx`、`CommandPalette.tsx`
   - `frontend/src/components/CheckpointPanel.tsx`、`ProblemsPanel.tsx`、`RunCenterPanel.tsx`：IDE 工作流升级的三类新工作台表面
   - `backend/src/chat/checkpoints.ts`、`diagnostics/service.ts`、`run/service.ts`：可恢复、可定位、可验证的后端能力边界
+  - `backend/src/auth/sessionManager.ts`、`routes/auth.ts`、`frontend/src/hooks/useAuth.ts`：登录会话、允许目录与工作区切换边界
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
@@ -66,6 +67,22 @@
 - Permission and path boundary: viewer 团队角色不可复制或粘贴；服务端重新解析源与目标路径，并继续以工作区安全路径边界为最终权限依据。
 - Completion feedback: 复制成功后刷新文件树、显示目标路径，并记录可读的团队活动；失败状态需区分同名冲突、自包含目标与一般复制失败。
 - Acceptance: 用户可将文件和含嵌套内容的文件夹复制到另一个文件夹或工作区根目录；源项目保持不变，目标完整出现，重名、自包含、只读与越界操作均不会修改文件系统。
+
+### Workspace context contract — 2026-07-27
+
+- Session isolation: 每次账号密码登录都创建独立会话；工作目录、Team、Terminal、Agent 单例和审批状态不得在同用户名的多个浏览器会话之间共享。
+- Workspace selection: Explorer 的当前工作区卡片与“打开文件夹”入口共同打开目录选择器；只允许浏览和选择 `users.json.allowedRoots` 内已经存在的目录，切换失败时弹层保留并在原位展示原因。
+- Atomic context switch: 工作区切换成功后，打开文件、预览、选择、Explorer 剪贴板、团队上下文和旧 Git Diff 必须清空；文件树、对话上下文、终端、运行/调试入口与 Git 状态都从新目录重新建立。Git 面板在切换过程中不得继续显示旧仓库的分支或变更。
+- Git scope: Git 状态以当前工作目录为请求边界；切换到另一个仓库立即重新加载其分支和变更，切换到非仓库目录显示明确空状态。状态和 Diff 中的文件路径始终相对当前工作目录，不能导航到工作区之外。
+- Acceptance: 两个同名用户会话可选择不同目录且互不影响；选择目录后 Explorer 首次刷新即展示新树，已打开 Git 面板先清空旧状态再展示新仓库；允许目录校验失败时不改变当前会话。
+
+### Local registration approval contract — 2026-07-27
+
+- Entry and states: 登录卡片内使用“登录 / 注册”分段切换，不增加独立路由。注册表单只收用户名、密码和确认密码；提交成功后回到登录态，并明确提示“管理员审核通过后可登录”。重复用户名、弱密码、两次密码不一致和网络失败必须在卡片内原位反馈。
+- Offline persistence: 注册申请与现有用户配置共同保存在本地 `users.json`，重启后仍可审核；管理 API 只返回用户名和申请时间，不返回待审核密码。
+- Approval boundary: 只有已登录管理员可以查看、批准或拒绝注册申请。批准后创建普通用户，默认工作区为第一个 `allowedRoots` 下的同名目录；注册申请不能请求管理员权限或自定义越界目录。
+- Admin review: 管理员设置的“用户管理”卡片先展示待审核申请及数量，再展示手动创建用户表单和现有用户列表；审核中禁用重复操作，批准或拒绝后立即刷新列表并显示成功反馈，无申请时展示明确空状态。
+- Acceptance: 未审核用户不能登录；申请在服务重启后仍存在；批准后原密码可立即登录且工作区位于允许根目录；拒绝后申请消失且账号不可登录；用户名冲突不会覆盖现有账号或已有申请。
 
 ### Phase 2 workflow contract
 

@@ -6,6 +6,7 @@ import { ArrowLeft, Moon, ShieldCheck, Sun } from "lucide-react";
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<string | null>;
+  onRegister: (username: string, password: string) => Promise<string | null>;
   onBack: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
@@ -13,6 +14,7 @@ interface LoginPageProps {
 
 export const LoginPage: React.FC<LoginPageProps> = ({
   onLogin,
+  onRegister,
   onBack,
   theme,
   onToggleTheme,
@@ -21,12 +23,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const isZh = locale === "zh-CN";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, [mode]);
+
+  const switchMode = useCallback((nextMode: "login" | "register") => {
+    setMode(nextMode);
+    setError(null);
+    setSuccess(null);
+    setPassword("");
+    setConfirmPassword("");
   }, []);
 
   const handleSubmit = useCallback(
@@ -34,14 +47,33 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       e.preventDefault();
       if (!username.trim() || !password.trim() || submitting) return;
       setError(null);
+      setSuccess(null);
+      if (mode === "register") {
+        if (password.length < 6) {
+          setError(t("login.passwordTooShort"));
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError(t("login.passwordMismatch"));
+          return;
+        }
+      }
       setSubmitting(true);
-      const err = await onLogin(username.trim(), password);
+      const err = mode === "login"
+        ? await onLogin(username.trim(), password)
+        : await onRegister(username.trim(), password);
       if (err) {
         setError(err);
         setSubmitting(false);
+      } else if (mode === "register") {
+        setMode("login");
+        setPassword("");
+        setConfirmPassword("");
+        setSuccess(t("login.registrationSubmitted"));
+        setSubmitting(false);
       }
     },
-    [username, password, submitting, onLogin]
+    [username, password, confirmPassword, submitting, mode, onLogin, onRegister, t]
   );
 
   return (
@@ -94,12 +126,33 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       <section className="login-auth-stage">
         <form className="login-card" onSubmit={handleSubmit}>
+          <div className="login-mode-tabs" role="tablist" aria-label={t("login.accountAccess")}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "login"}
+              className={mode === "login" ? "active" : ""}
+              onClick={() => switchMode("login")}
+            >
+              {t("login.signIn")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "register"}
+              className={mode === "register" ? "active" : ""}
+              onClick={() => switchMode("register")}
+            >
+              {t("login.register")}
+            </button>
+          </div>
           <div className="login-card-heading">
             <span>{isZh ? "工作区访问" : "Workspace access"}</span>
-            <h2>{isZh ? "登录 CrownForge" : "Sign in to CrownForge"}</h2>
-            <p>{t("login.description")}</p>
+            <h2>{mode === "login" ? t("login.heading") : t("login.registerHeading")}</h2>
+            <p>{mode === "login" ? t("login.description") : t("login.registerDescription")}</p>
           </div>
           {error && <div className="login-error" role="alert">{error}</div>}
+          {success && <div className="login-success" role="status">{success}</div>}
           <label className="login-field" htmlFor="login-username">
             <span>{t("login.username")}</span>
             <input
@@ -124,19 +177,43 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               placeholder={isZh ? "输入密码" : "Enter password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
             />
           </label>
+          {mode === "register" && (
+            <label className="login-field" htmlFor="login-confirm-password">
+              <span>{t("login.confirmPassword")}</span>
+              <input
+                id="login-confirm-password"
+                name="confirmPassword"
+                className="login-input"
+                type="password"
+                placeholder={t("login.confirmPasswordPlaceholder")}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+          )}
           <button
             className="login-btn"
             type="submit"
-            disabled={!username.trim() || !password.trim() || submitting}
+            disabled={
+              !username.trim() ||
+              !password.trim() ||
+              (mode === "register" && !confirmPassword.trim()) ||
+              submitting
+            }
           >
-            {submitting ? t("login.signingIn") : t("login.signIn")}
+            {submitting
+              ? mode === "login" ? t("login.signingIn") : t("login.submittingRegistration")
+              : mode === "login" ? t("login.signIn") : t("login.submitRegistration")}
           </button>
           <div className="login-footer">
             <ShieldCheck size={13} />
-            <span>{isZh ? "凭据只发送到本地 CrownForge 服务" : "Credentials are sent only to your local CrownForge service"}</span>
+            <span>{mode === "login"
+              ? t("login.localCredentialHint")
+              : t("login.approvalHint")}</span>
           </div>
         </form>
       </section>

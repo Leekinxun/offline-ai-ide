@@ -132,9 +132,9 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - **AI 编程助手** — 与 AI 智能体对话，它可以读取、编写、编辑文件，并在工作区内执行 Shell 命令；支持通过停止和纠偏控制在运行中打断或追加 follow-up / steering 消息，并会自动遵守团队只读角色权限
 - **历史对话持久化** — 每个工作区会在 `.history/` 下保存 `.jsonl` 会话文件，支持继续历史对话，并自动只保留最近 5 个会话
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda，默认自动激活 `base` 环境，并内置 `ruff`
-- **文件浏览器** — 树形文件管理，支持新建、重命名、文件/文件夹上传、下载、批量删除、文件夹 zip 下载、文件变化自动刷新、手动刷新按钮、改进后的多选交互，以及"打开文件夹"功能（运行时切换工作区）
+- **文件浏览器** — 树形文件管理，支持新建、重命名、文件/文件夹上传、下载、批量删除、文件夹 zip 下载、自动刷新，以及会话隔离的“打开文件夹”；切换后文件树、终端、AI 上下文和 Git 状态都会跟随当前目录更新
 - **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens / Max Agent Iterations / System Prompt / 上传大小限制，并切换英文 / 简体中文界面语言
-- **多用户认证** — 登录页面支持用户名/密码认证，底层由 `users.json` 和内置管理员设置页共同管理；每个用户拥有独立会话（独立的工作区、终端、AI 上下文）
+- **多用户认证** — 支持由 `users.json` 管理的本地账号密码登录、用户自助注册和管理员审核；每个审核通过的登录会话拥有独立工作区、终端和 AI 上下文
 - **团队协作** — 支持在共享工作区内创建/加入团队、按 `owner/admin/member/viewer` 邀请成员、查看在线状态与活跃文件、认领文件、查看协作活动，并通过冲突安全保存流程降低多人编辑冲突
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作
 - **任务看板** — 创建、分配、跟踪跨智能体任务
@@ -304,6 +304,7 @@ npm run dev
 ```json
 {
   "allowedRoots": ["/workspace", "/home"],
+  "pendingRegistrations": [],
   "users": [
     { "username": "admin", "password": "admin123", "defaultWorkspace": "/workspace", "isAdmin": true },
     { "username": "alice", "password": "securepass", "defaultWorkspace": "/workspace/alice", "isAdmin": false }
@@ -314,12 +315,17 @@ npm run dev
 | 字段 | 说明 |
 |------|------|
 | `allowedRoots` | 用户可通过文件夹浏览器打开的目录前缀白名单 |
+| `pendingRegistrations` | 等待管理员审核的注册申请，由 CrownForge 自动维护 |
 | `username` | 登录用户名 |
 | `password` | 登录密码 |
 | `defaultWorkspace` | 登录后默认打开的工作区目录 |
 | `isAdmin` | 是否拥有管理员设置页权限 |
 
 如果你是在应用外手动编辑 `users.json`，需要重启后端后才会生效；如果是在管理员设置页中修改，则会立即生效。
+
+用户可以在登录卡片切换到“注册”，提交用户名和密码。申请只保存在本地，管理员在“设置 → 用户管理”中审核通过前不能登录。审核通过后会创建普通用户，并在第一个 `allowedRoots` 根目录下分配同名默认工作区；拒绝则会删除该申请。
+
+每次登录都会创建独立 CrownForge 会话。在 Explorer 中切换文件夹只影响当前浏览器会话，并会立即清空旧编辑器/Git Diff，重新加载新目录的文件树、终端、对话上下文和 Git 状态。目标目录必须已经存在且位于 `allowedRoots` 内。
 
 ### LLM 配置管理
 

@@ -1661,6 +1661,18 @@ select:focus-visible,
   border-radius: var(--radius);
   background: var(--surface-panel-strong);
   box-shadow: var(--shadow-sm);
+  width: calc(100% - 20px);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.sidebar-workspace-card:hover,
+.sidebar-workspace-card:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--surface-panel-strong) 92%, var(--accent-light));
 }
 
 .sidebar-workspace-icon {
@@ -1680,6 +1692,12 @@ select:focus-visible,
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  flex: 1;
+}
+
+.sidebar-workspace-open {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
 }
 
 .sidebar-workspace-label {
@@ -5900,6 +5918,44 @@ select:focus-visible,
   min-width: 0;
   font-family: var(--font-mono);
   font-size: 11px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--input-surface);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.folder-browser-path:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.folder-browser-go {
+  min-width: 48px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.folder-browser-go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.folder-browser-error {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--border));
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .folder-browser-list {
@@ -6396,6 +6452,39 @@ select:focus-visible,
   gap: 10px;
 }
 
+.settings-registration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.settings-registration-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-registration-heading span:last-child {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settings-registration-empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
 .settings-mcp-list {
   display: flex;
   flex-direction: column;
@@ -6491,6 +6580,11 @@ select:focus-visible,
   color: var(--text-secondary);
 }
 
+.settings-role-badge.pending {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+}
+
 .settings-user-path {
   color: var(--text-secondary);
   font-size: 12px;
@@ -6532,6 +6626,12 @@ select:focus-visible,
 
 .settings-inline-btn.danger {
   color: var(--status-danger-fg);
+}
+
+.settings-inline-btn.approve {
+  color: var(--status-success-fg);
+  background: var(--status-success-bg);
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
 }
 
 .settings-inline-btn.danger:hover {
@@ -7931,6 +8031,46 @@ body {
   background: var(--surface-panel-strong);
   box-shadow: var(--shadow-md);
   backdrop-filter: none;
+}
+
+.login-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+}
+
+.login-mode-tabs button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 12px var(--font-sans);
+  cursor: pointer;
+}
+
+.login-mode-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.login-mode-tabs button.active {
+  color: var(--text-primary);
+  background: var(--surface-panel-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+.login-success {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--success) 24%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  color: var(--success);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .login-page > .login-card:only-child {

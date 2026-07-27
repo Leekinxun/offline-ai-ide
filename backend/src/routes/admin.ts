@@ -91,6 +91,7 @@ adminRouter.get("/settings", (req, res) => {
 
   res.json({
     users: sessionManager.listUsers(),
+    pendingRegistrations: sessionManager.listPendingRegistrations(),
     allowedRoots: sessionManager.getAllowedRoots(),
     llm: getLlmSettings(),
     mcp: getMcpSettings(),
@@ -351,6 +352,42 @@ adminRouter.post("/users", (req, res) => {
       isAdmin,
     });
     res.status(201).json({ user });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.post("/registrations/:username/approve", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const username = normalizeUsername(req.params.username);
+  const defaultWorkspace = normalizeWorkspace(req.body?.defaultWorkspace);
+  if (!username) {
+    return res.status(400).json({ error: "username required" });
+  }
+
+  try {
+    const user = sessionManager.approveRegistration(
+      username,
+      defaultWorkspace || undefined
+    );
+    res.json({ user });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+adminRouter.delete("/registrations/:username", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+
+  const username = normalizeUsername(req.params.username);
+  if (!username) {
+    return res.status(400).json({ error: "username required" });
+  }
+
+  try {
+    sessionManager.rejectRegistration(username);
+    res.json({ status: "ok" });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

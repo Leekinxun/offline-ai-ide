@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Check,
   KeyRound,
   Languages,
   PlugZap,
@@ -129,6 +130,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
+  const [reviewingRegistration, setReviewingRegistration] = useState<{
+    username: string;
+    action: "approve" | "reject";
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState<CreateUserForm>(
     EMPTY_CREATE_USER_FORM
@@ -244,6 +249,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setError(e instanceof Error ? e.message : t("settings.failedToDeleteUser"));
     } finally {
       setDeletingUsername(null);
+    }
+  };
+
+  const handleApproveRegistration = async (username: string) => {
+    if (reviewingRegistration || !settings) return;
+    setReviewingRegistration({ username, action: "approve" });
+    setError(null);
+    try {
+      await adminSettings.approveRegistration(
+        username,
+        buildDefaultWorkspace(username, settings.allowedRoots)
+      );
+      await loadSettings();
+      onShowToast(t("settings.registrationApproved", { username }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToApproveRegistration"));
+    } finally {
+      setReviewingRegistration(null);
+    }
+  };
+
+  const handleRejectRegistration = async (username: string) => {
+    if (reviewingRegistration) return;
+    if (!window.confirm(t("settings.confirmRejectRegistration", { username }))) return;
+    setReviewingRegistration({ username, action: "reject" });
+    setError(null);
+    try {
+      await adminSettings.rejectRegistration(username);
+      await loadSettings();
+      onShowToast(t("settings.registrationRejected", { username }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.failedToRejectRegistration"));
+    } finally {
+      setReviewingRegistration(null);
     }
   };
 
@@ -534,6 +573,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="settings-card-meta">
                     {t("settings.allowedRoots", { roots: allowedRootsText })}
                   </span>
+                </div>
+
+                <div className="settings-registration-list">
+                  <div className="settings-registration-heading">
+                    <span>{t("settings.pendingRegistrations")}</span>
+                    <span>{t("settings.pendingRegistrationCount", {
+                      count: settings?.pendingRegistrations?.length || 0,
+                    })}</span>
+                  </div>
+                  {!settings?.pendingRegistrations?.length ? (
+                    <div className="settings-registration-empty">
+                      {t("settings.noPendingRegistrations")}
+                    </div>
+                  ) : (
+                    settings.pendingRegistrations.map((registration) => {
+                      const action = reviewingRegistration?.username === registration.username
+                        ? reviewingRegistration.action
+                        : null;
+                      return (
+                        <div key={registration.username} className="settings-user-row">
+                          <div className="settings-user-info">
+                            <div className="settings-user-name-row">
+                              <span className="settings-user-name">{registration.username}</span>
+                              <span className="settings-role-badge pending">
+                                {t("settings.pendingApproval")}
+                              </span>
+                            </div>
+                            <div className="settings-user-path">
+                              {t("settings.requestedAt", {
+                                time: new Date(registration.requestedAt).toLocaleString(
+                                  locale === "zh-CN" ? "zh-CN" : "en-US"
+                                ),
+                              })}
+                            </div>
+                          </div>
+                          <div className="settings-user-actions">
+                            <button
+                              type="button"
+                              className="settings-inline-btn approve"
+                              disabled={Boolean(reviewingRegistration)}
+                              onClick={() => void handleApproveRegistration(registration.username)}
+                            >
+                              <Check size={14} />
+                              {action === "approve"
+                                ? t("settings.approvingRegistration")
+                                : t("settings.approveRegistration")}
+                            </button>
+                            <button
+                              type="button"
+                              className="settings-inline-btn danger"
+                              disabled={Boolean(reviewingRegistration)}
+                              onClick={() => void handleRejectRegistration(registration.username)}
+                            >
+                              <X size={14} />
+                              {action === "reject"
+                                ? t("settings.rejectingRegistration")
+                                : t("settings.rejectRegistration")}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
 
                 <form className="settings-form" onSubmit={handleCreateUser}>

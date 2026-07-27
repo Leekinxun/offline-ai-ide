@@ -1,4 +1,6 @@
 import { execFileSync } from "child_process";
+import fs from "fs";
+import path from "path";
 
 export type GitChangeKind = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
 
@@ -77,12 +79,70 @@ export function parseGitStatusOutput(output: string): Omit<GitStatusSnapshot, "i
   };
 }
 
+export function resolveGitWorkspaceContext(workspaceDir: string): {
+  repoRoot: string;
+  workspacePrefix: string;
+} {
+  const resolvedWorkspace = fs.realpathSync.native(path.resolve(workspaceDir));
+  const repoRoot = fs.realpathSync.native(path.resolve(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: resolvedWorkspace,
+    encoding: "utf-8",
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim()));
+  const relative = path.relative(repoRoot, resolvedWorkspace);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Workspace is outside the Git repository");
+  }
+  return {
+    repoRoot,
+    workspacePrefix: relative.split(path.sep).join("/"),
+  };
+}
+
+export function toRepositoryRelativePath(workspaceDir: string, relPath: string): string {
+  const { workspacePrefix } = resolveGitWorkspaceContext(workspaceDir);
+  const normalized = relPath.split(path.sep).join("/").replace(/^\.\//, "");
+  return workspacePrefix ? `${workspacePrefix}/${normalized}` : normalized;
+}
+
+export function scopeGitStatusEntries(
+  entries: GitStatusEntry[],
+  workspacePrefix: string
+): GitStatusEntry[] {
+  if (!workspacePrefix) return entries;
+  const prefix = `${workspacePrefix.replace(/\/$/, "")}/`;
+  const relativePath = (value: string | undefined): string | undefined => {
+    if (!value?.startsWith(prefix)) return undefined;
+    return value.slice(prefix.length);
+  };
+  return entries.flatMap((entry) => {
+    const scopedPath = relativePath(entry.path);
+    if (!scopedPath) return [];
+    const previousPath = relativePath(entry.previousPath);
+    return [{
+      ...entry,
+      path: scopedPath,
+      ...(previousPath ? { previousPath } : { previousPath: undefined }),
+    }];
+  });
+}
+
 export function readGitStatus(workspaceDir: string): GitStatusSnapshot {
-  const output = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b", "-uall"], {
-    cwd: workspaceDir,
+  const { repoRoot, workspacePrefix } = resolveGitWorkspaceContext(workspaceDir);
+  const args = ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b", "-uall"];
+  if (workspacePrefix) args.push("--", workspacePrefix);
+  const output = execFileSync("git", args, {
+    cwd: repoRoot,
     encoding: "utf-8",
     timeout: 10_000,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  return { isRepo: true, ...parseGitStatusOutput(output), updatedAt: Date.now() };
+  const parsed = parseGitStatusOutput(output);
+  return {
+    isRepo: true,
+    ...parsed,
+    entries: scopeGitStatusEntries(parsed.entries, workspacePrefix),
+    updatedAt: Date.now(),
+  };
 }

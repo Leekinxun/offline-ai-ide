@@ -14,15 +14,27 @@ interface UserConfig {
   isAdmin?: boolean;
 }
 
+interface RegistrationRequest {
+  username: string;
+  password: string;
+  requestedAt: number;
+}
+
 interface UsersConfig {
   allowedRoots: string[];
   users: UserConfig[];
+  pendingRegistrations: RegistrationRequest[];
 }
 
 export interface SafeUserConfig {
   username: string;
   defaultWorkspace: string;
   isAdmin: boolean;
+}
+
+export interface SafeRegistrationRequest {
+  username: string;
+  requestedAt: number;
 }
 
 export interface UserSession {
@@ -35,6 +47,13 @@ export interface UserSession {
   teammateManager: TeammateManager;
 }
 
+export interface SessionSummary {
+  token: string;
+  username: string;
+  workspaceDir: string;
+  isAdmin: boolean;
+}
+
 function createSessionSingletons(workspaceDir: string) {
   const taskManager = new TaskManager(workspaceDir);
   const messageBus = new MessageBus(workspaceDir);
@@ -42,22 +61,25 @@ function createSessionSingletons(workspaceDir: string) {
   return { taskManager, messageBus, teammateManager };
 }
 
-class SessionManager {
+export class SessionManager {
   private sessions = new Map<string, UserSession>();
   private usersConfig: UsersConfig;
   private configPath: string;
 
-  constructor() {
-    this.configPath = this.resolveDefaultConfigPath();
+  constructor(configPath?: string) {
+    this.configPath = configPath
+      ? path.resolve(configPath)
+      : this.resolveDefaultConfigPath();
     this.usersConfig = this.loadConfig();
   }
 
   private resolveConfigCandidates(): string[] {
-    return [
+    return Array.from(new Set([
+      this.configPath,
       process.env.USERS_CONFIG,
       path.resolve(process.cwd(), "users.json"),
       path.resolve(process.cwd(), "../users.json"),
-    ].filter(Boolean) as string[];
+    ].filter(Boolean) as string[]));
   }
 
   private resolveDefaultConfigPath(): string {
@@ -91,6 +113,20 @@ class SessionManager {
     };
   }
 
+  private normalizeRegistration(
+    registration: Partial<RegistrationRequest>
+  ): RegistrationRequest | null {
+    const username =
+      typeof registration.username === "string" ? registration.username.trim() : "";
+    const password = typeof registration.password === "string" ? registration.password : "";
+    const requestedAt =
+      typeof registration.requestedAt === "number" && Number.isFinite(registration.requestedAt)
+        ? registration.requestedAt
+        : Date.now();
+    if (!username || !password || !this.isValidUsername(username)) return null;
+    return { username, password, requestedAt };
+  }
+
   private normalizeConfig(raw: Partial<UsersConfig>): UsersConfig {
     const allowedRoots = Array.isArray(raw.allowedRoots) && raw.allowedRoots.length > 0
       ? raw.allowedRoots
@@ -113,7 +149,21 @@ class SessionManager {
       });
     }
 
-    return { allowedRoots, users };
+    const existingUsernames = new Set(users.map((user) => user.username));
+    const pendingUsernames = new Set<string>();
+    const pendingRegistrations = Array.isArray(raw.pendingRegistrations)
+      ? raw.pendingRegistrations
+          .map((registration) => this.normalizeRegistration(registration))
+          .filter((registration): registration is RegistrationRequest => {
+            if (!registration) return false;
+            if (existingUsernames.has(registration.username)) return false;
+            if (pendingUsernames.has(registration.username)) return false;
+            pendingUsernames.add(registration.username);
+            return true;
+          })
+      : [];
+
+    return { allowedRoots, users, pendingRegistrations };
   }
 
   private loadConfig(): UsersConfig {
@@ -144,6 +194,10 @@ class SessionManager {
 
   private getUser(username: string): UserConfig | undefined {
     return this.usersConfig.users.find((user) => user.username === username);
+  }
+
+  private isValidUsername(username: string): boolean {
+    return /^[\p{L}\p{N}][\p{L}\p{N}._@-]{0,63}$/u.test(username);
   }
 
   private toSafeUser(user: UserConfig): SafeUserConfig {
@@ -178,38 +232,53 @@ class SessionManager {
     }
   }
 
+  private createSession(
+    username: string,
+    workspaceDir: string,
+    isAdmin: boolean
+  ): SessionSummary {
+    const resolvedWorkspace = path.resolve(workspaceDir);
+    if (!this.isAllowedPath(resolvedWorkspace)) {
+      throw new Error("Workspace is not within allowed roots");
+    }
+    fs.mkdirSync(resolvedWorkspace, { recursive: true });
+    const canonicalWorkspace = this.resolveSelectableWorkspace(resolvedWorkspace);
+    if (!canonicalWorkspace) {
+      throw new Error("Workspace is not an accessible directory within allowed roots");
+    }
+    const token = crypto.randomUUID();
+    const singletons = createSessionSingletons(canonicalWorkspace);
+    const session: UserSession = {
+      token,
+      username,
+      workspaceDir: canonicalWorkspace,
+      isAdmin,
+      ...singletons,
+    };
+    this.sessions.set(token, session);
+    return {
+      token,
+      username,
+      workspaceDir: canonicalWorkspace,
+      isAdmin,
+    };
+  }
+
   login(
     username: string,
     password: string
-  ): { token: string; username: string; workspaceDir: string; isAdmin: boolean } | null {
+  ): SessionSummary | null {
     const user = this.getUser(username);
     if (!user || user.password !== password) return null;
-
-    // Check if user already has an active session
-    for (const [, session] of this.sessions) {
-      if (session.username === username) {
-        return {
-          token: session.token,
-          username: session.username,
-          workspaceDir: session.workspaceDir,
-          isAdmin: session.isAdmin,
-        };
-      }
+    try {
+      return this.createSession(
+        user.username,
+        user.defaultWorkspace,
+        Boolean(user.isAdmin)
+      );
+    } catch {
+      return null;
     }
-
-    const workspaceDir = path.resolve(user.defaultWorkspace);
-    try { fs.mkdirSync(workspaceDir, { recursive: true }); } catch { /* ignore */ }
-
-    const token = crypto.randomUUID();
-    const singletons = createSessionSingletons(workspaceDir);
-    this.sessions.set(token, {
-      token,
-      username,
-      workspaceDir,
-      isAdmin: Boolean(user.isAdmin),
-      ...singletons,
-    });
-    return { token, username, workspaceDir, isAdmin: Boolean(user.isAdmin) };
   }
 
   getSession(token: string | null | undefined): UserSession | null {
@@ -228,6 +297,94 @@ class SessionManager {
       .map((user) => this.toSafeUser(user));
   }
 
+  listPendingRegistrations(): SafeRegistrationRequest[] {
+    return this.usersConfig.pendingRegistrations
+      .slice()
+      .sort((left, right) => left.requestedAt - right.requestedAt)
+      .map(({ username, requestedAt }) => ({ username, requestedAt }));
+  }
+
+  requestRegistration(username: string, password: string): SafeRegistrationRequest {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) {
+      throw new Error("Username and password are required");
+    }
+    if (!this.isValidUsername(normalizedUsername)) {
+      throw new Error(
+        "Username must start with a letter or number and contain only letters, numbers, dots, underscores, hyphens, or @"
+      );
+    }
+    if (password.length < 6) {
+      throw new Error("Password must be at least 6 characters");
+    }
+    if (
+      this.getUser(normalizedUsername) ||
+      this.usersConfig.pendingRegistrations.some(
+        (registration) => registration.username === normalizedUsername
+      )
+    ) {
+      throw new Error("Username is already registered or pending approval");
+    }
+
+    const registration: RegistrationRequest = {
+      username: normalizedUsername,
+      password,
+      requestedAt: Date.now(),
+    };
+    this.usersConfig.pendingRegistrations.push(registration);
+    this.saveConfig();
+    return {
+      username: registration.username,
+      requestedAt: registration.requestedAt,
+    };
+  }
+
+  approveRegistration(username: string, defaultWorkspace?: string): SafeUserConfig {
+    const normalizedUsername = username.trim();
+    const registration = this.usersConfig.pendingRegistrations.find(
+      (entry) => entry.username === normalizedUsername
+    );
+    if (!registration) {
+      throw new Error("Registration request not found");
+    }
+    if (this.getUser(normalizedUsername)) {
+      throw new Error("User already exists");
+    }
+
+    const fallbackRoot = this.usersConfig.allowedRoots[0];
+    const workspaceDir = path.resolve(
+      defaultWorkspace?.trim() || path.join(fallbackRoot, normalizedUsername)
+    );
+    if (!this.isAllowedPath(workspaceDir)) {
+      throw new Error("Default workspace is not within allowed roots");
+    }
+
+    const user: UserConfig = {
+      username: normalizedUsername,
+      password: registration.password,
+      defaultWorkspace: workspaceDir,
+      isAdmin: false,
+    };
+    this.usersConfig.users.push(user);
+    this.usersConfig.pendingRegistrations = this.usersConfig.pendingRegistrations.filter(
+      (entry) => entry.username !== normalizedUsername
+    );
+    this.saveConfig();
+    return this.toSafeUser(user);
+  }
+
+  rejectRegistration(username: string): void {
+    const normalizedUsername = username.trim();
+    const before = this.usersConfig.pendingRegistrations.length;
+    this.usersConfig.pendingRegistrations = this.usersConfig.pendingRegistrations.filter(
+      (entry) => entry.username !== normalizedUsername
+    );
+    if (this.usersConfig.pendingRegistrations.length === before) {
+      throw new Error("Registration request not found");
+    }
+    this.saveConfig();
+  }
+
   getAllowedRoots(): string[] {
     return [...this.usersConfig.allowedRoots];
   }
@@ -244,6 +401,13 @@ class SessionManager {
     }
     if (this.getUser(normalized.username)) {
       throw new Error("User already exists");
+    }
+    if (
+      this.usersConfig.pendingRegistrations.some(
+        (registration) => registration.username === normalized.username
+      )
+    ) {
+      throw new Error("Username has a pending registration request");
     }
     if (!this.isAllowedPath(normalized.defaultWorkspace)) {
       throw new Error("Default workspace is not within allowed roots");
@@ -291,14 +455,38 @@ class SessionManager {
     });
   }
 
+  isSelectableWorkspace(dir: string): boolean {
+    return this.resolveSelectableWorkspace(dir) !== null;
+  }
+
+  private resolveSelectableWorkspace(dir: string): string | null {
+    if (!this.isAllowedPath(dir)) return null;
+    try {
+      const resolved = path.resolve(dir);
+      if (!fs.statSync(resolved).isDirectory()) return null;
+      const canonical = fs.realpathSync.native(resolved);
+      const withinCanonicalRoot = this.usersConfig.allowedRoots.some((root) => {
+        let canonicalRoot = path.resolve(root);
+        try {
+          canonicalRoot = fs.realpathSync.native(canonicalRoot);
+        } catch {
+          // A non-existent root cannot contain an existing selectable directory.
+          return false;
+        }
+        return canonical === canonicalRoot || canonical.startsWith(`${canonicalRoot}${path.sep}`);
+      });
+      return withinCanonicalRoot ? canonical : null;
+    } catch {
+      return null;
+    }
+  }
+
   changeWorkspace(token: string, newDir: string): { workspaceDir: string } | null {
     const session = this.sessions.get(token);
     if (!session) return null;
 
-    const resolved = path.resolve(newDir);
-    if (!this.isAllowedPath(resolved)) return null;
-
-    try { fs.mkdirSync(resolved, { recursive: true }); } catch { /* ignore */ }
+    const resolved = this.resolveSelectableWorkspace(newDir);
+    if (!resolved) return null;
 
     session.workspaceDir = resolved;
     const singletons = createSessionSingletons(resolved);
@@ -314,13 +502,14 @@ class SessionManager {
     const resolved = path.resolve(dir);
 
     // If path is within an allowed root, list its subdirectories normally
-    if (this.isAllowedPath(resolved)) {
+    const selectableDirectory = this.resolveSelectableWorkspace(resolved);
+    if (selectableDirectory) {
       try {
-        const entries = fs.readdirSync(resolved, { withFileTypes: true });
+        const entries = fs.readdirSync(selectableDirectory, { withFileTypes: true });
         return entries
           .filter((e) => e.isDirectory() && !e.name.startsWith("."))
           .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
-          .map((e) => ({ name: e.name, path: path.join(resolved, e.name) }));
+          .map((e) => ({ name: e.name, path: path.join(selectableDirectory, e.name) }));
       } catch {
         return [];
       }
