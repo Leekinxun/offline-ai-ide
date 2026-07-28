@@ -23,6 +23,7 @@ checkpointsRouter.post("/create", (req, res) => {
       conversationId:
         typeof req.body?.conversationId === "string" ? req.body.conversationId : undefined,
       runId: typeof req.body?.runId === "string" ? req.body.runId : undefined,
+      kind: "manual",
     });
     res.status(201).json({ checkpoint });
   } catch (error) {

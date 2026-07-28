@@ -1,6 +1,5 @@
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
 import { safePath } from "../utils/safePath.js";
 import {
   FileSelectionRange,
@@ -16,7 +15,8 @@ import { runSubagent } from "./subagent.js";
 import { recordKnownFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
-import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
+import { evaluateWorkspaceWrite } from "./toolPolicy.js";
+import { runWorkspaceCommand } from "./shell.js";
 
 // ---- Tool handler type ----
 
@@ -59,26 +59,6 @@ function createSelectionRange(
     endLine: end.line,
     endColumn: end.column,
   };
-}
-
-async function runBash(command: string, cwd: string): Promise<string> {
-  const policy = evaluateShellCommand(command);
-  if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
-  try {
-    const output = execSync(command, {
-      cwd,
-      timeout: 120_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    const result = output.trim();
-    return result ? result.slice(0, 50000) : "(no output)";
-  } catch (e: any) {
-    if (e.killed) return "Error: Timeout (120s)";
-    const output = ((e.stdout || "") + (e.stderr || "")).trim();
-    return output ? output.slice(0, 50000) : `Error: ${e.message}`;
-  }
 }
 
 async function runReadFile(
@@ -192,7 +172,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     loadWorkspaceSkill(ctx.workspaceDir, args.name),
 
   bash: async (args, ctx) =>
-    runBash(args.command as string, ctx.workspaceDir),
+    runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal),
 
   read_file: async (args, ctx) =>
     runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir),
@@ -246,12 +226,21 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx.workspaceDir,
       ctx.vllmApiUrl,
       ctx.modelName,
-      ctx.vllmApiKey
+      ctx.vllmApiKey,
+      ctx.authorizeTool,
+      ctx.signal,
+      ctx.lineage
     ),
 
   // --- Team tools ---
   spawn_teammate: async (args, ctx) =>
-    ctx.teammateManager.spawn(args.name as string, args.role as string, args.prompt as string),
+    ctx.teammateManager.spawn(
+      args.name as string,
+      args.role as string,
+      args.prompt as string,
+      ctx.authorizeTool,
+      ctx.signal
+    ),
 
   list_teammates: async (_args, ctx) =>
     ctx.teammateManager.listAll(),

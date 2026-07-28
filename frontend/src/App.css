@@ -928,6 +928,61 @@ body {
   flex-shrink: 0;
 }
 
+.recovery-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-panel-strong);
+}
+
+.recovery-tabs button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.recovery-tabs button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.recovery-tabs button.active {
+  border-color: var(--border);
+  background: var(--bg-primary);
+  color: var(--accent);
+}
+
+.worktree-create {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.worktree-create label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.worktree-create .dialog-btn {
+  justify-self: start;
+}
+
 .checkpoint-notice {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-light);
@@ -987,6 +1042,54 @@ body {
   max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.checkpoint-kind {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.checkpoint-kind.kind-run {
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+}
+
+.checkpoint-kind.kind-step {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+}
+
+.checkpoint-kind.kind-revert {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+}
+
+.worktree-path {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dialog-btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
+  color: var(--danger);
+}
+
+.dialog-btn.danger:hover {
+  background: var(--status-danger-bg);
 }
 
 .problems-toolbar,
@@ -3650,18 +3753,52 @@ select:focus-visible,
 }
 
 .chat-history-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  position: relative;
+  overflow: hidden;
   width: 100%;
-  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--border-light);
   background: var(--bg-primary);
   color: var(--text-primary);
   text-align: left;
-  cursor: pointer;
   transition: all var(--transition);
+}
+
+.chat-history-item-main {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 42px 10px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.chat-history-item-fork {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.chat-history-item-fork:hover,
+.chat-history-item-fork:focus-visible {
+  border-color: var(--border);
+  background: var(--bg-primary);
+  color: var(--accent);
 }
 
 .chat-history-item:hover {
@@ -3674,7 +3811,8 @@ select:focus-visible,
   background: var(--accent-light);
 }
 
-.chat-history-item:disabled {
+.chat-history-item-main:disabled,
+.chat-history-item-fork:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -3794,7 +3932,8 @@ select:focus-visible,
 }
 
 .chat-run-history-main,
-.chat-run-history-resume {
+.chat-run-history-resume,
+.chat-run-history-revert {
   border: 0;
   background: transparent;
   color: var(--text-primary);
@@ -3814,7 +3953,8 @@ select:focus-visible,
 }
 
 .chat-run-history-main:hover,
-.chat-run-history-resume:hover {
+.chat-run-history-resume:hover,
+.chat-run-history-revert:hover {
   background: var(--bg-hover);
 }
 
@@ -3837,12 +3977,23 @@ select:focus-visible,
   font-size: 9px;
 }
 
-.chat-run-history-resume {
+.chat-run-history-resume,
+.chat-run-history-revert {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   color: var(--accent);
+}
+
+.chat-run-history-revert {
+  color: var(--status-warning-fg);
+}
+
+.chat-run-history-resume:disabled,
+.chat-run-history-revert:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .chat-run-history-empty {
@@ -4017,12 +4168,42 @@ select:focus-visible,
   gap: 4px;
 }
 
+.chat-message-header {
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .chat-message-label {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+}
+
+.chat-message-fork {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+}
+
+.chat-message-fork:hover,
+.chat-message-fork:focus-visible {
+  border-color: var(--border-light);
+  background: var(--bg-hover);
+  color: var(--accent);
 }
 
 .chat-message-content {

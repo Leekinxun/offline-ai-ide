@@ -16,6 +16,7 @@ export interface ProbeSettings {
   apiKey?: string;
   modelName: string;
   fallbackMaxOutputTokens?: number;
+  signal?: AbortSignal;
 }
 
 const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -40,17 +41,22 @@ export async function getModelCapabilities(
 
   for (const candidate of buildProbeCandidates(settings.apiUrl, settings.modelName)) {
     try {
+      settings.signal?.throwIfAborted();
+      const timeoutSignal = AbortSignal.timeout(PROBE_TIMEOUT_MS);
       const response = await fetch(candidate.url, {
         method: candidate.method,
         headers: buildHeaders(settings.apiKey),
         ...(candidate.body ? { body: JSON.stringify(candidate.body) } : {}),
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        signal: settings.signal
+          ? AbortSignal.any([timeoutSignal, settings.signal])
+          : timeoutSignal,
       });
       if (!response.ok) continue;
       const payload = (await response.json()) as unknown;
       metadata = selectModelMetadata(payload, settings.modelName);
       if (metadata && hasCapabilityMetadata(metadata)) break;
     } catch {
+      settings.signal?.throwIfAborted();
       // Capability probing is best-effort and must never block a normal run.
     }
   }

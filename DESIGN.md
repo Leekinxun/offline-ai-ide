@@ -103,6 +103,16 @@
 - Conflict continuity: Git 冲突与远端版本冲突保持各自的决策能力，但共享相同的状态术语、文件定位和退出行为；冲突不得仅依赖颜色或单字母状态表达。
 - Phase 3 acceptance: AI Review 发现到文件行号最多一次操作，变更摘要到指定 Diff 最多一次操作；无变更、未跟踪、删除和冲突均有解释与下一步；桌面与窄屏可使用键盘完成 Tab、变更列表和 Diff 的主要动作。
 
+### Agent recovery operations contract — 2026-07-28
+
+- Placement: 会话 Fork 和运行回滚属于 Chat 历史上下文操作；Git worktree 与 workspace checkpoint 共同归入现有 Checkpoints/Recovery 抽屉，避免新增 Activity Rail 顶级入口。
+- Conversation fork: 历史会话提供完整 Fork，消息节点提供“从此处 Fork”；成功后直接进入新会话，原会话保持不变。操作使用分支图标、可读 tooltip 和执行中禁用态。
+- Run revert: 仅 Code 模式的已结束根运行展示回滚入口。执行前必须说明将恢复运行前工作区、未保存编辑器状态会失效；成功后关闭旧编辑器状态并刷新文件树。
+- Worktree management: Recovery 抽屉使用“快照 / Worktrees”分段切换；Worktree 表面支持基于名称和 revision 创建、打开隔离工作区、列出路径/分支/HEAD，以及确认后移除。非 Git 工作区显示靠近操作区的可恢复错误。
+- Visual and interaction: 复用 `PanelShell`、`dialog-btn`、细边框卡片、状态徽章和 8/12px 间距；危险操作使用语义化 danger 状态但不铺大面积红色。所有动作具备 loading、disabled、empty、error 和成功 toast。
+- Responsive/accessibility: 操作留在现有 Chat/Recovery 抽屉内，在窄屏不新增并列面板；图标按钮提供 `aria-label`/tooltip，分段控件使用 tab 语义，异步错误使用 `role="alert"`。
+- Acceptance: 用户可在两步内完成完整会话 Fork、消息点 Fork、运行回滚或创建 Worktree；任何恢复/移除操作均经过确认，成功后界面状态与文件系统一致。
+
 ## Frontend redesign direction
 
 - Working name: **CrownForge Workbench**

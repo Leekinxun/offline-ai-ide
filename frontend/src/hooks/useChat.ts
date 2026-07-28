@@ -34,6 +34,10 @@ interface RunListResponse {
   runs?: AgentRunSummary[];
 }
 
+interface ForkConversationResponse {
+  conversation?: ConversationSummary;
+}
+
 const EMPTY_RUN_METRICS: AgentRunMetrics = {
   iterations: 0,
   modelCalls: 0,
@@ -43,6 +47,7 @@ const EMPTY_RUN_METRICS: AgentRunMetrics = {
   promptTokens: 0,
   completionTokens: 0,
   totalTokens: 0,
+  estimatedCostUsd: 0,
   estimatedTokensPeak: 0,
   compactionCount: 0,
 };
@@ -625,6 +630,37 @@ export function useChat(
     [t, token]
   );
 
+  const forkConversation = useCallback(
+    async (conversationId: string, upToTimestamp?: number) => {
+      setHistoryError(null);
+      const response = await fetch(
+        `/api/chat/conversations/${encodeURIComponent(conversationId)}/fork`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            ...(typeof upToTimestamp === "number" ? { upToTimestamp } : {}),
+          }),
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const error = new Error(payload.error || "Failed to fork conversation");
+        setHistoryError(error.message);
+        throw error;
+      }
+      const payload = (await response.json()) as ForkConversationResponse;
+      if (!payload.conversation?.id) throw new Error("Conversation fork did not return a conversation");
+      await refreshConversations();
+      await loadConversation(payload.conversation.id);
+      return payload.conversation;
+    },
+    [loadConversation, refreshConversations, token]
+  );
+
   const loadRun = useCallback(
     async (runId: string) => {
       try {
@@ -647,6 +683,30 @@ export function useChat(
       }
     },
     [currentConversationId, loadConversation, token]
+  );
+
+  const revertRun = useCallback(
+    async (runId: string) => {
+      setRunHistoryError(null);
+      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/revert`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: "{}",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const error = new Error(payload.error || "Failed to revert agent run");
+        setRunHistoryError(error.message);
+        throw error;
+      }
+      const payload = await response.json();
+      await refreshRunHistory(currentConversationId);
+      return payload;
+    },
+    [currentConversationId, refreshRunHistory, token]
   );
 
   const resumeConversation = useCallback(
@@ -695,6 +755,7 @@ export function useChat(
     historyError,
     refreshConversations,
     loadConversation,
+    forkConversation,
     agentMode,
     setAgentMode,
     currentRunSummary,
@@ -707,6 +768,7 @@ export function useChat(
     runHistoryError,
     refreshRunHistory,
     loadRun,
+    revertRun,
     resumeConversation,
     pendingApprovals,
     respondToToolApproval,

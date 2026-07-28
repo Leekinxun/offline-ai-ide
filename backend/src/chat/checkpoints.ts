@@ -30,6 +30,8 @@ export interface WorkspaceCheckpoint {
   createdAt: number;
   conversationId?: string;
   runId?: string;
+  kind?: "manual" | "run" | "step" | "revert";
+  toolCallId?: string;
   fileCount: number;
   totalBytes: number;
   files: string[];
@@ -115,10 +117,23 @@ function pruneRetention(
   checkpoints: WorkspaceCheckpoint[],
   protectedIds: Set<string> = new Set()
 ): WorkspaceCheckpoint[] {
+  const effectiveProtectedIds = new Set(protectedIds);
+  const protectedRunIds = new Set<string>();
+  for (const checkpoint of checkpoints) {
+    if (
+      checkpoint.kind === "run" &&
+      checkpoint.runId &&
+      protectedRunIds.size < 4 &&
+      !protectedRunIds.has(checkpoint.runId)
+    ) {
+      protectedRunIds.add(checkpoint.runId);
+      effectiveProtectedIds.add(checkpoint.id);
+    }
+  }
   const retained: WorkspaceCheckpoint[] = [];
   const stale: WorkspaceCheckpoint[] = [];
   for (const checkpoint of checkpoints) {
-    if (retained.length < MAX_CHECKPOINTS || protectedIds.has(checkpoint.id)) {
+    if (retained.length < MAX_CHECKPOINTS || effectiveProtectedIds.has(checkpoint.id)) {
       retained.push(checkpoint);
     } else {
       stale.push(checkpoint);
@@ -127,7 +142,7 @@ function pruneRetention(
   while (retained.length > MAX_CHECKPOINTS) {
     let removableIndex = -1;
     for (let index = retained.length - 1; index > 0; index -= 1) {
-      if (!protectedIds.has(retained[index].id)) {
+      if (!effectiveProtectedIds.has(retained[index].id)) {
         removableIndex = index;
         break;
       }
@@ -150,7 +165,14 @@ export function listCheckpoints(workspaceDir: string): PublicWorkspaceCheckpoint
 
 export function createCheckpoint(
   workspaceDir: string,
-  input: { label?: string; conversationId?: string; runId?: string; retainId?: string } = {}
+  input: {
+    label?: string;
+    conversationId?: string;
+    runId?: string;
+    kind?: WorkspaceCheckpoint["kind"];
+    toolCallId?: string;
+    retainId?: string;
+  } = {}
 ): PublicWorkspaceCheckpoint {
   fs.mkdirSync(workspaceDir, { recursive: true });
   const files = walkWorkspace(workspaceDir);
@@ -181,6 +203,8 @@ export function createCheckpoint(
     createdAt,
     ...(input.conversationId?.trim() ? { conversationId: input.conversationId.trim() } : {}),
     ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}),
     fileCount: files.length,
     totalBytes,
     files: files.map((file) => file.relative),
@@ -206,6 +230,7 @@ export function restoreCheckpoint(
     label: `Before restore · ${checkpoint.label}`,
     conversationId: checkpoint.conversationId,
     runId: checkpoint.runId,
+    kind: "revert",
     retainId: checkpointId,
   });
   checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId);
@@ -227,4 +252,20 @@ export function restoreCheckpoint(
     fs.renameSync(temporary, target);
   }
   return publicCheckpoint(checkpoint);
+}
+
+export function findCheckpointForRun(
+  workspaceDir: string,
+  runId: string
+): PublicWorkspaceCheckpoint | undefined {
+  const normalized = runId.trim();
+  if (!normalized) return undefined;
+  const matching = readIndex(workspaceDir).filter((entry) => entry.runId === normalized);
+  const checkpoint = matching
+    .filter((entry) => entry.kind === "run")
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  const legacy = matching
+    .filter((entry) => !entry.kind && entry.label.startsWith("Before agent task"))
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  return checkpoint || legacy ? publicCheckpoint(checkpoint || legacy) : undefined;
 }

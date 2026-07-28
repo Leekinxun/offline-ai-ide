@@ -20,12 +20,27 @@ export interface PersistedToolCallStep {
   fileUpdate?: ToolFileUpdate;
 }
 
+export type PersistedMessagePart =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | {
+      type: "tool";
+      toolCallId: string;
+      name: string;
+      input: Record<string, unknown>;
+      status: "completed" | "failed";
+      result?: string;
+      isError?: boolean;
+      fileUpdate?: ToolFileUpdate;
+    };
+
 export interface PersistedChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
   toolCalls?: PersistedToolCallStep[];
   thinking?: string;
+  parts?: PersistedMessagePart[];
 }
 
 interface ConversationMetaRecord {
@@ -169,6 +184,58 @@ function normalizeToolCall(raw: unknown): PersistedToolCallStep | null {
   };
 }
 
+function normalizeMessagePart(raw: unknown): PersistedMessagePart | null {
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as Partial<PersistedMessagePart>;
+  if (candidate.type === "text" && typeof candidate.text === "string" && candidate.text) {
+    return { type: "text", text: candidate.text };
+  }
+  if (
+    candidate.type === "thinking" &&
+    typeof candidate.text === "string" &&
+    candidate.text
+  ) {
+    return { type: "thinking", text: candidate.text };
+  }
+  if (candidate.type !== "tool") return null;
+  const tool = normalizeToolCall(candidate);
+  if (!tool) return null;
+  const failed = candidate.status === "failed" || candidate.isError === true;
+  return {
+    type: "tool",
+    ...tool,
+    status: failed ? "failed" : "completed",
+  };
+}
+
+function deriveMessageParts(message: Omit<PersistedChatMessage, "parts">): PersistedMessagePart[] {
+  const parts: PersistedMessagePart[] = [];
+  if (message.thinking) parts.push({ type: "thinking", text: message.thinking });
+  if (message.content) parts.push({ type: "text", text: message.content });
+  for (const tool of message.toolCalls || []) {
+    parts.push({
+      type: "tool",
+      ...tool,
+      status: tool.isError ? "failed" : "completed",
+    });
+  }
+  return parts;
+}
+
+export function withStructuredParts(message: PersistedChatMessage): PersistedChatMessage {
+  const normalizedParts = Array.isArray(message.parts)
+    ? message.parts
+        .map(normalizeMessagePart)
+        .filter((part): part is PersistedMessagePart => part !== null)
+    : [];
+  return {
+    ...message,
+    parts: normalizedParts.length > 0
+      ? normalizedParts
+      : deriveMessageParts(message),
+  };
+}
+
 function normalizePersistedMessage(raw: unknown): PersistedChatMessage | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -193,7 +260,7 @@ function normalizePersistedMessage(raw: unknown): PersistedChatMessage | null {
         .filter((entry): entry is PersistedToolCallStep => entry !== null)
     : undefined;
 
-  return {
+  return withStructuredParts({
     role: candidate.role,
     content: candidate.content,
     timestamp,
@@ -201,7 +268,8 @@ function normalizePersistedMessage(raw: unknown): PersistedChatMessage | null {
       ? { thinking: candidate.thinking }
       : {}),
     ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
-  };
+    ...(Array.isArray(candidate.parts) ? { parts: candidate.parts } : {}),
+  });
 }
 
 function normalizeConversationMeta(raw: unknown): ConversationMetaRecord | null {
@@ -303,8 +371,13 @@ function writeConversationFile(
     JSON.stringify(parsed.meta),
     ...parsed.messages.map((message) => JSON.stringify(message)),
   ];
-
-  fs.writeFileSync(conversationPath, `${lines.join("\n")}\n`, "utf-8");
+  const tempPath = `${conversationPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, `${lines.join("\n")}\n`, "utf-8");
+    fs.renameSync(tempPath, conversationPath);
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
 }
 
 export function getHistoryDir(workspaceDir: string): string {
@@ -443,6 +516,38 @@ export function readConversationMessages(
   }
 
   return readConversationFile(workspaceDir, conversationId).messages;
+}
+
+export function forkConversation(
+  workspaceDir: string,
+  conversationId: string,
+  input: { upToTimestamp?: number; title?: string } = {}
+): ConversationSummary {
+  const sourcePath = getConversationPath(workspaceDir, conversationId);
+  if (!fs.existsSync(sourcePath)) throw new Error("Conversation not found");
+  const source = readConversationFile(workspaceDir, conversationId);
+  const messages = typeof input.upToTimestamp === "number" && Number.isFinite(input.upToTimestamp)
+    ? source.messages.filter((message) => message.timestamp <= input.upToTimestamp!)
+    : source.messages;
+  const id = createConversationId();
+  const now = Date.now();
+  const requestedTitle = typeof input.title === "string" ? sanitizeConversationTitle(input.title) : "";
+  const sourceTitle = source.meta.title || messages.find((message) => message.role === "user")?.content || conversationId;
+  writeConversationFile(workspaceDir, id, {
+    meta: {
+      type: "meta",
+      createdAt: now,
+      updatedAt: now,
+      title: requestedTitle || sanitizeConversationTitle(`Fork · ${sourceTitle}`),
+      mode: source.meta.mode || "code",
+      status: "completed",
+    },
+    messages: messages.map((message) => withStructuredParts({ ...message })),
+  });
+  pruneConversationHistory(workspaceDir);
+  const summary = listConversationSummaries(workspaceDir).find((entry) => entry.id === id);
+  if (!summary) throw new Error("Failed to create conversation fork");
+  return summary;
 }
 
 export function listConversationSummaries(

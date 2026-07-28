@@ -32,6 +32,8 @@ import {
   Square,
   Sparkles,
   Activity,
+  ArchiveRestore,
+  GitFork,
   RotateCcw,
 } from "lucide-react";
 import { ContextStrip } from "./ContextStrip";
@@ -104,6 +106,7 @@ interface ChatPanelProps {
   onClear: () => void;
   onRetry: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
+  onForkConversation: (conversationId: string, upToTimestamp?: number) => Promise<ConversationSummary>;
   onRefreshConversations: () => Promise<void> | void;
   runState: AgentRunState | null;
   runHistory: AgentRunSummary[];
@@ -111,6 +114,7 @@ interface ChatPanelProps {
   runHistoryError: string | null;
   onLoadRun: (runId: string) => Promise<void> | void;
   onResumeRun: (conversationId: string, runId?: string) => Promise<void> | void;
+  onRevertRun: (runId: string) => Promise<void>;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
   pendingApprovals: ToolApprovalRequest[];
@@ -151,6 +155,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onClear,
   onRetry,
   onLoadConversation,
+  onForkConversation,
   onRefreshConversations,
   runState,
   runHistory,
@@ -158,6 +163,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   runHistoryError,
   onLoadRun,
   onResumeRun,
+  onRevertRun,
   onApplyCode,
   onNavigateToFileUpdate,
   pendingApprovals,
@@ -169,6 +175,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
+  const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useState(messages.length > 0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -255,6 +262,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return nextCollapsed;
     });
   }, []);
+
+  const handleForkConversation = useCallback(
+    async (conversationId: string, upToTimestamp?: number) => {
+      if (busyHistoryAction || isStreaming) return;
+      const key = `fork:${conversationId}:${upToTimestamp ?? "all"}`;
+      setBusyHistoryAction(key);
+      try {
+        await onForkConversation(conversationId, upToTimestamp);
+        setHistoryOpen(false);
+      } catch {
+        // The hook keeps the localized history error visible.
+      } finally {
+        setBusyHistoryAction(null);
+      }
+    },
+    [busyHistoryAction, isStreaming, onForkConversation]
+  );
+
+  const handleRevertRun = useCallback(
+    async (runId: string) => {
+      if (busyHistoryAction || isStreaming) return;
+      if (!window.confirm(t("chat.revertRunConfirm"))) return;
+      setBusyHistoryAction(`revert:${runId}`);
+      try {
+        await onRevertRun(runId);
+      } catch {
+        // The hook keeps the run error visible.
+      } finally {
+        setBusyHistoryAction(null);
+      }
+    },
+    [busyHistoryAction, isStreaming, onRevertRun, t]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -421,44 +461,55 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           ) : (
             <div className="chat-history-list">
               {conversations.map((conversation) => (
-                <button
+                <div
                   key={conversation.id}
                   className={`chat-history-item${
                     conversation.id === currentConversationId ? " active" : ""
                   }`}
-                  onClick={() => {
-                    void onLoadConversation(conversation.id);
-                    setHistoryOpen(false);
-                  }}
-                  disabled={historyLoadingId === conversation.id || isStreaming}
                 >
-                  <div className="chat-history-item-header">
-                    <span className="chat-history-item-title">
-                      {conversation.title || t("chat.untitledConversation")}
-                    </span>
-                    <span className="chat-history-item-time">
-                      {formatTimestamp(conversation.updatedAt)}
-                    </span>
-                  </div>
-                  <div className="chat-history-item-badges">
-                    <span className={`chat-task-mode mode-${conversation.mode || "code"}`}>
-                      {t(`chat.mode.${conversation.mode || "code"}.label`)}
-                    </span>
-                    <span className={`chat-task-status status-${conversation.status || "completed"}`}>
-                      {t(`chat.taskStatus.${conversation.status || "completed"}`)}
-                    </span>
-                  </div>
-                  {conversation.preview && (
-                    <div className="chat-history-item-preview">
-                      {conversation.preview}
+                  <button
+                    type="button"
+                    className="chat-history-item-main"
+                    onClick={() => {
+                      void onLoadConversation(conversation.id);
+                      setHistoryOpen(false);
+                    }}
+                    disabled={historyLoadingId === conversation.id || isStreaming || busyHistoryAction !== null}
+                  >
+                    <div className="chat-history-item-header">
+                      <span className="chat-history-item-title">
+                        {conversation.title || t("chat.untitledConversation")}
+                      </span>
+                      <span className="chat-history-item-time">
+                        {formatTimestamp(conversation.updatedAt)}
+                      </span>
                     </div>
-                  )}
-                  <div className="chat-history-item-meta">
-                    {t("chat.messageCount", {
-                      count: conversation.messageCount,
-                    })}
-                  </div>
-                </button>
+                    <div className="chat-history-item-badges">
+                      <span className={`chat-task-mode mode-${conversation.mode || "code"}`}>
+                        {t(`chat.mode.${conversation.mode || "code"}.label`)}
+                      </span>
+                      <span className={`chat-task-status status-${conversation.status || "completed"}`}>
+                        {t(`chat.taskStatus.${conversation.status || "completed"}`)}
+                      </span>
+                    </div>
+                    {conversation.preview && (
+                      <div className="chat-history-item-preview">{conversation.preview}</div>
+                    )}
+                    <div className="chat-history-item-meta">
+                      {t("chat.messageCount", { count: conversation.messageCount })}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-history-item-fork"
+                    onClick={() => void handleForkConversation(conversation.id)}
+                    disabled={isStreaming || busyHistoryAction !== null}
+                    title={t("chat.forkConversation")}
+                    aria-label={t("chat.forkConversation")}
+                  >
+                    <GitFork size={13} />
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -492,7 +543,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           {formatTimestamp(run.startedAt)} · {run.metrics.modelCalls} {t("chat.runModels")}
                         </span>
                       </button>
-                      {(run.status === "running" || run.status === "stopped" || run.status === "failed") && (
+                      {!run.parentRunId &&
+                        (run.status === "running" || run.status === "stopped" || run.status === "failed") && (
                         <button
                           type="button"
                           className="chat-run-history-resume"
@@ -503,6 +555,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           <RotateCcw size={12} />
                         </button>
                       )}
+                      {!run.parentRunId &&
+                        run.mode === "code" &&
+                        (run.status === "completed" || run.status === "stopped" || run.status === "failed") && (
+                          <button
+                            type="button"
+                            className="chat-run-history-revert"
+                            onClick={() => void handleRevertRun(run.runId)}
+                            disabled={isStreaming || busyHistoryAction !== null}
+                            title={t("chat.revertRun")}
+                            aria-label={t("chat.revertRun")}
+                          >
+                            <ArchiveRestore size={12} className={busyHistoryAction === `revert:${run.runId}` ? "chat-spin" : ""} />
+                          </button>
+                        )}
                     </div>
                   ))}
                 </div>
@@ -554,6 +620,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <span>{t("chat.runDuration", { value: Math.round((runState.metrics.durationMs || 0) / 1000) })}</span>
             <span>{t("chat.runModels", { count: runState.metrics.modelCalls })}</span>
             <span>{t("chat.runTokens", { count: runState.metrics.totalTokens || runState.metrics.estimatedTokensPeak })}</span>
+            {runState.metrics.estimatedCostUsd > 0 && (
+              <span>{t("chat.runCost", { value: runState.metrics.estimatedCostUsd.toFixed(6) })}</span>
+            )}
             <span>{t("chat.runErrors", { count: runState.metrics.toolErrors + runState.metrics.modelErrors })}</span>
           </div>
           {runTimelineOpen && (
@@ -609,6 +678,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             }
             onApplyCode={onApplyCode}
             onNavigateToFileUpdate={onNavigateToFileUpdate}
+            onFork={currentConversationId && !isStreaming
+              ? () => void handleForkConversation(currentConversationId, msg.timestamp)
+              : undefined}
+            forking={busyHistoryAction === `fork:${currentConversationId}:${msg.timestamp}`}
           />
         ))}
         <div ref={messagesEndRef} />
@@ -687,6 +760,8 @@ interface MessageItemProps {
   isStreaming: boolean;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
+  onFork?: () => void;
+  forking?: boolean;
 }
 
 const MessageItem: React.FC<MessageItemProps> = ({
@@ -694,6 +769,8 @@ const MessageItem: React.FC<MessageItemProps> = ({
   isStreaming,
   onApplyCode,
   onNavigateToFileUpdate,
+  onFork,
+  forking,
 }) => {
   const { t } = useI18n();
   const parts = useMemo(
@@ -708,9 +785,17 @@ const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div className={`chat-message ${message.role}`}>
-      <span className="chat-message-label">
-        {message.role === "user" ? t("chat.you") : t("chat.ai")}
-      </span>
+      <div className="chat-message-header">
+        <span className="chat-message-label">
+          {message.role === "user" ? t("chat.you") : t("chat.ai")}
+        </span>
+        {onFork && (
+          <button type="button" className="chat-message-fork" onClick={onFork} title={t("chat.forkFromHere")} aria-label={t("chat.forkFromHere")}>
+            <GitFork size={11} className={forking ? "chat-spin" : ""} />
+            <span>{t("chat.fork")}</span>
+          </button>
+        )}
+      </div>
 
       {/* Thinking text (collapsible) */}
       {hasThinking && (

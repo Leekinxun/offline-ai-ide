@@ -351,7 +351,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | File | Purpose |
 |------|---------|
 | `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
-| `app-settings.json` | Stores admin-managed runtime settings such as LLM URL, API key, model, max agent iterations, system prompt, MCP endpoints, plugin overrides, and upload size limits |
+| `app-settings.json` | Stores admin-managed runtime settings such as LLM configuration, per-agent profiles, MCP servers, plugin overrides, and upload size limits |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
 | `<workspace>/.codex/USER.md` | Stores durable user preferences and working conventions |
 | `<workspace>/.codex/MEMORY.md` | Stores durable project facts, decisions, and conventions |
@@ -407,7 +407,13 @@ When settings are changed from the UI, they are written to `app-settings.json` a
 
 ### External MCP
 
-Administrators can add HTTP/SSE MCP endpoints from **Settings → External MCP**, test their connections, and inspect the discovered tools. Endpoints can be marked lazy so the Agent first uses `search_lazy_mcp_tools`, then `activate_lazy_mcp_tools` to expose only the relevant tools. Eager tools use endpoint-scoped names such as `mcp_<endpoint>__<tool>`. MCP servers that are unavailable are reported in the UI and do not prevent built-in tools from running.
+Administrators can add legacy HTTP endpoints or advanced MCP server JSON from **Settings → External MCP**, test connections, and inspect discovered tools. Advanced entries support remote HTTP with custom headers and OAuth bearer tokens loaded from an environment-variable name, plus persistent local `stdio` commands with arguments and environment overrides. Endpoints can be lazy so the Agent searches and activates only relevant tools. Unavailable servers are reported without preventing built-in tools from running.
+
+### Agent Profiles and Recovery
+
+**Settings → Agent Profiles** accepts per-agent overrides for `ask`, `code`, `review`, `plan`, `explore`, `subagent`, and `teammate`. Each profile can narrow the model/provider, step/tool/time/token/cost budgets, tool allow/deny patterns, pricing, and workspace step snapshots. Child authorizers can only narrow inherited permissions.
+
+Code runs now retain a pre-run checkpoint and step checkpoints before side-effecting tools. The chat API supports conversation forks, run rollback, and managed Git worktrees under `/api/chat/conversations/:id/fork`, `/api/chat/runs/:runId/revert`, and `/api/chat/worktrees`.
 
 ### Uploads
 

@@ -37,7 +37,10 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
   });
   let activeRun: Promise<void> | null = null;
 
-  ws.on("close", () => approvals.cancelAll());
+  ws.on("close", () => {
+    controlState.stop();
+    approvals.cancelAll();
+  });
 
   ws.on("message", async (raw) => {
     try {
@@ -91,6 +94,13 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           resumableRun.conversationId !== requestedConversationId
         ) {
           wsSend(ws, { type: "error", content: "Run does not belong to this conversation" });
+          return;
+        }
+        if (resumableRun.parentRunId) {
+          wsSend(ws, {
+            type: "error",
+            content: "Child agent runs cannot be resumed directly; resume the parent run instead",
+          });
           return;
         }
         if (
@@ -315,6 +325,7 @@ async function processConversationQueue(
         label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
         conversationId: initialTurn.conversationId,
         runId: recorder.runId,
+        kind: "run",
       });
       await recorder.event({
         kind: "tool_result",
@@ -574,7 +585,7 @@ interface RunControlState {
 }
 
 function createRunControlState(): RunControlState {
-  let activeAbortController: AbortController | null = null;
+  let activeAbortController = new AbortController();
 
   return {
     stopped: false,
@@ -585,12 +596,12 @@ function createRunControlState(): RunControlState {
       activeAbortController?.abort();
     },
     reset() {
+      activeAbortController.abort();
       this.stopped = false;
       this.requestId = undefined;
-      activeAbortController = null;
+      activeAbortController = new AbortController();
     },
     createAbortSignal() {
-      activeAbortController = new AbortController();
       if (this.stopped) {
         activeAbortController.abort();
       }

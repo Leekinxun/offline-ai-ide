@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createCheckpoint, listCheckpoints, restoreCheckpoint } from "./checkpoints.js";
+import {
+  createCheckpoint,
+  findCheckpointForRun,
+  listCheckpoints,
+  restoreCheckpoint,
+} from "./checkpoints.js";
 
 test("checkpoint restores captured source files and removes later workspace files", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-checkpoint-"));
@@ -31,4 +36,20 @@ test("checkpoint restores captured source files and removes later workspace file
   restoreCheckpoint(workspace, rollback.id);
   assert.equal(fs.readFileSync(path.join(workspace, "src", "app.ts"), "utf-8"), "export const version = 2;\n");
   assert.equal(fs.readFileSync(path.join(workspace, "src", "new.ts"), "utf-8"), "temporary\n");
+});
+
+test("indexes run and step checkpoint metadata for targeted rollback", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-checkpoint-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "file.txt"), "before");
+  const baseline = createCheckpoint(workspace, { runId: "run-1", kind: "run" });
+  fs.writeFileSync(path.join(workspace, "file.txt"), "during");
+  const step = createCheckpoint(workspace, {
+    runId: "run-1",
+    kind: "step",
+    toolCallId: "tool-1",
+  });
+
+  assert.equal(findCheckpointForRun(workspace, "run-1")?.id, baseline.id);
+  assert.equal(listCheckpoints(workspace).find((entry) => entry.id === step.id)?.toolCallId, "tool-1");
 });

@@ -380,7 +380,6 @@ function handlePythonDapEvent(active: ActivePythonDebugSession, event: DapEvent)
     return;
   }
   if (event.event === "stopped") {
-    active.state.status = "paused";
     active.state.frames = [];
     active.state.updatedAt = Date.now();
     void capturePythonFrames(active, Number(body.threadId || 0));

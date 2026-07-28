@@ -983,6 +983,14 @@ function AuthenticatedApp({
     [applyFileUpdateToTabs, fs, loadTree]
   );
 
+  const handleWorkspaceRestored = useCallback(async () => {
+    setOpenFiles([]);
+    setActiveFilePath(null);
+    setCompareFilePath(null);
+    setTreeRefreshNonce((value) => value + 1);
+    await loadTree();
+  }, [loadTree]);
+
   const handleNavigationComplete = useCallback((requestId: number) => {
     setEditorNavigationTarget((prev) =>
       prev?.requestId === requestId ? null : prev
@@ -2849,13 +2857,11 @@ function AuthenticatedApp({
           token={token}
           conversationId={chat.currentConversationId}
           runId={chat.runState?.runId || null}
+          readOnly={readOnlyWorkspace}
           onClose={() => setCheckpointsVisible(false)}
-          onRestored={async () => {
-            setOpenFiles([]);
-            setActiveFilePath(null);
-            setCompareFilePath(null);
-            setTreeRefreshNonce((value) => value + 1);
-            await loadTree();
+          onRestored={handleWorkspaceRestored}
+          onOpenWorktree={async (path) => {
+            await handleChangeWorkspace(path);
           }}
           onNotify={showToast}
         />
@@ -2944,6 +2950,16 @@ function AuthenticatedApp({
           onClear={chat.clearMessages}
           onRetry={chat.retryLast}
           onLoadConversation={chat.loadConversation}
+          onForkConversation={async (conversationId, upToTimestamp) => {
+            try {
+              const fork = await chat.forkConversation(conversationId, upToTimestamp);
+              showToast(t("chat.forkCreated"));
+              return fork;
+            } catch (error) {
+              showToast(error instanceof Error ? error.message : t("chat.forkFailed"));
+              throw error;
+            }
+          }}
           onRefreshConversations={chat.refreshConversations}
           runState={chat.runState}
           runHistory={chat.runHistory}
@@ -2951,6 +2967,16 @@ function AuthenticatedApp({
           runHistoryError={chat.runHistoryError}
           onLoadRun={chat.loadRun}
           onResumeRun={chat.resumeConversation}
+          onRevertRun={async (runId) => {
+            try {
+              await chat.revertRun(runId);
+              await handleWorkspaceRestored();
+              showToast(t("chat.runReverted"));
+            } catch (error) {
+              showToast(error instanceof Error ? error.message : t("chat.revertRunFailed"));
+              throw error;
+            }
+          }}
           onApplyCode={handleApplyCode}
           onNavigateToFileUpdate={handleNavigateToFileUpdate}
           pendingApprovals={chat.pendingApprovals}

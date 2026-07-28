@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { callChatCompletion } from "./llm.js";
+import { processModelTurn } from "./modelProcessor.js";
 import { OpenAIMessage } from "./types.js";
 
 export type ContextStatus = "ready" | "compacting" | "warning";
@@ -36,6 +36,8 @@ export interface ContextCompactionResult {
 }
 
 const TRANSCRIPT_LIMIT = 80_000;
+const DEFAULT_RECENT_USER_TURNS = 2;
+const DEFAULT_TAIL_MESSAGE_LIMIT = 16;
 
 function truncateForSummary(value: string): string {
   if (value.length <= TRANSCRIPT_LIMIT) return value;
@@ -119,41 +121,65 @@ async function persistTranscript(
   return relativePath;
 }
 
+export function splitCompactionMessages(
+  messages: OpenAIMessage[],
+  recentUserTurns = DEFAULT_RECENT_USER_TURNS,
+  tailMessageLimit = DEFAULT_TAIL_MESSAGE_LIMIT
+): { head: OpenAIMessage[]; tail: OpenAIMessage[] } {
+  const userIndexes = messages
+    .map((message, index) => message.role === "user" ? index : -1)
+    .filter((index) => index >= 0);
+  if (userIndexes.length < 2) return { head: [...messages], tail: [] };
+
+  const desiredIndex = userIndexes[Math.max(0, userIndexes.length - recentUserTurns)];
+  const lastUserIndex = userIndexes[userIndexes.length - 1];
+  const boundedDesiredIndex = desiredIndex > 0 ? desiredIndex : lastUserIndex;
+  const splitIndex = messages.length - boundedDesiredIndex <= tailMessageLimit
+    ? boundedDesiredIndex
+    : lastUserIndex;
+  if (splitIndex <= 0) return { head: [...messages], tail: [] };
+  return {
+    head: messages.slice(0, splitIndex).map((message) => ({ ...message })),
+    tail: messages.slice(splitIndex).map((message) => ({ ...message })),
+  };
+}
+
 export async function compactMessages(options: {
   workspaceDir: string;
   messages: OpenAIMessage[];
   apiUrl: string;
   apiKey?: string;
   model: string;
+  signal?: AbortSignal;
 }): Promise<ContextCompactionResult> {
   const estimatedTokensBefore = estimateMessageTokens(options.messages);
   const transcriptPath = await persistTranscript(options.workspaceDir, options.messages);
-  const serialized = truncateForSummary(JSON.stringify(options.messages));
+  const { head, tail } = splitCompactionMessages(options.messages);
+  const serialized = truncateForSummary(JSON.stringify(head));
   const prompt = [
     "Summarize the following coding-agent conversation context for continuation.",
-    "Preserve the user's goals, decisions, constraints, files changed, important tool results, errors, and unfinished work.",
-    "Be concise and factual. Do not invent progress or claim that unfinished work is complete.",
+    "Use these headings: Objective; Constraints; Facts and decisions; Files and changes; Tests and validation; Permissions and safety; Failures; Current state; Remaining work; Evidence, inference, and unknowns.",
+    "Preserve goals, decisions, constraints, files changed, important tool results, errors, unfinished work, and the distinction between observed evidence and inference.",
+    "Be concise and factual. Do not invent progress or claim unfinished work is complete.",
+    tail.length > 0
+      ? `Do not summarize the recent ${tail.length}-message tail; it will be appended verbatim after this summary.`
+      : "No safe recent user-turn boundary was available, so summarize the full context.",
     `The full transcript is preserved at ${transcriptPath} if details are needed later.`,
-    "\nConversation context:",
+    "\nOlder context to summarize:",
     serialized,
   ].join("\n");
 
-  const response = await callChatCompletion({
+  const processed = await processModelTurn({
     apiUrl: options.apiUrl,
     apiKey: options.apiKey,
     model: options.model,
     messages: [{ role: "user", content: prompt }],
-    maxTokens: 2000,
+    fallbackMaxOutputTokens: 2000,
+    maxOutputTokens: 2000,
     temperature: 0.1,
-    stream: false,
+    signal: options.signal,
   });
-
-  if (!response.ok) {
-    throw new Error(`Context summary request failed (${response.status})`);
-  }
-
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string | null } }> };
-  const summary = data.choices?.[0]?.message?.content?.trim();
+  const summary = processed.response.choices?.[0]?.message?.content?.trim();
   if (!summary) {
     throw new Error("Context summary response was empty");
   }
@@ -167,6 +193,7 @@ export async function compactMessages(options: {
       role: "assistant",
       content: "Understood. Continuing with the compressed context.",
     },
+    ...tail,
   ];
 
   const preview: ContextCompactionPreview = {
@@ -175,7 +202,7 @@ export async function compactMessages(options: {
     estimatedTokensAfter: estimateMessageTokens(messages),
     transcriptPath,
     protectedMessageCount: options.messages.filter(isProtectedMessage).length,
-    compactedMessageCount: Math.max(0, options.messages.length - messages.length),
+    compactedMessageCount: head.length,
     preservedMessageCount: messages.length,
   };
 

@@ -17,6 +17,7 @@ import { useAdminSettings } from "../hooks/useAdminSettings";
 import { useI18n } from "../i18n";
 import {
   AdminSettings,
+  AgentProfileOverrides,
   AdminUser,
   LlmSettings,
   McpServerPreview,
@@ -69,6 +70,7 @@ interface McpFormState {
   disabledUrls: string;
   timeout: string;
   connectTimeout: string;
+  serversJson: string;
 }
 
 const EMPTY_CREATE_USER_FORM: CreateUserForm = {
@@ -97,6 +99,7 @@ const EMPTY_MCP_FORM: McpFormState = {
   disabledUrls: "",
   timeout: "60",
   connectTimeout: "10",
+  serversJson: "[]",
 };
 
 function buildDefaultWorkspace(username: string, allowedRoots: string[]): string {
@@ -124,6 +127,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savingLlm, setSavingLlm] = useState(false);
   const [savingApp, setSavingApp] = useState(false);
   const [savingMcp, setSavingMcp] = useState(false);
+  const [savingAgents, setSavingAgents] = useState(false);
   const [inspectingMcp, setInspectingMcp] = useState(false);
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilities | null>(null);
   const [loadingModelCapabilities, setLoadingModelCapabilities] = useState(false);
@@ -141,6 +145,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [llmForm, setLlmForm] = useState<LlmFormState>(EMPTY_LLM_FORM);
   const [appForm, setAppForm] = useState<AppFormState>(EMPTY_APP_FORM);
   const [mcpForm, setMcpForm] = useState<McpFormState>(EMPTY_MCP_FORM);
+  const [agentProfilesJson, setAgentProfilesJson] = useState("{}");
   const [mcpServers, setMcpServers] = useState<McpServerPreview[]>([]);
   const [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null);
   const [nextPassword, setNextPassword] = useState("");
@@ -173,7 +178,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         disabledUrls: (data.mcp?.disabledUrls || []).join("\n"),
         timeout: String(data.mcp?.timeout || 60),
         connectTimeout: String(data.mcp?.connectTimeout || 10),
+        serversJson: JSON.stringify(data.mcp?.servers || [], null, 2),
       });
+      setAgentProfilesJson(JSON.stringify(data.agents || {}, null, 2));
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToLoadSettings"));
     } finally {
@@ -427,6 +434,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
+    let servers: McpSettings["servers"];
+    try {
+      const parsed = JSON.parse(mcpForm.serversJson || "[]");
+      if (!Array.isArray(parsed)) throw new Error(t("settings.mcpServersJsonArray"));
+      servers = parsed as McpSettings["servers"];
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : t("settings.mcpServersJsonInvalid"));
+      return;
+    }
+
     const payload: McpSettings = {
       baseUrls: mcpForm.baseUrls
         .split(/[\n,]/)
@@ -440,6 +457,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         .split(/[\n,]/)
         .map((value) => value.trim())
         .filter(Boolean),
+      servers,
       timeout,
       connectTimeout,
     };
@@ -454,6 +472,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         disabledUrls: saved.disabledUrls.join("\n"),
         timeout: String(saved.timeout),
         connectTimeout: String(saved.connectTimeout),
+        serversJson: JSON.stringify(saved.servers || [], null, 2),
       });
       setSettings((prev) => (prev ? { ...prev, mcp: saved } : prev));
       setMcpServers([]);
@@ -462,6 +481,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setError(e instanceof Error ? e.message : t("settings.failedToSaveMcpSettings"));
     } finally {
       setSavingMcp(false);
+    }
+  };
+
+  const handleSaveAgentProfiles = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (savingAgents) return;
+    let profiles: AgentProfileOverrides;
+    try {
+      const parsed = JSON.parse(agentProfilesJson || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(t("settings.agentProfilesJsonObject"));
+      }
+      profiles = parsed as AgentProfileOverrides;
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : t("settings.agentProfilesJsonInvalid"));
+      return;
+    }
+    setSavingAgents(true);
+    setError(null);
+    try {
+      const saved = await adminSettings.updateAgentSettings(profiles);
+      setAgentProfilesJson(JSON.stringify(saved, null, 2));
+      setSettings((previous) => previous ? { ...previous, agents: saved } : previous);
+      onShowToast(t("settings.agentProfilesSaved"));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : t("settings.agentProfilesSaveFailed"));
+    } finally {
+      setSavingAgents(false);
     }
   };
 
@@ -813,6 +860,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
                     />
                   </label>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.mcpAdvancedServers")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={10}
+                      value={mcpForm.serversJson}
+                      onChange={(e) => setMcpForm((prev) => ({ ...prev, serversJson: e.target.value }))}
+                      placeholder='[{"id":"local","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","."]}]'
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                    <small>{t("settings.mcpAdvancedServersHelp")}</small>
+                  </label>
                   <div className="settings-form-row">
                     <label className="settings-field">
                       <span>{t("settings.mcpTimeout")}</span>
@@ -877,6 +936,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     ))}
                   </div>
                 )}
+              </section>
+
+              <section className="settings-card">
+                <div className="settings-card-header">
+                  <div className="settings-card-title">
+                    <Shield size={16} />
+                    <span>{t("settings.agentProfiles")}</span>
+                  </div>
+                  <span className="settings-card-meta">{t("settings.agentProfilesMeta")}</span>
+                </div>
+                <form className="settings-form" onSubmit={handleSaveAgentProfiles}>
+                  <label className="settings-field settings-field-wide">
+                    <span>{t("settings.agentProfilesJson")}</span>
+                    <textarea
+                      className="settings-input"
+                      rows={14}
+                      value={agentProfilesJson}
+                      onChange={(event) => setAgentProfilesJson(event.target.value)}
+                      style={{ resize: "vertical", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                    />
+                    <small>{t("settings.agentProfilesHelp")}</small>
+                  </label>
+                  <div className="settings-form-footer">
+                    <span className="settings-help-text">{t("settings.agentProfilesHelp")}</span>
+                    <button className="dialog-btn primary" type="submit" disabled={savingAgents}>
+                      <Save size={14} />
+                      {savingAgents ? t("settings.saving") : t("settings.saveAgentProfiles")}
+                    </button>
+                  </div>
+                </form>
               </section>
 
               <section className="settings-card">

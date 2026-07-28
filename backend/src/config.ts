@@ -1,6 +1,10 @@
 import path from "path";
 import os from "os";
 import fs from "fs";
+import {
+  normalizeAgentProfileOverrides,
+  type AgentProfileOverrides,
+} from "./agent/agentProfiles.js";
 
 interface LlmRuntimeSettings {
   vllmApiUrl: string;
@@ -23,9 +27,32 @@ export interface McpRuntimeSettings {
   baseUrls: string[];
   lazyUrls: string[];
   disabledUrls: string[];
+  servers?: McpServerConfig[];
   timeout: number;
   connectTimeout: number;
 }
+
+export interface McpRemoteServerConfig {
+  id: string;
+  transport: "remote";
+  url: string;
+  headers?: Record<string, string>;
+  oauthTokenEnv?: string;
+  lazy?: boolean;
+  disabled?: boolean;
+}
+
+export interface McpStdioServerConfig {
+  id: string;
+  transport: "stdio";
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  lazy?: boolean;
+  disabled?: boolean;
+}
+
+export type McpServerConfig = McpRemoteServerConfig | McpStdioServerConfig;
 
 interface PersistedPluginSettings {
   overrides?: Record<string, Partial<PluginOverrideSettings>>;
@@ -36,6 +63,7 @@ interface PersistedAppSettings {
   plugins?: PersistedPluginSettings;
   app?: Partial<AppRuntimeSettings>;
   mcp?: Partial<McpRuntimeSettings>;
+  agents?: AgentProfileOverrides;
 }
 
 function parsePositiveInteger(
@@ -67,6 +95,67 @@ function parseUrlList(value: unknown): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value)
+    .filter((entry): entry is [string, string] =>
+      entry[0].trim().length > 0 && typeof entry[1] === "string"
+    )
+    .map(([key, entryValue]) => [key.trim(), entryValue] as const);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+export function normalizeMcpServers(value: unknown): McpServerConfig[] {
+  if (!Array.isArray(value)) return [];
+  const servers: McpServerConfig[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const raw = candidate as Record<string, unknown>;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    if (!id || ids.has(id)) continue;
+    if (raw.transport === "remote") {
+      const url = typeof raw.url === "string" ? raw.url.trim().replace(/\/+$/, "") : "";
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      } catch {
+        continue;
+      }
+      servers.push({
+        id,
+        transport: "remote",
+        url,
+        headers: normalizeStringRecord(raw.headers),
+        oauthTokenEnv:
+          typeof raw.oauthTokenEnv === "string" && raw.oauthTokenEnv.trim()
+            ? raw.oauthTokenEnv.trim()
+            : undefined,
+        lazy: raw.lazy === true,
+        disabled: raw.disabled === true,
+      });
+    } else if (raw.transport === "stdio") {
+      const command = typeof raw.command === "string" ? raw.command.trim() : "";
+      if (!command) continue;
+      servers.push({
+        id,
+        transport: "stdio",
+        command,
+        args: Array.isArray(raw.args)
+          ? raw.args.filter((item): item is string => typeof item === "string")
+          : undefined,
+        env: normalizeStringRecord(raw.env),
+        lazy: raw.lazy === true,
+        disabled: raw.disabled === true,
+      });
+    } else {
+      continue;
+    }
+    ids.add(id);
+  }
+  return servers;
 }
 
 function resolveWorkspaceDir(): string {
@@ -149,6 +238,7 @@ let persistedAppSettings = loadPersistedAppSettings(appSettingsPath);
 const persistedLlmSettings = persistedAppSettings.llm || {};
 const persistedRuntimeSettings = persistedAppSettings.app || {};
 const persistedMcpSettings = persistedAppSettings.mcp || {};
+const initialAgentSettings = normalizeAgentProfileOverrides(persistedAppSettings.agents);
 const initialMcpUrls = parseUrlList(
   persistedMcpSettings.baseUrls ||
     process.env.MCP_BASE_URLS ||
@@ -160,6 +250,7 @@ const initialMcpLazyUrls = parseUrlList(
 const initialMcpDisabledUrls = parseUrlList(
   persistedMcpSettings.disabledUrls || process.env.MCP_DISABLED_URLS
 );
+const initialMcpServers = normalizeMcpServers(persistedMcpSettings.servers);
 
 function savePersistedAppSettings(): void {
   fs.mkdirSync(path.dirname(config.appSettingsPath), { recursive: true });
@@ -199,6 +290,7 @@ export const config = {
   mcpBaseUrls: initialMcpUrls,
   mcpLazyUrls: initialMcpLazyUrls,
   mcpDisabledUrls: initialMcpDisabledUrls,
+  mcpServers: initialMcpServers,
   mcpTimeout: parsePositiveInteger(
     persistedMcpSettings.timeout,
     parsePositiveInteger(process.env.MCP_TIMEOUT, 60)
@@ -207,6 +299,7 @@ export const config = {
     persistedMcpSettings.connectTimeout,
     parsePositiveInteger(process.env.MCP_CONNECT_TIMEOUT, 10)
   ),
+  agentProfiles: initialAgentSettings,
   usersConfigPath: process.env.USERS_CONFIG || "users.json",
   pluginsDir: resolvePluginsDir(),
   uploadMaxFileSizeMb: parsePositiveInteger(
@@ -215,6 +308,20 @@ export const config = {
   ),
   appSettingsPath,
 };
+
+export function getAgentSettings(): AgentProfileOverrides {
+  return JSON.parse(JSON.stringify(config.agentProfiles)) as AgentProfileOverrides;
+}
+
+export function updateAgentSettings(next: AgentProfileOverrides): AgentProfileOverrides {
+  config.agentProfiles = normalizeAgentProfileOverrides(next);
+  persistedAppSettings = {
+    ...persistedAppSettings,
+    agents: getAgentSettings(),
+  };
+  savePersistedAppSettings();
+  return getAgentSettings();
+}
 
 export function getAppSettings(): AppRuntimeSettings {
   return {
@@ -227,6 +334,7 @@ export function getMcpSettings(): McpRuntimeSettings {
     baseUrls: [...config.mcpBaseUrls],
     lazyUrls: [...config.mcpLazyUrls],
     disabledUrls: [...config.mcpDisabledUrls],
+    servers: normalizeMcpServers(config.mcpServers),
     timeout: config.mcpTimeout,
     connectTimeout: config.mcpConnectTimeout,
   };
@@ -236,6 +344,7 @@ export function updateMcpSettings(next: McpRuntimeSettings): McpRuntimeSettings 
   config.mcpBaseUrls = parseUrlList(next.baseUrls);
   config.mcpLazyUrls = parseUrlList(next.lazyUrls);
   config.mcpDisabledUrls = parseUrlList(next.disabledUrls);
+  config.mcpServers = normalizeMcpServers(next.servers);
   config.mcpTimeout = next.timeout;
   config.mcpConnectTimeout = next.connectTimeout;
 

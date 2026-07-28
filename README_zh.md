@@ -285,7 +285,7 @@ npm run dev
 | 文件 | 作用 |
 |------|------|
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
-| `app-settings.json` | 存储管理员在界面中配置的 LLM URL、API Key、Model、Max Tokens、Max Agent Iterations、System Prompt、插件覆盖项、上传大小限制等运行时设置 |
+| `app-settings.json` | 存储管理员配置的 LLM、分 Agent 档案、MCP 服务、插件覆盖项和上传大小限制等运行时设置 |
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
 | `<workspace>/.team/teams.json` | 存储团队成员、角色、邀请码、在线状态、文件认领和协作活动等团队数据 |
 
@@ -335,6 +335,12 @@ LLM 运行时配置同样支持两种方式：
 - 兼容方式：通过环境变量 `VLLM_API_URL`、`VLLM_API_KEY`、`MODEL_NAME`、`AGENT_MAX_TOKENS`、`MAX_AGENT_ITERATIONS`、`SYSTEM_PROMPT` 指定
 
 通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。系统提示词也属于运行时配置，管理员可以不重建镜像就定制 AI 助手行为。
+
+### Agent 档案与恢复
+
+管理员可在 **Settings → Agent 配置档案** 中分别覆盖 `ask`、`code`、`review`、`plan`、`explore`、`subagent` 和 `teammate` 的模型/Provider、轮次/工具/时间/Token/成本预算、工具允许/拒绝规则、计价及 step snapshot。子 Agent 的权限只能在父权限基础上继续收窄。
+
+**Settings → 外部 MCP** 继续兼容旧版 HTTP 地址，同时支持高级 JSON：远程服务可配置请求头和从环境变量读取的 OAuth bearer token，本地服务可通过持久 `stdio` 命令启动。Code 运行会保存运行前基线及危险工具前快照；聊天 API 还提供会话 fork、按运行回滚和受控 Git worktree。
 
 ### 上传
 

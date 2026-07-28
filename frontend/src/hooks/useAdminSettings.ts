@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import {
   AdminSettings,
+  AgentProfileOverrides,
   AppSettings,
   LlmSettings,
   McpSettings,
@@ -191,6 +192,23 @@ export function useAdminSettings(token: string) {
     [authHeaders]
   );
 
+  const updateAgentSettings = useCallback(
+    async (settings: AgentProfileOverrides) => {
+      const res = await fetch(`${API}/agents`, {
+        method: "PUT",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to save agent settings");
+      }
+      const data = await res.json();
+      return data.agents as AgentProfileOverrides;
+    },
+    [authHeaders]
+  );
+
   const inspectMcpServers = useCallback(async (): Promise<McpServerPreview[]> => {
     const res = await fetch(`${API}/mcp/inspect`, { headers: authHeaders() });
     if (!res.ok) {
@@ -306,6 +324,7 @@ export function useAdminSettings(token: string) {
       fetchLlmCapabilities,
       updateAppSettings,
       updateMcpSettings,
+      updateAgentSettings,
       inspectMcpServers,
       fetchMemory,
       updateMemory,
@@ -327,6 +346,7 @@ export function useAdminSettings(token: string) {
       fetchLlmCapabilities,
       updateAppSettings,
       updateMcpSettings,
+      updateAgentSettings,
       inspectMcpServers,
       fetchMemory,
       updateMemory,

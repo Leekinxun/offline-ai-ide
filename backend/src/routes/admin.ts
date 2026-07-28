@@ -2,12 +2,15 @@ import { Router, Request, Response } from "express";
 import { sessionManager, UserSession } from "../auth/sessionManager.js";
 import {
   clearPluginOverride,
+  getAgentSettings,
   getAppSettings,
   getLlmSettings,
   getMcpSettings,
   getPluginOverrides,
+  normalizeMcpServers,
   setPluginEnabled,
   updateAppSettings,
+  updateAgentSettings,
   updateLlmSettings,
   updateMcpSettings,
 } from "../config.js";
@@ -94,12 +97,22 @@ adminRouter.get("/settings", (req, res) => {
     pendingRegistrations: sessionManager.listPendingRegistrations(),
     allowedRoots: sessionManager.getAllowedRoots(),
     llm: getLlmSettings(),
+    agents: getAgentSettings(),
     mcp: getMcpSettings(),
     app: getAppSettings(),
     plugins: {
       overrides: getPluginOverrides(),
     },
   });
+});
+
+adminRouter.put("/agents", (req, res) => {
+  if (!getAdminSession(req, res)) return;
+  try {
+    res.json({ agents: updateAgentSettings(req.body || {}) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 adminRouter.get("/mcp/inspect", async (req, res) => {
@@ -245,10 +258,21 @@ adminRouter.put("/mcp", (req, res) => {
   }
 
   try {
+    const existing = getMcpSettings();
+    const servers = req.body.servers === undefined
+      ? (existing.servers || [])
+      : normalizeMcpServers(req.body.servers);
+    if (
+      req.body.servers !== undefined &&
+      (!Array.isArray(req.body.servers) || servers.length !== req.body.servers.length)
+    ) {
+      return res.status(400).json({ error: "Invalid MCP server configuration" });
+    }
     const mcp = updateMcpSettings({
       baseUrls: baseResult.urls,
       lazyUrls: lazyResult.urls,
       disabledUrls: disabledResult.urls,
+      servers,
       timeout,
       connectTimeout,
     });

@@ -1,14 +1,22 @@
 import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
-import { execSync } from "child_process";
 import { TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
 import { safePath } from "../utils/safePath.js";
-import { callChatCompletion } from "./llm.js";
-import { resolveMaxOutputTokens } from "./modelCapabilities.js";
-import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
+import { evaluateWorkspaceWrite } from "./toolPolicy.js";
+import {
+  createPermissionAuthorizer,
+  narrowPermissionAuthorizer,
+  type PermissionAuthorizer,
+} from "./permissionService.js";
+import { runWorkspaceCommand } from "./shell.js";
+import { processModelTurn } from "./modelProcessor.js";
+import { estimateUsageCostUsd, resolveAgentProfile } from "./agentProfiles.js";
+import { runAgentHooks } from "./agentHooks.js";
+import { createCheckpoint } from "../chat/checkpoints.js";
+import { estimateMessageTokens } from "./context.js";
 
 const POLL_INTERVAL = 5000; // ms
 const IDLE_TIMEOUT = 60000; // ms
@@ -23,25 +31,31 @@ const TEAMMATE_TOOLS: OpenAIToolDef[] = [
   { type: "function", function: { name: "claim_task", description: "Claim task by ID.", parameters: { type: "object", properties: { task_id: { type: "integer" } }, required: ["task_id"] } } },
 ];
 
-function dispatchTeammateTool(
+async function dispatchTeammateTool(
   name: string,
   args: Record<string, unknown>,
   cwd: string,
   agentName: string,
   bus: MessageBus,
-  taskMgr: TaskManager
-): string {
+  taskMgr: TaskManager,
+  authorize: PermissionAuthorizer,
+  toolCallId: string,
+  onAuthorized?: () => Promise<void>,
+  signal?: AbortSignal
+): Promise<string> {
+  const permission = await authorize({
+    requestId: `teammate:${agentName}`,
+    toolCallId,
+    name,
+    input: args,
+    agentName: `teammate:${agentName}`,
+  });
+  if (!permission.allowed) return `Error: Tool denied: ${permission.reason || "permission denied"}`;
+  await onAuthorized?.();
   switch (name) {
     case "bash": {
       const cmd = args.command as string;
-      const decision = evaluateShellCommand(cmd);
-      if (!decision.allowed) return `Error: ${decision.reason || "Command blocked by workspace policy"}`;
-      try {
-        const out = execSync(cmd, { cwd, timeout: 120_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-        return (out.trim() || "(no output)").slice(0, 50000);
-      } catch (e: any) {
-        return ((e.stdout || "") + (e.stderr || "")).trim().slice(0, 50000) || `Error: ${e.message}`;
-      }
+      return runWorkspaceCommand(cmd, cwd, signal);
     }
     case "read_file":
       try { return fs.readFileSync(safePath(args.path as string, cwd), "utf-8").slice(0, 50000); }
@@ -136,7 +150,13 @@ export class TeammateManager {
     }
   }
 
-  async spawn(name: string, role: string, prompt: string): Promise<string> {
+  async spawn(
+    name: string,
+    role: string,
+    prompt: string,
+    authorizeTool?: PermissionAuthorizer,
+    signal?: AbortSignal
+  ): Promise<string> {
     let member = this.findMember(name);
     if (member) {
       if (member.status === "working") return `Error: '${name}' is currently working`;
@@ -161,7 +181,14 @@ export class TeammateManager {
     // Start background loop (non-blocking)
     const control = { abort: false };
     this.activeLoops.set(name, control);
-    this.runTeammateLoop(name, role, prompt, control).catch(() => {
+    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
+      modelName: config.modelName,
+      maxOutputTokens: config.agentMaxTokens,
+    });
+    const authorize = authorizeTool
+      ? narrowPermissionAuthorizer(authorizeTool, profile)
+      : createPermissionAuthorizer({ mode: "code", readOnly: false, signal, profile });
+    this.runTeammateLoop(name, role, prompt, control, authorize, signal).catch(() => {
       this.setStatus(name, "shutdown");
     });
 
@@ -172,17 +199,34 @@ export class TeammateManager {
     name: string,
     role: string,
     prompt: string,
-    control: { abort: boolean }
+    control: { abort: boolean },
+    authorize: PermissionAuthorizer,
+    signal?: AbortSignal
   ): Promise<void> {
     this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work");
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${this.workspaceDir}. Use idle when done with current work.`;
     const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
     const vllmUrl = config.vllmApiUrl;
     const vllmApiKey = config.vllmApiKey;
-    const model = config.modelName;
+    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
+      modelName: config.modelName,
+      maxOutputTokens: config.agentMaxTokens,
+    });
+    const model = profile.modelName || config.modelName;
+    const startedAt = Date.now();
+    let toolCalls = 0;
+    let estimatedCostUsd = 0;
 
     // Work phase
-    for (let round = 0; round < 50 && !control.abort; round++) {
+    for (
+      let round = 0;
+      round < profile.budget.maxSteps &&
+      Date.now() - startedAt < profile.budget.maxDurationMs &&
+      (profile.budget.maxCostUsd <= 0 || estimatedCostUsd < profile.budget.maxCostUsd) &&
+      !control.abort &&
+      !signal?.aborted;
+      round++
+    ) {
       // Check inbox
       const inbox = this.bus.readInbox(name);
       for (const msg of inbox) {
@@ -194,36 +238,42 @@ export class TeammateManager {
         messages.push({ role: "user", content: JSON.stringify(msg) });
       }
 
-      let resp: Response;
+      let data;
       try {
-        const maxOutputTokens = await resolveMaxOutputTokens({
-          apiUrl: vllmUrl,
-          apiKey: vllmApiKey,
-          modelName: model,
-          fallbackMaxOutputTokens: config.agentMaxTokens,
-        });
-        resp = await callChatCompletion({
+        const processed = await processModelTurn({
           apiUrl: vllmUrl,
           apiKey: vllmApiKey,
           model,
+          providerId: profile.providerId,
           systemPrompt: sysPrompt,
           messages,
           tools: TEAMMATE_TOOLS,
-          maxTokens: maxOutputTokens,
+          fallbackMaxOutputTokens: profile.budget.maxOutputTokens,
+          maxOutputTokens: profile.budget.maxOutputTokens,
+          hookContext: { agentId: `teammate:${name}` },
+          signal,
         });
+        data = processed.response;
       } catch {
         this.setStatus(name, "shutdown");
         this.activeLoops.delete(name);
         return;
       }
 
-      if (!resp.ok) { this.setStatus(name, "shutdown"); this.activeLoops.delete(name); return; }
-
-      let data: any;
-      try { data = await resp.json(); } catch { this.setStatus(name, "shutdown"); this.activeLoops.delete(name); return; }
-
       const choice = data.choices?.[0];
       if (!choice) { this.setStatus(name, "shutdown"); this.activeLoops.delete(name); return; }
+      const usage = data.usage || {};
+      estimatedCostUsd += estimateUsageCostUsd(
+        profile,
+        typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : estimateMessageTokens(messages),
+        typeof usage.completion_tokens === "number"
+          ? usage.completion_tokens
+          : estimateMessageTokens([{
+              role: "assistant",
+              content: choice.message.content,
+              tool_calls: choice.message.tool_calls,
+            }])
+      );
 
       messages.push({ role: "assistant", content: choice.message.content, tool_calls: choice.message.tool_calls });
 
@@ -235,7 +285,54 @@ export class TeammateManager {
         try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
         if (tc.function.name === "idle") idleRequested = true;
-        const output = dispatchTeammateTool(tc.function.name, args, this.workspaceDir, name, this.bus, this.taskMgr);
+        let output: string;
+        if (toolCalls >= profile.budget.maxToolCalls) {
+          output = `Error: Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`;
+        } else {
+          toolCalls += 1;
+          try {
+            output = await dispatchTeammateTool(
+              tc.function.name,
+              args,
+              this.workspaceDir,
+              name,
+              this.bus,
+              this.taskMgr,
+              authorize,
+              tc.id,
+              async () => {
+                if (profile.stepSnapshots && ["bash", "write_file", "edit_file"].includes(tc.function.name)) {
+                  try {
+                    createCheckpoint(this.workspaceDir, {
+                      label: `Before teammate:${name} · ${tc.function.name}`,
+                      kind: "step",
+                      toolCallId: tc.id,
+                    });
+                  } catch (error) {
+                    console.warn(`Failed to create teammate step snapshot: ${error instanceof Error ? error.message : String(error)}`);
+                  }
+                }
+                await runAgentHooks("beforeToolExecute", {
+                  agentId: `teammate:${name}`,
+                  toolCallId: tc.id,
+                  toolName: tc.function.name,
+                  input: args,
+                });
+              },
+              signal
+            );
+          } catch (error) {
+            output = `Error: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          await runAgentHooks("afterToolExecute", {
+            agentId: `teammate:${name}`,
+            toolCallId: tc.id,
+            toolName: tc.function.name,
+            input: args,
+            output,
+            ...(output.startsWith("Error:") ? { error: output } : {}),
+          });
+        }
         console.log(`  [${name}] ${tc.function.name}: ${output.slice(0, 120)}`);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
       }
@@ -249,7 +346,7 @@ export class TeammateManager {
 
     await new Promise<void>((resolve) => {
       const interval = setInterval(() => {
-        if (control.abort || Date.now() - pollStart > IDLE_TIMEOUT) {
+        if (control.abort || signal?.aborted || Date.now() - pollStart > IDLE_TIMEOUT) {
           clearInterval(interval);
           this.setStatus(name, "shutdown");
           this.activeLoops.delete(name);
@@ -272,7 +369,7 @@ export class TeammateManager {
           clearInterval(interval);
           this.setStatus(name, "working", "Processing a new team message");
           // Restart work loop
-          this.runTeammateLoop(name, role, "", { ...control }).catch(() => {
+          this.runTeammateLoop(name, role, "", { ...control }, authorize, signal).catch(() => {
             this.setStatus(name, "shutdown");
           });
           resolve();
@@ -290,7 +387,7 @@ export class TeammateManager {
           });
           clearInterval(interval);
           this.setStatus(name, "working", `Working on task #${task.id}: ${task.subject}`);
-          this.runTeammateLoop(name, role, "", { ...control }).catch(() => {
+          this.runTeammateLoop(name, role, "", { ...control }, authorize, signal).catch(() => {
             this.setStatus(name, "shutdown");
           });
           resolve();

@@ -49,6 +49,14 @@ export interface ToolCallStep {
   fileUpdate?: FileUpdate;
 }
 
+export type ChatMessagePart =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | ({
+      type: "tool";
+      status: "completed" | "failed";
+    } & ToolCallStep);
+
 export interface ToolApprovalRequest {
   approvalId: string;
   requestId: string;
@@ -70,6 +78,7 @@ export interface ChatMessage {
   timestamp: number;
   toolCalls?: ToolCallStep[];
   thinking?: string;
+  parts?: ChatMessagePart[];
 }
 
 export type AgentMode = "ask" | "code" | "review" | "plan";
@@ -97,6 +106,7 @@ export interface AgentRunMetrics {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  estimatedCostUsd: number;
   estimatedTokensPeak: number;
   compactionCount: number;
   durationMs?: number;
@@ -123,6 +133,10 @@ export interface AgentRunSummary {
   updatedAt: number;
   endedAt?: number;
   resumedFromRunId?: string;
+  parentRunId?: string;
+  parentToolCallId?: string;
+  parentRequestId?: string;
+  agentName?: string;
   metrics: AgentRunMetrics;
   eventCount: number;
   summary?: ConversationRunSummary;
@@ -311,9 +325,49 @@ export interface McpSettings {
   baseUrls: string[];
   lazyUrls: string[];
   disabledUrls: string[];
+  servers?: McpServerConfig[];
   timeout: number;
   connectTimeout: number;
 }
+
+export type McpServerConfig =
+  | {
+      id: string;
+      transport: "remote";
+      url: string;
+      headers?: Record<string, string>;
+      oauthTokenEnv?: string;
+      lazy?: boolean;
+      disabled?: boolean;
+    }
+  | {
+      id: string;
+      transport: "stdio";
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+      lazy?: boolean;
+      disabled?: boolean;
+    };
+
+export type AgentProfileId = AgentMode | "explore" | "subagent" | "teammate";
+
+export interface AgentProfileOverride {
+  modelName?: string;
+  providerId?: string;
+  budget?: Partial<{
+    maxSteps: number;
+    maxToolCalls: number;
+    maxDurationMs: number;
+    maxOutputTokens: number;
+    maxCostUsd: number;
+  }>;
+  permissions?: Partial<{ allow: string[]; deny: string[] }>;
+  pricing?: Partial<{ inputPerMillionUsd: number; outputPerMillionUsd: number }>;
+  stepSnapshots?: boolean;
+}
+
+export type AgentProfileOverrides = Partial<Record<AgentProfileId, AgentProfileOverride>>;
 
 export interface McpServerPreview {
   endpoint: string;
@@ -340,6 +394,7 @@ export interface AdminSettings {
   pendingRegistrations: AdminRegistrationRequest[];
   allowedRoots: string[];
   llm: LlmSettings;
+  agents: AgentProfileOverrides;
   mcp: McpSettings;
   app: AppSettings;
   plugins?: {

@@ -15,10 +15,43 @@ const RUN_FILE_EXTENSION = ".json";
 const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const MAX_STORED_RUNS = 100;
 const MAX_STORED_EVENTS = 250;
+const MAX_STORED_TOOL_EXECUTIONS = 250;
 const runMutationQueues = new Map<string, Promise<unknown>>();
+const activeRunPaths = new Set<string>();
+
+export type AgentToolExecutionStatus =
+  | "pending"
+  | "awaiting_permission"
+  | "running"
+  | "completed"
+  | "failed"
+  | "denied"
+  | "interrupted";
+
+export interface AgentToolExecution {
+  toolCallId: string;
+  requestId: string;
+  name: string;
+  input: Record<string, unknown>;
+  status: AgentToolExecutionStatus;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  resultSummary?: string;
+  error?: string;
+  snapshotId?: string;
+}
 
 export const RESUME_PROMPT =
   "Continue the interrupted task from the last recorded state. Do not repeat completed steps; inspect the current workspace and resume from the next step.";
+
+export interface AgentRunLineage {
+  parentRunId: string;
+  parentToolCallId?: string;
+  parentRequestId?: string;
+  agentName?: string;
+}
 
 export interface AgentRunRecord {
   runId: string;
@@ -29,9 +62,14 @@ export interface AgentRunRecord {
   updatedAt: number;
   endedAt?: number;
   resumedFromRunId?: string;
+  parentRunId?: string;
+  parentToolCallId?: string;
+  parentRequestId?: string;
+  agentName?: string;
   metrics: AgentRunMetrics;
   summary?: ConversationRunSummary;
   events: AgentRunEvent[];
+  toolExecutions: AgentToolExecution[];
 }
 
 export interface AgentRunSummary {
@@ -43,6 +81,10 @@ export interface AgentRunSummary {
   updatedAt: number;
   endedAt?: number;
   resumedFromRunId?: string;
+  parentRunId?: string;
+  parentToolCallId?: string;
+  parentRequestId?: string;
+  agentName?: string;
   metrics: AgentRunMetrics;
   eventCount: number;
   summary?: ConversationRunSummary;
@@ -67,6 +109,7 @@ export const EMPTY_RUN_METRICS: AgentRunMetrics = {
   promptTokens: 0,
   completionTokens: 0,
   totalTokens: 0,
+  estimatedCostUsd: 0,
   estimatedTokensPeak: 0,
   compactionCount: 0,
 };
@@ -112,6 +155,7 @@ function normalizeMetrics(raw: unknown): AgentRunMetrics {
     promptTokens: metric("promptTokens"),
     completionTokens: metric("completionTokens"),
     totalTokens: metric("totalTokens"),
+    estimatedCostUsd: metric("estimatedCostUsd"),
     estimatedTokensPeak: metric("estimatedTokensPeak"),
     compactionCount: metric("compactionCount"),
     ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs)
@@ -171,6 +215,12 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     : [];
   const startedAt = typeof value.startedAt === "number" ? value.startedAt : Date.now();
   const summary = normalizeConversationRunSummary(value.summary);
+  const toolExecutions = Array.isArray(value.toolExecutions)
+    ? value.toolExecutions
+        .map(normalizeToolExecution)
+        .filter((tool): tool is AgentToolExecution => tool !== null)
+        .slice(-MAX_STORED_TOOL_EXECUTIONS)
+    : [];
   return {
     runId: value.runId,
     conversationId: value.conversationId,
@@ -180,9 +230,49 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : startedAt,
     ...(typeof value.endedAt === "number" ? { endedAt: value.endedAt } : {}),
     ...(typeof value.resumedFromRunId === "string" ? { resumedFromRunId: value.resumedFromRunId } : {}),
+    ...(typeof value.parentRunId === "string" && value.parentRunId ? { parentRunId: value.parentRunId } : {}),
+    ...(typeof value.parentToolCallId === "string" && value.parentToolCallId ? { parentToolCallId: value.parentToolCallId } : {}),
+    ...(typeof value.parentRequestId === "string" && value.parentRequestId ? { parentRequestId: value.parentRequestId } : {}),
+    ...(typeof value.agentName === "string" && value.agentName ? { agentName: value.agentName.slice(0, 160) } : {}),
     metrics: normalizeMetrics(value.metrics),
     ...(summary ? { summary } : {}),
     events: events.slice(-MAX_STORED_EVENTS),
+    toolExecutions,
+  };
+}
+
+function normalizeToolExecution(raw: unknown): AgentToolExecution | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<AgentToolExecution>;
+  const statuses: AgentToolExecutionStatus[] = [
+    "pending",
+    "awaiting_permission",
+    "running",
+    "completed",
+    "failed",
+    "denied",
+    "interrupted",
+  ];
+  if (
+    typeof value.toolCallId !== "string" ||
+    typeof value.requestId !== "string" ||
+    typeof value.name !== "string" ||
+    !statuses.includes(value.status as AgentToolExecutionStatus)
+  ) return null;
+  const createdAt = typeof value.createdAt === "number" ? value.createdAt : Date.now();
+  return {
+    toolCallId: value.toolCallId,
+    requestId: value.requestId,
+    name: value.name.slice(0, 160),
+    input: value.input && typeof value.input === "object" ? value.input : {},
+    status: value.status as AgentToolExecutionStatus,
+    createdAt,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : createdAt,
+    ...(typeof value.startedAt === "number" ? { startedAt: value.startedAt } : {}),
+    ...(typeof value.endedAt === "number" ? { endedAt: value.endedAt } : {}),
+    ...(typeof value.resultSummary === "string" ? { resultSummary: value.resultSummary.slice(0, 2000) } : {}),
+    ...(typeof value.error === "string" ? { error: value.error.slice(0, 2000) } : {}),
+    ...(typeof value.snapshotId === "string" ? { snapshotId: value.snapshotId.slice(0, 120) } : {}),
   };
 }
 
@@ -225,7 +315,8 @@ export class AgentRunRecorder {
     runId: string,
     conversationId: string,
     mode: AgentMode,
-    resumedFromRunId?: string
+    resumedFromRunId?: string,
+    lineage?: AgentRunLineage
   ) {
     const now = Date.now();
     this.record = {
@@ -236,8 +327,13 @@ export class AgentRunRecorder {
       startedAt: now,
       updatedAt: now,
       ...(resumedFromRunId ? { resumedFromRunId } : {}),
+      ...(lineage?.parentRunId ? { parentRunId: lineage.parentRunId } : {}),
+      ...(lineage?.parentToolCallId ? { parentToolCallId: lineage.parentToolCallId } : {}),
+      ...(lineage?.parentRequestId ? { parentRequestId: lineage.parentRequestId } : {}),
+      ...(lineage?.agentName ? { agentName: lineage.agentName.slice(0, 160) } : {}),
       metrics: clone(EMPTY_RUN_METRICS),
       events: [],
+      toolExecutions: [],
     };
   }
 
@@ -254,13 +350,61 @@ export class AgentRunRecorder {
   }
 
   async start(): Promise<AgentRunRecord> {
-    return this.mutate((record) => {
-      record.events.push({
-        id: createRunEventId(),
-        timestamp: Date.now(),
-        kind: "run_started",
-        label: "Agent run started",
+    activeRunPaths.add(getRunPath(this.workspaceDir, this.record.runId));
+    try {
+      return await this.mutate((record) => {
+        record.events.push({
+          id: createRunEventId(),
+          timestamp: Date.now(),
+          kind: "run_started",
+          label: "Agent run started",
+        });
+        return record;
       });
+    } catch (error) {
+      activeRunPaths.delete(getRunPath(this.workspaceDir, this.record.runId));
+      throw error;
+    }
+  }
+
+  async toolState(input: {
+    toolCallId: string;
+    requestId: string;
+    name: string;
+    toolInput?: Record<string, unknown>;
+    status: AgentToolExecutionStatus;
+    resultSummary?: string;
+    error?: string;
+    snapshotId?: string;
+  }): Promise<AgentRunRecord> {
+    return this.mutate((record) => {
+      const now = Date.now();
+      const existing = record.toolExecutions.find(
+        (tool) =>
+          tool.toolCallId === input.toolCallId && tool.requestId === input.requestId
+      );
+      const execution: AgentToolExecution = existing || {
+        toolCallId: input.toolCallId,
+        requestId: input.requestId,
+        name: input.name,
+        input: sanitizeToolInput(input.toolInput || {}),
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      };
+      execution.status = input.status;
+      execution.updatedAt = now;
+      if (input.status === "running" && !execution.startedAt) execution.startedAt = now;
+      if (["completed", "failed", "denied", "interrupted"].includes(input.status)) {
+        execution.endedAt = now;
+      }
+      if (input.resultSummary !== undefined) {
+        execution.resultSummary = input.resultSummary.slice(0, 2000);
+      }
+      if (input.error !== undefined) execution.error = input.error.slice(0, 2000);
+      if (input.snapshotId !== undefined) execution.snapshotId = input.snapshotId.slice(0, 120);
+      if (!existing) record.toolExecutions.push(execution);
+      record.toolExecutions = record.toolExecutions.slice(-MAX_STORED_TOOL_EXECUTIONS);
       return record;
     });
   }
@@ -295,33 +439,38 @@ export class AgentRunRecorder {
     metricsPatch: Partial<AgentRunMetrics> = {},
     summary?: ConversationRunSummary
   ): Promise<AgentRunRecord> {
-    return this.mutate((record) => {
-      const endedAt = Date.now();
-      record.status = status;
-      record.endedAt = endedAt;
-      record.metrics = {
-        ...record.metrics,
-        ...metricsPatch,
-        durationMs: endedAt - record.startedAt,
-      };
-      if (summary) record.summary = clone(summary);
-      record.events = [
-        ...record.events,
-        {
-          id: createRunEventId(),
-          timestamp: endedAt,
-          kind: "run_finished" as const,
-          label:
-            status === "completed"
-              ? "Agent run completed"
-              : status === "stopped"
-                ? "Agent run stopped"
-                : "Agent run failed",
-          isError: status === "failed",
-        },
-      ].slice(-MAX_STORED_EVENTS);
-      return record;
-    });
+    try {
+      return await this.mutate((record) => {
+        const endedAt = Date.now();
+        record.status = status;
+        record.endedAt = endedAt;
+        record.metrics = {
+          ...record.metrics,
+          ...metricsPatch,
+          durationMs: endedAt - record.startedAt,
+        };
+        if (summary) record.summary = clone(summary);
+        interruptNonterminalTools(record, endedAt);
+        record.events = [
+          ...record.events,
+          {
+            id: createRunEventId(),
+            timestamp: endedAt,
+            kind: "run_finished" as const,
+            label:
+              status === "completed"
+                ? "Agent run completed"
+                : status === "stopped"
+                  ? "Agent run stopped"
+                  : "Agent run failed",
+            isError: status === "failed",
+          },
+        ].slice(-MAX_STORED_EVENTS);
+        return record;
+      });
+    } finally {
+      activeRunPaths.delete(getRunPath(this.workspaceDir, this.record.runId));
+    }
   }
 
   private mutate<T>(mutation: (record: AgentRunRecord) => T): Promise<T> {
@@ -359,6 +508,10 @@ export function listRunSummaries(
     updatedAt: record.updatedAt,
     ...(record.endedAt ? { endedAt: record.endedAt } : {}),
     ...(record.resumedFromRunId ? { resumedFromRunId: record.resumedFromRunId } : {}),
+    ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+    ...(record.parentToolCallId ? { parentToolCallId: record.parentToolCallId } : {}),
+    ...(record.parentRequestId ? { parentRequestId: record.parentRequestId } : {}),
+    ...(record.agentName ? { agentName: record.agentName } : {}),
     metrics: record.metrics,
     eventCount: record.events.length,
     ...(record.summary ? { summary: record.summary } : {}),
@@ -373,7 +526,7 @@ export function listRunRecords(workspaceDir: string): AgentRunRecord[] {
     .map((name) => name.slice(0, -RUN_FILE_EXTENSION.length))
     .map((runId) => {
       try {
-        return readRunFile(workspaceDir, runId);
+        return readRunRecord(workspaceDir, runId);
       } catch {
         return null;
       }
@@ -383,7 +536,13 @@ export function listRunRecords(workspaceDir: string): AgentRunRecord[] {
 }
 
 export function readRunRecord(workspaceDir: string, runId: string): AgentRunRecord {
-  return clone(readRunFile(workspaceDir, runId));
+  const record = readRunFile(workspaceDir, runId);
+  const runPath = getRunPath(workspaceDir, runId);
+  if (record.status === "running" && !activeRunPaths.has(runPath)) {
+    const changed = interruptNonterminalTools(record, Date.now());
+    if (changed) writeRunFile(workspaceDir, record);
+  }
+  return clone(record);
 }
 
 export function findLatestResumableRun(
@@ -391,9 +550,18 @@ export function findLatestResumableRun(
   conversationId: string
 ): AgentRunRecord | null {
   const candidate = listRunSummaries(workspaceDir, conversationId).find(
-    (run) => run.status === "running" || run.status === "stopped" || run.status === "failed"
+    (run) =>
+      !run.parentRunId &&
+      (run.status === "running" || run.status === "stopped" || run.status === "failed")
   );
   return candidate ? readRunRecord(workspaceDir, candidate.runId) : null;
+}
+
+export function listChildRuns(
+  workspaceDir: string,
+  parentRunId: string
+): AgentRunSummary[] {
+  return listRunSummaries(workspaceDir).filter((run) => run.parentRunId === parentRunId);
 }
 
 function pruneRunHistory(workspaceDir: string): void {
@@ -407,4 +575,34 @@ function pruneRunHistory(workspaceDir: string): void {
     })
     .sort((left, right) => right.updatedAt - left.updatedAt);
   for (const entry of files.slice(MAX_STORED_RUNS)) fs.rmSync(entry.fullPath, { force: true });
+}
+
+function interruptNonterminalTools(record: AgentRunRecord, timestamp: number): boolean {
+  let changed = false;
+  for (const tool of record.toolExecutions) {
+    if (["pending", "awaiting_permission", "running"].includes(tool.status)) {
+      tool.status = "interrupted";
+      tool.updatedAt = timestamp;
+      tool.endedAt = timestamp;
+      tool.error ||= "Tool execution was interrupted before a terminal result was recorded";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function sanitizeToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  try {
+    const serialized = JSON.stringify(input, (key, value) =>
+      /(?:password|secret|token|api[_-]?key|authorization|cookie)/i.test(key)
+        ? "[REDACTED]"
+        : value
+    );
+    if (serialized.length <= 20_000) {
+      return JSON.parse(serialized) as Record<string, unknown>;
+    }
+    return { _truncated: serialized.slice(0, 20_000) };
+  } catch {
+    return { _unserializable: true };
+  }
 }

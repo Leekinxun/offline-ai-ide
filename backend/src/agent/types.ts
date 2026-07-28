@@ -87,6 +87,7 @@ export interface AgentRunMetrics {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  estimatedCostUsd: number;
   estimatedTokensPeak: number;
   compactionCount: number;
   durationMs?: number;
@@ -233,6 +234,15 @@ export interface ToolContext {
   vllmApiKey: string;
   modelName: string;
   actorName?: string;
+  signal?: AbortSignal;
+  authorizeTool?: import("./permissionService.js").PermissionAuthorizer;
+  lineage?: {
+    parentRunId: string;
+    parentConversationId: string;
+    parentRequestId: string;
+    parentToolCallId: string;
+  };
+  agentProfileId?: import("./agentProfiles.js").AgentProfileId;
 }
 
 // --- Todo types ---

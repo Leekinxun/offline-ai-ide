@@ -6,6 +6,8 @@ export interface WorkspaceCheckpoint {
   createdAt: number;
   conversationId?: string;
   runId?: string;
+  kind?: "manual" | "run" | "step" | "revert";
+  toolCallId?: string;
   fileCount: number;
   totalBytes: number;
 }
