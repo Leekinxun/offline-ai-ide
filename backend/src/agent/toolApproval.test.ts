@@ -48,3 +48,30 @@ test("shell commands remain per-action approvals", async () => {
   session.resolve(approvalId, "allow_session");
   assert.equal(await pending, "allow_once");
 });
+
+test("approves current and future requests only for one conversation", async () => {
+  const approvalIds: string[] = [];
+  const session = new ToolApprovalSession((request) => approvalIds.push(request.approvalId), 1000);
+  const input = {
+    requestId: "req",
+    toolCallId: "call-a",
+    name: "bash",
+    input: { command: "npm test" },
+    risk: "high" as const,
+    reason: "execute",
+    scope: "npm test",
+    canAllowSession: false,
+  };
+  const first = session.request({ ...input, conversationId: "conversation-a" });
+  const other = session.request({ ...input, conversationId: "conversation-b", toolCallId: "call-b" });
+
+  assert.equal(session.allowConversation("conversation-a"), 1);
+  assert.equal(await first, "allow_once");
+  assert.equal(
+    await session.request({ ...input, conversationId: "conversation-a", toolCallId: "call-a2" }),
+    "allow_once"
+  );
+  assert.equal(approvalIds.length, 2);
+  session.resolve(approvalIds[1], "deny");
+  assert.equal(await other, "deny");
+});

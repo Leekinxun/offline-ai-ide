@@ -21,6 +21,9 @@ interface McpRawTool {
 export interface McpServerPreview {
   endpoint: string;
   endpointKey: string;
+  configId: string;
+  transport: McpServerConfig["transport"];
+  disabled: boolean;
   ok: boolean;
   toolCount: number;
   tools: Array<{ name: string; description: string }>;
@@ -431,9 +434,25 @@ export class McpClient {
 
     const tools: OpenAIToolDef[] = [];
     const serverPreviews: McpServerPreview[] = [];
-    for (const server of activeServers) {
-      const session = this.getSession(server, settings.timeout, settings.connectTimeout);
+    for (const server of configuredServers) {
       const endpointKeyValue = endpointKey(server.key);
+      const identity = {
+        endpoint: server.endpoint,
+        endpointKey: endpointKeyValue,
+        configId: server.config.id,
+        transport: server.config.transport,
+        disabled: server.disabled,
+      };
+      if (server.disabled) {
+        serverPreviews.push({
+          ...identity,
+          ok: false,
+          toolCount: 0,
+          tools: [],
+        });
+        continue;
+      }
+      const session = this.getSession(server, settings.timeout, settings.connectTimeout);
       try {
         const rawTools = await session.listTools();
         const previewTools: Array<{ name: string; description: string }> = [];
@@ -465,8 +484,7 @@ export class McpClient {
           previewTools.push({ name: actualName, description });
         }
         serverPreviews.push({
-          endpoint: server.endpoint,
-          endpointKey: endpointKeyValue,
+          ...identity,
           ok: true,
           toolCount: previewTools.length,
           tools: previewTools,
@@ -474,8 +492,7 @@ export class McpClient {
         });
       } catch (error) {
         serverPreviews.push({
-          endpoint: server.endpoint,
-          endpointKey: endpointKeyValue,
+          ...identity,
           ok: false,
           toolCount: 0,
           tools: [],
@@ -497,6 +514,15 @@ export class McpClient {
   async inspectServers(): Promise<McpServerPreview[]> {
     const discovery = await this.discoverTools(true, new McpToolSelection());
     return discovery.servers;
+  }
+
+  resetDiscovery(): void {
+    this.cacheKey = "";
+    this.cachedAt = 0;
+    this.cachedDiscovery = { tools: [], servers: [], hasLazyEndpoints: false };
+    for (const session of this.sessions.values()) session.dispose();
+    this.sessions.clear();
+    this.bindings.clear();
   }
 
   async searchLazyTools(query: unknown, endpointKeyFilter?: unknown): Promise<string> {
@@ -583,9 +609,7 @@ export class McpClient {
   }
 
   dispose(): void {
-    for (const session of this.sessions.values()) session.dispose();
-    this.sessions.clear();
-    this.bindings.clear();
+    this.resetDiscovery();
   }
 }
 

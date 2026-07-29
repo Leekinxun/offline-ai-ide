@@ -4,6 +4,7 @@ import {
   KeyRound,
   Languages,
   PlugZap,
+  Power,
   RefreshCw,
   Save,
   Settings,
@@ -129,6 +130,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savingMcp, setSavingMcp] = useState(false);
   const [savingAgents, setSavingAgents] = useState(false);
   const [inspectingMcp, setInspectingMcp] = useState(false);
+  const [togglingMcpEndpoint, setTogglingMcpEndpoint] = useState<string | null>(null);
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilities | null>(null);
   const [loadingModelCapabilities, setLoadingModelCapabilities] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
@@ -203,6 +205,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     () => settings?.users.filter((user) => user.isAdmin).length || 0,
     [settings]
   );
+  const mcpHasUnsavedChanges = useMemo(() => {
+    const saved = settings?.mcp;
+    if (!saved) return false;
+    return (
+      mcpForm.baseUrls !== saved.baseUrls.join("\n") ||
+      mcpForm.lazyUrls !== saved.lazyUrls.join("\n") ||
+      mcpForm.disabledUrls !== saved.disabledUrls.join("\n") ||
+      mcpForm.timeout !== String(saved.timeout) ||
+      mcpForm.connectTimeout !== String(saved.connectTimeout) ||
+      mcpForm.serversJson !== JSON.stringify(saved.servers || [], null, 2)
+    );
+  }, [mcpForm, settings?.mcp]);
 
   if (!visible) return null;
 
@@ -522,6 +536,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setError(e instanceof Error ? e.message : t("settings.failedToInspectMcp"));
     } finally {
       setInspectingMcp(false);
+    }
+  };
+
+  const handleSetMcpEnabled = async (server: McpServerPreview, enabled: boolean) => {
+    if (!settings?.mcp || togglingMcpEndpoint) return;
+    const current = settings.mcp;
+    const advancedServers = [...(current.servers || [])];
+    const advancedIndex = advancedServers.findIndex((candidate) => {
+      if (candidate.id !== server.configId || candidate.transport !== server.transport) return false;
+      return candidate.transport === "remote"
+        ? candidate.url.replace(/\/+$/, "") === server.endpoint.replace(/\/+$/, "")
+        : server.endpoint === `stdio:${candidate.id}`;
+    });
+    if (advancedIndex >= 0) {
+      advancedServers[advancedIndex] = {
+        ...advancedServers[advancedIndex],
+        disabled: !enabled,
+      };
+    }
+    const disabledUrls = current.disabledUrls.filter(
+      (url) => url.replace(/\/+$/, "") !== server.endpoint.replace(/\/+$/, "")
+    );
+    if (advancedIndex < 0 && !enabled) disabledUrls.push(server.endpoint);
+
+    setTogglingMcpEndpoint(server.endpointKey);
+    setError(null);
+    try {
+      const saved = await adminSettings.updateMcpSettings({
+        ...current,
+        disabledUrls,
+        servers: advancedServers,
+      });
+      setMcpForm({
+        baseUrls: saved.baseUrls.join("\n"),
+        lazyUrls: saved.lazyUrls.join("\n"),
+        disabledUrls: saved.disabledUrls.join("\n"),
+        timeout: String(saved.timeout),
+        connectTimeout: String(saved.connectTimeout),
+        serversJson: JSON.stringify(saved.servers || [], null, 2),
+      });
+      setSettings((previous) => previous ? { ...previous, mcp: saved } : previous);
+      setMcpServers(await adminSettings.inspectMcpServers());
+      onShowToast(enabled ? t("settings.mcpEnabled") : t("settings.mcpDisabled"));
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : t("settings.failedToSaveMcpSettings"));
+    } finally {
+      setTogglingMcpEndpoint(null);
     }
   };
 
@@ -923,15 +984,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div className="settings-mcp-info">
                           <code>{server.endpoint}</code>
                           <span>
-                            {server.ok ? t("settings.mcpServerReady") : server.error || t("settings.mcpServerFailed")}
-                            {server.ok && server.latencyMs !== undefined
+                            {server.disabled
+                              ? t("settings.mcpServerDisabled")
+                              : server.ok
+                                ? t("settings.mcpServerReady")
+                                : server.error || t("settings.mcpServerFailed")}
+                            {!server.disabled && server.ok && server.latencyMs !== undefined
                               ? ` · ${server.latencyMs}ms${server.attempts && server.attempts > 1 ? ` · ${t("settings.mcpAttempts", { count: server.attempts })}` : ""}`
                               : ""}
                           </span>
                         </div>
-                        <span className={`settings-mcp-badge${server.ok ? " ready" : " failed"}`}>
-                          {server.ok ? t("settings.mcpToolCount", { count: server.toolCount }) : t("settings.mcpServerFailed")}
-                        </span>
+                        <div className="settings-mcp-actions">
+                          <span className={`settings-mcp-badge${server.disabled ? " disabled" : server.ok ? " ready" : " failed"}`}>
+                            {server.disabled
+                              ? t("settings.mcpServerDisabled")
+                              : server.ok
+                                ? t("settings.mcpToolCount", { count: server.toolCount })
+                                : t("settings.mcpServerFailed")}
+                          </span>
+                          <button
+                            className={`settings-mcp-toggle${server.disabled ? "" : " active"}`}
+                            type="button"
+                            aria-pressed={!server.disabled}
+                            aria-label={server.disabled ? t("settings.enableMcp") : t("settings.disableMcp")}
+                            title={mcpHasUnsavedChanges
+                              ? t("settings.saveMcpBeforeToggle")
+                              : server.disabled
+                                ? t("settings.enableMcp")
+                                : t("settings.disableMcp")}
+                            disabled={mcpHasUnsavedChanges || togglingMcpEndpoint === server.endpointKey || savingMcp}
+                            onClick={() => void handleSetMcpEnabled(server, server.disabled)}
+                          >
+                            <Power size={13} />
+                            {togglingMcpEndpoint === server.endpointKey
+                              ? t("settings.saving")
+                              : server.disabled
+                                ? t("settings.enableMcp")
+                                : t("settings.disableMcp")}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

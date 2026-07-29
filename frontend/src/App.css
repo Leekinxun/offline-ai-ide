@@ -2126,7 +2126,8 @@ select:focus-visible,
 }
 
 .editor-compare-picker select:focus-visible,
-.editor-compare-close:focus-visible {
+.editor-compare-close:focus-visible,
+.editor-compare-sync:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
@@ -2148,6 +2149,27 @@ select:focus-visible,
 .editor-compare-close:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+}
+
+.editor-compare-sync {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 7px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  background: var(--surface-workbench);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.editor-compare-sync.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-light));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-workbench));
+  color: var(--accent);
 }
 
 .editor-compare-workbench {
@@ -4284,6 +4306,31 @@ select:focus-visible,
   padding: 10px 12px;
   border-top: 1px solid var(--border-light);
   background: var(--surface-workbench);
+}
+
+.tool-approval-bulk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tool-approval-bulk button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .tool-approval-card {
@@ -6716,6 +6763,44 @@ select:focus-visible,
   color: var(--status-success-fg);
 }
 
+.settings-mcp-badge.disabled {
+  background: var(--elevated-surface-muted);
+  color: var(--text-tertiary);
+}
+
+.settings-mcp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.settings-mcp-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-panel-strong);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.settings-mcp-toggle.active {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line-strong));
+  color: var(--success);
+}
+
+.settings-mcp-toggle:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
 .settings-user-row {
   display: flex;
   align-items: center;
@@ -7198,12 +7283,16 @@ select:focus-visible,
   .settings-user-row,
   .settings-form-footer,
   .settings-form-actions,
-  .settings-mcp-row,
+    .settings-mcp-row,
   .settings-plugin-header,
   .settings-plugin-toolbar {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .settings-mcp-actions {
+    justify-content: space-between;
   }
 
   .settings-user-actions {

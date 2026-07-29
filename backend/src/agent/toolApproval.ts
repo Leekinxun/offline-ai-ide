@@ -97,6 +97,7 @@ export function classifyToolApproval(
 }
 
 export interface ToolApprovalRequestInput {
+  conversationId?: string;
   requestId: string;
   toolCallId: string;
   name: string;
@@ -113,6 +114,7 @@ export interface ToolApprovalRequestEvent extends ToolApprovalRequestInput {
 }
 
 interface PendingApproval {
+  conversationId?: string;
   canAllowSession: boolean;
   sessionKey?: string;
   resolve: (decision: ToolApprovalDecision) => void;
@@ -122,6 +124,7 @@ interface PendingApproval {
 export class ToolApprovalSession {
   private readonly pending = new Map<string, PendingApproval>();
   private readonly sessionAllowed = new Set<string>();
+  private readonly conversationAllowed = new Set<string>();
 
   constructor(
     private readonly emitRequest: (request: ToolApprovalRequestEvent) => void,
@@ -129,6 +132,9 @@ export class ToolApprovalSession {
   ) {}
 
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
+    if (input.conversationId && this.conversationAllowed.has(input.conversationId)) {
+      return Promise.resolve("allow_once");
+    }
     if (input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
       return Promise.resolve("allow_session");
     }
@@ -142,12 +148,28 @@ export class ToolApprovalSession {
       }, this.timeoutMs);
       timer.unref?.();
       this.pending.set(approvalId, {
+        conversationId: input.conversationId,
         canAllowSession: input.canAllowSession,
         sessionKey: input.sessionKey,
         resolve,
         timer,
       });
     });
+  }
+
+  allowConversation(conversationId: string): number {
+    const normalized = conversationId.trim();
+    if (!normalized) return 0;
+    this.conversationAllowed.add(normalized);
+    let resolvedCount = 0;
+    for (const [approvalId, pending] of this.pending) {
+      if (pending.conversationId !== normalized) continue;
+      this.pending.delete(approvalId);
+      clearTimeout(pending.timer);
+      pending.resolve("allow_once");
+      resolvedCount += 1;
+    }
+    return resolvedCount;
   }
 
   resolve(approvalId: string, decision: ToolApprovalDecision): boolean {

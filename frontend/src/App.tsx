@@ -55,6 +55,8 @@ import {
   Bug,
   Users,
   X,
+  Link2,
+  Unlink2,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -316,6 +318,8 @@ function AuthenticatedApp({
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
+  const [compareScrollLinked, setCompareScrollLinked] = useState(true);
+  const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
   const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
@@ -1945,6 +1949,78 @@ function AuthenticatedApp({
       ? openFiles.find((file) => file.path === compareFilePath) || null
       : null;
 
+  const handleCompareEditorReady = useCallback(
+    (mountedEditor: monaco.editor.IStandaloneCodeEditor | null) => {
+      if (mountedEditor) setCompareEditorMountVersion((version) => version + 1);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!compareFile || !compareScrollLinked) return;
+    const primary = editorRef.current;
+    const reference = compareEditorRef.current;
+    if (!primary || !reference) return;
+
+    const expectedScroll = new Map<
+      monaco.editor.IStandaloneCodeEditor,
+      { scrollTop?: number; scrollLeft?: number }
+    >();
+    const mirrorScroll = (
+      source: monaco.editor.IStandaloneCodeEditor,
+      target: monaco.editor.IStandaloneCodeEditor,
+      syncVertical: boolean,
+      syncHorizontal: boolean
+    ) => {
+      const sourceLayout = source.getLayoutInfo();
+      const targetLayout = target.getLayoutInfo();
+      const sourceVerticalRange = Math.max(0, source.getScrollHeight() - sourceLayout.height);
+      const targetVerticalRange = Math.max(0, target.getScrollHeight() - targetLayout.height);
+      const sourceHorizontalRange = Math.max(0, source.getScrollWidth() - sourceLayout.contentWidth);
+      const targetHorizontalRange = Math.max(0, target.getScrollWidth() - targetLayout.contentWidth);
+      const position = {
+        ...(syncVertical
+          ? { scrollTop: sourceVerticalRange > 0
+              ? (source.getScrollTop() / sourceVerticalRange) * targetVerticalRange
+              : 0 }
+          : {}),
+        ...(syncHorizontal
+          ? { scrollLeft: sourceHorizontalRange > 0
+              ? (source.getScrollLeft() / sourceHorizontalRange) * targetHorizontalRange
+              : 0 }
+          : {}),
+      };
+      const changesVertical = position.scrollTop !== undefined &&
+        Math.abs(position.scrollTop - target.getScrollTop()) > 0.5;
+      const changesHorizontal = position.scrollLeft !== undefined &&
+        Math.abs(position.scrollLeft - target.getScrollLeft()) > 0.5;
+      if (!changesVertical && !changesHorizontal) return;
+      expectedScroll.set(target, position);
+      target.setScrollPosition(position);
+    };
+
+    const listen = (
+      source: monaco.editor.IStandaloneCodeEditor,
+      target: monaco.editor.IStandaloneCodeEditor
+    ) => source.onDidScrollChange((event) => {
+      const expected = expectedScroll.get(source);
+      if (expected) {
+        const matchesTop = expected.scrollTop === undefined || Math.abs(expected.scrollTop - event.scrollTop) <= 0.5;
+        const matchesLeft = expected.scrollLeft === undefined || Math.abs(expected.scrollLeft - event.scrollLeft) <= 0.5;
+        expectedScroll.delete(source);
+        if (matchesTop && matchesLeft) return;
+      }
+      mirrorScroll(source, target, event.scrollTopChanged, event.scrollLeftChanged);
+    });
+    const primaryScroll = listen(primary, reference);
+    const referenceScroll = listen(reference, primary);
+    mirrorScroll(primary, reference, true, true);
+    return () => {
+      primaryScroll.dispose();
+      referenceScroll.dispose();
+    };
+  }, [compareEditorMountVersion, compareFile, compareScrollLinked]);
+
   useEffect(() => {
     if (compareFilePath && !compareFile) {
       setCompareFilePath(null);
@@ -2375,6 +2451,18 @@ function AuthenticatedApp({
                 {compareFile && (
                   <button
                     type="button"
+                    className={`editor-compare-sync${compareScrollLinked ? " active" : ""}`}
+                    onClick={() => setCompareScrollLinked((linked) => !linked)}
+                    aria-pressed={compareScrollLinked}
+                    title={compareScrollLinked ? t("editor.disableSyncScroll") : t("editor.enableSyncScroll")}
+                  >
+                    {compareScrollLinked ? <Link2 size={13} /> : <Unlink2 size={13} />}
+                    <span>{t("editor.syncScroll")}</span>
+                  </button>
+                )}
+                {compareFile && (
+                  <button
+                    type="button"
                     className="editor-compare-close"
                     onClick={() => setCompareFilePath(null)}
                     title={t("editor.stopCompare")}
@@ -2495,6 +2583,7 @@ function AuthenticatedApp({
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
                       editorRef={editorRef}
+                      onEditorReady={handleCompareEditorReady}
                       navigationTarget={
                         editorNavigationTarget?.path === activeFile.path
                           ? editorNavigationTarget
@@ -2534,6 +2623,7 @@ function AuthenticatedApp({
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
                       editorRef={compareEditorRef}
+                      onEditorReady={handleCompareEditorReady}
                       navigationTarget={
                         editorNavigationTarget?.path === compareFile.path
                           ? editorNavigationTarget
@@ -2981,6 +3071,7 @@ function AuthenticatedApp({
           onNavigateToFileUpdate={handleNavigateToFileUpdate}
           pendingApprovals={chat.pendingApprovals}
           onToolApproval={chat.respondToToolApproval}
+          onApproveConversationTools={chat.approveConversationTools}
           style={chatVisible ? { width: chatWidth } : undefined}
         />
       </div>

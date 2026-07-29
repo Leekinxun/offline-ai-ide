@@ -58,6 +58,7 @@ export type ChatMessagePart =
     } & ToolCallStep);
 
 export interface ToolApprovalRequest {
+  conversationId?: string;
   approvalId: string;
   requestId: string;
   toolCallId: string;
@@ -372,6 +373,9 @@ export type AgentProfileOverrides = Partial<Record<AgentProfileId, AgentProfileO
 export interface McpServerPreview {
   endpoint: string;
   endpointKey: string;
+  configId: string;
+  transport: McpServerConfig["transport"];
+  disabled: boolean;
   ok: boolean;
   toolCount: number;
   tools: Array<{ name: string; description: string }>;

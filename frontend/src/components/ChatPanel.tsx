@@ -35,6 +35,7 @@ import {
   ArchiveRestore,
   GitFork,
   RotateCcw,
+  ShieldCheck,
 } from "lucide-react";
 import { ContextStrip } from "./ContextStrip";
 import { TaskHeader } from "./TaskHeader";
@@ -119,6 +120,7 @@ interface ChatPanelProps {
   onNavigateToFileUpdate: (update: FileUpdate) => void;
   pendingApprovals: ToolApprovalRequest[];
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
+  onApproveConversationTools: (conversationId: string) => void;
   style?: React.CSSProperties;
 }
 
@@ -168,6 +170,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onNavigateToFileUpdate,
   pendingApprovals,
   onToolApproval,
+  onApproveConversationTools,
   style,
 }) => {
   const { locale, t } = useI18n();
@@ -689,6 +692,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {pendingApprovals.length > 0 && (
         <div className="tool-approval-stack">
+          {pendingApprovals[0].conversationId && (
+            <div className="tool-approval-bulk">
+              <span>{t("chat.approval.pendingCount", { count: pendingApprovals.length })}</span>
+              <button
+                type="button"
+                onClick={() => onApproveConversationTools(pendingApprovals[0].conversationId!)}
+              >
+                <ShieldCheck size={14} />
+                {t("chat.approval.allowConversation")}
+              </button>
+            </div>
+          )}
           {pendingApprovals.map((request) => (
             <ToolApprovalCard key={request.approvalId} request={request} onRespond={onToolApproval} />
           ))}

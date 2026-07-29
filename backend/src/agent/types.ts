@@ -203,6 +203,7 @@ export type WsServerMessage =
     }
   | {
       type: "tool_approval_request";
+      conversationId?: string;
       approvalId: string;
       requestId: string;
       toolCallId: string;

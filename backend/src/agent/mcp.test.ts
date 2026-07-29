@@ -104,6 +104,22 @@ test("keeps built-in agent operation possible when an MCP endpoint is unavailabl
   assert.equal(discovery.servers[0].ok, false);
 });
 
+test("reports disabled MCP servers without connecting or exposing tools", async () => {
+  const endpoint = "http://127.0.0.1:1/mcp";
+  const client = new McpClient(() => ({
+    baseUrls: [endpoint],
+    lazyUrls: [],
+    disabledUrls: [endpoint],
+    timeout: 1,
+    connectTimeout: 1,
+  }));
+  const discovery = await client.discoverTools(true);
+  assert.equal(discovery.tools.length, 0);
+  assert.equal(discovery.servers.length, 1);
+  assert.equal(discovery.servers[0].disabled, true);
+  assert.equal(discovery.servers[0].endpoint, endpoint);
+});
+
 test("retries transient MCP discovery failures and reports endpoint health", async () => {
   let initializeAttempts = 0;
   const server = createServer(async (request, response) => {

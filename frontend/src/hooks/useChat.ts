@@ -586,6 +586,17 @@ export function useChat(
     []
   );
 
+  const approveConversationTools = useCallback((conversationId: string) => {
+    if (!conversationId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      type: "tool_approval_all",
+      conversationId,
+    }));
+    setPendingApprovals((previous) =>
+      previous.filter((item) => item.conversationId !== conversationId)
+    );
+  }, []);
+
   const retryLast = useCallback(() => {
     const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
     if (!lastUserMessage) return;
@@ -772,6 +783,7 @@ export function useChat(
     resumeConversation,
     pendingApprovals,
     respondToToolApproval,
+    approveConversationTools,
   };
 }
 

@@ -80,10 +80,10 @@ export function createPermissionAuthorizer(options: {
     }
     const requirement = classifyToolApproval(request.name, request.input);
 
-    if (request.name.startsWith("mcp_") && (options.readOnly || options.mode !== "code")) {
+    if (request.name.startsWith("mcp_") && options.readOnly) {
       return decide({
         allowed: false,
-        reason: `MCP tools are unavailable in ${options.readOnly ? "read-only workspaces" : `${options.mode} mode`}`,
+        reason: "MCP tools are unavailable in read-only workspaces",
       });
     }
     if (options.readOnly && requirement.kind !== "none") {

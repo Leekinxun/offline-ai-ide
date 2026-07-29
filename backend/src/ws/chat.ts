@@ -45,6 +45,17 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
   ws.on("message", async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
+      if (data.type === "tool_approval_all") {
+        const conversationId = typeof data.conversationId === "string"
+          ? data.conversationId.trim()
+          : "";
+        if (!conversationId || !conversationExists(session.workspaceDir, conversationId)) {
+          wsSend(ws, { type: "error", content: "Conversation not found for approval" });
+          return;
+        }
+        approvals.allowConversation(conversationId);
+        return;
+      }
       if (data.type === "tool_approval") {
         const approvalId = typeof data.approvalId === "string" ? data.approvalId : "";
         const decision: ToolApprovalDecision =
@@ -364,7 +375,10 @@ async function processConversationQueue(
       mode: initialTurn.mode,
       conversationId: activeConversationId,
       runRecorder: recorder,
-      requestToolApproval: (input) => approvals.request(input),
+      requestToolApproval: (input) => approvals.request({
+        ...input,
+        conversationId: activeConversationId,
+      }),
     }
     );
   } catch (error) {

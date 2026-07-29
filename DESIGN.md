@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-27
+- Last refreshed: 2026-07-29
 - Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
@@ -16,6 +16,8 @@
   - `frontend/src/components/CheckpointPanel.tsx`、`ProblemsPanel.tsx`、`RunCenterPanel.tsx`：IDE 工作流升级的三类新工作台表面
   - `backend/src/chat/checkpoints.ts`、`diagnostics/service.ts`、`run/service.ts`：可恢复、可定位、可验证的后端能力边界
   - `backend/src/auth/sessionManager.ts`、`routes/auth.ts`、`frontend/src/hooks/useAuth.ts`：登录会话、允许目录与工作区切换边界
+  - `backend/src/agent/mcp.ts`、`permissionService.ts`、`toolApproval.ts`、`frontend/src/components/SettingsModal.tsx`：MCP 发现、启停与对话审批边界
+  - `frontend/src/App.tsx`、`components/Editor.tsx`：并排文件对比与 Monaco 滚动状态
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
@@ -112,6 +114,15 @@
 - Visual and interaction: 复用 `PanelShell`、`dialog-btn`、细边框卡片、状态徽章和 8/12px 间距；危险操作使用语义化 danger 状态但不铺大面积红色。所有动作具备 loading、disabled、empty、error 和成功 toast。
 - Responsive/accessibility: 操作留在现有 Chat/Recovery 抽屉内，在窄屏不新增并列面板；图标按钮提供 `aria-label`/tooltip，分段控件使用 tab 语义，异步错误使用 `role="alert"`。
 - Acceptance: 用户可在两步内完成完整会话 Fork、消息点 Fork、运行回滚或创建 Worktree；任何恢复/移除操作均经过确认，成功后界面状态与文件系统一致。
+
+### MCP, approval, and compare interaction contract — 2026-07-29
+
+- MCP discovery: 保存 MCP 配置必须立即失效旧发现缓存，下一轮工具发现必须只使用已保存配置；连接成功但工具未注入模型的状态不可被呈现为“可用”。可写工作区中的 Ask、Code、Review、Plan 对话都可发现已启用 MCP 工具，最终可调用范围继续由 Agent profile 与审批策略收窄。
+- MCP activation: 每个已保存的远程或 stdio MCP 服务在连接结果列表中显示“已启用 / 已禁用”状态并提供单步切换；禁用服务不建立连接、不暴露工具，重新启用后立即刷新发现结果。高级服务仍由原配置对象持有 `disabled`，普通 URL 服务复用 `disabledUrls`，避免引入第二套状态源。
+- Conversation approval: 审批区提供“一键批准本次对话”。动作只覆盖当前 WebSocket 生命周期内、同一 conversation id 的当前与后续软审批；硬策略拦截、只读角色、停止任务和断线仍不可绕过。切换到其他对话不得继承该授权。
+- Compare scrolling: 并排文件对比默认启用同步滚动，并提供可见开关。两个 Monaco 编辑器按各自可滚动范围映射纵向和横向位置，避免不同文件长度导致单边提前触底；程序化镜像滚动不得形成反馈循环，关闭同步后两侧恢复独立滚动。
+- Accessibility and feedback: MCP 启停与同步滚动按钮必须暴露 pressed/disabled 语义和本地化名称；批量批准只在存在待审批项时出现，文案明确授权边界；保存、刷新、启停失败均在原设置/对话表面反馈。
+- Acceptance: 保存并测试通过的 MCP 在下一轮任一对话模式中进入模型工具列表；任一服务可启停且状态重载后保持；批准当前对话后同对话后续软审批不再逐项暂停而其他对话仍需审批；文件对比两侧可同步滚动并可随时关闭。
 
 ## Frontend redesign direction
 

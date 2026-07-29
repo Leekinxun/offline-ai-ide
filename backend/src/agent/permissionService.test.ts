@@ -32,11 +32,15 @@ test("child permissions fail closed without an approval channel", async () => {
   assert.match(result.reason || "", /approval channel/i);
 });
 
-test("read-only role and non-code modes cannot widen into MCP access", async () => {
+test("read-only roles block MCP while conversation modes can use approved MCP tools", async () => {
   const readOnly = createPermissionAuthorizer({ mode: "code", readOnly: true });
   assert.equal((await readOnly(request)).allowed, false);
-  const plan = createPermissionAuthorizer({ mode: "plan", readOnly: false });
-  assert.equal((await plan({ ...request, name: "mcp_remote_write" })).allowed, false);
+  const plan = createPermissionAuthorizer({
+    mode: "plan",
+    readOnly: false,
+    requestApproval: async () => "allow_once",
+  });
+  assert.equal((await plan({ ...request, name: "mcp_remote_write" })).allowed, true);
 });
 
 test("stopped runs deny future child actions without opening an approval", async () => {

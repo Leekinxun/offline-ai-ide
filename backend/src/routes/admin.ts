@@ -276,6 +276,8 @@ adminRouter.put("/mcp", (req, res) => {
       timeout,
       connectTimeout,
     });
+    const client = getMcpClient();
+    client.resetDiscovery();
     res.json({ mcp });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

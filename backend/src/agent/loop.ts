@@ -405,16 +405,16 @@ export async function runAgentLoop(
       }
 
       let availableTools = tools;
-      const mcpDiscovery = !readOnlyWorkspace && mode === "code"
+      const mcpDiscovery = !readOnlyWorkspace
         ? await mcpClient.discoverTools(false, mcpSelection)
         : { tools: [], servers: [], hasLazyEndpoints: false };
       if (mcpDiscovery.servers.length > 0) {
-        const failedServers = mcpDiscovery.servers.filter((server) => !server.ok);
+        const failedServers = mcpDiscovery.servers.filter((server) => !server.ok && !server.disabled);
         emit({
           type: "mcp_state",
           requestId: currentRequestId,
           status: failedServers.length > 0 ? "warning" : "ready",
-          serverCount: mcpDiscovery.servers.filter((server) => server.ok).length,
+          serverCount: mcpDiscovery.servers.filter((server) => server.ok && !server.disabled).length,
           toolCount: mcpDiscovery.tools.length,
           servers: mcpDiscovery.servers,
           message:

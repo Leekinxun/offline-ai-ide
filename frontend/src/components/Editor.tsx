@@ -49,6 +49,7 @@ interface EditorProps {
     currentPath: string
   ) => Promise<DefinitionLocation | null>;
   editorRef: React.MutableRefObject<monaco.editor.IStandaloneCodeEditor | null>;
+  onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor | null) => void;
   navigationTarget: NavigationTarget | null;
   highlightTarget: HighlightTarget | null;
   onNavigationComplete: (requestId: number) => void;
@@ -233,6 +234,7 @@ export const Editor: React.FC<EditorProps> = ({
   onNavigateToLocation,
   onFindDefinition,
   editorRef,
+  onEditorReady,
   navigationTarget,
   highlightTarget,
   onNavigationComplete,
@@ -486,6 +488,7 @@ export const Editor: React.FC<EditorProps> = ({
   const handleMount: OnMount = useCallback(
     (editor) => {
       editorRef.current = editor;
+      onEditorReady?.(editor);
       pluginCleanupRef.current?.();
 
       // Cmd/Ctrl + S to save
@@ -609,6 +612,7 @@ export const Editor: React.FC<EditorProps> = ({
       editorRef,
       language,
       navigationTarget,
+      onEditorReady,
       path,
       readOnly,
       saveCurrentViewState,
@@ -626,10 +630,11 @@ export const Editor: React.FC<EditorProps> = ({
       pluginCleanupRef.current?.();
       pluginCleanupRef.current = null;
       editorRef.current = null;
+      onEditorReady?.(null);
       clearHighlights();
       clearSymbolHighlights();
     },
-    [clearHighlights, clearSymbolHighlights, editorRef, saveCurrentViewState]
+    [clearHighlights, clearSymbolHighlights, editorRef, onEditorReady, saveCurrentViewState]
   );
 
   useEffect(() => {
