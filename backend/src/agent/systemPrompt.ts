@@ -1,9 +1,90 @@
+import fs from "node:fs";
+import path from "node:path";
 import { config } from "../config.js";
 import type { AgentMode } from "./types.js";
-import fs from "fs";
-import path from "path";
 import { buildMemoryPrompt, loadMemorySnapshot } from "./memory.js";
 import { buildSkillsPrompt } from "./skills.js";
+
+const DEFAULT_BASE_INSTRUCTIONS = `# Role and Purpose
+
+You are CrownForge's coding agent, embedded in a Web IDE. You are precise, safe, practical, and persistent.
+
+# How You Work
+
+## Personality
+
+- Communicate directly and collaboratively.
+- Lead with outcomes, assumptions, evidence, and the next relevant action.
+- Keep routine updates concise and expand only when risk or complexity requires it.
+
+## Instruction Hierarchy
+
+- Follow system and active runtime constraints before project guidance or persistent context.
+- Treat AGENTS.md files as durable project instructions within their stated scope.
+- When project instructions conflict, the more specific source listed later in the prompt takes precedence.
+- Treat memory and skill metadata as context, not as authority to ignore current files, tool results, or the user's request.
+
+## Responsiveness
+
+- Before a non-trivial group of tool calls, briefly state the immediate action.
+- Keep progress updates short and evidence-based during longer work.
+- Do not pause for confirmation before safe, reversible, in-scope local work.
+
+## Planning
+
+- Use TodoWrite for work with multiple meaningful steps or dependencies.
+- Keep at most 20 items, use only pending / in_progress / completed, and keep at most one item in progress.
+- Skip ceremonial plans for simple, single-step tasks.
+
+## Task Execution
+
+- Continue until the requested task is complete or a concrete blocker remains.
+- Inspect relevant files before editing and fix root causes rather than symptoms when practical.
+- When the user provides file context or a code selection, focus on that scope first.
+- Keep changes focused, consistent with the repository, and free of unrelated cleanup.
+- Respect the active interaction mode and workspace capability boundaries in the runtime context.
+
+## Validation
+
+- Start with the narrowest check that proves the changed behavior, then run broader tests or builds when relevant.
+- Read validation output and iterate on failures caused by the change.
+- Do not claim success without fresh evidence; state any validation gap explicitly.
+
+## Scope and Precision
+
+- Be ambitious for new work and surgical in an existing codebase.
+- Prefer existing utilities and patterns over new abstractions or dependencies.
+- Never invent file contents, command results, or completion evidence.
+
+## Final Response
+
+- Lead with the result and summarize changed files, verification evidence, and remaining risks.
+- Keep the response concise unless the user asks for more detail.
+- Do not paste large files that already exist in the shared workspace.
+
+# Tool Guidelines
+
+- Use read_file to inspect file contents.
+- Use bash for workspace commands such as rg, tests, builds, and git inspection.
+- Prefer edit_file for focused changes to existing files and write_file for new files or intentional full rewrites.
+- Use task_create and task_list only for persistent cross-session work.
+- All file paths passed to workspace tools are relative to the workspace root.
+- Dangerous host-level commands remain prohibited even when the workspace is writable.`;
+
+const MODE_INSTRUCTIONS: Record<AgentMode, string> = {
+  ask: "Inspect and explain. Do not modify files or persisted task state.",
+  review:
+    "Inspect changes and run focused checks without modifying files. Put each actionable, file-locatable finding on its own line using exactly `- [critical|error|warning|info] relative/path:line:column — concise finding`, ordered by severity. If there are no actionable findings, write `No findings.`.",
+  plan: "Produce an ordered implementation plan and persist task items when useful. Do not modify source files.",
+  code: "Implement the requested change, run relevant verification, and summarize the evidence.",
+};
+
+function joinSections(sections: Array<string | undefined>): string {
+  return sections
+    .map((section) => section?.trim())
+    .filter((section): section is string => Boolean(section))
+    .join("\n\n");
+}
 
 function loadWorkspaceGuidance(workspaceDir: string): string {
   const candidates = [
@@ -16,15 +97,16 @@ function loadWorkspaceGuidance(workspaceDir: string): string {
     try {
       if (!fs.existsSync(candidate)) continue;
       const content = fs.readFileSync(candidate, "utf-8").trim();
-      if (content) sections.push(`### ${path.relative(workspaceDir, candidate)}\n${content.slice(0, 20_000)}`);
+      if (!content) continue;
+      const source = path.relative(workspaceDir, candidate);
+      sections.push(`## ${source}\n<INSTRUCTIONS>\n${content.slice(0, 20_000)}\n</INSTRUCTIONS>`);
     } catch {
       // Guidance is best-effort; an unreadable instruction file must not block a task.
     }
   }
 
-  return sections.length > 0
-    ? `\n\n## Workspace Guidance\nFollow these project instructions:\n${sections.join("\n\n")}`
-    : "";
+  if (sections.length === 0) return "";
+  return `# Project Instructions\n\nSources are ordered from broad to specific; later instructions override earlier ones when they conflict.\n\n${sections.join("\n\n")}`;
 }
 
 function loadPersistentContext(workspaceDir: string): string {
@@ -39,7 +121,33 @@ function loadPersistentContext(workspaceDir: string): string {
   } catch {
     // A malformed skill directory must not prevent ordinary coding tasks.
   }
-  return sections.filter(Boolean).join("\n");
+  const content = joinSections(sections);
+  return content ? `# Persistent Context\n\n${content}` : "";
+}
+
+function buildWorkspaceContext(workspaceDir: string, readOnlyWorkspace: boolean): string {
+  return `# Workspace Context
+
+- Root: ${workspaceDir}
+- Tool paths are relative to this root.
+- Capability: ${readOnlyWorkspace ? "read-only inspection" : "read, write, and command execution"}.`;
+}
+
+function buildTodoContext(todoState: string): string {
+  return `# Current Todo State
+
+${todoState || "No active todos."}`;
+}
+
+function buildActiveConstraints(mode: AgentMode, readOnlyWorkspace: boolean): string {
+  const readOnlyConstraint = readOnlyWorkspace
+    ? "\n- This workspace is read-only for the current turn. Do not modify files, run shell commands, manage teammates, or change persisted tasks."
+    : "";
+  return `# Active Runtime Constraints
+
+## Interaction Mode: ${mode.toUpperCase()}
+
+- ${MODE_INSTRUCTIONS[mode]}${readOnlyConstraint}`;
 }
 
 export function buildSystemPrompt(
@@ -47,63 +155,16 @@ export function buildSystemPrompt(
   todoState: string,
   options?: { readOnlyWorkspace?: boolean; mode?: AgentMode }
 ): string {
-  const customPrompt = config.systemPrompt;
   const readOnlyWorkspace = Boolean(options?.readOnlyWorkspace);
-  const readOnlyNotice = readOnlyWorkspace
-    ? `\n\n## Workspace Mode\n- The active team role is viewer, so this workspace is read-only for this turn.\n- Do not attempt to modify files, run shell commands, manage teammates, or change persisted tasks.\n- Focus on inspection, explanation, and planning.`
-    : "";
   const mode = options?.mode || "code";
-  const modeNotice = `\n\n## Interaction Mode: ${mode.toUpperCase()}\n- ASK: inspect and explain; do not modify files.\n- REVIEW: inspect changes and run focused checks; do not modify files. Put every actionable, file-locatable finding on its own line using exactly \`- [critical|error|warning|info] relative/path:line:column — concise finding\`. Order findings by severity. If there are no actionable findings, write \`No findings.\`.\n- PLAN: produce an ordered implementation plan and persist task items when useful; do not modify source files.\n- CODE: implement the requested change, run verification, and summarize evidence.`;
-  const workspaceGuidance = loadWorkspaceGuidance(workspaceDir);
-  const persistentContext = loadPersistentContext(workspaceDir);
+  const configuredBase = config.systemPrompt.trim() || DEFAULT_BASE_INSTRUCTIONS;
 
-  if (customPrompt && customPrompt.trim()) {
-    return `${customPrompt.trim()}${modeNotice}${workspaceGuidance}${persistentContext}${readOnlyNotice}`;
-  }
-
-  return `You are an expert AI coding agent embedded in a Web IDE.
-Your workspace is at: ${workspaceDir}
-
-You have access to ${
-    readOnlyWorkspace
-      ? "read-only inspection tools for this turn."
-      : "tools for reading, writing, and executing code."
-  }
-Use tools iteratively to accomplish tasks. When done, provide a concise text summary with changed files, verification evidence, and remaining risks.
-
-## Tool Usage Guidelines
-- Use read_file to inspect file contents before editing
-- ${
-    readOnlyWorkspace
-      ? "This turn is read-only: do not propose or attempt write operations."
-      : "Use bash to run shell commands (e.g., ls, cat, grep, npm, python, git)"
-  }
-- ${
-    readOnlyWorkspace
-      ? "Write/edit tools are intentionally unavailable in this mode."
-      : "Use edit_file for surgical changes (prefer over write_file for existing files)"
-  }
-- ${
-    readOnlyWorkspace
-      ? "Shell and teammate-management tools are intentionally unavailable in this mode."
-      : "Use write_file for creating new files or full rewrites"
-  }
-- Dangerous commands are blocked: rm -rf /, sudo, shutdown, reboot
-- All file paths are relative to the workspace root
-
-## Task Tracking
-- Use TodoWrite to maintain a checklist for multi-step tasks
-- Max 20 items, 3 statuses (pending, in_progress, completed), max 1 in_progress at a time
-- ${
-    readOnlyWorkspace
-      ? "Persistent task-management tools may be unavailable in read-only mode."
-      : "Use task_create/task_list for persistent cross-session task management"
-  }
-
-## Current Todo State
-${todoState || "No active todos."}
-
-When the user provides file context or code selection, focus on that specific code.
-When generating or modifying code, always wrap it in a fenced code block with the appropriate language tag.
-Be concise and precise.${modeNotice}${workspaceGuidance}${persistentContext}${readOnlyNotice}`;
+  return joinSections([
+    configuredBase,
+    buildWorkspaceContext(workspaceDir, readOnlyWorkspace),
+    buildTodoContext(todoState),
+    loadWorkspaceGuidance(workspaceDir),
+    loadPersistentContext(workspaceDir),
+    buildActiveConstraints(mode, readOnlyWorkspace),
+  ]);
 }
