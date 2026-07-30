@@ -18,6 +18,7 @@ import { CheckpointPanel } from "./components/CheckpointPanel";
 import { ProblemsPanel } from "./components/ProblemsPanel";
 import { RunCenterPanel } from "./components/RunCenterPanel";
 import { DebugPanel } from "./components/DebugPanel";
+import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
@@ -349,6 +350,7 @@ function AuthenticatedApp({
   const [debugVisible, setDebugVisible] = useState(false);
   const [breakpointsByPath, setBreakpointsByPath] = useState<Record<string, number[]>>({});
   const [debugStartRequest, setDebugStartRequest] = useState<{ id: number; path: string } | null>(null);
+  const [debugActiveFrame, setDebugActiveFrame] = useState<DebugFrame | null>(null);
   const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -2631,6 +2633,7 @@ function AuthenticatedApp({
                       onFormat={formatPythonDocument}
                       onValidateDocument={fs.checkPythonDocument}
                       breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                      debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
                       onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                       onSelectionChange={handleSelectionChange}
                       onNavigateToLocation={handleNavigateToLocation}
@@ -2673,6 +2676,7 @@ function AuthenticatedApp({
                       onSave={() => undefined}
                       onFormat={formatPythonDocument}
                       onValidateDocument={fs.checkPythonDocument}
+                      debugExecutionLine={debugActiveFrame?.path === compareFile.path ? debugActiveFrame.line : undefined}
                       onSelectionChange={() => undefined}
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
@@ -2753,6 +2757,7 @@ function AuthenticatedApp({
                           onFormat={formatPythonDocument}
                           onValidateDocument={fs.checkPythonDocument}
                           breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                          debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
                           onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                           onSelectionChange={handleSelectionChange}
                           onNavigateToLocation={handleNavigateToLocation}
@@ -2801,6 +2806,7 @@ function AuthenticatedApp({
                   onFormat={formatPythonDocument}
                   onValidateDocument={fs.checkPythonDocument}
                   breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                  debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
                   onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                   onSelectionChange={handleSelectionChange}
                   onNavigateToLocation={handleNavigateToLocation}
@@ -3057,6 +3063,7 @@ function AuthenticatedApp({
             endLine: frame.line,
             endColumn: frame.column + 1,
           })}
+          onActiveFrameChange={setDebugActiveFrame}
           onClose={() => setDebugVisible(false)}
         />
 

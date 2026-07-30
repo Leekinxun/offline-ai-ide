@@ -12,6 +12,29 @@ export type DebugRuntime = "node" | "python";
 
 export interface DebugBreakpoint { path: string; line: number; verified: boolean; }
 export interface DebugFrame { id: string; functionName: string; path: string; line: number; column: number; }
+export interface DebugScope {
+  name: string;
+  variablesReference: number;
+  expensive: boolean;
+  namedVariables?: number;
+  indexedVariables?: number;
+}
+export interface DebugVariable {
+  name: string;
+  value: string;
+  type?: string;
+  variablesReference: number;
+  evaluateName?: string;
+  namedVariables?: number;
+  indexedVariables?: number;
+}
+export interface DebugEvaluation {
+  result: string;
+  type?: string;
+  variablesReference: number;
+  namedVariables?: number;
+  indexedVariables?: number;
+}
 export interface DebugSessionState {
   id: string;
   path: string;
@@ -19,6 +42,7 @@ export interface DebugSessionState {
   status: DebugStatus;
   startedAt: number;
   updatedAt: number;
+  pauseVersion: number;
   breakpoints: DebugBreakpoint[];
   frames: DebugFrame[];
   stdout: string;
@@ -32,6 +56,7 @@ interface ActiveDebugSessionBase {
   child: ChildProcess;
   state: DebugSessionState;
   connectTimer: NodeJS.Timeout;
+  pauseVersion: number;
 }
 
 interface ActiveNodeDebugSession extends ActiveDebugSessionBase {
@@ -43,6 +68,9 @@ interface ActiveNodeDebugSession extends ActiveDebugSessionBase {
   breakpointSetup: Promise<void>;
   resolveBreakpointSetup?: () => void;
   scriptPaths: Map<string, string>;
+  callFrames: Map<string, any>;
+  variableReferences: Map<number, string>;
+  nextVariableReference: number;
 }
 
 interface ActivePythonDebugSession extends ActiveDebugSessionBase {
@@ -90,11 +118,95 @@ function validateTarget(
 
 function publicState(active?: ActiveDebugSession): DebugSessionState | null {
   if (!active) return null;
-  return { ...active.state, breakpoints: active.state.breakpoints.map((item) => ({ ...item })), frames: active.state.frames.map((item) => ({ ...item })) };
+  return { ...active.state, pauseVersion: active.pauseVersion, breakpoints: active.state.breakpoints.map((item) => ({ ...item })), frames: active.state.frames.map((item) => ({ ...item })) };
 }
 
 export function getDebugSession(workspaceDir: string): DebugSessionState | null {
   return publicState(sessions.get(workspaceDir));
+}
+
+function requirePausedSession(workspaceDir: string): ActiveDebugSession {
+  const active = sessions.get(workspaceDir);
+  if (!active || active.state.status !== "paused") throw new Error("Debugger is not paused");
+  return active;
+}
+
+function clearPausedData(active: ActiveDebugSession): void {
+  active.state.frames = [];
+  if (active.runtime === "node") {
+    active.callFrames.clear();
+    active.variableReferences.clear();
+  } else {
+    active.threadId = undefined;
+  }
+}
+
+function waitForNextPause(active: ActiveDebugSession, pauseVersion: number, timeoutMs = 8_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (active.pauseVersion > pauseVersion || active.state.status === "stopped") {
+        clearInterval(timer);
+        resolve();
+        return;
+      }
+      if (active.state.status === "failed") {
+        clearInterval(timer);
+        reject(new Error(active.state.error || "Debug session failed"));
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(timer);
+        reject(new Error("Debugger did not pause after the step command"));
+      }
+    }, 20);
+    timer.unref?.();
+  });
+}
+
+function nodeVariableReference(active: ActiveNodeDebugSession, objectId?: string): number {
+  if (!objectId) return 0;
+  for (const [reference, currentObjectId] of active.variableReferences) {
+    if (currentObjectId === objectId) return reference;
+  }
+  const reference = active.nextVariableReference++;
+  active.variableReferences.set(reference, objectId);
+  return reference;
+}
+
+function nodeRemoteValue(remote: any): string {
+  if (!remote) return "undefined";
+  if (remote.type === "undefined") return "undefined";
+  if (remote.subtype === "null") return "null";
+  if (remote.unserializableValue !== undefined) return String(remote.unserializableValue);
+  if (remote.type === "string") return JSON.stringify(String(remote.value ?? ""));
+  if (remote.value !== undefined) return String(remote.value);
+  return String(remote.description || remote.className || remote.type || "object");
+}
+
+function nodeRemoteType(remote: any): string | undefined {
+  if (!remote) return undefined;
+  if (remote.subtype && remote.subtype !== "null") return String(remote.subtype);
+  if (remote.className) return String(remote.className);
+  return remote.type ? String(remote.type) : undefined;
+}
+
+function nodeRemoteVariable(
+  active: ActiveNodeDebugSession,
+  remote: any,
+  name: string,
+  evaluateName?: string
+): DebugVariable {
+  return {
+    name,
+    value: nodeRemoteValue(remote),
+    type: nodeRemoteType(remote),
+    variablesReference: nodeVariableReference(active, remote?.objectId),
+    evaluateName,
+    namedVariables: Number.isInteger(remote?.preview?.properties?.length)
+      ? remote.preview.properties.length
+      : undefined,
+  };
 }
 
 function sendInspector(active: ActiveNodeDebugSession, method: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -148,8 +260,10 @@ async function connectInspector(active: ActiveNodeDebugSession, inspectorUrl: st
     }
     if (message.method === "Debugger.resumed") {
       active.state.status = "running";
-      active.state.frames = [];
+      clearPausedData(active);
       active.state.updatedAt = Date.now();
+      void sendInspector(active, "Runtime.releaseObjectGroup", { objectGroup: "crownforge-debug" })
+        .catch(() => undefined);
     }
     if (message.method === "Debugger.breakpointResolved") {
       const line = Number(message.params?.location?.lineNumber || -1) + 1;
@@ -188,17 +302,23 @@ async function connectInspector(active: ActiveNodeDebugSession, inspectorUrl: st
         return;
       }
       active.initialBreakHandled = true;
+      clearPausedData(active);
       active.state.status = "paused";
       active.state.updatedAt = Date.now();
-      active.state.frames = (message.params?.callFrames || []).slice(0, 30).map((frame: any) => ({
-        id: String(frame.callFrameId || crypto.randomUUID()),
-        functionName: String(frame.functionName || "(anonymous)"),
-        path: frame.url
-          ? framePath(active.workspaceDir, String(frame.url))
-          : active.scriptPaths.get(String(frame.location?.scriptId || "")) || "",
-        line: Number(frame.location?.lineNumber || 0) + 1,
-        column: Number(frame.location?.columnNumber || 0) + 1,
-      }));
+      active.state.frames = (message.params?.callFrames || []).slice(0, 30).map((frame: any) => {
+        const id = String(frame.callFrameId || crypto.randomUUID());
+        active.callFrames.set(id, frame);
+        return {
+          id,
+          functionName: String(frame.functionName || "(anonymous)"),
+          path: frame.url
+            ? framePath(active.workspaceDir, String(frame.url))
+            : active.scriptPaths.get(String(frame.location?.scriptId || "")) || "",
+          line: Number(frame.location?.lineNumber || 0) + 1,
+          column: Number(frame.location?.columnNumber || 0) + 1,
+        };
+      });
+      active.pauseVersion += 1;
     }
   });
   socket.once("open", async () => {
@@ -239,6 +359,7 @@ function createDebugState(
     status: "starting",
     startedAt: Date.now(),
     updatedAt: Date.now(),
+    pauseVersion: 0,
     breakpoints: breakpoints.map((line) => ({ path: normalizedPath, line, verified: false })),
     frames: [],
     stdout: "",
@@ -274,6 +395,10 @@ function startNodeDebugSession(
     breakpointSetup,
     resolveBreakpointSetup,
     scriptPaths: new Map(),
+    callFrames: new Map(),
+    variableReferences: new Map(),
+    nextVariableReference: 1,
+    pauseVersion: 0,
   };
   clearTimeout(active.connectTimer);
   active.connectTimer = setTimeout(() => {
@@ -295,7 +420,7 @@ function startNodeDebugSession(
     if (text.includes("Waiting for the debugger to disconnect")) {
       active.inspector?.close();
       state.status = "stopped";
-      state.frames = [];
+      clearPausedData(active);
       state.updatedAt = Date.now();
     }
   });
@@ -306,6 +431,7 @@ function startNodeDebugSession(
     active.pending.clear();
     active.inspector?.close();
     if (state.status !== "failed") state.status = "stopped";
+    clearPausedData(active);
     state.updatedAt = Date.now();
   });
   return publicState(active)!;
@@ -329,7 +455,7 @@ function failPythonSession(active: ActivePythonDebugSession, error: unknown): vo
   active.state.error = /No module named ['\"]?debugpy/i.test(active.state.stderr)
     ? `debugpy is not installed for ${config.debugpyPythonExecutable}. Install debugpy==1.8.21 or set DEBUGPY_PYTHON_EXECUTABLE.`
     : message;
-  active.state.frames = [];
+  clearPausedData(active);
   active.state.updatedAt = Date.now();
   stopChild(active);
 }
@@ -359,6 +485,7 @@ async function capturePythonFrames(active: ActivePythonDebugSession, requestedTh
     }));
     active.state.status = "paused";
     active.state.updatedAt = Date.now();
+    active.pauseVersion += 1;
   } catch (error) {
     failPythonSession(active, error);
   }
@@ -380,14 +507,14 @@ function handlePythonDapEvent(active: ActivePythonDebugSession, event: DapEvent)
     return;
   }
   if (event.event === "stopped") {
-    active.state.frames = [];
+    clearPausedData(active);
     active.state.updatedAt = Date.now();
     void capturePythonFrames(active, Number(body.threadId || 0));
     return;
   }
   if (event.event === "continued") {
     active.state.status = "running";
-    active.state.frames = [];
+    clearPausedData(active);
     active.state.updatedAt = Date.now();
     return;
   }
@@ -405,14 +532,14 @@ function handlePythonDapEvent(active: ActivePythonDebugSession, event: DapEvent)
   }
   if (event.event === "exited") {
     active.state.status = "stopped";
-    active.state.frames = [];
+    clearPausedData(active);
     active.state.updatedAt = Date.now();
     return;
   }
   if (event.event === "terminated") {
     active.stopping = true;
     active.state.status = "stopped";
-    active.state.frames = [];
+    clearPausedData(active);
     active.state.updatedAt = Date.now();
     void active.dap.request("disconnect", { restart: false, terminateDebuggee: false }, 1_500)
       .catch(() => undefined)
@@ -518,6 +645,7 @@ function startPythonDebugSession(
     resolveInitialized,
     capabilities: {},
     stopping: false,
+    pauseVersion: 0,
     connectTimer: setTimeout(() => undefined, 15_000),
   };
   clearTimeout(active.connectTimer);
@@ -551,7 +679,7 @@ function startPythonDebugSession(
     if (!["failed", "stopped"].includes(state.status)) {
       failPythonSession(active, new Error("debugpy adapter exited before the session completed"));
     }
-    state.frames = [];
+    clearPausedData(active);
     state.updatedAt = Date.now();
   });
   void initializePythonSession(active);
@@ -567,9 +695,150 @@ export function startDebugSession(workspaceDir: string, targetPath: string, line
     : startNodeDebugSession(workspaceDir, absoluteTarget, lines);
 }
 
+export async function getDebugScopes(workspaceDir: string, frameId: string): Promise<DebugScope[]> {
+  const active = requirePausedSession(workspaceDir);
+  if (!frameId || !active.state.frames.some((frame) => frame.id === frameId)) {
+    throw new Error("Debug frame is not available");
+  }
+  if (active.runtime === "python") {
+    const result = await active.dap.request("scopes", { frameId: Number(frameId) });
+    return (result?.scopes || []).map((scope: any) => ({
+      name: String(scope.name || "Scope"),
+      variablesReference: Number(scope.variablesReference || 0),
+      expensive: Boolean(scope.expensive),
+      namedVariables: Number.isInteger(scope.namedVariables) ? scope.namedVariables : undefined,
+      indexedVariables: Number.isInteger(scope.indexedVariables) ? scope.indexedVariables : undefined,
+    }));
+  }
+
+  const frame = active.callFrames.get(frameId);
+  if (!frame) throw new Error("Debug frame is no longer available");
+  const labels: Record<string, string> = {
+    local: "Local",
+    closure: "Closure",
+    global: "Global",
+    catch: "Catch",
+    block: "Block",
+    script: "Script",
+    with: "With",
+    eval: "Eval",
+    module: "Module",
+    wasmExpressionStack: "WebAssembly",
+  };
+  return (frame.scopeChain || []).map((scope: any) => ({
+    name: String(labels[String(scope.type || "")] || scope.name || scope.type || "Scope"),
+    variablesReference: nodeVariableReference(active, scope.object?.objectId),
+    expensive: scope.type === "global",
+    namedVariables: Number.isInteger(scope.object?.preview?.properties?.length)
+      ? scope.object.preview.properties.length
+      : undefined,
+  }));
+}
+
+export async function getDebugVariables(workspaceDir: string, reference: number): Promise<DebugVariable[]> {
+  const active = requirePausedSession(workspaceDir);
+  if (!Number.isInteger(reference) || reference <= 0) throw new Error("Invalid variable reference");
+  if (active.runtime === "python") {
+    const result = await active.dap.request("variables", { variablesReference: reference });
+    return (result?.variables || []).map((variable: any) => ({
+      name: String(variable.name || ""),
+      value: String(variable.value ?? ""),
+      type: variable.type ? String(variable.type) : undefined,
+      variablesReference: Number(variable.variablesReference || 0),
+      evaluateName: variable.evaluateName ? String(variable.evaluateName) : undefined,
+      namedVariables: Number.isInteger(variable.namedVariables) ? variable.namedVariables : undefined,
+      indexedVariables: Number.isInteger(variable.indexedVariables) ? variable.indexedVariables : undefined,
+    }));
+  }
+
+  const objectId = active.variableReferences.get(reference);
+  if (!objectId) throw new Error("Variable reference is no longer available");
+  const result = await sendInspector(active, "Runtime.getProperties", {
+    objectId,
+    ownProperties: true,
+    accessorPropertiesOnly: false,
+    generatePreview: true,
+  });
+  const variables: DebugVariable[] = [];
+  for (const property of result?.result || []) {
+    if (property.symbol) continue;
+    const name = String(property.name || "");
+    if (property.value) {
+      variables.push(nodeRemoteVariable(active, property.value, name, name));
+    } else if (property.get || property.set) {
+      variables.push({
+        name,
+        value: property.get ? "<getter>" : "<setter>",
+        type: "accessor",
+        variablesReference: 0,
+        evaluateName: name,
+      });
+    }
+  }
+  for (const property of result?.internalProperties || []) {
+    if (property.value) variables.push(nodeRemoteVariable(active, property.value, String(property.name || "")));
+  }
+  return variables;
+}
+
+export async function evaluateDebugExpression(
+  workspaceDir: string,
+  frameId: string,
+  expression: string
+): Promise<DebugEvaluation> {
+  const active = requirePausedSession(workspaceDir);
+  const normalizedExpression = expression.trim();
+  if (!normalizedExpression) throw new Error("Expression is required");
+  if (normalizedExpression.length > 10_000) throw new Error("Expression is too long");
+  if (!frameId || !active.state.frames.some((frame) => frame.id === frameId)) {
+    throw new Error("Debug frame is not available");
+  }
+
+  if (active.runtime === "python") {
+    const result = await active.dap.request("evaluate", {
+      frameId: Number(frameId),
+      expression: normalizedExpression,
+      context: "watch",
+    });
+    return {
+      result: String(result?.result ?? ""),
+      type: result?.type ? String(result.type) : undefined,
+      variablesReference: Number(result?.variablesReference || 0),
+      namedVariables: Number.isInteger(result?.namedVariables) ? result.namedVariables : undefined,
+      indexedVariables: Number.isInteger(result?.indexedVariables) ? result.indexedVariables : undefined,
+    };
+  }
+
+  if (!active.callFrames.has(frameId)) throw new Error("Debug frame is no longer available");
+  const response = await sendInspector(active, "Debugger.evaluateOnCallFrame", {
+    callFrameId: frameId,
+    expression: normalizedExpression,
+    objectGroup: "crownforge-debug",
+    includeCommandLineAPI: true,
+    silent: false,
+    returnByValue: false,
+    generatePreview: true,
+  });
+  if (response?.exceptionDetails) {
+    const detail = response.exceptionDetails.exception?.description
+      || response.exceptionDetails.text
+      || "Expression evaluation failed";
+    throw new Error(String(detail));
+  }
+  const remote = response?.result;
+  return {
+    result: nodeRemoteValue(remote),
+    type: nodeRemoteType(remote),
+    variablesReference: nodeVariableReference(active, remote?.objectId),
+    namedVariables: Number.isInteger(remote?.preview?.properties?.length)
+      ? remote.preview.properties.length
+      : undefined,
+  };
+}
+
 export async function debugCommand(workspaceDir: string, action: "continue" | "step_over" | "step_into" | "step_out"): Promise<DebugSessionState> {
-  const active = sessions.get(workspaceDir);
-  if (!active || active.state.status !== "paused") throw new Error("Debugger is not paused");
+  const active = requirePausedSession(workspaceDir);
+  const pauseVersion = active.pauseVersion;
   if (active.runtime === "python") {
     const commands = {
       continue: "continue",
@@ -580,26 +849,27 @@ export async function debugCommand(workspaceDir: string, action: "continue" | "s
     const threadId = active.threadId;
     if (!threadId) throw new Error("debugpy did not provide a paused thread");
     active.state.status = "running";
-    active.state.frames = [];
+    clearPausedData(active);
     active.state.updatedAt = Date.now();
     try {
       await active.dap.request(commands[action], {
         threadId,
         ...(action === "continue" ? {} : { singleThread: false }),
       });
+      if (action !== "continue") await waitForNextPause(active, pauseVersion);
       return publicState(active)!;
     } catch (error) {
-      active.state.status = "paused";
       active.state.error = error instanceof Error ? error.message : String(error);
       active.state.updatedAt = Date.now();
       throw error;
     }
   }
   const methods = { continue: "Debugger.resume", step_over: "Debugger.stepOver", step_into: "Debugger.stepInto", step_out: "Debugger.stepOut" } as const;
-  await sendInspector(active, methods[action]);
   active.state.status = "running";
-  active.state.frames = [];
+  clearPausedData(active);
   active.state.updatedAt = Date.now();
+  await sendInspector(active, methods[action]);
+  if (action !== "continue") await waitForNextPause(active, pauseVersion);
   return publicState(active)!;
 }
 
@@ -624,7 +894,7 @@ export async function stopDebugSession(workspaceDir: string): Promise<DebugSessi
   }
   stopChild(active);
   active.state.status = "stopped";
-  active.state.frames = [];
+  clearPausedData(active);
   active.state.updatedAt = Date.now();
   return publicState(active)!;
 }

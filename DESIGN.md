@@ -94,10 +94,12 @@
 - Tool approval: `write_file`、`edit_file` 和可执行 shell 命令在执行前暂停 Agent，并展示工具、参数摘要、风险等级和影响范围。用户可以“仅本次允许”或拒绝；文件写入可以在当前 WebSocket 会话内按工具与目录放行，shell 命令永远逐次审批。被安全策略硬拦截的命令不可通过审批绕过，断线、停止任务和超时都视为拒绝。
 - Background diagnostics: 工作区诊断从一次性按钮升级为可启动、可停止、可观察的后台会话；文件变化经过防抖后自动刷新 TypeScript、Ruff 和 Cargo 结果。Problems 标题区显示 watching/running/idle/error 和最近完成时间，但后台服务不得抢占编辑器焦点或制造重复通知。该阶段实现“常驻诊断生命周期”，不把编译器轮询伪装成完整 LSP 协议。
 - Cancellable tasks: Run/Test 采用异步子进程和任务记录；运行中必须显示状态、开始时间和实时输出，并提供 Stop。停止先发送 `SIGTERM`，短暂宽限后再终止进程组；历史记录区分 passed、failed、cancelled 和 timed_out，浏览器不能提交任意命令。
-- Debug session runtimes: 调试工作台同时支持 Node.js JavaScript 与 Python 文件。JavaScript 继续复用 Node Inspector；Python 使用固定版本的 `debugpy` 作为 Debug Adapter Protocol（DAP）实现，并按 `initialize -> launch -> initialized -> setBreakpoints -> configurationDone` 顺序建立会话。两种运行时共享工作区相对路径、团队只读权限、输出上限和进程组终止边界；当前界面仍聚焦断点、暂停、继续、单步进入/越过/跳出、停止和调用栈，不在本阶段暴露变量检查器、表达式求值、远程 attach 或子进程调试。
+- Debug session runtimes: 调试工作台同时支持 Node.js JavaScript 与 Python 文件。JavaScript 继续复用 Node Inspector；Python 使用固定版本的 `debugpy` 作为 Debug Adapter Protocol（DAP）实现，并按 `initialize -> launch -> initialized -> setBreakpoints -> configurationDone` 顺序建立会话。两种运行时共享工作区相对路径、团队只读权限、输出上限和进程组终止边界；远程 attach 与子进程调试仍不在本阶段范围内。
+- Paused-state inspection: 每次暂停都以当前线程和栈帧为上下文加载作用域，再通过运行时对象引用按需展开变量；Local、Global、Closure 和嵌套对象使用统一树形语义。切换栈帧必须同步刷新变量，恢复运行后立即废弃旧对象引用，不能继续展示上一暂停点的数据。Debug Console 在暂停时支持基于当前栈帧求值，并将表达式、结果和可操作错误与程序 stdout/stderr 明确区分。
+- Stepping feedback: Continue、Step Over、Step Into 和 Step Out 由运行时的 resumed/continued 与 paused/stopped 事件驱动。单步命令发出后先清空失效的栈帧和变量，在下一次暂停时自动选择新栈顶、打开对应文件，并用独立于断点的当前执行行箭头和整行高亮反馈真实位置；不得依赖用户手动点击调用栈来确认是否前进。按钮在命令进行中禁用，快速的 running -> paused 变化也必须可观察且不能被轮询竞态覆盖。
 - Python debug interaction: 打开 `.py` 或 `.pyw` 文件时自动填入调试目标并允许在当前行切换断点；调试状态必须明确标识 Python 运行时。`debugpy` 的 output、stopped、continued、exited 和 terminated 事件映射到现有状态与输出区，内部适配器日志不得混入用户程序输出；解释器或 `debugpy` 依赖缺失、目标越界、DAP 握手超时和不支持的扩展名必须显示可操作错误，不能表现为无反馈按钮。
 - Navigation and state: Debug 与 Run/Test、Problems、Checkpoints 一样通过 Activity Rail 和 Command Palette 可达；运行、调试、诊断和审批都必须在窄屏抽屉中可操作，且关闭面板不终止后台任务。
-- Phase 2 acceptance: 未经批准的副作用工具不执行；运行任务能在完成前取消且留下 cancelled 记录；修改源文件后诊断会话自动产生新一代结果；Node 与 Python 调试会话均可在断点暂停并完成至少一次 continue/step；所有新状态具备本地化名称、键盘焦点和错误恢复入口。
+- Phase 2 acceptance: 未经批准的副作用工具不执行；运行任务能在完成前取消且留下 cancelled 记录；修改源文件后诊断会话自动产生新一代结果；Node 与 Python 调试会话均可在断点暂停，展示局部变量和至少一层嵌套对象，单步后编辑器执行行与栈顶同步前进，切换栈帧会刷新变量，Debug Console 可在当前栈帧求值；所有新状态具备本地化名称、键盘焦点和错误恢复入口。
 
 ### Phase 3 review contract
 

@@ -42,6 +42,7 @@ interface EditorProps {
   onFormat: (path: string, content: string) => Promise<string>;
   onValidateDocument?: (path: string, content: string) => Promise<DocumentDiagnostic[]>;
   breakpoints?: number[];
+  debugExecutionLine?: number;
   onToggleBreakpoint?: (line: number) => void;
   onSelectionChange: (selection: SelectionInfo | null) => void;
   onNavigateToLocation: (
@@ -236,6 +237,7 @@ export const Editor: React.FC<EditorProps> = ({
   onFormat,
   onValidateDocument,
   breakpoints = [],
+  debugExecutionLine,
   onToggleBreakpoint,
   onSelectionChange,
   onNavigateToLocation,
@@ -253,6 +255,7 @@ export const Editor: React.FC<EditorProps> = ({
   const onToggleBreakpointRef = useRef(onToggleBreakpoint);
   const validationGenerationRef = useRef(0);
   const breakpointDecorationIdsRef = useRef<string[]>([]);
+  const debugExecutionDecorationIdsRef = useRef<string[]>([]);
   const suppressChangeRef = useRef(false);
   const highlightDecorationIdsRef = useRef<string[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
@@ -711,6 +714,32 @@ export const Editor: React.FC<EditorProps> = ({
       }))
     );
   }, [breakpoints, editorRef, path, t]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const validLine = debugExecutionLine && debugExecutionLine <= model.getLineCount()
+      ? debugExecutionLine
+      : null;
+    debugExecutionDecorationIdsRef.current = editor.deltaDecorations(
+      debugExecutionDecorationIdsRef.current,
+      validLine ? [{
+        range: new monaco.Range(validLine, 1, validLine, model.getLineMaxColumn(validLine)),
+        options: {
+          isWholeLine: true,
+          className: "editor-debug-execution-line",
+          glyphMarginClassName: "editor-debug-execution-glyph",
+          glyphMarginHoverMessage: { value: t("debug.currentExecutionLine") },
+          overviewRuler: {
+            color: "#d6a100",
+            position: monaco.editor.OverviewRulerLane.Center,
+          },
+        },
+      }] : []
+    );
+    if (validLine) editor.revealLineInCenterIfOutsideViewport(validLine);
+  }, [debugExecutionLine, editorRef, path, t]);
 
   useEffect(() => {
     const editor = editorRef.current;
