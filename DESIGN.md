@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-29
+- Last refreshed: 2026-07-30
 - Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
@@ -18,6 +18,9 @@
   - `backend/src/auth/sessionManager.ts`、`routes/auth.ts`、`frontend/src/hooks/useAuth.ts`：登录会话、允许目录与工作区切换边界
   - `backend/src/agent/mcp.ts`、`permissionService.ts`、`toolApproval.ts`、`frontend/src/components/SettingsModal.tsx`：MCP 发现、启停与对话审批边界
   - `frontend/src/App.tsx`、`components/Editor.tsx`：并排文件对比与 Monaco 滚动状态
+  - `frontend/src/editor/monacoSetup.ts`、`hooks/useEditorProblems.ts`、`backend/src/diagnostics/service.ts`：编辑器 marker、Problems 汇总与工作区诊断
+  - `frontend/src/components/DebugPanel.tsx`、`RunCenterPanel.tsx`、`backend/src/debug/service.ts`：断点、调试会话、运行输出与调用栈
+  - `backend/src/chat/worktrees.ts`、`routes/chat.ts`、`frontend/src/hooks/useAuth.ts`：Git worktree 与浏览器会话隔离边界
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
@@ -123,6 +126,17 @@
 - Compare scrolling: 并排文件对比默认启用同步滚动，并提供可见开关。两个 Monaco 编辑器按各自可滚动范围映射纵向和横向位置，避免不同文件长度导致单边提前触底；程序化镜像滚动不得形成反馈循环，关闭同步后两侧恢复独立滚动。
 - Accessibility and feedback: MCP 启停与同步滚动按钮必须暴露 pressed/disabled 语义和本地化名称；批量批准只在存在待审批项时出现，文案明确授权边界；保存、刷新、启停失败均在原设置/对话表面反馈。
 - Acceptance: 保存并测试通过的 MCP 在下一轮任一对话模式中进入模型工具列表；任一服务可启停且状态重载后保持；批准当前对话后同对话后续软审批不再逐项暂停而其他对话仍需审批；文件对比两侧可同步滚动并可随时关闭。
+
+### Editor diagnostics, debug, and isolated vibe windows — 2026-07-30
+
+- Live diagnostics: JavaScript/TypeScript 由 Monaco 的语法与语义诊断驱动，必须识别语法错误、类型问题和未知标识符；Python 文档通过防抖后的 Ruff 标准输入检查覆盖未保存内容。两类结果统一写入 Monaco markers，并由 Problems 面板汇总，旧请求结果不得覆盖较新的编辑内容。
+- Diagnostic feedback: 错误与警告使用 VS Code 类似的波浪线、overview ruler 和 Problems 条目，条目包含来源、消息、文件与行列并支持一步跳转。只读文件仍可检查；诊断失败显示为可恢复状态，不能阻断编辑或保存。
+- Breakpoint interaction: 可调试文件在行号左侧 glyph margin 点击即可增删断点，断点按文件维护并显示红色圆点；编辑器与 Debug 面板共享同一份受控断点状态，避免面板按钮、行号点击和实际调试会话发生偏差。
+- Run current file: 当前 `.js`、`.mjs`、`.cjs`、`.py` 或 `.pyw` 文件提供直接运行/调试入口；未保存内容先走既有保存与版本冲突流程，再启动对应 Node Inspector 或 debugpy 会话。断点、运行状态、继续/暂停/单步/停止、调用栈和程序输出使用同一 Debug 工作台展示。
+- Output surface: 输出区采用控制台式等宽文本与明确的 running、paused、stopped、failed 状态；运行时输出和适配器错误分层呈现，失败信息保留可操作上下文。Run/Test 继续只执行项目声明任务，其历史与实时输出视觉语义和 Debug Console 保持一致。
+- Isolated vibe windows: “新建隔离 Vibe 窗口”必须为当前 Git 工作区创建独立 worktree 和派生认证会话，再打开新的浏览器窗口。派生会话的 workspace 固定到该 worktree，不允许在该窗口切换回共享工作目录；每个窗口拥有独立 WebSocket、打开文件、终端、运行/调试和 Agent 单例。
+- Credential and lifecycle boundary: 派生 token 不进入 URL，也不覆盖主窗口的 localStorage；只通过新窗口的瞬时 `window.name` 交接并落到该窗口 sessionStorage。创建失败关闭预开窗口并显示错误；隔离窗口的分支与路径继续由 Recovery/Worktrees 表面管理，用户可审阅、合并或移除，不做隐式合并。
+- Acceptance: 输入尚未保存的错误代码即可看到行内提醒和 Problems 条目；点击 gutter 设置断点后运行当前 Node/Python 文件可暂停并在同一工作台查看调用栈与输出；同时打开两个隔离 Vibe 窗口修改同一原始文件时，修改分别落在不同 worktree/branch，主工作区和其他窗口文件均不被直接覆盖。
 
 ## Frontend redesign direction
 

@@ -22,3 +22,31 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+const sharedCompilerOptions: monaco.languages.typescript.CompilerOptions = {
+  allowJs: true,
+  allowNonTsExtensions: true,
+  checkJs: true,
+  noEmit: true,
+  target: monaco.languages.typescript.ScriptTarget.ES2020,
+  module: monaco.languages.typescript.ModuleKind.ESNext,
+  moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+  jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+};
+
+const diagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions = {
+  noSemanticValidation: false,
+  noSyntaxValidation: false,
+  noSuggestionDiagnostics: false,
+  onlyVisible: false,
+  // Monaco does not own the whole workspace module graph. Avoid presenting
+  // unresolved imports as errors while preserving syntax and unknown-name checks.
+  diagnosticCodesToIgnore: [2307],
+};
+
+monaco.languages.typescript.javascriptDefaults.setCompilerOptions(sharedCompilerOptions);
+monaco.languages.typescript.typescriptDefaults.setCompilerOptions(sharedCompilerOptions);
+monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true);

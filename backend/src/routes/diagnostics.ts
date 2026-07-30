@@ -1,7 +1,9 @@
 import { Router } from "express";
 import type { UserSession } from "../auth/sessionManager.js";
 import {
+  DocumentDiagnosticsError,
   DocumentFormatError,
+  checkPythonDocument,
   formatPythonDocument,
   getDiagnostics,
   runDiagnostics,
@@ -17,6 +19,21 @@ function workspace(req: unknown): string {
 }
 
 diagnosticsRouter.get("/", (req, res) => res.json(getDiagnostics(workspace(req))));
+diagnosticsRouter.post("/document", async (req, res) => {
+  const { path, content } = req.body || {};
+  if (typeof path !== "string" || typeof content !== "string") {
+    return res.status(400).json({ error: "path and content are required" });
+  }
+  try {
+    res.json(await checkPythonDocument(workspace(req), path, content));
+  } catch (error) {
+    if (error instanceof DocumentDiagnosticsError) {
+      const status = error.code === "RUFF_MISSING" ? 503 : error.code === "CHECK_TIMEOUT" ? 504 : error.code === "CHECK_FAILED" ? 422 : 400;
+      return res.status(status).json({ error: error.message, code: error.code });
+    }
+    res.status(500).json({ error: error instanceof Error ? error.message : "Document diagnostics failed" });
+  }
+});
 diagnosticsRouter.post("/format", async (req, res) => {
   if (!canWriteActiveWorkspace((req as any).userSession as UserSession)) {
     return res.status(403).json({ error: "Workspace is read-only" });

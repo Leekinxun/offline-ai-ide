@@ -5,6 +5,7 @@ import {
   readConversationMessages,
 } from "../chat/history.js";
 import type { UserSession } from "../auth/sessionManager.js";
+import { sessionManager } from "../auth/sessionManager.js";
 import { listChildRuns, listRunSummaries, readRunRecord } from "../chat/runHistory.js";
 import { findCheckpointForRun, restoreCheckpoint } from "../chat/checkpoints.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
@@ -143,6 +144,30 @@ chatRouter.post("/worktrees", (req, res) => {
     res.status(201).json({ worktree });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "Failed to create worktree" });
+  }
+});
+
+chatRouter.post("/vibe-window", (req, res) => {
+  const session = (req as any).userSession as UserSession;
+  if (!canWriteActiveWorkspace(session)) {
+    return res.status(403).json({ error: "Workspace is read-only" });
+  }
+  if (session.isolated) {
+    return res.status(409).json({ error: "This window is already isolated" });
+  }
+  let worktree: ReturnType<typeof createManagedWorktree> | null = null;
+  try {
+    worktree = createManagedWorktree(session.workspaceDir, {
+      name: typeof req.body?.name === "string" ? req.body.name : "vibe",
+      ...(typeof req.body?.revision === "string" ? { revision: req.body.revision } : {}),
+    });
+    const isolatedSession = sessionManager.createIsolatedSession(session.token, worktree.path);
+    res.status(201).json({ worktree, session: isolatedSession });
+  } catch (error) {
+    if (worktree) {
+      try { removeManagedWorktree(session.workspaceDir, worktree.id); } catch { /* preserve the original failure */ }
+    }
+    res.status(400).json({ error: error instanceof Error ? error.message : "Failed to create isolated Vibe window" });
   }
 });
 

@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const backendProxyUrl = process.env.BACKEND_PROXY_URL || "http://127.0.0.1:3000";
+
 function createWorkbenchChunk(id: string): string | undefined {
   if (id.includes("vite/preload-helper")) return "app-runtime";
   if (!id.includes("node_modules")) return undefined;
@@ -36,9 +38,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:3000",
+      "/api": backendProxyUrl,
       "/ws": {
-        target: "ws://localhost:3000",
+        target: backendProxyUrl.replace(/^http/, "ws"),
         ws: true,
       },
     },

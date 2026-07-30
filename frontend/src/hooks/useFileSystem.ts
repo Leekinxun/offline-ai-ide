@@ -21,6 +21,16 @@ export interface CopyEntryResult {
   type: FileNode["type"];
 }
 
+export interface DocumentDiagnostic {
+  path: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning" | "info";
+  message: string;
+  source: string;
+  code?: string;
+}
+
 function fallbackDownloadName(path: string, type: FileNode["type"]): string {
   const baseName = path.split("/").pop() || "download";
   return type === "directory" ? `${baseName}.zip` : baseName;
@@ -184,6 +194,23 @@ export function useFileSystem(token: string) {
       }
       const data = await res.json();
       return { content: String(data.content ?? ""), changed: Boolean(data.changed) };
+    },
+    [authHeaders]
+  );
+
+  const checkPythonDocument = useCallback(
+    async (path: string, content: string): Promise<DocumentDiagnostic[]> => {
+      const res = await fetch("/api/diagnostics/document", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path, content }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to check Python document");
+      }
+      const data = await res.json();
+      return Array.isArray(data.diagnostics) ? data.diagnostics : [];
     },
     [authHeaders]
   );
@@ -354,6 +381,7 @@ export function useFileSystem(token: string) {
       findDefinition,
       writeFile,
       formatPythonDocument,
+      checkPythonDocument,
       createEntry,
       copyEntry,
       deleteEntry,
@@ -371,6 +399,7 @@ export function useFileSystem(token: string) {
       findDefinition,
       writeFile,
       formatPythonDocument,
+      checkPythonDocument,
       createEntry,
       copyEntry,
       deleteEntry,

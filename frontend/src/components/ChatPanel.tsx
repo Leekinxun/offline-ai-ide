@@ -75,6 +75,8 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 interface ChatPanelProps {
+  token: string;
+  isolatedWindow: boolean;
   messages: ChatMessage[];
   currentConversationId: string | null;
   conversations: ConversationSummary[];
@@ -125,6 +127,8 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
+  token,
+  isolatedWindow,
   messages,
   currentConversationId,
   conversations,
@@ -180,6 +184,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
   const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useState(messages.length > 0);
+  const [creatingIsolatedWindow, setCreatingIsolatedWindow] = useState(false);
+  const [isolatedWindowError, setIsolatedWindowError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
@@ -265,6 +271,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return nextCollapsed;
     });
   }, []);
+
+  const handleOpenIsolatedWindow = useCallback(async () => {
+    if (isolatedWindow || creatingIsolatedWindow) return;
+    const popup = window.open("about:blank", "_blank");
+    if (!popup) {
+      setIsolatedWindowError(t("chat.popupBlocked"));
+      return;
+    }
+    setCreatingIsolatedWindow(true);
+    setIsolatedWindowError(null);
+    try {
+      popup.document.title = t("chat.creatingIsolatedWindow");
+      popup.document.body.textContent = t("chat.creatingIsolatedWindow");
+      const response = await fetch("/api/chat/vibe-window", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: "vibe" }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || typeof payload.session?.token !== "string") {
+        throw new Error(payload.error || t("chat.failedToCreateIsolatedWindow"));
+      }
+      popup.name = JSON.stringify({
+        type: "crownforge-vibe-session",
+        token: payload.session.token,
+      });
+      popup.location.replace(`${window.location.origin}/?vibe=1`);
+      popup.opener = null;
+    } catch (error) {
+      popup.close();
+      setIsolatedWindowError(error instanceof Error ? error.message : t("chat.failedToCreateIsolatedWindow"));
+    } finally {
+      setCreatingIsolatedWindow(false);
+    }
+  }, [creatingIsolatedWindow, isolatedWindow, t, token]);
 
   const handleForkConversation = useCallback(
     async (conversationId: string, upToTimestamp?: number) => {
@@ -386,7 +430,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         onToggleChanges={() => setChangesOpen((open) => !open)}
         onToggleDetails={handleToggleDetails}
         onClear={onClear}
+        onOpenIsolatedWindow={() => void handleOpenIsolatedWindow()}
+        creatingIsolatedWindow={creatingIsolatedWindow}
+        isolatedWindow={isolatedWindow}
       />
+      {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
+      {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 
       <div className="chat-details-region" hidden={detailsCollapsed}>
       <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>

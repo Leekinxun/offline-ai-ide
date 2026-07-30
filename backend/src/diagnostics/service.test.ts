@@ -4,12 +4,57 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  checkPythonDocument,
   DocumentFormatError,
   formatPythonDocument,
   getDiagnostics,
   startDiagnosticsSession,
   stopDiagnosticsSession,
 } from "./service.js";
+
+test("checks unsaved Python content through Ruff stdin", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-check-"));
+  const fakeRuff = path.join(workspace, "fake-ruff");
+  fs.writeFileSync(fakeRuff, `#!/usr/bin/env node
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const args = process.argv.slice(2);
+  if (args[0] !== "check" || args[1] !== "--output-format=json" || args[2] !== "--stdin-filename" || args[4] !== "-") process.exit(2);
+  if (input !== "print(missing_name)\\n") process.exit(3);
+  process.stdout.write(JSON.stringify([
+    { filename: args[3], location: { row: 1, column: 7 }, code: "F821", message: "Undefined name missing_name" },
+    { filename: args[3], location: { row: 2, column: 1 }, code: null, message: "invalid-syntax: Expected an expression" }
+  ]));
+  process.exitCode = 1;
+});
+`, { mode: 0o755 });
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+
+  const result = await checkPythonDocument(workspace, "sample.py", "print(missing_name)\n", fakeRuff);
+  assert.equal(result.tool, "ruff");
+  assert.deepEqual(result.diagnostics, [
+    {
+      path: "sample.py",
+      line: 1,
+      column: 7,
+      severity: "error",
+      code: "F821",
+      message: "Undefined name missing_name",
+      source: "ruff",
+    },
+    {
+      path: "sample.py",
+      line: 2,
+      column: 1,
+      severity: "error",
+      code: undefined,
+      message: "invalid-syntax: Expected an expression",
+      source: "ruff",
+    },
+  ]);
+});
 
 test("diagnostics sessions expose a persistent lifecycle", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-diagnostics-"));

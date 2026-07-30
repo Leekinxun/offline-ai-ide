@@ -1778,6 +1778,12 @@ select:focus-visible,
   background: color-mix(in srgb, var(--surface-panel-strong) 92%, var(--accent-light));
 }
 
+.sidebar-workspace-card:disabled {
+  cursor: default;
+  opacity: .78;
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
 .sidebar-workspace-icon {
   display: flex;
   align-items: center;
@@ -2323,6 +2329,22 @@ select:focus-visible,
   flex: 1;
   overflow: hidden;
   min-height: 0;
+}
+
+.editor-breakpoint-glyph {
+  position: relative;
+}
+
+.editor-breakpoint-glyph::before {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  left: 4px;
+  top: 5px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #8f1d22 70%, transparent);
 }
 
 .editor-workbench {
@@ -3150,6 +3172,23 @@ select:focus-visible,
   flex-direction: column;
   overflow-y: auto;
   border-bottom: 1px solid var(--border-light);
+}
+
+.vibe-window-banner {
+  padding: 7px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--status-success-fg);
+  background: var(--status-success-bg);
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11px;
+}
+
+.vibe-window-banner code {
+  color: inherit;
+  font-size: 10px;
+  opacity: .82;
 }
 
 .chat-details-region > :last-child {
@@ -4500,6 +4539,8 @@ select:focus-visible,
 .debug-controls { display: flex; gap: 5px; padding: 8px 12px; border-bottom: 1px solid var(--border-light); }
 .debug-controls button { display: grid; width: 30px; height: 28px; place-items: center; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-panel-strong); color: var(--text-primary); cursor: pointer; }
 .debug-output { flex: 1; min-height: 100px; margin: 10px 12px; }
+.debug-console { min-height: 0; display: flex; flex: 1; flex-direction: column; border-top: 1px solid var(--border-light); }
+.debug-console-header { min-height: 30px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-secondary); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border-light); }
 
 .chat-composer-context {
   display: flex;

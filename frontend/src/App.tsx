@@ -57,6 +57,7 @@ import {
   X,
   Link2,
   Unlink2,
+  Play,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -204,6 +205,7 @@ export default function App() {
       username={auth.user.username}
       workspaceDir={auth.user.workspaceDir}
       isAdmin={auth.user.isAdmin}
+      isolatedWindow={auth.user.isolated}
       onLogout={handleLogout}
       onChangeWorkspace={auth.changeWorkspace}
       theme={theme}
@@ -220,6 +222,7 @@ interface AuthenticatedAppProps {
   username: string;
   workspaceDir: string;
   isAdmin: boolean;
+  isolatedWindow: boolean;
   onLogout: () => void;
   onChangeWorkspace: (path: string) => Promise<boolean>;
   theme: "light" | "dark";
@@ -277,6 +280,10 @@ function isReadOnlyTeamRole(role: TeamRole | null | undefined): boolean {
   return role === "viewer";
 }
 
+function isDebuggablePath(path: string): boolean {
+  return /\.(?:js|mjs|cjs|py|pyw)$/i.test(path);
+}
+
 function buildClearedRemoteState(): Pick<
   OpenFile,
   | "remoteUpdated"
@@ -303,6 +310,7 @@ function AuthenticatedApp({
   username,
   workspaceDir,
   isAdmin,
+  isolatedWindow,
   onLogout,
   onChangeWorkspace,
   theme,
@@ -339,6 +347,8 @@ function AuthenticatedApp({
   const [problemsVisible, setProblemsVisible] = useState(false);
   const [runCenterVisible, setRunCenterVisible] = useState(false);
   const [debugVisible, setDebugVisible] = useState(false);
+  const [breakpointsByPath, setBreakpointsByPath] = useState<Record<string, number[]>>({});
+  const [debugStartRequest, setDebugStartRequest] = useState<{ id: number; path: string } | null>(null);
   const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -388,6 +398,11 @@ function AuthenticatedApp({
     debug: false,
   });
   const fs = useFileSystem(token);
+
+  useEffect(() => {
+    setBreakpointsByPath({});
+    setDebugStartRequest(null);
+  }, [workspaceDir]);
 
   // --- Toast ---
   const showToast = useCallback((msg: string) => {
@@ -1403,13 +1418,13 @@ function AuthenticatedApp({
     [fs, showToast, t]
   );
 
-  const saveFile = useCallback(async () => {
+  const saveFile = useCallback(async (): Promise<boolean> => {
     if (readOnlyWorkspace) {
       showToast(t("team.readOnlySaveBlocked"));
-      return;
+      return false;
     }
     const file = openFiles.find((f) => f.path === activeFilePath);
-    if (!file) return;
+    if (!file) return false;
     if (activeClaim && activeClaim.username !== username) {
       const confirmed = window.confirm(
         t("team.claimConflictConfirm", {
@@ -1418,7 +1433,7 @@ function AuthenticatedApp({
       );
       if (!confirmed) {
         showToast(t("team.claimConflictCancelled"));
-        return;
+        return false;
       }
     }
     try {
@@ -1442,6 +1457,7 @@ function AuthenticatedApp({
         )
       );
       showToast(t("app.fileSaved"));
+      return true;
     } catch (error) {
       const claimError = error as Error & {
         code?: string;
@@ -1485,7 +1501,7 @@ function AuthenticatedApp({
         );
         setDiffViewerPath(file.path);
         showToast(t("app.remoteConflictTitle"));
-        return;
+        return false;
       }
       if (claimError.code === "TEAM_CLAIM_CONFLICT" && claimError.claim?.username) {
         const confirmed = window.confirm(
@@ -1495,7 +1511,7 @@ function AuthenticatedApp({
         );
         if (!confirmed) {
           showToast(t("team.claimConflictCancelled"));
-          return;
+          return false;
         }
         try {
           const result = await fs.writeFile(file.path, file.content, true, file.version);
@@ -1513,13 +1529,14 @@ function AuthenticatedApp({
             )
           );
           showToast(t("app.fileSaved"));
-          return;
+          return true;
         } catch {
           showToast(t("app.failedToSaveFile"));
-          return;
+          return false;
         }
       }
       showToast(t("app.failedToSaveFile"));
+      return false;
     }
   }, [
     activeClaim,
@@ -1944,6 +1961,25 @@ function AuthenticatedApp({
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
+  const toggleBreakpoint = useCallback((path: string, line: number) => {
+    setBreakpointsByPath((previous) => {
+      const current = previous[path] || [];
+      const next = current.includes(line)
+        ? current.filter((value) => value !== line)
+        : [...current, line].sort((left, right) => left - right);
+      if (next.length === 0) {
+        const { [path]: _removed, ...rest } = previous;
+        return rest;
+      }
+      return { ...previous, [path]: next };
+    });
+  }, []);
+  const runCurrentFile = useCallback(async () => {
+    if (!activeFile || !isDebuggablePath(activeFile.path)) return;
+    if (activeFile.modified && !(await saveFile())) return;
+    toggleUtilityPanel("debug", true);
+    setDebugStartRequest((previous) => ({ id: (previous?.id || 0) + 1, path: activeFile.path }));
+  }, [activeFile, saveFile, toggleUtilityPanel]);
   const compareFile =
     compareFilePath && compareFilePath !== activeFilePath
       ? openFiles.find((file) => file.path === compareFilePath) || null
@@ -2399,6 +2435,7 @@ function AuthenticatedApp({
           onUploadEntries={handleUploadEntries}
           onRefreshTree={loadTree}
           workspaceDir={workspaceDir}
+          workspaceLocked={isolatedWindow}
           onChangeWorkspace={handleChangeWorkspace}
           token={token}
           activeTeam={team.activeTeam}
@@ -2428,6 +2465,19 @@ function AuthenticatedApp({
                 <code>{activeFile.path}</code>
               </div>
               <div className="editor-context-actions">
+                {isDebuggablePath(activeFile.path) && (
+                  <button
+                    type="button"
+                    className="editor-compare-sync"
+                    onClick={() => void runCurrentFile()}
+                    disabled={readOnlyWorkspace}
+                    title={t("debug.runCurrentFile")}
+                    aria-label={t("debug.runCurrentFile")}
+                  >
+                    <Play size={13} />
+                    <span>{t("debug.run")}</span>
+                  </button>
+                )}
                 {openFiles.length > 1 && (
                   <label className="editor-compare-picker">
                     <Columns2 size={13} aria-hidden="true" />
@@ -2579,6 +2629,9 @@ function AuthenticatedApp({
                       onChange={handleEditorChange}
                       onSave={saveFile}
                       onFormat={formatPythonDocument}
+                      onValidateDocument={fs.checkPythonDocument}
+                      breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                      onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                       onSelectionChange={handleSelectionChange}
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
@@ -2619,6 +2672,7 @@ function AuthenticatedApp({
                       onChange={() => undefined}
                       onSave={() => undefined}
                       onFormat={formatPythonDocument}
+                      onValidateDocument={fs.checkPythonDocument}
                       onSelectionChange={() => undefined}
                       onNavigateToLocation={handleNavigateToLocation}
                       onFindDefinition={handleFindDefinition}
@@ -2697,6 +2751,9 @@ function AuthenticatedApp({
                           onChange={handleEditorChange}
                           onSave={saveFile}
                           onFormat={formatPythonDocument}
+                          onValidateDocument={fs.checkPythonDocument}
+                          breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                          onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                           onSelectionChange={handleSelectionChange}
                           onNavigateToLocation={handleNavigateToLocation}
                           onFindDefinition={handleFindDefinition}
@@ -2742,6 +2799,9 @@ function AuthenticatedApp({
                   onChange={handleEditorChange}
                   onSave={saveFile}
                   onFormat={formatPythonDocument}
+                  onValidateDocument={fs.checkPythonDocument}
+                  breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
+                  onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
                   onSelectionChange={handleSelectionChange}
                   onNavigateToLocation={handleNavigateToLocation}
                   onFindDefinition={handleFindDefinition}
@@ -2988,6 +3048,9 @@ function AuthenticatedApp({
           token={token}
           activeFilePath={activeFilePath}
           cursorLine={cursorPos.line}
+          breakpointsByPath={breakpointsByPath}
+          onToggleBreakpoint={toggleBreakpoint}
+          startRequest={debugStartRequest}
           onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
             startLine: frame.line,
             startColumn: frame.column,
@@ -3003,6 +3066,8 @@ function AuthenticatedApp({
         />
 
         <ChatPanel
+          token={token}
+          isolatedWindow={isolatedWindow}
           messages={chat.messages}
           currentConversationId={chat.currentConversationId}
           conversations={chat.conversations}

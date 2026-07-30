@@ -6,6 +6,7 @@ import {
   History,
   Sparkles,
   Trash2,
+  PanelsTopLeft,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 
@@ -23,6 +24,9 @@ interface TaskHeaderProps {
   onToggleChanges: () => void;
   onToggleDetails: () => void;
   onClear: () => void;
+  onOpenIsolatedWindow: () => void;
+  creatingIsolatedWindow: boolean;
+  isolatedWindow: boolean;
 }
 
 export const TaskHeader: React.FC<TaskHeaderProps> = ({
@@ -39,6 +43,9 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   onToggleChanges,
   onToggleDetails,
   onClear,
+  onOpenIsolatedWindow,
+  creatingIsolatedWindow,
+  isolatedWindow,
 }) => {
   const { t } = useI18n();
   const statusLabel = isStreaming
@@ -101,6 +108,16 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             </button>
           </>
         )}
+        <button
+          type="button"
+          className="sidebar-action-btn"
+          title={t(isolatedWindow ? "chat.isolatedWindowActive" : "chat.openIsolatedWindow")}
+          aria-label={t(isolatedWindow ? "chat.isolatedWindowActive" : "chat.openIsolatedWindow")}
+          onClick={onOpenIsolatedWindow}
+          disabled={isStreaming || creatingIsolatedWindow || isolatedWindow}
+        >
+          <PanelsTopLeft size={14} />
+        </button>
         {hasMessages && !detailsCollapsed && (
           <button
             type="button"

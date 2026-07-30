@@ -105,6 +105,51 @@ export interface DocumentFormatResult {
   tool: "ruff";
 }
 
+export class DocumentDiagnosticsError extends Error {
+  constructor(
+    message: string,
+    readonly code: "INVALID_PATH" | "UNSUPPORTED_FILE" | "RUFF_MISSING" | "CHECK_TIMEOUT" | "CHECK_FAILED"
+  ) {
+    super(message);
+    this.name = "DocumentDiagnosticsError";
+  }
+}
+
+export async function checkPythonDocument(
+  workspaceDir: string,
+  candidatePath: string,
+  content: string,
+  executable = process.env.RUFF_EXECUTABLE || "ruff"
+): Promise<{ diagnostics: WorkspaceDiagnostic[]; tool: "ruff" }> {
+  const root = path.resolve(workspaceDir);
+  const absolute = path.resolve(root, candidatePath);
+  const relative = path.relative(root, absolute).split(path.sep).join("/");
+  if (!candidatePath.trim() || !relative || relative === "." || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    throw new DocumentDiagnosticsError("Invalid workspace file path", "INVALID_PATH");
+  }
+  if (![".py", ".pyi", ".pyw"].includes(path.extname(relative).toLowerCase())) {
+    throw new DocumentDiagnosticsError("Ruff diagnostics support Python files only", "UNSUPPORTED_FILE");
+  }
+
+  const result = await run(
+    executable,
+    ["check", "--output-format=json", "--stdin-filename", absolute, "-"],
+    root,
+    content
+  );
+  if (result.missing) {
+    throw new DocumentDiagnosticsError("Ruff is not installed", "RUFF_MISSING");
+  }
+  if (result.timedOut) {
+    throw new DocumentDiagnosticsError("Ruff diagnostics timed out", "CHECK_TIMEOUT");
+  }
+  // Ruff exits with 1 when lint findings are present. Higher codes indicate an execution failure.
+  if (result.exitCode !== 0 && result.exitCode !== 1) {
+    throw new DocumentDiagnosticsError(result.stderr.trim() || "Ruff diagnostics failed", "CHECK_FAILED");
+  }
+  return { diagnostics: parseRuff(root, result.stdout), tool: "ruff" };
+}
+
 export async function formatPythonDocument(
   workspaceDir: string,
   candidatePath: string,
@@ -161,13 +206,17 @@ function parseRuff(workspaceDir: string, output: string): WorkspaceDiagnostic[] 
     return entries.flatMap((entry): WorkspaceDiagnostic[] => {
       const file = relativePath(workspaceDir, String(entry.filename || ""));
       if (!file) return [];
+      const code = typeof entry.code === "string" ? entry.code : undefined;
+      const message = String(entry.message || "Python diagnostic");
       return [{
         path: file,
         line: Number(entry.location?.row || 1),
         column: Number(entry.location?.column || 1),
-        severity: "warning",
-        code: typeof entry.code === "string" ? entry.code : undefined,
-        message: String(entry.message || "Python diagnostic"),
+        severity: code === "F821" || code?.startsWith("E9") || code?.toLowerCase().includes("syntax") || message.toLowerCase().includes("syntax")
+          ? "error"
+          : "warning",
+        code,
+        message,
         source: "ruff",
       }];
     });

@@ -39,6 +39,7 @@ interface SidebarProps {
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
   workspaceDir: string;
+  workspaceLocked?: boolean;
   onChangeWorkspace: (path: string) => Promise<boolean>;
   token: string;
   activeTeam?: TeamDetails | null;
@@ -119,6 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUploadEntries,
   onRefreshTree,
   workspaceDir,
+  workspaceLocked = false,
   onChangeWorkspace,
   token,
   activeTeam,
@@ -495,10 +497,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const openFolderBrowser = useCallback(() => {
+    if (workspaceLocked) return;
     // Start from parent of current workspace
     const parent = workspaceDir.split("/").slice(0, -1).join("/") || "/";
     fetchDirectories(parent);
-  }, [workspaceDir, fetchDirectories]);
+  }, [workspaceDir, fetchDirectories, workspaceLocked]);
 
   const handleFolderSelect = useCallback(
     async (path: string) => {
@@ -655,8 +658,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         type="button"
         className="sidebar-workspace-card"
-        title={t("sidebar.openFolder")}
+        title={t(workspaceLocked ? "sidebar.isolatedWorkspaceLocked" : "sidebar.openFolder")}
         onClick={openFolderBrowser}
+        disabled={workspaceLocked}
       >
         <div className="sidebar-workspace-icon" aria-hidden="true">
           <FolderOpen size={16} />
@@ -666,7 +670,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <strong>{workspaceName}</strong>
           <span>{workspaceDir}</span>
         </div>
-        <ChevronRight size={14} className="sidebar-workspace-open" aria-hidden="true" />
+        {!workspaceLocked && <ChevronRight size={14} className="sidebar-workspace-open" aria-hidden="true" />}
       </button>
       <div className="sidebar-tools">
         <label className="sidebar-search">

@@ -112,3 +112,33 @@ test("persists registration requests and allows login only after admin approval"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("locks derived isolated sessions to their managed worktree", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-isolated-session-"));
+  const project = path.join(root, "project");
+  const worktree = path.join(root, ".crownforge-worktrees", "project", "vibe-1");
+  const other = path.join(root, "other");
+  const configPath = path.join(root, "users.json");
+  await mkdir(project, { recursive: true });
+  await mkdir(worktree, { recursive: true });
+  await mkdir(other, { recursive: true });
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [root],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: project }],
+  }));
+
+  try {
+    const manager = new SessionManager(configPath);
+    const parent = manager.login("alice", "secret");
+    assert.ok(parent);
+    const isolated = manager.createIsolatedSession(parent.token, worktree);
+    assert.equal(isolated.isolated, true);
+    assert.equal(isolated.workspaceDir, await realpath(worktree));
+    assert.equal(manager.changeWorkspace(isolated.token, other), null);
+    assert.equal(manager.getSession(parent.token)?.workspaceDir, await realpath(project));
+    assert.throws(() => manager.createIsolatedSession(isolated.token, worktree), /Nested isolated sessions/);
+    assert.throws(() => manager.createIsolatedSession(parent.token, other), /managed worktree/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

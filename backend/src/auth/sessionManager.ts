@@ -42,6 +42,7 @@ export interface UserSession {
   username: string;
   workspaceDir: string;
   isAdmin: boolean;
+  isolated: boolean;
   taskManager: TaskManager;
   messageBus: MessageBus;
   teammateManager: TeammateManager;
@@ -52,6 +53,7 @@ export interface SessionSummary {
   username: string;
   workspaceDir: string;
   isAdmin: boolean;
+  isolated: boolean;
 }
 
 function createSessionSingletons(workspaceDir: string) {
@@ -235,16 +237,29 @@ export class SessionManager {
   private createSession(
     username: string,
     workspaceDir: string,
-    isAdmin: boolean
+    isAdmin: boolean,
+    isolated = false
   ): SessionSummary {
     const resolvedWorkspace = path.resolve(workspaceDir);
-    if (!this.isAllowedPath(resolvedWorkspace)) {
+    if (!isolated && !this.isAllowedPath(resolvedWorkspace)) {
       throw new Error("Workspace is not within allowed roots");
     }
     fs.mkdirSync(resolvedWorkspace, { recursive: true });
-    const canonicalWorkspace = this.resolveSelectableWorkspace(resolvedWorkspace);
+    const canonicalWorkspace = isolated
+      ? (() => {
+          try {
+            return fs.statSync(resolvedWorkspace).isDirectory()
+              ? fs.realpathSync.native(resolvedWorkspace)
+              : null;
+          } catch {
+            return null;
+          }
+        })()
+      : this.resolveSelectableWorkspace(resolvedWorkspace);
     if (!canonicalWorkspace) {
-      throw new Error("Workspace is not an accessible directory within allowed roots");
+      throw new Error(isolated
+        ? "Workspace is not an accessible directory"
+        : "Workspace is not an accessible directory within allowed roots");
     }
     const token = crypto.randomUUID();
     const singletons = createSessionSingletons(canonicalWorkspace);
@@ -253,6 +268,7 @@ export class SessionManager {
       username,
       workspaceDir: canonicalWorkspace,
       isAdmin,
+      isolated,
       ...singletons,
     };
     this.sessions.set(token, session);
@@ -261,7 +277,20 @@ export class SessionManager {
       username,
       workspaceDir: canonicalWorkspace,
       isAdmin,
+      isolated,
     };
+  }
+
+  createIsolatedSession(parentToken: string, workspaceDir: string): SessionSummary {
+    const parent = this.sessions.get(parentToken);
+    if (!parent) throw new Error("Parent session not found");
+    if (parent.isolated) throw new Error("Nested isolated sessions are not supported");
+    const resolved = path.resolve(workspaceDir);
+    const managedMarker = `${path.sep}.crownforge-worktrees${path.sep}`;
+    if (!resolved.includes(managedMarker)) {
+      throw new Error("Isolated sessions require a managed worktree");
+    }
+    return this.createSession(parent.username, resolved, parent.isAdmin, true);
   }
 
   login(
@@ -484,6 +513,7 @@ export class SessionManager {
   changeWorkspace(token: string, newDir: string): { workspaceDir: string } | null {
     const session = this.sessions.get(token);
     if (!session) return null;
+    if (session.isolated) return null;
 
     const resolved = this.resolveSelectableWorkspace(newDir);
     if (!resolved) return null;

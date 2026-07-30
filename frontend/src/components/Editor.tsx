@@ -11,6 +11,7 @@ import {
 import { getEditorThemeName } from "../editor/theme";
 import { useI18n } from "../i18n";
 import { runEditorMountHandlers } from "../plugins/runtime";
+import type { DocumentDiagnostic } from "../hooks/useFileSystem";
 
 interface NavigationTarget extends FileSelectionRange {
   path: string;
@@ -39,6 +40,9 @@ interface EditorProps {
   onChange: (value: string) => void;
   onSave: () => void;
   onFormat: (path: string, content: string) => Promise<string>;
+  onValidateDocument?: (path: string, content: string) => Promise<DocumentDiagnostic[]>;
+  breakpoints?: number[];
+  onToggleBreakpoint?: (line: number) => void;
   onSelectionChange: (selection: SelectionInfo | null) => void;
   onNavigateToLocation: (
     path: string,
@@ -230,6 +234,9 @@ export const Editor: React.FC<EditorProps> = ({
   onChange,
   onSave,
   onFormat,
+  onValidateDocument,
+  breakpoints = [],
+  onToggleBreakpoint,
   onSelectionChange,
   onNavigateToLocation,
   onFindDefinition,
@@ -243,6 +250,9 @@ export const Editor: React.FC<EditorProps> = ({
   const onSaveRef = useRef(onSave);
   const onFormatRef = useRef(onFormat);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint);
+  const validationGenerationRef = useRef(0);
+  const breakpointDecorationIdsRef = useRef<string[]>([]);
   const suppressChangeRef = useRef(false);
   const highlightDecorationIdsRef = useRef<string[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
@@ -253,6 +263,7 @@ export const Editor: React.FC<EditorProps> = ({
   onSaveRef.current = onSave;
   onFormatRef.current = onFormat;
   onSelectionChangeRef.current = onSelectionChange;
+  onToggleBreakpointRef.current = onToggleBreakpoint;
 
   const saveCurrentViewState = useCallback(
     (editor: monaco.editor.IStandaloneCodeEditor) => {
@@ -562,6 +573,17 @@ export const Editor: React.FC<EditorProps> = ({
       });
 
       editor.onMouseDown((event) => {
+        if (
+          onToggleBreakpointRef.current &&
+          event.target.position &&
+          (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+            event.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)
+        ) {
+          event.event.preventDefault();
+          onToggleBreakpointRef.current(event.target.position.lineNumber);
+          return;
+        }
+
         const browserEvent = event.event.browserEvent;
         if (
           !(browserEvent.ctrlKey || browserEvent.metaKey) ||
@@ -672,6 +694,69 @@ export const Editor: React.FC<EditorProps> = ({
 
   useEffect(() => {
     const editor = editorRef.current;
+    if (!editor) return;
+    breakpointDecorationIdsRef.current = editor.deltaDecorations(
+      breakpointDecorationIdsRef.current,
+      breakpoints.filter((line) => line <= editor.getModel()!.getLineCount()).map((line) => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: false,
+          glyphMarginClassName: "editor-breakpoint-glyph",
+          glyphMarginHoverMessage: { value: t("debug.toggleBreakpoint", { line }) },
+          overviewRuler: {
+            color: "#e5484d",
+            position: monaco.editor.OverviewRulerLane.Left,
+          },
+        },
+      }))
+    );
+  }, [breakpoints, editorRef, path, t]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const owner = "crownforge-python";
+    if (language !== "python" || !onValidateDocument) {
+      monaco.editor.setModelMarkers(model, owner, []);
+      return;
+    }
+
+    const generation = ++validationGenerationRef.current;
+    const timer = window.setTimeout(() => {
+      void onValidateDocument(path, content)
+        .then((diagnostics) => {
+          if (generation !== validationGenerationRef.current || editor.getModel() !== model) return;
+          monaco.editor.setModelMarkers(model, owner, diagnostics.map((diagnostic) => ({
+            startLineNumber: Math.max(1, diagnostic.line),
+            startColumn: Math.max(1, diagnostic.column),
+            endLineNumber: Math.max(1, diagnostic.line),
+            endColumn: Math.max(2, diagnostic.column + 1),
+            severity: diagnostic.severity === "error"
+              ? monaco.MarkerSeverity.Error
+              : diagnostic.severity === "info"
+                ? monaco.MarkerSeverity.Info
+                : monaco.MarkerSeverity.Warning,
+            message: diagnostic.message,
+            source: diagnostic.source,
+            code: diagnostic.code,
+          })));
+        })
+        .catch(() => {
+          if (generation === validationGenerationRef.current && editor.getModel() === model) {
+            monaco.editor.setModelMarkers(model, owner, []);
+          }
+        });
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timer);
+      validationGenerationRef.current += 1;
+    };
+  }, [content, editorRef, language, onValidateDocument, path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
     if (!editor || !navigationTarget || navigationTarget.path !== path) return;
 
     const selection = new monaco.Selection(
@@ -714,6 +799,7 @@ export const Editor: React.FC<EditorProps> = ({
           fontLigatures: true,
           lineHeight: 20,
           minimap: { enabled: false },
+          glyphMargin: Boolean(onToggleBreakpoint),
           scrollBeyondLastLine: false,
           renderLineHighlight: "line",
           cursorBlinking: "smooth",
