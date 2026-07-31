@@ -489,6 +489,7 @@ The AI assistant can:
 - **Read / write / edit files** in your workspace
 - **Run shell commands** via the integrated terminal
 - **Stop active runs** — the Stop control aborts the current LLM/tool loop and reports the run as user-stopped
+- **Honor provider termination reasons** — an Agent run completes only after an explicit `finish_reason: "stop"`; `tool_calls` continues execution, while missing, null, truncated, or contradictory finish reasons fail the run instead of being reported as completed
 - **Accept real-time steering** — follow-up user messages and the Correct control can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context
 - **Manage tasks** — create, update, and track a task board
 - **Spawn teammates** — create autonomous sub-agents with specific roles

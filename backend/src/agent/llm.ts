@@ -177,8 +177,7 @@ export async function readChatCompletionResponse(
           content: content || (reasoning ? `<think>${reasoning}</think>` : null),
           ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
         },
-        finish_reason:
-          finishReason || (assembledToolCalls.length > 0 ? "tool_calls" : "stop"),
+        finish_reason: finishReason,
       },
     ],
     ...(usage ? { usage } : {}),

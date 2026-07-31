@@ -17,6 +17,7 @@ import {
   resolveAgentProfile,
 } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
+import { requireModelTurnAction } from "./finishReason.js";
 import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 
@@ -323,13 +324,28 @@ export async function runSubagent(
     );
 
     const msg = choice.message;
+    let turnAction: ReturnType<typeof requireModelTurnAction>;
+    try {
+      turnAction = requireModelTurnAction(choice);
+    } catch (error) {
+      await recorder?.event({
+        kind: "error",
+        label: "Subagent response did not finish cleanly",
+        isError: true,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      return finish(
+        "failed",
+        `(subagent: ${error instanceof Error ? error.message : String(error)})`
+      );
+    }
     messages.push({
       role: "assistant",
       content: msg.content,
       tool_calls: msg.tool_calls,
     });
 
-    if (!msg.tool_calls?.length) {
+    if (turnAction === "stop") {
       completedNaturally = true;
       break;
     }

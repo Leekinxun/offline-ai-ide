@@ -33,7 +33,7 @@ export interface OpenAIChoice {
     content: string | null;
     tool_calls?: OpenAIToolCall[];
   };
-  finish_reason: "stop" | "tool_calls" | "length" | null;
+  finish_reason?: "stop" | "tool_calls" | "length" | null;
 }
 
 export interface OpenAIResponse {

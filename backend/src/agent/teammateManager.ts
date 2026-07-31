@@ -15,6 +15,7 @@ import { runWorkspaceCommand } from "./shell.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { estimateUsageCostUsd, resolveAgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
+import { requireModelTurnAction } from "./finishReason.js";
 import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 
@@ -275,9 +276,18 @@ export class TeammateManager {
             }])
       );
 
+      let turnAction: ReturnType<typeof requireModelTurnAction>;
+      try {
+        turnAction = requireModelTurnAction(choice);
+      } catch {
+        this.setStatus(name, "shutdown");
+        this.activeLoops.delete(name);
+        return;
+      }
+
       messages.push({ role: "assistant", content: choice.message.content, tool_calls: choice.message.tool_calls });
 
-      if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) break;
+      if (turnAction === "stop") break;
 
       let idleRequested = false;
       for (const tc of choice.message.tool_calls as OpenAIToolCall[]) {

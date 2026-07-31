@@ -28,6 +28,7 @@ test("assembles split SSE text and usage while emitting real deltas", async () =
   });
   assert.deepEqual(deltas, ["hel", "lo"]);
   assert.equal(result.choices[0].message.content, "hello");
+  assert.equal(result.choices[0].finish_reason, "stop");
   assert.equal(result.usage?.total_tokens, 5);
 });
 
@@ -43,6 +44,27 @@ test("assembles fragmented indexed tool calls", async () => {
     type: "function",
     function: { name: "write_file", arguments: '{"path":"a.ts"}' },
   });
+  assert.equal(result.choices[0].finish_reason, "tool_calls");
+});
+
+test("does not invent a terminal finish reason when the stream omits it", async () => {
+  const response = sseResponse([
+    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+    "data: [DONE]\n\n",
+  ]);
+  const result = await readChatCompletionResponse(response);
+  assert.equal(result.choices[0].message.content, "partial");
+  assert.equal(result.choices[0].finish_reason, null);
+});
+
+test("does not infer tool_calls from fragments without a terminal finish reason", async () => {
+  const response = sseResponse([
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"README.md\\"}"}}]}}]}\n\n',
+    "data: [DONE]\n\n",
+  ]);
+  const result = await readChatCompletionResponse(response);
+  assert.equal(result.choices[0].message.tool_calls?.length, 1);
+  assert.equal(result.choices[0].finish_reason, null);
 });
 
 test("falls back to a regular JSON completion response", async () => {

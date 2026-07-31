@@ -31,6 +31,7 @@ import { createPermissionAuthorizer } from "./permissionService.js";
 import { ThinkStreamSplitter } from "./thinkStream.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { ToolLoopGuard } from "./toolLoopGuard.js";
+import { requireModelTurnAction } from "./finishReason.js";
 import {
   agentProfileAllowsTool,
   estimateUsageCostUsd,
@@ -496,55 +497,14 @@ export async function runAgentLoop(
           await compactContextIfNeeded(true);
           continue;
         }
-        await recordRunEvent(
-          {
-            kind: "error",
-            label: "Model request failed",
-            requestId: currentRequestId,
-            isError: true,
-            durationMs: Date.now() - modelCallStartedAt,
-            detail: e?.message || String(e),
-          },
-          {
-            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
-          }
-        );
-        emit({
-          type: "error",
-          requestId: currentRequestId,
-          content: `LLM request failed: ${e.message}`,
-        });
-        await flushAssistantTurn(
-          currentAssistantMessage,
-          currentRequestId,
-          onAssistantTurnComplete
-        );
-        return persistedAssistantMessages;
+        throw e;
       }
 
       const data = processed.response;
 
       const choice = data.choices?.[0];
       if (!choice) {
-        await recordRunEvent(
-          {
-            kind: "error",
-            label: "Model returned no choice",
-            requestId: currentRequestId,
-            isError: true,
-            durationMs: Date.now() - modelCallStartedAt,
-          },
-          {
-            modelErrors: (currentMetrics?.modelErrors || 0) + 1,
-          }
-        );
-        emit({ type: "error", requestId: currentRequestId, content: "No response from LLM" });
-        await flushAssistantTurn(
-          currentAssistantMessage,
-          currentRequestId,
-          onAssistantTurnComplete
-        );
-        return persistedAssistantMessages;
+        throw new Error("Model returned no choice");
       }
 
       const usage = data.usage || {};
@@ -575,7 +535,7 @@ export async function runAgentLoop(
           label: "Model response received",
           requestId: currentRequestId,
           durationMs: Date.now() - modelCallStartedAt,
-          detail: `finish_reason=${choice.finish_reason || "unknown"}; provider_attempts=${processed.attempts}`,
+          detail: `finish_reason=${choice.finish_reason ?? "missing"}; provider_attempts=${processed.attempts}`,
         },
         {
           promptTokens: (currentMetrics?.promptTokens || 0) + promptTokens,
@@ -587,6 +547,7 @@ export async function runAgentLoop(
       );
 
       const assistantMsg = choice.message;
+      const turnAction = requireModelTurnAction(choice);
 
       // Push assistant message to history
       messages.push({
@@ -596,7 +557,8 @@ export async function runAgentLoop(
       });
 
       // Check for tool calls
-      if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+      if (turnAction === "tool_calls") {
+        const toolCalls = assistantMsg.tool_calls!;
         // Send any reasoning text (parse <think> tags)
         if (assistantMsg.content && !streamedContent && !streamedReasoning) {
           const { thinking, rest } = extractThinkTags(assistantMsg.content);
@@ -615,9 +577,9 @@ export async function runAgentLoop(
         }
 
         // Execute each tool call
-        const executedToolCalls: typeof assistantMsg.tool_calls = [];
+        const executedToolCalls: typeof toolCalls = [];
         let compressRequested = false;
-        for (const toolCall of assistantMsg.tool_calls) {
+        for (const toolCall of toolCalls) {
           if (control?.isStopped()) {
             await stopCurrentTurn(currentAssistantMessage);
             return persistedAssistantMessages;
@@ -910,7 +872,7 @@ export async function runAgentLoop(
         continue;
       }
 
-      // No tool calls — this is the final text response
+      // Only an explicit finish_reason=stop reaches the final response path.
       const rawText = assistantMsg.content || "";
       const { thinking, rest: finalText } = extractThinkTags(rawText);
 
@@ -949,31 +911,7 @@ export async function runAgentLoop(
       continue outer;
     }
 
-    // Max iterations
-    const iterationMetrics = control?.runRecorder?.snapshot().metrics;
-    await recordRunEvent(
-      {
-        kind: "error",
-        label: "Agent iteration limit reached",
-        requestId: currentRequestId,
-        isError: true,
-        detail: `Maximum iterations: ${agentProfile.budget.maxSteps}`,
-      },
-      {
-        modelErrors: (iterationMetrics?.modelErrors || 0) + 1,
-      }
-    );
-    emit({
-      type: "error",
-      requestId: currentRequestId,
-      content: "Agent loop exceeded maximum iterations",
-    });
-    await flushAssistantTurn(
-      currentAssistantMessage,
-      currentRequestId,
-      onAssistantTurnComplete
-    );
-    return persistedAssistantMessages;
+    throw new Error(`Agent loop exceeded maximum iterations (${agentProfile.budget.maxSteps})`);
   }
 
   return persistedAssistantMessages;
