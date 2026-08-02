@@ -75,3 +75,23 @@ test("approves current and future requests only for one conversation", async () 
   session.resolve(approvalIds[1], "deny");
   assert.equal(await other, "deny");
 });
+
+test("execution plans always require an explicit approval decision", async () => {
+  const approvalIds: string[] = [];
+  const session = new ToolApprovalSession((request) => approvalIds.push(request.approvalId), 1000);
+  session.allowConversation("conversation-a");
+  const pending = session.request({
+    conversationId: "conversation-a",
+    requestId: "req-plan",
+    toolCallId: "call-plan",
+    name: "submit_plan",
+    input: { goal: "Implement capability boundaries" },
+    risk: "medium",
+    reason: "approve plan",
+    scope: "Implement capability boundaries",
+    canAllowSession: false,
+  });
+  assert.equal(approvalIds.length, 1);
+  session.resolve(approvalIds[0], "allow_once");
+  assert.equal(await pending, "allow_once");
+});

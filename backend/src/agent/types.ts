@@ -244,6 +244,10 @@ export interface ToolContext {
     parentToolCallId: string;
   };
   agentProfileId?: import("./agentProfiles.js").AgentProfileId;
+  mode?: AgentMode;
+  conversationId?: string;
+  runId?: string;
+  executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;
 }
 
 // --- Todo types ---

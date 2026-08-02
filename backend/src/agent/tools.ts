@@ -17,6 +17,7 @@ import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import { runWorkspaceCommand } from "./shell.js";
+import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 
 // ---- Tool handler type ----
 
@@ -171,6 +172,23 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   skill_load: async (args, ctx) =>
     loadWorkspaceSkill(ctx.workspaceDir, args.name),
 
+  submit_plan: async (args, ctx) => {
+    if (ctx.mode !== "plan" || !ctx.conversationId || !ctx.runId) {
+      return "Error: submit_plan is only available during an auditable Plan run";
+    }
+    const plan = createApprovedExecutionPlan(ctx.workspaceDir, args, {
+      conversationId: ctx.conversationId,
+      planRunId: ctx.runId,
+    });
+    return JSON.stringify({
+      approved: true,
+      planId: plan.id,
+      goal: plan.goal,
+      files: plan.files,
+      verificationCommands: plan.verificationCommands,
+    }, null, 2);
+  },
+
   bash: async (args, ctx) =>
     runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal),
 
@@ -264,6 +282,40 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 // ---- Tool definitions (OpenAI function-calling format) ----
 
 export const CORE_TOOLS: OpenAIToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "submit_plan",
+      description: "Submit the final structured implementation plan for explicit user approval. Plan mode must call this before finishing.",
+      parameters: {
+        type: "object",
+        properties: {
+          goal: { type: "string", description: "The exact outcome the implementation must achieve" },
+          files: {
+            type: "array",
+            items: { type: "string" },
+            description: "Complete relative file or directory scope that Code mode may modify",
+          },
+          steps: { type: "array", items: { type: "string" } },
+          risks: { type: "array", items: { type: "string" } },
+          verification_commands: {
+            type: "array",
+            items: { type: "string" },
+            description: "Exact shell commands Code mode may execute for verification",
+          },
+          acceptance_criteria: { type: "array", items: { type: "string" } },
+        },
+        required: [
+          "goal",
+          "files",
+          "steps",
+          "risks",
+          "verification_commands",
+          "acceptance_criteria",
+        ],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -590,14 +642,31 @@ export const MCP_CONTROL_TOOLS: OpenAIToolDef[] = [
 
 const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "TodoWrite"]);
 
-export function getAllTools(options?: { readOnly?: boolean; mode?: "ask" | "code" | "review" | "plan" }): OpenAIToolDef[] {
+export function getAllTools(options?: {
+  readOnly?: boolean;
+  mode?: "ask" | "code" | "review" | "plan";
+  constrainedCode?: boolean;
+}): OpenAIToolDef[] {
   const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
+  if (options?.mode === "code" && options.constrainedCode) {
+    const codeContractTools = new Set([
+      "compress",
+      "memory_read",
+      "skill_load",
+      "read_file",
+      "TodoWrite",
+      "bash",
+      "write_file",
+      "edit_file",
+    ]);
+    return allTools.filter((tool) => codeContractTools.has(tool.function.name));
+  }
   if (!options?.readOnly && options?.mode !== "ask" && options?.mode !== "review" && options?.mode !== "plan") {
     return allTools;
   }
   return allTools.filter((tool) =>
     READ_ONLY_TOOL_NAMES.has(tool.function.name) ||
-    (options?.mode === "review" && tool.function.name === "bash") ||
-    (options?.mode === "plan" && ["task_create", "task_get", "task_list"].includes(tool.function.name))
+    ((options?.mode === "review" || options?.mode === "plan") && tool.function.name === "bash") ||
+    (options?.mode === "plan" && tool.function.name === "submit_plan")
   );
 }

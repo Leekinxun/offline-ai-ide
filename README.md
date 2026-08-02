@@ -486,8 +486,10 @@ ai-ide/
 
 The AI assistant can:
 
-- **Read / write / edit files** in your workspace
-- **Run shell commands** via the integrated terminal
+- **Enforce real mode boundaries** — Ask, Plan, Code, and Review are backend capability contracts, not prompt-only preferences
+- **Require an approved Plan before Code** — Plan submits a structured, auditable handoff; Code can modify only its declared file scope and run its declared verification commands
+- **Read / write / edit files** within the active approved Code plan
+- **Run approved verification commands** via the integrated terminal
 - **Stop active runs** — the Stop control aborts the current LLM/tool loop and reports the run as user-stopped
 - **Honor provider termination reasons** — an Agent run completes only after an explicit `finish_reason: "stop"`; `tool_calls` continues execution, while missing, null, truncated, or contradictory finish reasons fail the run instead of being reported as completed
 - **Accept real-time steering** — follow-up user messages and the Correct control can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context
@@ -510,6 +512,7 @@ The AI assistant can:
 | `memory_read` | Read user or workspace persistent memory |
 | `memory_write` | Replace user or workspace persistent memory with durable Markdown |
 | `skill_load` | Load a workspace `SKILL.md` workflow by name |
+| `submit_plan` | Submit the structured Plan → Code handoff for explicit user approval |
 | `search_lazy_mcp_tools` | Search hidden tools on lazy MCP endpoints |
 | `activate_lazy_mcp_tools` | Activate selected lazy MCP tools for the next reasoning round |
 | `TodoWrite` | Update the in-chat task checklist |

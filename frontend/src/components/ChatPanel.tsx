@@ -443,7 +443,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           <span>{t("chat.modeLabel")}</span>
           <small>{t(`chat.mode.${agentMode}.hint`)}</small>
         </div>
-        {(["ask", "code", "review", "plan"] as AgentMode[]).map((mode) => (
+        {(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => (
           <button
             type="button"
             key={mode}
@@ -741,7 +741,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {pendingApprovals.length > 0 && (
         <div className="tool-approval-stack">
-          {pendingApprovals[0].conversationId && (
+          {pendingApprovals[0].conversationId && pendingApprovals[0].name !== "submit_plan" && (
             <div className="tool-approval-bulk">
               <span>{t("chat.approval.pendingCount", { count: pendingApprovals.length })}</span>
               <button

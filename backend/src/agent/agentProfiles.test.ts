@@ -32,11 +32,11 @@ test("keeps child defaults narrower than the primary code agent", () => {
   assert.equal(agentProfileAllowsTool(explore, "write_file"), false);
 });
 
-test("exposes MCP discovery tools to each primary conversation mode", () => {
-  for (const mode of ["ask", "code", "review", "plan"] as const) {
-    const profile = resolveAgentProfile(mode);
-    assert.equal(agentProfileAllowsTool(profile, "mcp_weather__forecast"), true);
-    assert.equal(agentProfileAllowsTool(profile, "search_lazy_mcp_tools"), true);
-    assert.equal(agentProfileAllowsTool(profile, "activate_lazy_mcp_tools"), true);
-  }
+test("keeps read-only modes narrower than the code profile", () => {
+  const code = resolveAgentProfile("code");
+  const plan = resolveAgentProfile("plan");
+  assert.equal(agentProfileAllowsTool(code, "mcp_weather__forecast"), true);
+  assert.equal(agentProfileAllowsTool(plan, "mcp_weather__forecast"), false);
+  assert.equal(agentProfileAllowsTool(plan, "submit_plan"), true);
+  assert.equal(agentProfileAllowsTool(plan, "bash"), true);
 });

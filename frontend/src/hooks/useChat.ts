@@ -68,7 +68,7 @@ export function useChat(
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [agentMode, setAgentMode] = useState<AgentMode>("code");
+  const [agentMode, setAgentMode] = useState<AgentMode>("plan");
   const [currentRunSummary, setCurrentRunSummary] = useState<ConversationRunSummary | null>(null);
   const [contextState, setContextState] = useState<ContextState>({
     estimatedTokens: 0,
@@ -427,7 +427,7 @@ export function useChat(
     setCurrentConversationId(null);
     setHistoryError(null);
     setActiveRequestIds([]);
-    setAgentMode("code");
+    setAgentMode("plan");
     setCurrentRunSummary(null);
     setContextState({
       estimatedTokens: 0,

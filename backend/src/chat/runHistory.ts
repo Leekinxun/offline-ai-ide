@@ -66,6 +66,7 @@ export interface AgentRunRecord {
   parentToolCallId?: string;
   parentRequestId?: string;
   agentName?: string;
+  executionPlanId?: string;
   metrics: AgentRunMetrics;
   summary?: ConversationRunSummary;
   events: AgentRunEvent[];
@@ -85,6 +86,7 @@ export interface AgentRunSummary {
   parentToolCallId?: string;
   parentRequestId?: string;
   agentName?: string;
+  executionPlanId?: string;
   metrics: AgentRunMetrics;
   eventCount: number;
   summary?: ConversationRunSummary;
@@ -234,6 +236,9 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     ...(typeof value.parentToolCallId === "string" && value.parentToolCallId ? { parentToolCallId: value.parentToolCallId } : {}),
     ...(typeof value.parentRequestId === "string" && value.parentRequestId ? { parentRequestId: value.parentRequestId } : {}),
     ...(typeof value.agentName === "string" && value.agentName ? { agentName: value.agentName.slice(0, 160) } : {}),
+    ...(typeof value.executionPlanId === "string" && value.executionPlanId
+      ? { executionPlanId: value.executionPlanId.slice(0, 160) }
+      : {}),
     metrics: normalizeMetrics(value.metrics),
     ...(summary ? { summary } : {}),
     events: events.slice(-MAX_STORED_EVENTS),
@@ -316,7 +321,8 @@ export class AgentRunRecorder {
     conversationId: string,
     mode: AgentMode,
     resumedFromRunId?: string,
-    lineage?: AgentRunLineage
+    lineage?: AgentRunLineage,
+    executionPlanId?: string
   ) {
     const now = Date.now();
     this.record = {
@@ -331,6 +337,7 @@ export class AgentRunRecorder {
       ...(lineage?.parentToolCallId ? { parentToolCallId: lineage.parentToolCallId } : {}),
       ...(lineage?.parentRequestId ? { parentRequestId: lineage.parentRequestId } : {}),
       ...(lineage?.agentName ? { agentName: lineage.agentName.slice(0, 160) } : {}),
+      ...(executionPlanId ? { executionPlanId: executionPlanId.slice(0, 160) } : {}),
       metrics: clone(EMPTY_RUN_METRICS),
       events: [],
       toolExecutions: [],
@@ -512,6 +519,7 @@ export function listRunSummaries(
     ...(record.parentToolCallId ? { parentToolCallId: record.parentToolCallId } : {}),
     ...(record.parentRequestId ? { parentRequestId: record.parentRequestId } : {}),
     ...(record.agentName ? { agentName: record.agentName } : {}),
+    ...(record.executionPlanId ? { executionPlanId: record.executionPlanId } : {}),
     metrics: record.metrics,
     eventCount: record.events.length,
     ...(record.summary ? { summary: record.summary } : {}),

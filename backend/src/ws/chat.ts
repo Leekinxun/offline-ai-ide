@@ -24,6 +24,12 @@ import { createCheckpoint } from "../chat/checkpoints.js";
 import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
 import { parseReviewFindings } from "../chat/reviewFindings.js";
 import { readGitStatus } from "../files/gitStatus.js";
+import {
+  findLatestApprovedExecutionPlan,
+  readExecutionPlan,
+  updateExecutionPlanStatus,
+  type ExecutionPlan,
+} from "../chat/executionPlans.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -124,6 +130,20 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         }
 
         const conversationId = resumableRun.conversationId;
+        let executionPlan: ExecutionPlan | undefined;
+        if (resumableRun.executionPlanId) {
+          try {
+            executionPlan = readExecutionPlan(
+              session.workspaceDir,
+              resumableRun.executionPlanId
+            );
+          } catch {
+            executionPlan = undefined;
+          }
+        }
+        const resumeMode = resumableRun.mode === "code" && !executionPlan
+          ? "plan"
+          : resumableRun.mode;
         const requestId =
           typeof data.requestId === "string" && data.requestId.trim()
             ? data.requestId.trim()
@@ -133,12 +153,14 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           session.workspaceDir,
           runId,
           conversationId,
-          resumableRun.mode,
-          resumableRun.runId
+          resumeMode,
+          resumableRun.runId,
+          undefined,
+          executionPlan?.id
         );
         await recorder.start();
         await updateConversationState(session.workspaceDir, conversationId, {
-          mode: resumableRun.mode,
+          mode: resumeMode,
           status: "running",
           lastRunId: runId,
         });
@@ -151,14 +173,14 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         wsSend(ws, {
           type: "conversation_state",
           conversationId,
-          mode: resumableRun.mode,
+          mode: resumeMode,
           status: "running",
         });
         wsSend(ws, {
           type: "run_state",
           conversationId,
           runId,
-          mode: resumableRun.mode,
+          mode: resumeMode,
           status: "running",
           metrics: recorder.snapshot().metrics,
           event: recorder.snapshot().events.at(-1),
@@ -172,7 +194,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
             requestId,
             message: RESUME_PROMPT,
             conversationId,
-            mode: resumableRun.mode,
+            mode: resumeMode,
+            executionPlan,
           },
           steeringQueue,
           controlState,
@@ -193,7 +216,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         typeof data.conversationId === "string" ? data.conversationId.trim() : "";
       const requestedRequestId =
         typeof data.requestId === "string" ? data.requestId.trim() : "";
-      const mode = normalizeAgentMode(data.mode);
+      let mode = normalizeAgentMode(data.mode);
 
       if (!userMessage.trim()) {
         wsSend(ws, { type: "error", content: "Empty message" });
@@ -211,6 +234,17 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
       } else {
         conversationId = createConversationId();
         created = true;
+      }
+
+      let executionPlan: ExecutionPlan | undefined;
+      if (mode === "code") {
+        executionPlan = findLatestApprovedExecutionPlan(
+          session.workspaceDir,
+          conversationId
+        ) || undefined;
+        if (!executionPlan) {
+          mode = "plan";
+        }
       }
 
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -253,6 +287,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         context,
         conversationId,
         mode,
+        executionPlan,
       };
 
       if (activeRun) {
@@ -273,7 +308,10 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         session.workspaceDir,
         runId,
         conversationId,
-        mode
+        mode,
+        undefined,
+        undefined,
+        executionPlan?.id
       );
       await recorder.start();
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -316,6 +354,7 @@ interface PendingUserMessage {
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId: string;
   mode: AgentMode;
+  executionPlan?: ExecutionPlan;
 }
 
 async function processConversationQueue(
@@ -332,6 +371,15 @@ async function processConversationQueue(
   let assistantMessages: PersistedChatMessage[];
   try {
     if (initialTurn.mode === "code") {
+      if (!initialTurn.executionPlan) {
+        throw new Error("Code mode requires an approved execution plan");
+      }
+      updateExecutionPlanStatus(
+        session.workspaceDir,
+        initialTurn.executionPlan.id,
+        "in_progress",
+        recorder.runId
+      );
       const checkpoint = createCheckpoint(session.workspaceDir, {
         label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
         conversationId: initialTurn.conversationId,
@@ -379,9 +427,18 @@ async function processConversationQueue(
         ...input,
         conversationId: activeConversationId,
       }),
+      executionPlan: initialTurn.executionPlan,
     }
     );
   } catch (error) {
+    if (initialTurn.executionPlan) {
+      updateExecutionPlanStatus(
+        session.workspaceDir,
+        initialTurn.executionPlan.id,
+        "approved",
+        recorder.runId
+      );
+    }
     const currentMetrics = recorder.snapshot().metrics;
     await recorder.event(
       {
@@ -423,14 +480,45 @@ async function processConversationQueue(
   }
 
   const summary = summarizeAssistantMessages(assistantMessages, initialTurn.mode, session.workspaceDir);
+  const requiresReplan = assistantMessages.some((message) =>
+    (message.toolCalls || []).some((tool) =>
+      tool.isError && tool.result?.includes("Execution plan scope violation")
+    )
+  );
   const finalStatus = controlState.stopped
     ? "stopped"
     : summary.errorCount > 0 || ws.readyState !== WebSocket.OPEN
       ? "failed"
       : "completed";
   const finishedRecord = await recorder.finish(finalStatus, {}, summary);
+  let finalMode = initialTurn.mode;
+  if (initialTurn.executionPlan) {
+    if (requiresReplan) {
+      updateExecutionPlanStatus(
+        session.workspaceDir,
+        initialTurn.executionPlan.id,
+        "needs_revision",
+        recorder.runId
+      );
+      finalMode = "plan";
+    } else if (finalStatus === "completed") {
+      updateExecutionPlanStatus(
+        session.workspaceDir,
+        initialTurn.executionPlan.id,
+        "completed",
+        recorder.runId
+      );
+    } else {
+      updateExecutionPlanStatus(
+        session.workspaceDir,
+        initialTurn.executionPlan.id,
+        "approved",
+        recorder.runId
+      );
+    }
+  }
   await updateConversationState(session.workspaceDir, activeConversationId, {
-    mode: initialTurn.mode,
+    mode: finalMode,
     status: finalStatus,
     summary,
     lastRunId: recorder.runId,
@@ -439,7 +527,7 @@ async function processConversationQueue(
     type: "run_state",
     conversationId: activeConversationId,
     runId: recorder.runId,
-    mode: initialTurn.mode,
+    mode: finalMode,
     status: finalStatus,
     metrics: finishedRecord.metrics,
     event: finishedRecord.events.at(-1),
@@ -455,7 +543,7 @@ async function processConversationQueue(
   wsSend(ws, {
     type: "conversation_state",
     conversationId: activeConversationId,
-    mode: initialTurn.mode,
+    mode: finalMode,
     status: finalStatus,
   });
 
@@ -471,7 +559,10 @@ async function processConversationQueue(
       session.workspaceDir,
       nextRunId,
       nextTurn.conversationId,
-      nextTurn.mode
+      nextTurn.mode,
+      undefined,
+      undefined,
+      nextTurn.executionPlan?.id
     );
     await nextRecorder.start();
     await updateConversationState(session.workspaceDir, nextTurn.conversationId, {

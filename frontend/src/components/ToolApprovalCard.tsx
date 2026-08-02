@@ -10,6 +10,7 @@ interface ToolApprovalCardProps {
 
 export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ request, onRespond }) => {
   const { t } = useI18n();
+  const isPlanHandoff = request.name === "submit_plan";
   const inputPreview = useMemo(() => {
     const json = JSON.stringify(request.input, null, 2);
     return json.length > 1200 ? `${json.slice(0, 1200)}\n…` : json;
@@ -20,7 +21,7 @@ export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ request, onR
       <div className="tool-approval-heading">
         <span className="tool-approval-icon"><ShieldAlert size={16} /></span>
         <div>
-          <strong>{t("chat.approval.title")}</strong>
+          <strong>{t(isPlanHandoff ? "chat.approval.planTitle" : "chat.approval.title")}</strong>
           <span>{t(`chat.approval.risk.${request.risk}`)} · <code>{request.name}</code></span>
         </div>
       </div>
@@ -35,7 +36,7 @@ export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ request, onR
       </details>
       <div className="tool-approval-actions">
         <button type="button" className="tool-approval-deny" onClick={() => onRespond(request.approvalId, "deny")}>
-          {t("chat.approval.deny")}
+          {t(isPlanHandoff ? "chat.approval.rejectPlan" : "chat.approval.deny")}
         </button>
         {request.canAllowSession && (
           <button type="button" onClick={() => onRespond(request.approvalId, "allow_session")}>
@@ -43,7 +44,7 @@ export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ request, onR
           </button>
         )}
         <button type="button" className="tool-approval-allow" onClick={() => onRespond(request.approvalId, "allow_once")} autoFocus>
-          {t("chat.approval.allowOnce")}
+          {t(isPlanHandoff ? "chat.approval.approvePlan" : "chat.approval.allowOnce")}
         </button>
       </div>
     </section>

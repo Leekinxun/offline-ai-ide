@@ -31,6 +31,15 @@ export function classifyToolApproval(
   name: string,
   input: Record<string, unknown>
 ): ToolApprovalRequirement {
+  if (name === "submit_plan") {
+    return {
+      kind: "approval",
+      risk: "medium",
+      reason: "Approve this Plan artifact as the capability contract for the next Code run",
+      scope: typeof input.goal === "string" ? input.goal : "Execution plan",
+      canAllowSession: false,
+    };
+  }
   if (name === "write_file" || name === "edit_file") {
     const target = typeof input.path === "string" ? input.path : "";
     const policy = evaluateWorkspaceWrite(target);
@@ -132,7 +141,11 @@ export class ToolApprovalSession {
   ) {}
 
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
-    if (input.conversationId && this.conversationAllowed.has(input.conversationId)) {
+    if (
+      input.name !== "submit_plan" &&
+      input.conversationId &&
+      this.conversationAllowed.has(input.conversationId)
+    ) {
       return Promise.resolve("allow_once");
     }
     if (input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {

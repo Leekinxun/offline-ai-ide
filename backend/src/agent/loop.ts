@@ -106,7 +106,11 @@ export async function runAgentLoop(
   });
   const runStartedAt = Date.now();
   const runSignal = control?.createAbortSignal();
-  const tools = getAllTools({ readOnly: readOnlyWorkspace, mode }).filter((tool) =>
+  const tools = getAllTools({
+    readOnly: readOnlyWorkspace,
+    mode,
+    constrainedCode: Boolean(control?.executionPlan),
+  }).filter((tool) =>
     agentProfileAllowsTool(agentProfile, tool.function.name)
   );
   const authorizeTool = createPermissionAuthorizer({
@@ -116,6 +120,7 @@ export async function runAgentLoop(
     requestApproval: control?.requestToolApproval,
     profile: agentProfile,
     runId: control?.runRecorder?.runId,
+    executionPlan: control?.executionPlan,
   });
   const mcpClient = getMcpClient();
   const mcpSelection = new McpToolSelection();
@@ -133,6 +138,10 @@ export async function runAgentLoop(
     authorizeTool,
     signal: runSignal,
     agentProfileId: agentProfile.id,
+    mode,
+    conversationId: control?.conversationId,
+    runId: control?.runRecorder?.runId,
+    executionPlan: control?.executionPlan,
   };
 
   // Build user content with file/selection context
@@ -164,6 +173,7 @@ export async function runAgentLoop(
   let lastTranscriptPath: string | undefined;
   let lastCompactionPreview: ContextCompactionPreview | undefined;
   let knowledgeStateSent = false;
+  let approvedPlanSubmitted = false;
 
   const recordRunEvent = async (
     event: AgentRunEventInput,
@@ -380,6 +390,7 @@ export async function runAgentLoop(
       const systemPrompt = buildSystemPrompt(session.workspaceDir, todoManager.render(), {
         readOnlyWorkspace,
         mode,
+        executionPlan: control?.executionPlan,
       });
 
       if (!knowledgeStateSent) {
@@ -406,7 +417,7 @@ export async function runAgentLoop(
       }
 
       let availableTools = tools;
-      const mcpDiscovery = !readOnlyWorkspace
+      const mcpDiscovery = !readOnlyWorkspace && !control?.executionPlan
         ? await mcpClient.discoverTools(false, mcpSelection)
         : { tools: [], servers: [], hasLazyEndpoints: false };
       if (mcpDiscovery.servers.length > 0) {
@@ -785,6 +796,9 @@ export async function runAgentLoop(
           if (!isError && toolCall.function.name === "compress") {
             compressRequested = true;
           }
+          if (!isError && toolCall.function.name === "submit_plan") {
+            approvedPlanSubmitted = true;
+          }
           await runAgentHooks("afterToolExecute", {
             agentId: agentProfile.id,
             runId: control?.runRecorder?.runId,
@@ -873,6 +887,14 @@ export async function runAgentLoop(
       }
 
       // Only an explicit finish_reason=stop reaches the final response path.
+      if (mode === "plan" && !approvedPlanSubmitted) {
+        messages.push({
+          role: "user",
+          content:
+            "Runtime requirement: Plan mode cannot finish until submit_plan has been called and explicitly approved. Submit the complete structured plan now.",
+        });
+        continue;
+      }
       const rawText = assistantMsg.content || "";
       const { thinking, rest: finalText } = extractThinkTags(rawText);
 
@@ -930,6 +952,7 @@ export interface AgentLoopControl {
   mode?: AgentMode;
   conversationId?: string;
   runRecorder?: AgentRunRecorder;
+  executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;
   requestToolApproval?: (input: {
     requestId: string;
     toolCallId: string;

@@ -6,6 +6,8 @@ import {
 } from "./toolApproval.js";
 import { agentProfileAllowsTool, type AgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
+import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { evaluateModeCapability } from "./modeCapabilities.js";
 
 export interface PermissionRequest {
   requestId: string;
@@ -19,6 +21,7 @@ export interface PermissionResult {
   allowed: boolean;
   reason?: string;
   decision?: ToolApprovalDecision | "not_required";
+  requiresReplan?: boolean;
 }
 
 export type PermissionAuthorizer = (
@@ -47,6 +50,7 @@ export function createPermissionAuthorizer(options: {
   requestApproval?: (input: ToolApprovalRequestInput) => Promise<ToolApprovalDecision>;
   profile?: AgentProfile;
   runId?: string;
+  executionPlan?: ExecutionPlan;
 }): PermissionAuthorizer {
   return async (request) => {
     await runAgentHooks("beforePermissionCheck", {
@@ -65,7 +69,12 @@ export function createPermissionAuthorizer(options: {
         toolCallId: request.toolCallId,
         toolName: request.name,
         input: request.input,
-        metadata: { allowed: result.allowed, reason: result.reason, decision: result.decision },
+        metadata: {
+          allowed: result.allowed,
+          reason: result.reason,
+          decision: result.decision,
+          requiresReplan: result.requiresReplan,
+        },
       });
       return result;
     };
@@ -76,6 +85,19 @@ export function createPermissionAuthorizer(options: {
       return decide({
         allowed: false,
         reason: `Agent profile '${options.profile.id}' does not allow ${request.name}`,
+      });
+    }
+    const capability = evaluateModeCapability({
+      mode: options.mode,
+      toolName: request.name,
+      input: request.input,
+      executionPlan: options.executionPlan,
+    });
+    if (!capability.allowed) {
+      return decide({
+        allowed: false,
+        reason: capability.reason,
+        requiresReplan: capability.requiresReplan,
       });
     }
     const requirement = classifyToolApproval(request.name, request.input);

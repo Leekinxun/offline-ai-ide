@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import type { AgentMode } from "./types.js";
 import { buildMemoryPrompt, loadMemorySnapshot } from "./memory.js";
 import { buildSkillsPrompt } from "./skills.js";
+import type { ExecutionPlan } from "../chat/executionPlans.js";
 
 const DEFAULT_BASE_INSTRUCTIONS = `# Role and Purpose
 
@@ -75,8 +76,8 @@ const MODE_INSTRUCTIONS: Record<AgentMode, string> = {
   ask: "Inspect and explain. Do not modify files or persisted task state.",
   review:
     "Inspect changes and run focused checks without modifying files. Put each actionable, file-locatable finding on its own line using exactly `- [critical|error|warning|info] relative/path:line:column — concise finding`, ordered by severity. If there are no actionable findings, write `No findings.`.",
-  plan: "Produce an ordered implementation plan and persist task items when useful. Do not modify source files.",
-  code: "Implement the requested change, run relevant verification, and summarize the evidence.",
+  plan: "Inspect the repository and produce an ordered implementation plan. Do not modify source files or persisted task state. Before finishing, call submit_plan exactly once with the complete file scope, steps, risks, exact verification commands, and acceptance criteria. The submitted plan becomes executable only after explicit user approval.",
+  code: "Execute only the approved Plan artifact supplied below. Modify only its declared file scope and run only its declared verification commands. If the plan is incomplete or the request requires work outside its scope, stop and require a new Plan.",
 };
 
 function joinSections(sections: Array<string | undefined>): string {
@@ -150,10 +151,22 @@ function buildActiveConstraints(mode: AgentMode, readOnlyWorkspace: boolean): st
 - ${MODE_INSTRUCTIONS[mode]}${readOnlyConstraint}`;
 }
 
+function buildExecutionPlanContext(plan?: ExecutionPlan): string {
+  if (!plan) return "";
+  return `# Approved Execution Plan\n\nPlan ID: ${plan.id}\nStatus: ${plan.status}\n\n${JSON.stringify({
+    goal: plan.goal,
+    files: plan.files,
+    steps: plan.steps,
+    risks: plan.risks,
+    verificationCommands: plan.verificationCommands,
+    acceptanceCriteria: plan.acceptanceCriteria,
+  }, null, 2)}`;
+}
+
 export function buildSystemPrompt(
   workspaceDir: string,
   todoState: string,
-  options?: { readOnlyWorkspace?: boolean; mode?: AgentMode }
+  options?: { readOnlyWorkspace?: boolean; mode?: AgentMode; executionPlan?: ExecutionPlan }
 ): string {
   const readOnlyWorkspace = Boolean(options?.readOnlyWorkspace);
   const mode = options?.mode || "code";
@@ -165,6 +178,7 @@ export function buildSystemPrompt(
     buildTodoContext(todoState),
     loadWorkspaceGuidance(workspaceDir),
     loadPersistentContext(workspaceDir),
+    buildExecutionPlanContext(options?.executionPlan),
     buildActiveConstraints(mode, readOnlyWorkspace),
   ]);
 }

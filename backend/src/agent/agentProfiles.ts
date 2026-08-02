@@ -40,8 +40,8 @@ export type AgentProfileOverrides = Partial<Record<AgentProfileId, Partial<{
 const ALL_TOOLS = ["*"];
 const DEFAULTS: Record<AgentProfileId, AgentProfile> = {
   ask: profile("ask", 8, 8, 5 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "TodoWrite", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
-  review: profile("review", 20, 30, 15 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
-  plan: profile("plan", 16, 20, 10 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "TodoWrite", "task_create", "task_get", "task_list", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
+  review: profile("review", 20, 30, 15 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite"]),
+  plan: profile("plan", 16, 20, 10 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "submit_plan"]),
   code: profile("code", 30, 80, 30 * 60_000, true, ALL_TOOLS),
   explore: profile("explore", 20, 40, 15 * 60_000, false, ["bash", "read_file"]),
   subagent: profile("subagent", 30, 60, 25 * 60_000, true, ["bash", "read_file", "write_file", "edit_file"]),
