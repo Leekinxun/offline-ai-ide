@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { DefinitionLocation, FileNode, GitStatus } from "../types";
 
 const API = "/api/files";
@@ -12,7 +12,24 @@ export interface WorkspaceSearchResult {
   path: string;
   line: number;
   column: number;
+  matchLength: number;
   preview: string;
+}
+
+export interface WorkspaceSearchOptions {
+  query: string;
+  scopePath?: string;
+  isRegex?: boolean;
+  matchCase?: boolean;
+  wholeWord?: boolean;
+  include?: string;
+  exclude?: string;
+  useIgnoreFiles?: boolean;
+}
+
+export interface WorkspaceSearchResponse {
+  results: WorkspaceSearchResult[];
+  truncated: boolean;
 }
 
 export interface CopyEntryResult {
@@ -56,6 +73,7 @@ function getDownloadName(
 }
 
 export function useFileSystem(token: string) {
+  const searchAbortControllerRef = useRef<AbortController | null>(null);
   const authHeaders = useCallback(
     (extra?: Record<string, string>): Record<string, string> => ({
       Authorization: `Bearer ${token}`,
@@ -93,17 +111,39 @@ export function useFileSystem(token: string) {
   }, [authHeaders]);
 
   const searchWorkspace = useCallback(
-    async (query: string): Promise<WorkspaceSearchResult[]> => {
-      const params = new URLSearchParams({ query });
+    async (options: WorkspaceSearchOptions): Promise<WorkspaceSearchResponse> => {
+      searchAbortControllerRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortControllerRef.current = controller;
+      const params = new URLSearchParams({ query: options.query });
+      if (options.scopePath) params.set("scopePath", options.scopePath);
+      if (options.isRegex) params.set("isRegex", "true");
+      if (options.matchCase) params.set("matchCase", "true");
+      if (options.wholeWord) params.set("wholeWord", "true");
+      if (options.include) params.set("include", options.include);
+      if (options.exclude) params.set("exclude", options.exclude);
+      if (options.useIgnoreFiles === false) params.set("useIgnoreFiles", "false");
       const res = await fetch(`${API}/search?${params.toString()}`, {
         headers: authHeaders(),
+        signal: controller.signal,
       });
-      if (!res.ok) throw new Error("Failed to search workspace");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to search workspace");
+      }
       const data = await res.json();
-      return Array.isArray(data.results) ? data.results : [];
+      return {
+        results: Array.isArray(data.results) ? data.results : [],
+        truncated: data.truncated === true,
+      };
     },
     [authHeaders]
   );
+
+  const cancelWorkspaceSearch = useCallback(() => {
+    searchAbortControllerRef.current?.abort();
+    searchAbortControllerRef.current = null;
+  }, []);
 
   const readFileWithMeta = useCallback(
     async (
@@ -376,6 +416,7 @@ export function useFileSystem(token: string) {
       fetchChanges,
       fetchGitStatus,
       searchWorkspace,
+      cancelWorkspaceSearch,
       readFileWithMeta,
       readFile,
       findDefinition,
@@ -394,6 +435,7 @@ export function useFileSystem(token: string) {
       fetchChanges,
       fetchGitStatus,
       searchWorkspace,
+      cancelWorkspaceSearch,
       readFileWithMeta,
       readFile,
       findDefinition,

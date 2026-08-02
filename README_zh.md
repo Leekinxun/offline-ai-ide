@@ -179,7 +179,7 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./plugins:/app/plugins
-      - ./users.json:/app/users.json  # 可选：覆盖用户配置
+      - ./users.json:/app/users.json  # 容器重建后仍保留用户配置
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
       - VLLM_API_KEY=
@@ -224,6 +224,10 @@ npm run dev
 - `Cmd/Ctrl+Alt+←/→` — 在任务线程之间切换
 - `Cmd/Ctrl+B` / `Cmd/Ctrl+J` / `Cmd/Ctrl+backtick` — 切换资源管理器 / AI 助手 / 终端
 - `Cmd/Ctrl+K` — 切换专注模式
+
+工作区搜索通过 Docker 镜像内置的 ripgrep 在本地运行，运行时无需联网。
+支持正则表达式、大小写和全字匹配、包含/排除 glob、忽略文件，以及在
+资源管理器右键菜单中限定文件夹范围搜索。
 
 命令面板还可以直接打开设置、MCP 健康状态、Memory/Skills 管理、Git 变更和 Agent Board；Chat 顶部的 MCP 与 Memory/Skills 状态入口也可以直接点击进入管理界面。
 

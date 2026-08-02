@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 WORKDIR /build/backend
 COPY backend/package.json backend/package-lock.json* ./
 RUN npm install
+RUN node --input-type=module -e "import { execFileSync } from 'node:child_process'; import { rgPath } from '@vscode/ripgrep'; execFileSync(rgPath, ['--version'], { stdio: 'inherit' });"
 COPY backend/ .
 RUN npx tsc
 

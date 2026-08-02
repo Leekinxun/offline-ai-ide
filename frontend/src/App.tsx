@@ -341,6 +341,7 @@ function AuthenticatedApp({
   const [chatHistoryRequest, setChatHistoryRequest] = useState(0);
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
+  const [workspaceSearchScope, setWorkspaceSearchScope] = useState("");
   const [gitVisible, setGitVisible] = useState(false);
   const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number } | null>(null);
   const [agentsVisible, setAgentsVisible] = useState(false);
@@ -1349,7 +1350,7 @@ function AuthenticatedApp({
         startLine: result.line,
         startColumn: result.column,
         endLine: result.line,
-        endColumn: result.column + 1,
+        endColumn: result.column + result.matchLength,
       });
     },
     [handleNavigateToLocation]
@@ -1916,6 +1917,7 @@ function AuthenticatedApp({
       }
       if (isShortcut && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
+        setWorkspaceSearchScope("");
         setWorkspaceSearchVisible(true);
         return;
       }
@@ -2439,6 +2441,10 @@ function AuthenticatedApp({
           workspaceDir={workspaceDir}
           workspaceLocked={isolatedWindow}
           onChangeWorkspace={handleChangeWorkspace}
+          onSearchInPath={(path) => {
+            setWorkspaceSearchScope(path);
+            setWorkspaceSearchVisible(true);
+          }}
           token={token}
           activeTeam={team.activeTeam}
           style={sidebarVisible ? { width: sidebarWidth } : undefined}
@@ -3356,8 +3362,11 @@ function AuthenticatedApp({
       />
       <WorkspaceSearchPanel
         visible={workspaceSearchVisible}
+        scopePath={workspaceSearchScope}
         onClose={() => setWorkspaceSearchVisible(false)}
+        onClearScope={() => setWorkspaceSearchScope("")}
         onSearch={fs.searchWorkspace}
+        onCancelSearch={fs.cancelWorkspaceSearch}
         onOpenResult={openSearchResult}
       />
     </div>

@@ -233,7 +233,7 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./plugins:/app/plugins
-      - ./users.json:/app/users.json  # optional: override user config
+      - ./users.json:/app/users.json  # persist users across container rebuilds
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
       - VLLM_API_KEY=
@@ -284,6 +284,11 @@ In local development, admin-managed LLM settings are persisted to `app-settings.
 - `Cmd/Ctrl+Alt+←/→` — Switch between task threads
 - `Cmd/Ctrl+B` / `Cmd/Ctrl+J` / `Cmd/Ctrl+backtick` — Toggle Explorer / AI Assistant / Terminal
 - `Cmd/Ctrl+K` — Toggle focus mode
+
+Workspace search runs locally through the ripgrep binary bundled in the Docker
+image, so it does not require network access at runtime. It supports regular
+expressions, case and whole-word matching, include/exclude globs, ignore files,
+and folder-scoped search from the Explorer context menu.
 
 The Command Palette also opens Settings, MCP health, Memory/Skills management, Git changes, Checkpoints, Problems, Run/Test, Run/Debug, and the Agent Board. The MCP and Memory/Skills status chips in the Chat header are clickable shortcuts to their management surfaces.
 

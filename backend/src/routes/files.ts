@@ -21,6 +21,10 @@ import {
 import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
+import {
+  searchWorkspace,
+  WorkspaceSearchError,
+} from "../files/workspaceSearch.js";
 
 export const filesRouter = Router();
 
@@ -414,66 +418,62 @@ filesRouter.get("/git-diff", (req, res) => {
 });
 
 // GET /search?query=xxx
-// Bounded text search for the command palette. Hidden folders and very large/binary
-// files are skipped so this stays responsive in a browser-based IDE.
-filesRouter.get("/search", (req, res) => {
+// Uses the ripgrep binary bundled with the backend package. The process runs
+// locally, honors ignore files by default, and is cancelled when the client leaves.
+filesRouter.get("/search", async (req, res) => {
   const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
   if (!query) return res.json({ results: [] });
 
   const workspaceDir = getWorkspace(req);
-  const results: Array<{
-    path: string;
-    line: number;
-    column: number;
-    preview: string;
-  }> = [];
-  const normalizedQuery = query.toLocaleLowerCase();
-  let visitedFiles = 0;
+  const requestedScope =
+    typeof req.query.scopePath === "string" ? req.query.scopePath.trim() : "";
+  let scopePath = "";
+  try {
+    const fullScope = safePathUtil(requestedScope || ".", workspaceDir);
+    if (!fs.existsSync(fullScope)) {
+      return res.status(404).json({ detail: "Search path not found" });
+    }
+    scopePath = path.relative(workspaceDir, fullScope).split(path.sep).join("/");
+  } catch (error: any) {
+    return res.status(error?.message === "Path traversal denied" ? 403 : 400).json({
+      detail: error?.message || "Invalid search path",
+    });
+  }
 
-  const visit = (directory: string, relativePrefix = "") => {
-    if (results.length >= 200 || visitedFiles >= 5000) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
+  const controller = new AbortController();
+  const abortSearch = () => controller.abort();
+  req.once("aborted", abortSearch);
+  res.once("close", abortSearch);
+
+  try {
+    const response = await searchWorkspace({
+      workspaceDir,
+      query,
+      scopePath,
+      isRegex: req.query.isRegex === "true",
+      matchCase: req.query.matchCase === "true",
+      wholeWord: req.query.wholeWord === "true",
+      include: typeof req.query.include === "string" ? req.query.include : undefined,
+      exclude: typeof req.query.exclude === "string" ? req.query.exclude : undefined,
+      useIgnoreFiles: req.query.useIgnoreFiles !== "false",
+      maxResults: 1000,
+      signal: controller.signal,
+    });
+    if (!controller.signal.aborted) return res.json(response);
+  } catch (error) {
+    if (
+      controller.signal.aborted ||
+      (error instanceof WorkspaceSearchError && error.code === "ABORTED")
+    ) {
       return;
     }
-
-    for (const entry of entries) {
-      if (results.length >= 200 || entry.name.startsWith(".")) return;
-      const absolutePath = path.join(directory, entry.name);
-      const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        visit(absolutePath, relativePath);
-        continue;
-      }
-
-      visitedFiles += 1;
-      try {
-        const stat = fs.statSync(absolutePath);
-        if (stat.size > 1024 * 1024) continue;
-        const content = fs.readFileSync(absolutePath, "utf-8");
-        if (content.includes("\u0000")) continue;
-        const lines = content.split(/\r?\n/);
-        for (let index = 0; index < lines.length && results.length < 200; index += 1) {
-          const line = lines[index];
-          const column = line.toLocaleLowerCase().indexOf(normalizedQuery);
-          if (column < 0) continue;
-          results.push({
-            path: relativePath,
-            line: index + 1,
-            column: column + 1,
-            preview: line.trim().slice(0, 240),
-          });
-        }
-      } catch {
-        // Ignore files that disappear or cannot be decoded during a search.
-      }
-    }
-  };
-
-  visit(workspaceDir);
-  res.json({ results });
+    return res.status(400).json({
+      detail: error instanceof Error ? error.message : "Workspace search failed",
+    });
+  } finally {
+    req.off("aborted", abortSearch);
+    res.off("close", abortSearch);
+  }
 });
 
 // GET /changes?since=timestamp

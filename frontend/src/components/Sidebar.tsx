@@ -41,6 +41,7 @@ interface SidebarProps {
   workspaceDir: string;
   workspaceLocked?: boolean;
   onChangeWorkspace: (path: string) => Promise<boolean>;
+  onSearchInPath: (path: string) => void;
   token: string;
   activeTeam?: TeamDetails | null;
   style?: React.CSSProperties;
@@ -122,6 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workspaceDir,
   workspaceLocked = false,
   onChangeWorkspace,
+  onSearchInPath,
   token,
   activeTeam,
   style,
@@ -826,6 +828,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <>
                   <button
                     className="context-menu-item"
+                    onClick={() => {
+                      onSearchInPath(contextMenu.node!.path);
+                      setContextMenu(null);
+                    }}
+                  >
+                    <Search size={14} /> {t("sidebar.findInFolder")}
+                  </button>
+                  <button
+                    className="context-menu-item"
                     onClick={() => handleCreateFile(contextMenu.node!.path)}
                     disabled={!canEditWorkspace}
                   >
@@ -900,6 +911,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </>
           ) : (
             <>
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  onSearchInPath("");
+                  setContextMenu(null);
+                }}
+              >
+                <Search size={14} /> {t("sidebar.findInWorkspace")}
+              </button>
+              <div className="context-menu-separator" />
               <button
                 className="context-menu-item"
                 onClick={() => handleCreateFile()}
