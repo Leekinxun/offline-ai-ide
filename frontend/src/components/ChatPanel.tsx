@@ -183,7 +183,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
   const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(messages.length > 0);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const [creatingIsolatedWindow, setCreatingIsolatedWindow] = useState(false);
   const [isolatedWindowError, setIsolatedWindowError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -217,11 +217,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       previousMessageCountRef.current === 0 && messages.length > 0;
 
     if (conversationChanged || conversationStarted) {
-      setDetailsCollapsed(messages.length > 0);
+      setDetailsCollapsed(true);
       setHistoryOpen(false);
       setChangesOpen(false);
-    } else if (messages.length === 0) {
-      setDetailsCollapsed(false);
     }
 
     previousConversationIdRef.current = currentConversationId;
@@ -235,7 +233,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     onClear();
     setHistoryOpen(false);
     setChangesOpen(false);
-    setDetailsCollapsed(false);
+    setDetailsCollapsed(true);
   }, [isStreaming, newConversationRequest, onClear]);
 
   useEffect(() => {
@@ -761,9 +759,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       <div className="chat-input-area">
         <div className="chat-composer-context">
-          <span className={`chat-composer-mode mode-${agentMode}`}>
-            {t(`chat.mode.${agentMode}.label`)}
-          </span>
+          <div className="chat-composer-modes" role="tablist" aria-label={t("chat.modeLabel")}>
+            {(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={agentMode === mode}
+                className={agentMode === mode ? "active" : ""}
+                onClick={() => onAgentModeChange(mode)}
+                disabled={isStreaming}
+                key={mode}
+              >
+                {t(`chat.mode.${mode}.label`)}
+              </button>
+            ))}
+          </div>
           {activeFileName && <code>{activeFileName}</code>}
         </div>
         {/* Selection indicator */}
@@ -785,7 +795,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             placeholder={
               selectionInfo
                 ? t("chat.askSelectedCode")
-                : t("chat.askYourCode")
+                : messages.length === 0
+                  ? t("workbench.describeTask")
+                  : t("workbench.followUpTask")
             }
             value={input}
             onChange={handleInputChange}

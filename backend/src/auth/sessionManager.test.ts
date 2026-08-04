@@ -8,9 +8,11 @@ import { SessionManager } from "./sessionManager.js";
 test("keeps workspace selection isolated between sessions for the same user", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-session-"));
   const projectA = path.join(root, "project-a");
+  const nestedProject = path.join(projectA, "nested-project");
   const projectB = path.join(root, "project-b");
   const configPath = path.join(root, "users.json");
   await mkdir(projectA);
+  await mkdir(nestedProject);
   await mkdir(projectB);
   const escapingLink = path.join(root, "outside-link");
   if (process.platform !== "win32") {
@@ -33,6 +35,23 @@ test("keeps workspace selection isolated between sessions for the same user", as
     assert.ok(first);
     assert.ok(second);
     assert.notEqual(first.token, second.token);
+
+    const canonicalProjectA = await realpath(projectA);
+    const canonicalNestedProject = await realpath(nestedProject);
+    assert.equal(first.workspaceRoot, canonicalProjectA);
+    assert.equal(manager.getSession(first.token)?.workspaceRoot, canonicalProjectA);
+    assert.deepEqual(manager.listUserWorkspaceDirectories(first.token), {
+      path: canonicalProjectA,
+      rootPath: canonicalProjectA,
+      entries: [{ name: "nested-project", path: canonicalNestedProject }],
+    });
+    assert.equal(manager.listUserWorkspaceDirectories(first.token, root), null);
+    assert.equal(manager.listUserWorkspaceDirectories(first.token, projectB), null);
+    assert.equal(manager.changeWorkspaceWithinUserRoot(first.token, projectB), null);
+    assert.deepEqual(
+      manager.changeWorkspaceWithinUserRoot(first.token, nestedProject),
+      { workspaceDir: canonicalNestedProject }
+    );
 
     assert.deepEqual(manager.changeWorkspace(first.token, projectB), {
       workspaceDir: await realpath(projectB),

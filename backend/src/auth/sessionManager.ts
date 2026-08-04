@@ -41,6 +41,7 @@ export interface UserSession {
   token: string;
   username: string;
   workspaceDir: string;
+  workspaceRoot: string;
   isAdmin: boolean;
   isolated: boolean;
   taskManager: TaskManager;
@@ -52,6 +53,7 @@ export interface SessionSummary {
   token: string;
   username: string;
   workspaceDir: string;
+  workspaceRoot: string;
   isAdmin: boolean;
   isolated: boolean;
 }
@@ -267,6 +269,7 @@ export class SessionManager {
       token,
       username,
       workspaceDir: canonicalWorkspace,
+      workspaceRoot: canonicalWorkspace,
       isAdmin,
       isolated,
       ...singletons,
@@ -276,6 +279,7 @@ export class SessionManager {
       token,
       username,
       workspaceDir: canonicalWorkspace,
+      workspaceRoot: canonicalWorkspace,
       isAdmin,
       isolated,
     };
@@ -489,7 +493,6 @@ export class SessionManager {
   }
 
   private resolveSelectableWorkspace(dir: string): string | null {
-    if (!this.isAllowedPath(dir)) return null;
     try {
       const resolved = path.resolve(dir);
       if (!fs.statSync(resolved).isDirectory()) return null;
@@ -526,6 +529,80 @@ export class SessionManager {
     setActiveTeamId(session, null);
 
     return { workspaceDir: resolved };
+  }
+
+  changeWorkspaceWithinUserRoot(
+    token: string,
+    newDir: string
+  ): { workspaceDir: string } | null {
+    const session = this.sessions.get(token);
+    if (!session || session.isolated) return null;
+
+    const resolved = this.resolveSelectableWorkspaceWithinRoot(
+      newDir,
+      session.workspaceRoot
+    );
+    if (!resolved) return null;
+
+    session.workspaceDir = resolved;
+    const singletons = createSessionSingletons(resolved);
+    session.taskManager = singletons.taskManager;
+    session.messageBus = singletons.messageBus;
+    session.teammateManager = singletons.teammateManager;
+    setActiveTeamId(session, null);
+
+    return { workspaceDir: resolved };
+  }
+
+  listUserWorkspaceDirectories(
+    token: string,
+    dir?: string
+  ): {
+    path: string;
+    rootPath: string;
+    entries: { name: string; path: string }[];
+  } | null {
+    const session = this.sessions.get(token);
+    if (!session) return null;
+
+    const requestedPath = dir?.trim() || session.workspaceRoot;
+    const selectableDirectory = this.resolveSelectableWorkspaceWithinRoot(
+      requestedPath,
+      session.workspaceRoot
+    );
+    if (!selectableDirectory) return null;
+
+    try {
+      const entries = fs.readdirSync(selectableDirectory, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .sort((left, right) =>
+          left.name.toLowerCase().localeCompare(right.name.toLowerCase())
+        )
+        .map((entry) => ({
+          name: entry.name,
+          path: path.join(selectableDirectory, entry.name),
+        }));
+      return {
+        path: selectableDirectory,
+        rootPath: session.workspaceRoot,
+        entries,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveSelectableWorkspaceWithinRoot(
+    dir: string,
+    workspaceRoot: string
+  ): string | null {
+    const selectable = this.resolveSelectableWorkspace(dir);
+    if (!selectable) return null;
+
+    const canonicalRoot = path.resolve(workspaceRoot);
+    return selectable === canonicalRoot || selectable.startsWith(`${canonicalRoot}${path.sep}`)
+      ? selectable
+      : null;
   }
 
   listDirectories(dir: string): { name: string; path: string }[] {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { FileNode, TeamDetails } from "../types";
-import { FileTree } from "./FileTree";
+import { FILE_TREE_DRAG_TYPE, FileTree } from "./FileTree";
 import {
   FilePlus,
   FileUp,
@@ -19,7 +19,7 @@ import {
   Copy,
   ClipboardPaste,
 } from "lucide-react";
-import type { CopyEntryResult } from "../hooks/useFileSystem";
+import type { CopyEntryResult, MoveEntryResult } from "../hooks/useFileSystem";
 import { useI18n } from "../i18n";
 
 interface SidebarProps {
@@ -29,6 +29,7 @@ interface SidebarProps {
   onFileSelect: (path: string) => void;
   onCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
   onCopyEntry: (sourcePath: string, targetDirectory: string) => Promise<CopyEntryResult>;
+  onMoveEntry: (sourcePath: string, targetDirectory: string) => Promise<MoveEntryResult>;
   onDeleteEntry: (path: string) => Promise<void>;
   onDeleteEntries: (paths: string[]) => Promise<void>;
   onRenameEntry: (oldPath: string, newPath: string) => Promise<void>;
@@ -107,6 +108,41 @@ function countTreeNodes(nodes: FileNode[]): { files: number; folders: number } {
   );
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the browser-compatible textarea fallback.
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
+function resolveAbsoluteWorkspacePath(workspaceDir: string, relativePath: string): string {
+  const separator = workspaceDir.includes("\\") ? "\\" : "/";
+  const base = workspaceDir.replace(/[\\/]+$/, "");
+  const suffix = relativePath.split("/").join(separator);
+  return base ? `${base}${separator}${suffix}` : `${separator}${suffix}`;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   tree,
   activeFilePath,
@@ -114,6 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onFileSelect,
   onCreateEntry,
   onCopyEntry,
+  onMoveEntry,
   onDeleteEntry,
   onDeleteEntries,
   onRenameEntry,
@@ -144,10 +181,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   } | null>(null);
   const [folderBrowser, setFolderBrowser] = useState<{
     currentPath: string;
+    rootPath: string;
     entries: { name: string; path: string }[];
     loading: boolean;
     switching: boolean;
     selectable: boolean;
+    canNavigateUp: boolean;
     error: string | null;
   } | null>(null);
   const [folderPathInput, setFolderPathInput] = useState("");
@@ -315,6 +354,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [canEditWorkspace]
   );
 
+  const handleCopyPath = useCallback(
+    async (node: FileNode) => {
+      setContextMenu(null);
+      const copied = await copyTextToClipboard(
+        resolveAbsoluteWorkspacePath(workspaceDir, node.path)
+      );
+      if (!copied) {
+        alert(t("sidebar.copyPathFailed"));
+      }
+    },
+    [t, workspaceDir]
+  );
+
   const handlePaste = useCallback(
     async (targetDirectory: string) => {
       if (!canEditWorkspace || !clipboardItem) return;
@@ -431,6 +483,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [handleUploadFiles]
   );
 
+  const handleMoveEntry = useCallback(
+    async (sourcePath: string, targetDirectory: string) => {
+      setRootDropActive(false);
+      const separatorIndex = sourcePath.lastIndexOf("/");
+      const currentDirectory = separatorIndex >= 0 ? sourcePath.slice(0, separatorIndex) : "";
+      if (currentDirectory === targetDirectory) return;
+
+      try {
+        await onMoveEntry(sourcePath, targetDirectory);
+        onRefreshTree();
+      } catch (error) {
+        const moveError = error as Error & { code?: string };
+        if (moveError.code === "MOVE_CONFLICT") {
+          alert(t("sidebar.moveConflict"));
+          return;
+        }
+        if (moveError.code === "MOVE_INTO_SELF") {
+          alert(t("sidebar.moveIntoSelf"));
+          return;
+        }
+        if (
+          moveError.code === "MOVE_SOURCE_NOT_FOUND" ||
+          moveError.code === "MOVE_TARGET_NOT_FOUND" ||
+          moveError.code === "MOVE_TARGET_NOT_DIRECTORY"
+        ) {
+          alert(t("sidebar.moveTargetMissing"));
+          return;
+        }
+        alert(moveError.message || t("sidebar.moveFailed"));
+      }
+    },
+    [onMoveEntry, onRefreshTree, t]
+  );
+
   const handleDialogSubmit = useCallback(async () => {
     if (!canEditWorkspace) return;
     if (!dialog || !dialogValue.trim()) return;
@@ -455,27 +541,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const fetchDirectories = useCallback(
     async (dir: string) => {
       setFolderBrowser((prev) => ({
-        currentPath: dir,
+        currentPath: prev?.currentPath || dir,
+        rootPath: prev?.rootPath || "",
         entries: prev?.entries || [],
         loading: true,
         switching: false,
         selectable: false,
+        canNavigateUp: prev?.canNavigateUp || false,
         error: null,
       }));
       setFolderPathInput(dir);
       try {
+        const query = dir ? `?path=${encodeURIComponent(dir)}` : "";
         const res = await fetch(
-          `/api/auth/workspace/list?path=${encodeURIComponent(dir)}`,
+          `/api/auth/workspace/list${query}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
-        if (!res.ok) throw new Error(t("sidebar.failedToListDirectories"));
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || t("sidebar.failedToListDirectories"));
+        }
         setFolderBrowser({
           currentPath: data.path || dir,
+          rootPath: data.rootPath || data.path || dir,
           entries: data.entries,
           loading: false,
           switching: false,
           selectable: Boolean(data.selectable),
+          canNavigateUp: Boolean(data.canNavigateUp),
           error: null,
         });
         setFolderPathInput(data.path || dir);
@@ -484,9 +577,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           prev
             ? {
                 ...prev,
-                entries: [],
                 loading: false,
-                selectable: false,
                 error: error instanceof Error
                   ? error.message
                   : t("sidebar.failedToListDirectories"),
@@ -500,10 +591,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const openFolderBrowser = useCallback(() => {
     if (workspaceLocked) return;
-    // Start from parent of current workspace
-    const parent = workspaceDir.split("/").slice(0, -1).join("/") || "/";
-    fetchDirectories(parent);
-  }, [workspaceDir, fetchDirectories, workspaceLocked]);
+    fetchDirectories("");
+  }, [fetchDirectories, workspaceLocked]);
 
   const handleFolderSelect = useCallback(
     async (path: string) => {
@@ -534,7 +623,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const handleFolderUp = useCallback(() => {
-    if (!folderBrowser) return;
+    if (!folderBrowser?.canNavigateUp) return;
     const parent = folderBrowser.currentPath.split("/").slice(0, -1).join("/") || "/";
     fetchDirectories(parent);
   }, [folderBrowser, fetchDirectories]);
@@ -550,7 +639,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="sidebar-header">
         <div className="sidebar-heading">
           <span className="sidebar-eyebrow">{t("sidebar.workspaceLabel")}</span>
-          <span className="sidebar-title">{t("sidebar.explorer")}</span>
+          <span className="sidebar-title">CrewForge / {workspaceName}</span>
         </div>
         <div className="sidebar-actions">
           <input
@@ -655,7 +744,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Trash2 size={15} />
           </button>
+          <button
+            className="sidebar-action-btn sidebar-workspace-menu"
+            title={t("sidebar.openFolder")}
+            aria-label={t("sidebar.openFolder")}
+            onClick={openFolderBrowser}
+          >
+            <ChevronRight size={15} />
+          </button>
         </div>
+      </div>
+      <div className="sidebar-file-toolbar">
+        <strong>{t("sidebar.explorer")}</strong>
+        <span />
+        <button
+          type="button"
+          title={t("sidebar.newFile")}
+          aria-label={t("sidebar.newFile")}
+          onClick={() => handleCreateFile()}
+          disabled={!canEditWorkspace}
+        >
+          <FilePlus size={15} />
+        </button>
+        <button
+          type="button"
+          title={t("common.refresh")}
+          aria-label={t("common.refresh")}
+          onClick={onRefreshTree}
+        >
+          <RefreshCw size={15} />
+        </button>
       </div>
       <button
         type="button"
@@ -745,9 +863,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         aria-label={t("sidebar.explorer")}
         onContextMenu={handleRootContextMenu}
         onDragOver={(event) => {
-          if (!canEditWorkspace || !event.dataTransfer.types.includes("Files")) return;
+          if (!canEditWorkspace) return;
+          const isWorkspaceEntry = event.dataTransfer.types.includes(FILE_TREE_DRAG_TYPE);
+          const isExternalFile = event.dataTransfer.types.includes("Files");
+          if (!isWorkspaceEntry && !isExternalFile) return;
           event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
+          event.dataTransfer.dropEffect = isWorkspaceEntry ? "move" : "copy";
           setRootDropActive(true);
         }}
         onDragLeave={(event) => {
@@ -760,10 +881,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           setRootDropActive(false);
         }}
         onDrop={(event) => {
-          if (!canEditWorkspace || event.dataTransfer.files.length === 0) return;
+          if (!canEditWorkspace) return;
+          const sourcePath = event.dataTransfer.getData(FILE_TREE_DRAG_TYPE);
+          if (!sourcePath && event.dataTransfer.files.length === 0) return;
           event.preventDefault();
+          event.stopPropagation();
           setRootDropActive(false);
-          handleDroppedFiles("", event.dataTransfer.files);
+          if (sourcePath) {
+            void handleMoveEntry(sourcePath, "");
+          } else {
+            handleDroppedFiles("", event.dataTransfer.files);
+          }
         }}
       >
         {rootDropActive && (
@@ -786,6 +914,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onDownload={handleDownload}
             onContextMenu={handleContextMenu}
             onDropFiles={handleDroppedFiles}
+            onMoveEntry={(sourcePath, targetDirectory) => {
+              void handleMoveEntry(sourcePath, targetDirectory);
+            }}
           />
         ) : (
           <div className="sidebar-tree-empty">
@@ -872,6 +1003,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 disabled={!canEditWorkspace}
               >
                 <Copy size={14} /> {t("sidebar.copyItem")}
+              </button>
+              <button
+                className="context-menu-item"
+                onClick={() => void handleCopyPath(contextMenu.node!)}
+              >
+                <Copy size={14} /> {t("sidebar.copyPath")}
               </button>
               {contextMenu.node.type === "directory" && (
                 <button
@@ -1025,6 +1162,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="folder-browser-up"
                 onClick={handleFolderUp}
                 title={t("sidebar.goUp")}
+                disabled={!folderBrowser.canNavigateUp}
               >
                 ..
               </button>

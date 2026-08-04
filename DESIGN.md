@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-07-30
+- Last refreshed: 2026-08-04
 - Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
@@ -22,17 +22,35 @@
   - `frontend/src/components/DebugPanel.tsx`、`RunCenterPanel.tsx`、`backend/src/debug/service.ts`：断点、调试会话、运行输出与调用栈
   - `backend/src/chat/worktrees.ts`、`routes/chat.ts`、`frontend/src/hooks/useAuth.ts`：Git worktree 与浏览器会话隔离边界
   - `docs/screenshots/ide.png`、`docs/screenshots/login.png`
+  - `design/ai-chat-workbench.html`：用户在 2026-08-04 指定的新版 AI 工作台视觉与交互参考
+  - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated.png`：2026-08-04 更新稿的编辑器首屏固定验收截图
+  - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated-chat.png`：更新稿的对话状态固定验收截图
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
 ## Approved 2026 redesign baseline
 
-- Visual source of truth: 仓库根目录的 `index.html`、`login.html`、`workbench.html`，默认桌面验收视口为 1440×900。
+- Visual source of truth: `design/ai-chat-workbench.html` 是工作台最新且优先级最高的视觉参考；营销首页与登录页仍沿用仓库根目录的 `index.html`、`login.html`。默认桌面验收视口为 1440×900。
 - Landing: 大留白、强排版层级、极少装饰；首屏突出“本地、离线、可控”，产品能力、任务主线和四种模式依次展开。
 - Login: 左侧品牌/产品叙事与右侧登录卡并置；桌面端保留预览画布，窄屏收敛为单列登录流。
 - Workbench: 56px 工作区 Header + 48px Activity Rail + Explorer + Editor Canvas + Task Dock + 22px Status Bar；编辑器永远是主视觉中心。
 - Theme contract: 所有新增页面和工作台表面都必须消费同一组语义 token；亮色、暗色均为一等主题，主题偏好保存在本地并同步 Monaco。
 - Interaction parity: 保留现有认证、文件、搜索、命令、Git、Agent、Team、终端、设置、AI 对话、面板拖拽和响应式抽屉能力。
 - Visual acceptance: 首页、登录页、工作台在 1440×900 下与批准基线保持相同的信息层级、布局比例、密度和交互分组；允许使用仓库内真实数据替换原型假数据。
+
+### Approved AI workbench reference — 2026-08-04
+
+- Reference: `design/ai-chat-workbench.html`；编辑器固定截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated.png`；对话固定截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated-chat.png`。
+- Shell: 56px Activity Rail + 286px context sidebar + flexible task/editor canvas；编辑器状态可增加 360px AI 协作/活动栏，对话状态默认保持三栏并让中央画布获得剩余宽度。
+- Default surface: 登录后默认进入文件/编辑器视图；编辑器 Header、Tabs、Breadcrumb、Monaco Canvas 形成纵向主线，当前文件、路径、连接状态和编辑器操作集中在 58px Header。
+- Editor AI collaboration: 桌面编辑器默认打开右侧 AI 协作栏；当前文件路径与代码选择自动成为下一条指令的上下文，切换文件时同步更新；“AI 协作 / 终端 / 变更”在编辑器 Header 内互斥调度。
+- Chat sidebar: 工作区身份置顶，“新建任务”作为第一主操作；搜索与按日期分组的任务历史形成稳定纵向层级，底部只保留紧凑上下文预算。
+- Task canvas: 58px Task Header 展示任务标题、工作区状态、连接状态与“对话 / 变更”切换；消息正文最大宽度 800px 并居中，工具运行步骤内嵌在 AI 回复中而非散落为独立仪表盘。
+- Composer: 固定在任务画布底部，最大宽度 800px；文本输入、上下文、命令、模型与发送/停止组成一个边界清晰的控制面，背景通过轻量渐隐与内容区分离。
+- Activity detail: 编辑器默认呈现 AI 协作；显式打开变更后切换为“变更 / 检查 / 终端”运行详情。桌面为右侧 360px 固定栏，<=1180px 为覆盖抽屉，<=780px 与左侧栏共同服从单抽屉布局。
+- Visual language: 使用 OKLCH 中性色、单一蓝色强调色、hairline 边框、10–16px 克制圆角；普通工作台表面无重阴影，仅 Composer、弹层与覆盖抽屉使用浮层阴影。
+- Fidelity contract: 保留现有文件、Git、Agent、Team、Problems、Run/Test、Checkpoints、终端、设置和 AI 模式能力；新版参考决定布局比例、层级、密度、形状与交互分组，真实业务数据替换原型假数据。
+- Reproduction: `python3 -m http.server 4174 --bind 127.0.0.1`（仓库根目录），访问 `/design/ai-chat-workbench.html`，视口 1440×900。
+- Pass threshold: 实际应用截图与参考经 `visual-verdict` 评分达到 90；最终保留参考、实际截图、verdict JSON 和像素差异图。
 
 ## Visual audit
 

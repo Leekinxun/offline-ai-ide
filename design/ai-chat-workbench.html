@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrewForge · AI 工作台</title>
+  <style>
+    :root {
+      --bg: oklch(99% 0.002 240);
+      --surface: oklch(100% 0 0);
+      --fg: oklch(18% 0.012 250);
+      --muted: oklch(54% 0.012 250);
+      --border: oklch(92% 0.005 250);
+      --accent: oklch(58% 0.18 255);
+      --quiet: oklch(96.5% 0.004 250);
+      --hover: oklch(95% 0.006 250);
+      --strong-border: oklch(84% 0.008 250);
+      --success: oklch(61% 0.15 145);
+      --warn: oklch(70% 0.14 75);
+      --danger: oklch(58% 0.2 28);
+      --code-bg: oklch(22% 0.012 250);
+      --code-fg: oklch(94% 0.008 250);
+      --shadow-float: 0 18px 55px oklch(18% 0.012 250 / 0.14);
+      --shadow-input: 0 10px 32px oklch(18% 0.012 250 / 0.09);
+      --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+      --font-mono: 'SF Mono', 'Menlo', 'Monaco', monospace;
+      --rail: 56px;
+      --sidebar: 286px;
+      --activity: 360px;
+    }
+    [data-theme="dark"] {
+      --bg: oklch(16% 0.008 250);
+      --surface: oklch(19% 0.009 250);
+      --fg: oklch(94% 0.006 250);
+      --muted: oklch(68% 0.01 250);
+      --border: oklch(100% 0 0 / 0.09);
+      --quiet: oklch(22% 0.009 250);
+      --hover: oklch(25% 0.01 250);
+      --strong-border: oklch(100% 0 0 / 0.17);
+      --accent: oklch(70% 0.14 255);
+      --code-bg: oklch(12% 0.008 250);
+      --code-fg: oklch(92% 0.006 250);
+      --shadow-float: 0 18px 55px oklch(0% 0 0 / 0.38);
+      --shadow-input: 0 10px 32px oklch(0% 0 0 / 0.26);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body {
+      font-family: var(--font-body);
+      color: var(--fg);
+      background: var(--bg);
+      font-size: 14px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .app { display: grid; grid-template-columns: var(--rail) var(--sidebar) minmax(420px, 1fr) var(--activity); height: 100dvh; overflow: hidden; }
+    .app.activity-hidden { grid-template-columns: var(--rail) var(--sidebar) minmax(420px, 1fr); }
+    .rail { border-right: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 84%, transparent); display: flex; flex-direction: column; align-items: center; padding: 12px 6px; gap: 8px; z-index: 20; }
+    .mark { width: 36px; height: 36px; display: grid; place-items: center; margin-bottom: 8px; }
+    .mark svg { width: 27px; height: 27px; stroke-width: 1.9; }
+    .rail-spacer { flex: 1; }
+    .icon-btn { width: 44px; height: 44px; border: 0; border-radius: 10px; display: grid; place-items: center; background: transparent; color: var(--muted); transition: background .16s ease, color .16s ease, transform .12s ease; position: relative; }
+    .icon-btn:hover { background: var(--hover); color: var(--fg); }
+    .icon-btn:active { transform: scale(.96); }
+    .icon-btn.active { color: var(--accent); background: color-mix(in oklch, var(--accent) 10%, transparent); }
+    .icon-btn[data-tip]::after { content: attr(data-tip); position: absolute; left: 52px; top: 50%; transform: translateY(-50%); padding: 5px 8px; background: var(--fg); color: var(--surface); border-radius: 6px; font-size: 11px; letter-spacing: .02em; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 60; }
+    .icon-btn[data-tip]:hover::after { opacity: 1; }
+    .sidebar { border-right: 1px solid var(--border); background: var(--bg); min-width: 0; display: flex; flex-direction: column; }
+    .sidebar-head { height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px 0 16px; }
+    .sidebar-pane { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+    .sidebar-pane[hidden] { display: none; }
+    .workspace-name { font-family: var(--font-display); font-weight: 600; font-size: 14px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .small-icon { width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+    .small-icon:hover { background: var(--hover); color: var(--fg); }
+    .new-task { margin: 0 12px 14px; min-height: 44px; border: 1px solid var(--strong-border); border-radius: 10px; background: var(--surface); display: flex; align-items: center; gap: 9px; padding: 0 12px; font-weight: 550; letter-spacing: .02em; box-shadow: 0 1px 0 color-mix(in oklch, var(--fg) 5%, transparent); }
+    .new-task:hover { background: var(--quiet); }
+    .new-task kbd { margin-left: auto; font-family: var(--font-mono); color: var(--muted); font-size: 11px; font-weight: 400; }
+    .search-box { margin: 0 12px 10px; height: 36px; border-radius: 8px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--quiet); color: var(--muted); }
+    .search-box svg { width: 15px; }
+    .search-box input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--fg); min-width: 0; }
+    .section-label { padding: 8px 16px 6px; font-size: 11px; font-weight: 550; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+    .thread-list { padding: 0 8px; overflow: auto; }
+    .thread { width: 100%; border: 0; background: transparent; border-radius: 9px; padding: 9px 10px; text-align: left; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; min-height: 54px; }
+    .thread:hover { background: var(--hover); }
+    .thread.active { background: var(--quiet); }
+    .thread-title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thread-time, .thread-meta { color: var(--muted); font-size: 11px; letter-spacing: .015em; }
+    .thread-meta { grid-column: 1 / -1; }
+    .sidebar-footer { margin-top: auto; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+    .usage { display: grid; gap: 7px; padding: 10px 4px; }
+    .usage-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+    .usage-row strong { color: var(--fg); font-family: var(--font-mono); font-weight: 500; }
+    .meter { height: 3px; border-radius: 3px; background: var(--border); overflow: hidden; }
+    .meter span { display: block; height: 100%; width: 38%; background: var(--fg); }
+    .file-toolbar { min-height: 42px; display: flex; align-items: center; gap: 4px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border); }
+    .file-toolbar strong { font-size: 11px; font-weight: 550; letter-spacing: .08em; color: var(--muted); }
+    .tree { padding: 7px 8px 18px; overflow: auto; min-height: 0; }
+    .tree-row { width: 100%; min-height: 34px; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 16px 17px minmax(0,1fr) auto; align-items: center; gap: 5px; padding: 0 8px; text-align: left; color: var(--muted); }
+    .tree-row:hover { background: var(--hover); color: var(--fg); }
+    .tree-row.active { background: var(--quiet); color: var(--fg); }
+    .tree-row svg { width: 14px; height: 14px; }
+    .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; }
+    .tree-folder .tree-name { font-family: var(--font-body); font-size: 12px; font-weight: 550; }
+    .tree-change { color: var(--warn); font-family: var(--font-mono); font-size: 10px; }
+    .tree-children { padding-left: 13px; }
+    .tree-children[hidden] { display: none; }
+    .tree-folder.collapsed .chev { transform: rotate(-90deg); }
+    .main { min-width: 0; background: var(--surface); display: grid; grid-template-rows: 58px 1fr; position: relative; }
+    .topbar { border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 18px; background: color-mix(in oklch, var(--surface) 86%, transparent); backdrop-filter: blur(18px); z-index: 5; }
+    .mobile-toggle { display: none; }
+    .title-wrap { min-width: 0; flex: 1; }
+    .task-title { font-family: var(--font-display); font-size: 15px; line-height: 1.2; font-weight: 600; letter-spacing: -.015em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-subtitle { color: var(--muted); font-size: 11px; letter-spacing: .015em; margin-top: 2px; }
+    .online { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in oklch, var(--success) 15%, transparent); }
+    .segmented { display: flex; background: var(--quiet); border-radius: 9px; padding: 3px; }
+    .segmented[hidden] { display: none; }
+    .segmented button { min-height: 34px; border: 0; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; letter-spacing: .02em; }
+    .segmented button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px color-mix(in oklch, var(--fg) 9%, transparent); }
+    .conversation { overflow: auto; min-height: 0; }
+    .conversation-inner { width: min(780px, calc(100% - 40px)); margin: 0 auto; padding: 38px 0 190px; }
+    .date-divider { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 11px; letter-spacing: .02em; margin: 0 0 28px; }
+    .date-divider::before, .date-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .message { margin: 0 0 30px; }
+    .message-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+    .avatar { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--quiet); font-size: 11px; font-weight: 600; }
+    .avatar.ai { background: var(--fg); color: var(--surface); }
+    .sender { font-weight: 600; font-size: 13px; }
+    .message-time { color: var(--muted); font-size: 11px; }
+    .message-body { padding-left: 35px; max-width: 68ch; }
+    .message-body p { margin: 0 0 12px; }
+    .user .message-body { margin-left: 35px; padding: 13px 15px; border-radius: 12px; background: var(--quiet); max-width: 62ch; }
+    .user .message-body p { margin: 0; }
+    .inline-context { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0 0; }
+    .context-chip { height: 28px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 7px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; }
+    .context-chip svg { width: 13px; }
+    .run-card { margin: 14px 0 18px 35px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .run-head { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 13px; background: var(--quiet); }
+    .run-pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--success); position: relative; }
+    .run-pulse::after { content: ''; position: absolute; inset: -4px; border: 1px solid color-mix(in oklch, var(--success) 50%, transparent); border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
+    @keyframes pulse { 0% { transform: scale(.7); opacity: 1; } 100% { transform: scale(1.7); opacity: 0; } }
+    .run-title { font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+    .run-elapsed { margin-left: auto; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+    .run-stop { height: 32px; padding: 0 10px; border: 1px solid var(--strong-border); border-radius: 7px; background: var(--surface); font-size: 11px; letter-spacing: .02em; display: inline-flex; align-items: center; gap: 6px; }
+    .run-stop svg { width: 12px; }
+    .steps { padding: 5px 0; }
+    .step { border-top: 1px solid var(--border); }
+    .step:first-child { border-top: 0; }
+    .step-button { width: 100%; min-height: 44px; border: 0; background: transparent; padding: 0 13px; display: grid; grid-template-columns: 18px 22px minmax(0, 1fr) auto; align-items: center; gap: 7px; text-align: left; }
+    .step-button:hover { background: var(--quiet); }
+    .step-icon { color: var(--muted); display: grid; place-items: center; }
+    .step-icon svg, .chev { width: 14px; height: 14px; }
+    .step-name { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+    .step-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .step-status { color: var(--success); font-size: 11px; }
+    .step-detail { display: none; background: var(--code-bg); color: var(--code-fg); padding: 13px 16px; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-x: auto; }
+    .step.open .step-detail { display: block; }
+    .step.open .chev { transform: rotate(90deg); }
+    .change-card { margin: 16px 0 0 35px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .change-head { min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 13px; background: var(--quiet); font-size: 12px; }
+    .change-head strong { font-family: var(--font-mono); font-weight: 500; }
+    .change-meta { color: var(--muted); margin-left: auto; font-size: 11px; }
+    .diff { background: var(--code-bg); color: var(--code-fg); padding: 13px 16px; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; overflow-x: auto; white-space: pre; }
+    .diff .add { color: oklch(78% .13 145); }
+    .diff .remove { color: oklch(76% .13 28); }
+    .composer-wrap { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 24px 18px; background: linear-gradient(to bottom, transparent, var(--surface) 28%); pointer-events: none; }
+    .composer { width: min(800px, 100%); margin: 0 auto; border: 1px solid var(--strong-border); border-radius: 16px; background: color-mix(in oklch, var(--surface) 95%, transparent); box-shadow: var(--shadow-input); backdrop-filter: blur(18px); pointer-events: auto; overflow: hidden; transition: border-color .16s, transform .16s; }
+    .composer:focus-within { border-color: color-mix(in oklch, var(--accent) 65%, var(--strong-border)); transform: translateY(-1px); }
+    .composer textarea { display: block; width: 100%; min-height: 56px; max-height: 150px; resize: none; border: 0; outline: 0; background: transparent; padding: 14px 15px 8px; line-height: 1.5; }
+    .composer textarea::placeholder { color: var(--muted); }
+    .composer-tools { display: flex; align-items: center; gap: 4px; padding: 7px 8px 8px; }
+    .tool-btn { height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); padding: 0 9px; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; letter-spacing: .02em; }
+    .tool-btn:hover { background: var(--quiet); color: var(--fg); }
+    .tool-btn svg { width: 16px; }
+    .composer-spacer { flex: 1; }
+    .model-select { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 0 4px; height: 36px; }
+    .send-btn { width: 36px; height: 36px; border: 0; border-radius: 9px; background: var(--accent); color: var(--surface); display: grid; place-items: center; box-shadow: 0 2px 8px color-mix(in oklch, var(--accent) 28%, transparent); }
+    .send-btn:hover { filter: brightness(.94); }
+    .send-btn:active { transform: scale(.94); }
+    .send-btn svg { width: 16px; }
+    .composer-note { text-align: center; color: var(--muted); font-size: 10px; letter-spacing: .015em; margin-top: 7px; pointer-events: auto; }
+    .editor-workspace { min-height: 0; display: grid; grid-template-rows: 39px 1fr auto 24px; background: var(--surface); }
+    .editor-workspace[hidden] { display: none; }
+    .editor-tabs { display: flex; align-items: stretch; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .editor-tab { min-width: 142px; max-width: 210px; border: 0; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; background: transparent; padding: 0 11px; display: flex; align-items: center; gap: 7px; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+    .editor-tab:hover { background: var(--hover); color: var(--fg); }
+    .editor-tab.active { background: var(--surface); color: var(--fg); border-bottom-color: var(--fg); }
+    .editor-tab svg { width: 14px; flex: 0 0 auto; }
+    .editor-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .editor-stage { min-height: 0; display: grid; grid-template-rows: 34px 1fr; }
+    .editor-breadcrumb { display: flex; align-items: center; gap: 6px; padding: 0 14px; color: var(--muted); font-family: var(--font-mono); font-size: 10px; border-bottom: 1px solid var(--border); overflow: hidden; white-space: nowrap; }
+    .editor-breadcrumb strong { color: var(--fg); font-weight: 500; }
+    .code-editor { overflow: auto; background: var(--surface); padding: 12px 0 30px; counter-reset: line; font-family: var(--font-mono); font-size: 12px; line-height: 1.72; tab-size: 2; }
+    .code-line { min-width: max-content; display: grid; grid-template-columns: 54px minmax(720px, 1fr); min-height: 21px; }
+    .code-line::before { counter-increment: line; content: counter(line); color: var(--muted); opacity: .62; text-align: right; padding-right: 15px; user-select: none; }
+    .code-line:hover { background: var(--quiet); }
+    .code-line code { display: block; white-space: pre; outline: none; padding-right: 28px; }
+    .code-line code:focus { background: color-mix(in oklch, var(--accent) 7%, transparent); }
+    .editor-terminal { height: 184px; border-top: 1px solid var(--border); background: var(--code-bg); color: var(--code-fg); display: grid; grid-template-rows: 38px 1fr; }
+    .editor-terminal[hidden] { display: none; }
+    .editor-terminal-head { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid oklch(100% 0 0 / .09); }
+    .editor-terminal-head strong { font-size: 11px; letter-spacing: .04em; }
+    .editor-terminal-output { padding: 10px 14px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; }
+    .editor-status { display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--fg); color: var(--surface); font-family: var(--font-mono); font-size: 10px; }
+    .editor-status .grow { flex: 1; }
+    .activity { border-left: 1px solid var(--border); background: var(--bg); min-width: 0; display: flex; flex-direction: column; }
+    .activity.is-hidden { display: none; }
+    .activity-head { height: 58px; display: flex; align-items: center; padding: 0 14px 0 16px; gap: 8px; border-bottom: 1px solid var(--border); }
+    .activity-head strong { font-family: var(--font-display); font-size: 13px; letter-spacing: -.01em; }
+    .activity-tabs { display: flex; padding: 9px 10px 0; gap: 3px; border-bottom: 1px solid var(--border); }
+    .activity-tabs button { flex: 1; min-height: 38px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; letter-spacing: .02em; }
+    .activity-tabs button.active { color: var(--fg); border-bottom-color: var(--fg); }
+    .activity-tabs[hidden] { display: none; }
+    .activity-pane { padding: 14px; overflow: auto; }
+    .activity-pane[hidden] { display: none; }
+    .assistant-pane { min-height: 0; flex: 1; display: grid; grid-template-rows: auto 1fr auto; background: var(--surface); }
+    .assistant-pane[hidden] { display: none; }
+    .assistant-context { padding: 11px 12px; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .context-label { color: var(--muted); font-size: 10px; letter-spacing: .08em; margin-bottom: 6px; }
+    .active-file-context { width: 100%; min-height: 38px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 0 9px; text-align: left; }
+    .active-file-context svg { width: 14px; color: var(--muted); }
+    .active-file-context strong { font-family: var(--font-mono); font-size: 10px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .active-file-context span { color: var(--success); font-size: 10px; }
+    .assistant-messages { min-height: 0; overflow: auto; padding: 14px 13px 20px; }
+    .assistant-message { margin-bottom: 17px; }
+    .assistant-message-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; font-size: 11px; font-weight: 600; }
+    .assistant-message-head .mini-avatar { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--fg); color: var(--surface); font-size: 9px; }
+    .assistant-message.user .mini-avatar { background: var(--quiet); color: var(--fg); }
+    .assistant-message p { margin: 0 0 7px 29px; color: var(--fg); font-size: 12px; line-height: 1.58; }
+    .assistant-message .assistant-note { margin-left: 29px; color: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+    .assistant-composer { margin: 0 10px 10px; border: 1px solid var(--strong-border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-input); overflow: hidden; }
+    .assistant-composer textarea { width: 100%; min-height: 64px; max-height: 120px; resize: none; border: 0; outline: 0; background: transparent; padding: 11px 11px 5px; font-size: 12px; line-height: 1.5; }
+    .assistant-composer-tools { display: flex; align-items: center; gap: 6px; padding: 6px; }
+    .assistant-context-status { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; min-width: 0; }
+    .assistant-context-status svg { width: 13px; }
+    .assistant-context-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .assistant-send { margin-left: auto; width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--accent); color: var(--surface); display: grid; place-items: center; }
+    .assistant-send svg { width: 14px; }
+    .summary-block { margin-bottom: 22px; }
+    .summary-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; font-size: 12px; font-weight: 600; }
+    .summary-title span { color: var(--muted); font-family: var(--font-mono); font-size: 11px; font-weight: 400; }
+    .file-row { min-height: 42px; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 7px; border-radius: 8px; padding: 0 8px; }
+    .file-row:hover { background: var(--hover); }
+    .file-row svg { width: 15px; color: var(--muted); }
+    .file-name { font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-count { color: var(--success); font-family: var(--font-mono); font-size: 11px; }
+    .check-row { display: flex; align-items: flex-start; gap: 9px; padding: 7px 4px; font-size: 12px; }
+    .check { width: 17px; height: 17px; border-radius: 50%; background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); display: grid; place-items: center; flex: 0 0 auto; margin-top: 1px; }
+    .check svg { width: 11px; }
+    .terminal { background: var(--code-bg); color: var(--code-fg); border-radius: 10px; padding: 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.7; min-height: 150px; }
+    .prompt { color: oklch(76% .11 145); }
+    .muted-code { color: oklch(69% .015 250); }
+    .overlay { position: fixed; inset: 0; background: color-mix(in oklch, var(--fg) 20%, transparent); backdrop-filter: blur(4px); z-index: 100; display: none; align-items: center; justify-content: center; padding: 20px; }
+    .overlay.open { display: flex; }
+    .modal { width: min(720px, 100%); max-height: min(680px, 90dvh); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-float); overflow: hidden; display: grid; grid-template-columns: 180px minmax(0, 1fr); }
+    .modal-nav { background: var(--bg); border-right: 1px solid var(--border); padding: 16px 10px; }
+    .modal-nav h2 { font-family: var(--font-display); font-size: 17px; letter-spacing: -.015em; margin: 4px 8px 18px; }
+    .modal-nav button { width: 100%; min-height: 40px; border: 0; border-radius: 8px; background: transparent; text-align: left; padding: 0 10px; color: var(--muted); }
+    .modal-nav button.active { background: var(--surface); color: var(--fg); }
+    .modal-body { padding: 22px; overflow: auto; }
+    .modal-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+    .modal-title-row h3 { font-family: var(--font-display); font-size: 22px; letter-spacing: -.015em; margin: 0; }
+    .setting-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .setting-copy strong { display: block; font-size: 13px; margin-bottom: 2px; }
+    .setting-copy span { display: block; color: var(--muted); font-size: 12px; max-width: 42ch; }
+    .setting-row select { min-width: 150px; height: 38px; border: 1px solid var(--strong-border); border-radius: 8px; background: var(--surface); padding: 0 9px; }
+    .switch { width: 46px; height: 28px; border: 0; border-radius: 20px; background: var(--strong-border); padding: 3px; transition: background .18s; }
+    .switch span { display: block; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 4px color-mix(in oklch, var(--fg) 20%, transparent); transition: transform .18s; }
+    .switch.on { background: var(--success); }
+    .switch.on span { transform: translateX(18px); }
+    .palette { width: min(560px, calc(100% - 24px)); position: fixed; top: 12%; left: 50%; transform: translateX(-50%); z-index: 120; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-float); display: none; overflow: hidden; }
+    .palette.open { display: block; }
+    .palette-input { height: 54px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+    .palette-input input { flex: 1; border: 0; outline: 0; background: transparent; }
+    .palette-list { padding: 7px; }
+    .command { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 8px; background: transparent; padding: 0 10px; text-align: left; }
+    .command:hover { background: var(--quiet); }
+    .command kbd { margin-left: auto; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+    .empty { display: none; min-height: calc(100dvh - 58px); align-items: center; justify-content: center; padding: 40px 24px 160px; text-align: center; }
+    .empty.open { display: flex; }
+    .empty-inner { width: min(580px, 100%); }
+    .empty h1 { font-family: var(--font-display); font-size: clamp(32px, 4vw, 48px); line-height: 1.08; letter-spacing: -.025em; margin: 0 0 13px; font-weight: 600; }
+    .empty p { color: var(--muted); font-size: 15px; margin: 0 auto 26px; max-width: 52ch; }
+    .starter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
+    .starter { min-height: 82px; border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 13px; }
+    .starter:hover { background: var(--quiet); border-color: var(--strong-border); }
+    .starter strong { display: block; font-size: 13px; margin-bottom: 3px; }
+    .starter span { color: var(--muted); font-size: 12px; }
+    .toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px); background: var(--fg); color: var(--surface); padding: 9px 13px; border-radius: 9px; font-size: 12px; opacity: 0; pointer-events: none; transition: .2s ease; z-index: 150; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    @media (max-width: 1180px) {
+      .app { grid-template-columns: var(--rail) 250px minmax(420px, 1fr); }
+      .activity { position: fixed; right: 0; top: 0; bottom: 0; width: min(var(--activity), calc(100vw - 56px)); transform: translateX(100%); transition: transform .22s ease; z-index: 40; box-shadow: var(--shadow-float); }
+      .activity.open { transform: translateX(0); }
+      .mobile-toggle.activity-toggle { display: grid; }
+    }
+    @media (max-width: 780px) {
+      .app { display: block; }
+      .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 62px; width: auto; border-right: 0; border-top: 1px solid var(--border); flex-direction: row; justify-content: space-around; padding: 4px 8px; background: color-mix(in oklch, var(--surface) 90%, transparent); backdrop-filter: blur(20px); }
+      .rail .mark, .rail-spacer, .rail [data-hide-mobile] { display: none; }
+      .icon-btn[data-tip]::after { display: none; }
+      .sidebar { position: fixed; left: 0; top: 0; bottom: 62px; width: min(310px, 88vw); transform: translateX(-100%); transition: transform .22s ease; z-index: 45; box-shadow: var(--shadow-float); }
+      .sidebar.open { transform: translateX(0); }
+      .main { height: calc(100dvh - 62px); grid-template-rows: 58px 1fr; }
+      .mobile-toggle { display: grid; }
+      .topbar { padding: 0 10px; gap: 7px; }
+      .online, .segmented { display: none; }
+      .conversation-inner { width: min(100% - 28px, 720px); padding-top: 24px; }
+      .message-body { padding-left: 0; }
+      .user .message-body, .run-card, .change-card { margin-left: 0; }
+      .message-head { margin-bottom: 8px; }
+      .composer-wrap { padding: 18px 10px 10px; }
+      .composer-note { display: none; }
+      .tool-btn span { display: none; }
+      .model-select { max-width: 108px; }
+      .activity { bottom: 62px; height: auto; width: min(340px, 94vw); }
+      .code-line { grid-template-columns: 42px minmax(640px, 1fr); }
+      .editor-tab { min-width: 126px; }
+      .modal { grid-template-columns: 1fr; }
+      .modal-nav { border-right: 0; border-bottom: 1px solid var(--border); display: flex; gap: 4px; overflow-x: auto; }
+      .modal-nav h2 { display: none; }
+      .modal-nav button { width: auto; white-space: nowrap; }
+      .setting-row { grid-template-columns: 1fr; gap: 10px; }
+      .setting-row select { width: 100%; }
+    }
+    @media (max-width: 430px) {
+      .conversation-inner { width: calc(100% - 20px); }
+      .starter-grid { grid-template-columns: 1fr; }
+      .task-subtitle { display: none; }
+      .change-meta { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-mark" viewBox="0 0 24 24"><path d="M7 7.5 12 4l5 3.5v6L12 17l-5-3.5z"/><path d="m12 9 5 3.5M12 9 7 12.5M12 9v8"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a4 4 0 0 1-4 4H8l-4 3V7a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4z"/></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 6h4a6 6 0 0 1 6 6v-4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.2 4.2L17 9l-3.8 1.8L12 15l-1.2-4.2L7 9l3.8-1.8z"/><path d="m18.5 14 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 4 4-4 4M12 17h7"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20.5 11.5-8.7 8.7a6 6 0 0 1-8.5-8.5l9.4-9.4a4 4 0 1 1 5.7 5.7L9 17.4a2 2 0 0 1-2.8-2.8l8.7-8.7"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 6V5a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v14a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </svg>
+
+  <div class="app" data-od-id="ai-workbench-shell">
+    <nav class="rail" data-od-id="primary-navigation" aria-label="主导航">
+      <div class="mark" title="CrewForge"><svg><use href="#i-mark"/></svg></div>
+      <button class="icon-btn active" data-view="chat" data-tip="对话" aria-label="对话"><svg><use href="#i-chat"/></svg></button>
+      <button class="icon-btn" data-view="files" data-tip="文件" aria-label="文件"><svg><use href="#i-files"/></svg></button>
+      <button class="icon-btn" data-view="search" data-tip="搜索" aria-label="搜索"><svg><use href="#i-search"/></svg></button>
+      <button class="icon-btn" data-view="git" data-tip="源代码管理" aria-label="源代码管理"><svg><use href="#i-git"/></svg></button>
+      <div class="rail-spacer"></div>
+      <button class="icon-btn" id="themeToggle" data-tip="切换外观" aria-label="切换外观" data-hide-mobile><svg><use href="#i-moon"/></svg></button>
+      <button class="icon-btn" id="settingsOpen" data-tip="设置" aria-label="设置"><svg><use href="#i-settings"/></svg></button>
+    </nav>
+
+    <aside class="sidebar" id="sidebar" data-od-id="conversation-sidebar">
+      <div class="sidebar-head"><div class="workspace-name">CrewForge / ai-ide</div><button class="small-icon" aria-label="工作区菜单"><svg><use href="#i-chevron"/></svg></button></div>
+      <div class="sidebar-pane" id="chatSidebarPane">
+      <button class="new-task" id="newTask" data-od-id="new-task-button"><svg><use href="#i-plus"/></svg>新建任务<kbd>⌘ N</kbd></button>
+      <label class="search-box"><svg><use href="#i-search"/></svg><input id="threadSearch" aria-label="搜索对话" placeholder="搜索对话" /></label>
+      <div class="section-label">今天</div>
+      <div class="thread-list" id="threadList" data-od-id="conversation-list">
+        <button class="thread active" data-title="优化 AI 对话工作流"><span class="thread-title">优化 AI 对话工作流</span><span class="thread-time">刚刚</span><span class="thread-meta">正在处理 · 4 个步骤</span></button>
+        <button class="thread" data-title="修复终端重连逻辑"><span class="thread-title">修复终端重连逻辑</span><span class="thread-time">09:42</span><span class="thread-meta">已完成 · 3 个文件</span></button>
+        <button class="thread" data-title="检查登录页响应式布局"><span class="thread-title">检查登录页响应式布局</span><span class="thread-time">08:16</span><span class="thread-meta">待继续 · 有 1 条建议</span></button>
+        <div class="section-label">昨天</div>
+        <button class="thread" data-title="重构插件权限面板"><span class="thread-title">重构插件权限面板</span><span class="thread-time">昨天</span><span class="thread-meta">已完成 · 6 个文件</span></button>
+        <button class="thread" data-title="分析 Monaco 首屏加载"><span class="thread-title">分析 Monaco 首屏加载</span><span class="thread-time">昨天</span><span class="thread-meta">分析结果</span></button>
+      </div>
+      <div class="sidebar-footer">
+        <div class="usage"><div class="usage-row"><span>本次上下文</span><strong>38%</strong></div><div class="meter"><span></span></div></div>
+      </div>
+      </div>
+      <div class="sidebar-pane" id="fileSidebarPane" data-od-id="workspace-file-tree" hidden>
+        <div class="file-toolbar"><strong>资源管理器</strong><div class="rail-spacer"></div><button class="small-icon" id="newFileButton" aria-label="新建文件"><svg><use href="#i-plus"/></svg></button><button class="small-icon" id="collapseTreeButton" aria-label="折叠文件夹"><svg><use href="#i-chevron"/></svg></button></div>
+        <label class="search-box" style="margin-top:10px"><svg><use href="#i-search"/></svg><input id="fileSearch" aria-label="筛选文件" placeholder="筛选文件" /></label>
+        <div class="tree" id="fileTree">
+          <button class="tree-row tree-folder" data-folder="frontend"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-files"/></svg><span class="tree-name">frontend</span></button>
+          <div class="tree-children" data-children="frontend">
+            <button class="tree-row tree-folder" data-folder="src"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-files"/></svg><span class="tree-name">src</span></button>
+            <div class="tree-children" data-children="src">
+              <button class="tree-row tree-folder" data-folder="components"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-files"/></svg><span class="tree-name">components</span></button>
+              <div class="tree-children" data-children="components">
+                <button class="tree-row file-item active" data-file="ChatPanel.tsx" data-path="frontend/src/components/ChatPanel.tsx"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">ChatPanel.tsx</span><span class="tree-change">M</span></button>
+                <button class="tree-row file-item" data-file="ToolCallStep.tsx" data-path="frontend/src/components/ToolCallStep.tsx"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">ToolCallStep.tsx</span><span class="tree-change">M</span></button>
+                <button class="tree-row file-item" data-file="TaskHeader.tsx" data-path="frontend/src/components/TaskHeader.tsx"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">TaskHeader.tsx</span></button>
+              </div>
+              <button class="tree-row file-item" data-file="App.tsx" data-path="frontend/src/App.tsx"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">App.tsx</span></button>
+              <button class="tree-row file-item" data-file="App.css" data-path="frontend/src/App.css"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">App.css</span><span class="tree-change">M</span></button>
+            </div>
+            <button class="tree-row file-item" data-file="package.json" data-path="frontend/package.json"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">package.json</span></button>
+          </div>
+          <button class="tree-row file-item" data-file="requirements.txt" data-path="requirements.txt"><span></span><svg><use href="#i-file"/></svg><span class="tree-name">requirements.txt</span></button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main" data-od-id="conversation-workspace">
+      <header class="topbar" data-od-id="task-header">
+        <button class="icon-btn mobile-toggle" id="sidebarToggle" aria-label="打开会话列表"><svg><use href="#i-menu"/></svg></button>
+        <div class="title-wrap"><div class="task-title" id="taskTitle">优化 AI 对话工作流</div><div class="task-subtitle" id="taskSubtitle">main · 工作区状态已同步</div></div>
+        <div class="online"><span class="online-dot"></span><span>已连接</span></div>
+        <div class="segmented" id="chatViewActions" aria-label="内容视图"><button class="active">对话</button><button id="openChanges">变更</button></div>
+        <div class="segmented" id="editorViewActions" aria-label="编辑器操作" hidden><button id="editorAssistant">AI 协作</button><button id="toggleEditorTerminal">终端</button><button id="editorChanges">变更</button></div>
+        <button class="icon-btn mobile-toggle activity-toggle" id="activityToggle" aria-label="打开运行详情"><svg><use href="#i-panel"/></svg></button>
+      </header>
+
+      <section class="conversation" id="conversation" data-od-id="chat-thread">
+        <div class="conversation-inner" id="conversationInner">
+          <div class="date-divider">今天 10:03</div>
+          <article class="message user" data-od-id="message-user-request">
+            <div class="message-head"><div class="avatar">你</div><span class="sender">你</span><span class="message-time">10:03</span></div>
+            <div class="message-body"><p>优化 ChatPanel 的信息层级。工具调用不要打断阅读，同时让生成、暂停和继续的状态更明确。</p><div class="inline-context"><span class="context-chip"><svg><use href="#i-file"/></svg>ChatPanel.tsx</span><span class="context-chip"><svg><use href="#i-file"/></svg>App.css</span></div></div>
+          </article>
+
+          <article class="message" data-od-id="message-ai-analysis">
+            <div class="message-head"><div class="avatar ai">CF</div><span class="sender">CrewForge</span><span class="message-time">10:03</span></div>
+            <div class="message-body"><p>我会先梳理对话区的状态与操作，再把工具步骤收进可展开的运行记录。消息正文保持稳定，生成过程不会挤动当前阅读位置。</p></div>
+            <div class="run-card" data-od-id="active-run-card">
+              <div class="run-head"><span class="run-pulse"></span><span class="run-title" id="runTitle">正在实现 · 编辑界面样式</span><span class="run-elapsed" id="elapsed">00:18</span><button class="run-stop" id="stopRun"><svg><use href="#i-stop"/></svg><span>停止</span></button></div>
+              <div class="steps">
+                <div class="step"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-search"/></svg></span><span><span class="step-name">read_file</span> <span class="step-summary">读取 ChatPanel 与相关样式</span></span><span class="step-status">完成</span></button><div class="step-detail">frontend/src/components/ChatPanel.tsx
+frontend/src/components/ToolCallStep.tsx
+frontend/src/App.css</div></div>
+                <div class="step"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-file"/></svg></span><span><span class="step-name">edit_file</span> <span class="step-summary">重排任务头、消息流与输入区</span></span><span class="step-status">完成</span></button><div class="step-detail">修改 ChatPanel.tsx
++ 新增运行状态栏
++ 合并上下文入口
++ 将停止操作固定在状态区</div></div>
+                <div class="step"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-terminal"/></svg></span><span><span class="step-name">bash</span> <span class="step-summary">npm run typecheck</span></span><span class="step-status">完成</span></button><div class="step-detail">&gt; tsc --noEmit
+检查通过，未发现类型错误。</div></div>
+                <div class="step"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-terminal"/></svg></span><span><span class="step-name">bash</span> <span class="step-summary">npm run test</span></span><span class="step-status" id="lastStepStatus">进行中</span></button><div class="step-detail" id="lastStepDetail">正在运行 ChatPanel 交互测试…</div></div>
+              </div>
+            </div>
+            <div class="message-body"><p>核心结构已经完成。输入区现在会根据运行状态切换为“追加指令”，停止操作也保留在上下文附近，避免用户寻找全局按钮。</p></div>
+            <div class="change-card" data-od-id="change-preview-card">
+              <div class="change-head"><svg><use href="#i-file"/></svg><strong>ChatPanel.tsx</strong><span class="change-meta">+24 −11</span></div>
+              <div class="diff"><span class="remove">- {isStreaming &amp;&amp; &lt;Spinner /&gt;}</span>
+<span class="add">+ &lt;RunStatus state={runState} onStop={onStop} /&gt;</span>
+<span class="add">+ &lt;Composer mode={isStreaming ? 'steer' : 'send'} /&gt;</span></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="empty" id="emptyState" data-od-id="new-task-empty-state">
+          <div class="empty-inner"><h1>今天想解决什么？</h1><p>描述目标，或从常见工作开始。CrewForge 会先理解上下文，再执行改动。</p><div class="starter-grid"><button class="starter" data-prompt="帮我检查当前分支的未提交改动"><strong>检查当前改动</strong><span>找出风险、回归与遗漏的测试</span></button><button class="starter" data-prompt="分析这个项目的结构并提出简化建议"><strong>理解代码库</strong><span>梳理模块、依赖和关键入口</span></button><button class="starter" data-prompt="帮我定位最近一次测试失败的原因"><strong>定位失败测试</strong><span>从日志和相关代码开始排查</span></button><button class="starter" data-prompt="实现当前选中的 TODO，并补充验证"><strong>完成一个任务</strong><span>实现、测试并汇总变更</span></button></div></div>
+        </div>
+
+        <div class="composer-wrap" data-od-id="message-composer">
+          <div class="composer"><textarea id="composerInput" rows="1" aria-label="给 CrewForge 发送消息" placeholder="追加指令，或描述下一步…"></textarea><div class="composer-tools"><button class="tool-btn" id="attachButton"><svg><use href="#i-clip"/></svg><span>添加上下文</span></button><button class="tool-btn" id="commandButton"><svg><use href="#i-command"/></svg><span>命令</span></button><div class="composer-spacer"></div><select class="model-select" aria-label="选择模型"><option>GPT-5.6</option><option>GPT-5.6 · 深度思考</option><option>GPT-5.6 · 快速</option></select><button class="send-btn" id="sendButton" aria-label="发送消息"><svg><use href="#i-arrow"/></svg></button></div></div>
+          <div class="composer-note">Enter 发送 · Shift + Enter 换行 · ⌘ K 打开命令</div>
+        </div>
+      </section>
+
+      <section class="editor-workspace" id="editorWorkspace" data-od-id="code-editor-workspace" hidden>
+        <div class="editor-tabs" id="editorTabs" data-od-id="editor-tabs">
+          <button class="editor-tab active" data-file="ChatPanel.tsx" data-path="frontend/src/components/ChatPanel.tsx"><svg><use href="#i-file"/></svg><span>ChatPanel.tsx</span></button>
+          <button class="editor-tab" data-file="ToolCallStep.tsx" data-path="frontend/src/components/ToolCallStep.tsx"><svg><use href="#i-file"/></svg><span>ToolCallStep.tsx</span></button>
+          <button class="editor-tab" data-file="App.css" data-path="frontend/src/App.css"><svg><use href="#i-file"/></svg><span>App.css</span></button>
+        </div>
+        <div class="editor-stage">
+          <div class="editor-breadcrumb" id="editorBreadcrumb">frontend <span>›</span> src <span>›</span> components <span>›</span> <strong>ChatPanel.tsx</strong></div>
+          <div class="code-editor" id="codeEditor" data-od-id="editable-code-surface" aria-label="代码编辑器"></div>
+        </div>
+        <div class="editor-terminal" id="editorTerminal" data-od-id="editor-terminal" hidden>
+          <div class="editor-terminal-head"><strong>终端</strong><span style="color:var(--muted);font-size:11px">zsh</span><div class="rail-spacer"></div><button class="small-icon" id="closeEditorTerminal" aria-label="关闭终端"><svg><use href="#i-close"/></svg></button></div>
+          <div class="editor-terminal-output"><span class="prompt">ai-ide %</span> npm run dev
+
+<span class="muted-code">VITE v6.1.0 ready</span>
+本地服务已启动，正在监听文件变更。</div>
+        </div>
+        <div class="editor-status"><span>main*</span><span>无问题</span><span class="grow"></span><span>Ln 18, Col 7</span><span>空格: 2</span><span>UTF-8</span><span>TypeScript React</span></div>
+      </section>
+    </main>
+
+    <aside class="activity" id="activity" data-od-id="run-details-panel">
+      <div class="activity-head"><strong id="activityTitle">运行详情</strong><div class="rail-spacer"></div><button class="small-icon" id="activityClose" aria-label="关闭右侧面板"><svg><use href="#i-close"/></svg></button></div>
+      <div class="activity-tabs" id="activityTabs"><button class="active" data-pane="changesPane">变更</button><button data-pane="checksPane">检查</button><button data-pane="terminalPane">终端</button></div>
+      <div class="assistant-pane" id="assistantPane" data-od-id="editor-ai-collaboration" hidden>
+        <div class="assistant-context"><div class="context-label">自动附加的编辑上下文</div><button class="active-file-context" id="activeFileContext"><svg><use href="#i-file"/></svg><strong id="assistantActiveFile">frontend/src/components/ChatPanel.tsx</strong><span>已同步</span></button></div>
+        <div class="assistant-messages" id="assistantMessages">
+          <article class="assistant-message"><div class="assistant-message-head"><span class="mini-avatar">CF</span><span>CrewForge</span></div><p>我会持续跟随你当前打开的文件。你切换文件后，新的路径会自动加入下一条指令的上下文。</p><div class="assistant-note">当前：ChatPanel.tsx · 未选择代码</div></article>
+        </div>
+        <div class="assistant-composer"><textarea id="assistantInput" aria-label="基于当前文件向 Agent 提问" placeholder="针对当前文件提出修改要求…"></textarea><div class="assistant-composer-tools"><span class="assistant-context-status"><svg><use href="#i-file"/></svg><span id="assistantContextStatus">ChatPanel.tsx 已附加</span></span><button class="assistant-send" id="assistantSend" aria-label="发送给 Agent"><svg><use href="#i-arrow"/></svg></button></div></div>
+      </div>
+      <div class="activity-pane" id="changesPane">
+        <div class="summary-block"><div class="summary-title">工作区变更 <span>3 个文件</span></div><div class="file-row"><svg><use href="#i-file"/></svg><span class="file-name">ChatPanel.tsx</span><span class="file-count">+24 −11</span></div><div class="file-row"><svg><use href="#i-file"/></svg><span class="file-name">ToolCallStep.tsx</span><span class="file-count">+18 −7</span></div><div class="file-row"><svg><use href="#i-file"/></svg><span class="file-name">App.css</span><span class="file-count">+86 −42</span></div></div>
+        <div class="summary-block"><div class="summary-title">变更摘要</div><p style="margin:0;color:var(--muted);font-size:12px">工具步骤收纳为可展开记录；生成状态与输入器共享上下文；移动端使用底部导航和抽屉式详情。</p></div>
+      </div>
+      <div class="activity-pane" id="checksPane" hidden><div class="summary-title">自动检查 <span>3 / 3</span></div><div class="check-row"><span class="check"><svg><use href="#i-check"/></svg></span><span>TypeScript 类型检查通过</span></div><div class="check-row"><span class="check"><svg><use href="#i-check"/></svg></span><span>ChatPanel 交互测试通过</span></div><div class="check-row"><span class="check"><svg><use href="#i-check"/></svg></span><span>未发现横向溢出</span></div></div>
+      <div class="activity-pane" id="terminalPane" hidden><div class="terminal"><span class="prompt">ai-ide %</span> npm run test
+
+<span class="muted-code">RUN v3.2.1</span>
+✓ ChatPanel.test.tsx
+✓ ToolCallStep.test.tsx
+
+测试已通过。</div></div>
+    </aside>
+  </div>
+
+  <div class="overlay" id="settingsOverlay" data-od-id="settings-dialog">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <nav class="modal-nav"><h2 id="settingsTitle">设置</h2><button class="active">通用</button><button>模型</button><button>工具权限</button><button>外观</button></nav>
+      <section class="modal-body"><div class="modal-title-row"><h3>通用</h3><button class="small-icon" id="settingsClose" aria-label="关闭设置"><svg><use href="#i-close"/></svg></button></div><div class="setting-row"><div class="setting-copy"><strong>默认交互模式</strong><span>决定新任务是直接执行，还是先给出计划。</span></div><select><option>自动</option><option>先计划</option><option>仅对话</option></select></div><div class="setting-row"><div class="setting-copy"><strong>工具执行前确认</strong><span>仅在写文件、运行命令等操作前请求确认。</span></div><button class="switch on" aria-label="切换工具确认"><span></span></button></div><div class="setting-row"><div class="setting-copy"><strong>完成后通知</strong><span>任务在后台完成时显示系统通知。</span></div><button class="switch" aria-label="切换完成通知"><span></span></button></div><div class="setting-row"><div class="setting-copy"><strong>界面密度</strong><span>紧凑模式会显示更多对话与工具步骤。</span></div><select><option>舒适</option><option>紧凑</option></select></div></section>
+    </div>
+  </div>
+
+  <div class="palette" id="palette" data-od-id="command-palette"><label class="palette-input"><svg><use href="#i-search"/></svg><input id="paletteInput" placeholder="搜索命令或文件" aria-label="搜索命令或文件" /></label><div class="palette-list"><button class="command" data-action="new"><svg><use href="#i-plus"/></svg>新建任务<kbd>⌘ N</kbd></button><button class="command" data-action="changes"><svg><use href="#i-git"/></svg>查看当前变更<kbd>⌘ ⇧ G</kbd></button><button class="command" data-action="settings"><svg><use href="#i-settings"/></svg>打开设置<kbd>⌘ ,</kbd></button></div></div>
+  <div class="toast" id="toast" role="status"></div>
+  <input type="file" id="fileInput" hidden multiple />
+
+  <script>
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{ density: 'comfortable', motion: true, theme: 'light' }/*EDITMODE-END*/;
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const root = document.documentElement;
+    const sidebar = $('#sidebar');
+    const activity = $('#activity');
+    const conversationInner = $('#conversationInner');
+    const emptyState = $('#emptyState');
+    const input = $('#composerInput');
+    const toast = $('#toast');
+    let running = true;
+    let seconds = 18;
+    let toastTimer;
+    let currentWorkspaceMode = 'chat';
+    let activeEditorFile = 'ChatPanel.tsx';
+    let currentEditorPath = 'frontend/src/components/ChatPanel.tsx';
+    const fileContents = {
+      'ChatPanel.tsx': [
+        'import React, { useCallback, useRef, useState } from "react";',
+        'import { TaskHeader } from "./TaskHeader";',
+        'import { ToolCallStep } from "./ToolCallStep";',
+        '',
+        'interface ChatPanelProps {',
+        '  connected: boolean;',
+        '  isStreaming: boolean;',
+        '  onSend: (message: string) => void;',
+        '  onSteer: (message: string) => void;',
+        '  onStop: () => void;',
+        '}',
+        '',
+        'export function ChatPanel(props: ChatPanelProps) {',
+        '  const [input, setInput] = useState("");',
+        '  const composerRef = useRef<HTMLTextAreaElement>(null);',
+        '',
+        '  const submit = useCallback(() => {',
+        '    const message = input.trim();',
+        '    if (!message || !props.connected) return;',
+        '    props.isStreaming ? props.onSteer(message) : props.onSend(message);',
+        '    setInput("");',
+        '  }, [input, props]);',
+        '',
+        '  return (',
+        '    <section className="chat-panel">',
+        '      <TaskHeader state={props.isStreaming ? "running" : "ready"} />',
+        '      <div className="message-stream">{/* messages */}</div>',
+        '      <Composer ref={composerRef} value={input} onSubmit={submit} />',
+        '    </section>',
+        '  );',
+        '}'
+      ],
+      'ToolCallStep.tsx': [
+        'import React, { useState } from "react";',
+        '',
+        'export function ToolCallStep({ step }) {',
+        '  const [expanded, setExpanded] = useState(false);',
+        '  const status = step.isError ? "失败" : step.result ? "完成" : "进行中";',
+        '',
+        '  return (',
+        '    <article className="tool-step">',
+        '      <button onClick={() => setExpanded(value => !value)}>',
+        '        <span>{step.name}</span>',
+        '        <span>{status}</span>',
+        '      </button>',
+        '      {expanded && <pre>{JSON.stringify(step.input, null, 2)}</pre>}',
+        '    </article>',
+        '  );',
+        '}'
+      ],
+      'TaskHeader.tsx': [
+        'import React from "react";',
+        '',
+        'export function TaskHeader({ state }) {',
+        '  return (',
+        '    <header className="task-header">',
+        '      <div>',
+        '        <strong>优化 AI 对话工作流</strong>',
+        '        <span>{state === "running" ? "正在执行" : "已连接"}</span>',
+        '      </div>',
+        '    </header>',
+        '  );',
+        '}'
+      ],
+      'App.tsx': [
+        'import React, { useState } from "react";',
+        'import { Sidebar } from "./components/Sidebar";',
+        'import { ChatPanel } from "./components/ChatPanel";',
+        '',
+        'export default function App() {',
+        '  const [activeView, setActiveView] = useState("chat");',
+        '  return (',
+        '    <main className="workbench">',
+        '      <Sidebar view={activeView} onViewChange={setActiveView} />',
+        '      <ChatPanel />',
+        '    </main>',
+        '  );',
+        '}'
+      ],
+      'App.css': [
+        ':root {',
+        '  --bg: oklch(99% 0.002 240);',
+        '  --surface: oklch(100% 0 0);',
+        '  --fg: oklch(18% 0.012 250);',
+        '  --muted: oklch(54% 0.012 250);',
+        '  --border: oklch(92% 0.005 250);',
+        '}',
+        '',
+        '.workbench {',
+        '  display: grid;',
+        '  grid-template-columns: 286px minmax(0, 1fr);',
+        '  height: 100dvh;',
+        '  overflow: hidden;',
+        '}',
+        '',
+        '.message-stream {',
+        '  overflow: auto;',
+        '  padding: 32px clamp(20px, 5vw, 72px) 180px;',
+        '}'
+      ],
+      'package.json': ['{', '  "name": "crewforge-ai-ide",', '  "private": true,', '  "scripts": {', '    "dev": "vite",', '    "test": "vitest run",', '    "typecheck": "tsc --noEmit"', '  }', '}'],
+      'requirements.txt': ['fastapi==0.115.0', 'uvicorn==0.30.6', 'pydantic==2.9.2']
+    };
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+    function updateAgentContext(path, lineNumber) {
+      currentEditorPath = path;
+      $('#assistantActiveFile').textContent = path;
+      const fileName = path.split('/').pop();
+      $('#assistantContextStatus').textContent = lineNumber ? `${fileName} · 第 ${lineNumber} 行已附加` : `${fileName} 已附加`;
+    }
+    function renderEditor(fileName, path) {
+      const editor = $('#codeEditor');
+      editor.innerHTML = '';
+      (fileContents[fileName] || ['// 暂无可预览内容']).forEach((text, index) => {
+        const line = document.createElement('div');
+        line.className = 'code-line';
+        const code = document.createElement('code');
+        code.contentEditable = 'true';
+        code.spellcheck = false;
+        code.textContent = text || ' ';
+        code.addEventListener('focus', () => updateAgentContext(path, index + 1));
+        line.appendChild(code);
+        editor.appendChild(line);
+      });
+      activeEditorFile = fileName;
+      updateAgentContext(path);
+      $('#taskTitle').textContent = fileName;
+      $('#taskSubtitle').textContent = `${path} · 已启用自动保存`;
+      const parts = path.split('/');
+      $('#editorBreadcrumb').innerHTML = parts.map((part, index) => index === parts.length - 1 ? `<strong>${part}</strong>` : `${part} <span>›</span>`).join(' ');
+      $$('.file-item').forEach(item => item.classList.toggle('active', item.dataset.path === path));
+      $$('.editor-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.path === path));
+    }
+    function ensureEditorTab(fileName, path) {
+      let tab = $(`.editor-tab[data-path="${path}"]`);
+      if (!tab) {
+        tab = document.createElement('button');
+        tab.className = 'editor-tab';
+        tab.dataset.file = fileName;
+        tab.dataset.path = path;
+        tab.innerHTML = '<svg><use href="#i-file"/></svg><span></span>';
+        $('span', tab).textContent = fileName;
+        $('#editorTabs').appendChild(tab);
+        tab.addEventListener('click', () => openFile(fileName, path));
+      }
+    }
+    function openFile(fileName, path) {
+      ensureEditorTab(fileName, path);
+      renderEditor(fileName, path);
+      if (innerWidth <= 780) sidebar.classList.remove('open');
+    }
+    function setWorkspaceMode(mode) {
+      currentWorkspaceMode = mode;
+      const isEditor = mode === 'files';
+      $('#chatSidebarPane').hidden = isEditor;
+      $('#fileSidebarPane').hidden = !isEditor;
+      $('#conversation').hidden = isEditor;
+      $('#editorWorkspace').hidden = !isEditor;
+      $('#chatViewActions').hidden = isEditor;
+      $('#editorViewActions').hidden = !isEditor;
+      $$('.rail .icon-btn[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === mode));
+      if (isEditor) {
+        const item = $(`.file-item[data-file="${activeEditorFile}"]`) || $('.file-item');
+        renderEditor(item.dataset.file, item.dataset.path);
+        showAssistantPanel(innerWidth > 1180);
+      } else {
+        if (!$('#assistantPane').hidden) {
+          $('#assistantPane').hidden = true;
+          $('#activityTabs').hidden = false;
+          $('#activityTitle').textContent = '运行详情';
+          $('#changesPane').hidden = false;
+          closeActivity();
+        }
+        const activeThread = $('.thread.active');
+        $('#taskTitle').textContent = activeThread ? activeThread.dataset.title : '新任务';
+        $('#taskSubtitle').textContent = 'main · 工作区状态已同步';
+      }
+    }
+    function closeDrawers() { sidebar.classList.remove('open'); activity.classList.remove('open'); }
+    function newTask() {
+      setWorkspaceMode('chat');
+      $$('.thread').forEach(t => t.classList.remove('active'));
+      $('#taskTitle').textContent = '新任务';
+      conversationInner.style.display = 'none';
+      emptyState.classList.add('open');
+      input.placeholder = '描述要完成的任务…';
+      closeDrawers();
+      setTimeout(() => input.focus(), 80);
+    }
+    function openSettings() { $('#settingsOverlay').classList.add('open'); }
+    function closeSettings() { $('#settingsOverlay').classList.remove('open'); }
+    function openPalette() { $('#palette').classList.add('open'); setTimeout(() => $('#paletteInput').focus(), 30); }
+    function closePalette() { $('#palette').classList.remove('open'); $('#paletteInput').value = ''; }
+    function openActivity() {
+      activity.classList.remove('is-hidden');
+      $('.app').classList.remove('activity-hidden');
+      activity.classList.add('open');
+    }
+    function closeActivity() {
+      activity.classList.remove('open');
+      if (innerWidth > 1180) {
+        activity.classList.add('is-hidden');
+        $('.app').classList.add('activity-hidden');
+      }
+    }
+    function showAssistantPanel(openPanel = true) {
+      $('#activityTitle').textContent = 'AI 协作';
+      $('#activityTabs').hidden = true;
+      $('#assistantPane').hidden = false;
+      $$('.activity-pane').forEach(p => p.hidden = true);
+      if (openPanel) openActivity();
+    }
+    function setActivityPane(id) {
+      $('#activityTitle').textContent = '运行详情';
+      $('#activityTabs').hidden = false;
+      $('#assistantPane').hidden = true;
+      $$('.activity-tabs button').forEach(b => b.classList.toggle('active', b.dataset.pane === id));
+      $$('.activity-pane').forEach(p => p.hidden = p.id !== id);
+      openActivity();
+    }
+    function sendAssistantMessage() {
+      const field = $('#assistantInput');
+      const text = field.value.trim();
+      if (!text) return;
+      const fileName = currentEditorPath.split('/').pop();
+      const messages = $('#assistantMessages');
+      const userMessage = document.createElement('article');
+      userMessage.className = 'assistant-message user';
+      userMessage.innerHTML = '<div class="assistant-message-head"><span class="mini-avatar">你</span><span>你</span></div><p></p><div class="assistant-note"></div>';
+      $('p', userMessage).textContent = text;
+      $('.assistant-note', userMessage).textContent = `上下文：${currentEditorPath}`;
+      messages.appendChild(userMessage);
+      const reply = document.createElement('article');
+      reply.className = 'assistant-message';
+      reply.innerHTML = '<div class="assistant-message-head"><span class="mini-avatar">CF</span><span>CrewForge</span></div><p></p><div class="assistant-note"></div>';
+      $('p', reply).textContent = `收到。我会以 ${fileName} 为当前修改目标，并结合已打开的代码内容执行。`;
+      $('.assistant-note', reply).textContent = '当前文件已锁定 · 可继续切换文件追加上下文';
+      messages.appendChild(reply);
+      field.value = '';
+      messages.scrollTop = messages.scrollHeight;
+      showToast(`${fileName} 已作为 Agent 当前上下文`);
+    }
+    function addMessage(text) {
+      if (!text.trim()) return;
+      if (emptyState.classList.contains('open')) { emptyState.classList.remove('open'); conversationInner.style.display = 'block'; conversationInner.innerHTML = '<div class="date-divider">刚刚</div>'; }
+      const article = document.createElement('article');
+      article.className = 'message user';
+      article.innerHTML = '<div class="message-head"><div class="avatar">你</div><span class="sender">你</span><span class="message-time">刚刚</span></div><div class="message-body"><p></p></div>';
+      $('p', article).textContent = text;
+      conversationInner.appendChild(article);
+      const reply = document.createElement('article');
+      reply.className = 'message';
+      reply.innerHTML = '<div class="message-head"><div class="avatar ai">CF</div><span class="sender">CrewForge</span><span class="message-time">刚刚</span></div><div class="message-body"><p>已收到。我会先检查相关上下文，并在执行过程中持续更新这里的状态。</p></div>';
+      conversationInner.appendChild(reply);
+      input.value = '';
+      input.style.height = 'auto';
+      $('#conversation').scrollTop = $('#conversation').scrollHeight;
+      showToast('任务已加入运行队列');
+    }
+    $('#newTask').addEventListener('click', newTask);
+    $('#sidebarToggle').addEventListener('click', () => sidebar.classList.toggle('open'));
+    $('#activityToggle').addEventListener('click', () => activity.classList.contains('open') ? closeActivity() : openActivity());
+    $('#activityClose').addEventListener('click', closeActivity);
+    $('#openChanges').addEventListener('click', () => setActivityPane('changesPane'));
+    $('#editorAssistant').addEventListener('click', () => showAssistantPanel(true));
+    $('#editorChanges').addEventListener('click', () => setActivityPane('changesPane'));
+    $('#toggleEditorTerminal').addEventListener('click', () => $('#editorTerminal').hidden = !$('#editorTerminal').hidden);
+    $('#closeEditorTerminal').addEventListener('click', () => $('#editorTerminal').hidden = true);
+    $('#settingsOpen').addEventListener('click', openSettings);
+    $('#settingsClose').addEventListener('click', closeSettings);
+    $('#settingsOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettings(); });
+    $('#themeToggle').addEventListener('click', () => {
+      const dark = root.dataset.theme !== 'dark';
+      root.dataset.theme = dark ? 'dark' : 'light';
+      localStorage.setItem('crewforge-theme', root.dataset.theme);
+      showToast(dark ? '已切换为深色外观' : '已切换为浅色外观');
+    });
+    const savedTheme = localStorage.getItem('crewforge-theme');
+    if (savedTheme) root.dataset.theme = savedTheme;
+    $$('.thread').forEach(thread => thread.addEventListener('click', () => {
+      $$('.thread').forEach(t => t.classList.remove('active'));
+      thread.classList.add('active');
+      $('#taskTitle').textContent = thread.dataset.title;
+      emptyState.classList.remove('open');
+      conversationInner.style.display = 'block';
+      input.placeholder = '发送后续指令…';
+      closeDrawers();
+    }));
+    $('#threadSearch').addEventListener('input', e => {
+      const q = e.target.value.trim().toLowerCase();
+      $$('.thread').forEach(t => t.style.display = t.textContent.toLowerCase().includes(q) ? 'grid' : 'none');
+    });
+    $$('.file-item').forEach(item => item.addEventListener('click', () => openFile(item.dataset.file, item.dataset.path)));
+    $$('.editor-tab').forEach(tab => tab.addEventListener('click', () => openFile(tab.dataset.file, tab.dataset.path)));
+    $$('.tree-folder').forEach(folder => folder.addEventListener('click', () => {
+      const children = $(`[data-children="${folder.dataset.folder}"]`);
+      children.hidden = !children.hidden;
+      folder.classList.toggle('collapsed', children.hidden);
+    }));
+    $('#collapseTreeButton').addEventListener('click', () => {
+      $$('.tree-children').forEach(children => children.hidden = true);
+      $$('.tree-folder').forEach(folder => folder.classList.add('collapsed'));
+      showToast('文件夹已折叠');
+    });
+    $('#newFileButton').addEventListener('click', () => showToast('新建文件入口已就绪'));
+    $('#fileSearch').addEventListener('input', e => {
+      const q = e.target.value.trim().toLowerCase();
+      $$('.file-item').forEach(item => item.style.display = item.textContent.toLowerCase().includes(q) ? 'grid' : 'none');
+    });
+    $('#activeFileContext').addEventListener('click', () => showToast(`${currentEditorPath} 已作为当前上下文`));
+    $('#assistantSend').addEventListener('click', sendAssistantMessage);
+    $('#assistantInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAssistantMessage(); }
+    });
+    $$('.step-button').forEach(btn => btn.addEventListener('click', () => btn.parentElement.classList.toggle('open')));
+    $$('.activity-tabs button').forEach(btn => btn.addEventListener('click', () => setActivityPane(btn.dataset.pane)));
+    $$('.switch').forEach(sw => sw.addEventListener('click', () => sw.classList.toggle('on')));
+    $$('.starter').forEach(starter => starter.addEventListener('click', () => { input.value = starter.dataset.prompt; input.focus(); }));
+    $('#attachButton').addEventListener('click', () => $('#fileInput').click());
+    $('#fileInput').addEventListener('change', e => { if (e.target.files.length) showToast(`已添加 ${e.target.files.length} 个上下文文件`); });
+    $('#commandButton').addEventListener('click', openPalette);
+    $('#sendButton').addEventListener('click', () => addMessage(input.value));
+    input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 150) + 'px'; });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); addMessage(input.value); } });
+    $('#stopRun').addEventListener('click', () => {
+      running = !running;
+      $('#runTitle').textContent = running ? '正在继续 · 运行测试' : '已暂停 · 可以追加指令';
+      $('#stopRun span').textContent = running ? '停止' : '继续';
+      $('#lastStepStatus').textContent = running ? '进行中' : '已暂停';
+      showToast(running ? '任务已继续' : '任务已暂停');
+    });
+    setInterval(() => { if (running) { seconds++; $('#elapsed').textContent = `${String(Math.floor(seconds / 60)).padStart(2,'0')}:${String(seconds % 60).padStart(2,'0')}`; } }, 1000);
+    $$('.rail .icon-btn[data-view]').forEach(btn => btn.addEventListener('click', () => {
+      if (btn.dataset.view === 'chat') { setWorkspaceMode('chat'); if (innerWidth <= 780) sidebar.classList.add('open'); }
+      if (btn.dataset.view === 'files') { setWorkspaceMode('files'); if (innerWidth <= 780) sidebar.classList.add('open'); showToast('已打开文件树与代码编辑器'); }
+      if (btn.dataset.view === 'search') { sidebar.classList.add('open'); (currentWorkspaceMode === 'files' ? $('#fileSearch') : $('#threadSearch')).focus(); }
+      if (btn.dataset.view === 'git') setActivityPane('changesPane');
+    }));
+    $$('.command').forEach(cmd => cmd.addEventListener('click', () => {
+      closePalette();
+      if (cmd.dataset.action === 'new') newTask();
+      if (cmd.dataset.action === 'changes') setActivityPane('changesPane');
+      if (cmd.dataset.action === 'settings') openSettings();
+    }));
+    $('#paletteInput').addEventListener('input', e => { const q = e.target.value.toLowerCase(); $$('.command').forEach(c => c.style.display = c.textContent.toLowerCase().includes(q) ? 'flex' : 'none'); });
+    document.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#palette').classList.contains('open') ? closePalette() : openPalette(); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newTask(); }
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+      if (e.key === 'Escape') { closePalette(); closeSettings(); closeDrawers(); }
+    });
+    renderEditor('ChatPanel.tsx', 'frontend/src/components/ChatPanel.tsx');
+    setWorkspaceMode('files');
+  </script>
+</body>
+</html>

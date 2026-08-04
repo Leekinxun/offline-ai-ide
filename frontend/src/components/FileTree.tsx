@@ -3,6 +3,8 @@ import { FileNode, TeamClaim, TeamPresence } from "../types";
 import { ChevronRight, Download, File, Folder } from "lucide-react";
 import { useI18n } from "../i18n";
 
+export const FILE_TREE_DRAG_TYPE = "application/x-crewforge-file-path";
+
 interface FileTreeProps {
   nodes: FileNode[];
   activeFilePath: string | null;
@@ -14,6 +16,7 @@ interface FileTreeProps {
   onDownload: (path: string, type: FileNode["type"]) => void;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   onDropFiles: (targetPath: string, files: FileList) => void;
+  onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery?: string;
@@ -31,6 +34,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onDownload,
   onContextMenu,
   onDropFiles,
+  onMoveEntry,
   claims,
   presence,
   filterQuery = "",
@@ -51,6 +55,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           onDownload={onDownload}
           onContextMenu={onContextMenu}
           onDropFiles={onDropFiles}
+          onMoveEntry={onMoveEntry}
           claims={claims}
           presence={presence}
           filterQuery={filterQuery}
@@ -72,6 +77,7 @@ interface FileTreeItemProps {
   onDownload: (path: string, type: FileNode["type"]) => void;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   onDropFiles: (targetPath: string, files: FileList) => void;
+  onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery: string;
@@ -89,6 +95,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   onDownload,
   onContextMenu,
   onDropFiles,
+  onMoveEntry,
   claims,
   presence,
   filterQuery,
@@ -129,17 +136,31 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, node)}
+        draggable={canEditWorkspace}
+        onDragStart={(event) => {
+          if (!canEditWorkspace) {
+            event.preventDefault();
+            return;
+          }
+          event.stopPropagation();
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData(FILE_TREE_DRAG_TYPE, node.path);
+          event.dataTransfer.setData("text/plain", node.path);
+        }}
+        onDragEnd={() => setDropActive(false)}
         onDragOver={(event) => {
+          const isWorkspaceEntry = event.dataTransfer.types.includes(FILE_TREE_DRAG_TYPE);
+          const isExternalFile = event.dataTransfer.types.includes("Files");
           if (
             !canEditWorkspace ||
             node.type !== "directory" ||
-            !event.dataTransfer.types.includes("Files")
+            (!isWorkspaceEntry && !isExternalFile)
           ) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
-          event.dataTransfer.dropEffect = "copy";
+          event.dataTransfer.dropEffect = isWorkspaceEntry ? "move" : "copy";
           setDropActive(true);
         }}
         onDragLeave={(event) => {
@@ -153,17 +174,19 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
           setDropActive(false);
         }}
         onDrop={(event) => {
-          if (
-            !canEditWorkspace ||
-            node.type !== "directory" ||
-            event.dataTransfer.files.length === 0
-          ) {
+          if (!canEditWorkspace || node.type !== "directory") {
             return;
           }
+          const sourcePath = event.dataTransfer.getData(FILE_TREE_DRAG_TYPE);
+          if (!sourcePath && event.dataTransfer.files.length === 0) return;
           event.preventDefault();
           event.stopPropagation();
           setDropActive(false);
-          onDropFiles(node.path, event.dataTransfer.files);
+          if (sourcePath) {
+            onMoveEntry(sourcePath, node.path);
+          } else {
+            onDropFiles(node.path, event.dataTransfer.files);
+          }
         }}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -232,6 +255,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onDownload={onDownload}
             onContextMenu={onContextMenu}
             onDropFiles={onDropFiles}
+            onMoveEntry={onMoveEntry}
             claims={claims}
             presence={presence}
             filterQuery={filterQuery}

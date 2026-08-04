@@ -59,3 +59,16 @@ test("Code is constrained to approved files and verification commands", () => {
     executionPlan: plan,
   }).allowed, false);
 });
+
+test("Code can edit and execute directly without an approved Plan", () => {
+  assert.deepEqual(evaluateModeCapability({
+    mode: "code",
+    toolName: "edit_file",
+    input: { path: "src/routes/admin.ts" },
+  }), { allowed: true });
+  assert.deepEqual(evaluateModeCapability({
+    mode: "code",
+    toolName: "bash",
+    input: { command: "npm test" },
+  }), { allowed: true });
+});

@@ -240,9 +240,6 @@ export function useChat(
                 : conversation
             )
           );
-          if (data.mode) {
-            setAgentMode(data.mode);
-          }
           break;
 
         case "run_state": {

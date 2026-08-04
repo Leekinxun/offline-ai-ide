@@ -85,6 +85,20 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
       </div>
 
       <div className="chat-header-actions task-header-actions">
+        <div className="task-header-view-tabs" role="tablist" aria-label={t("workbench.contentView")}>
+          <button type="button" role="tab" aria-selected="true" className="active">
+            {t("workbench.details.chat")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={changesOpen}
+            className={changesOpen ? "active" : ""}
+            onClick={onToggleChanges}
+          >
+            {t("chat.changes")}
+          </button>
+        </div>
         {!detailsCollapsed && (
           <>
             <button

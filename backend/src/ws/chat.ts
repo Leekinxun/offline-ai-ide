@@ -141,9 +141,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
             executionPlan = undefined;
           }
         }
-        const resumeMode = resumableRun.mode === "code" && !executionPlan
-          ? "plan"
-          : resumableRun.mode;
+        const resumeMode = resumableRun.mode;
         const requestId =
           typeof data.requestId === "string" && data.requestId.trim()
             ? data.requestId.trim()
@@ -242,9 +240,6 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           session.workspaceDir,
           conversationId
         ) || undefined;
-        if (!executionPlan) {
-          mode = "plan";
-        }
       }
 
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -371,15 +366,14 @@ async function processConversationQueue(
   let assistantMessages: PersistedChatMessage[];
   try {
     if (initialTurn.mode === "code") {
-      if (!initialTurn.executionPlan) {
-        throw new Error("Code mode requires an approved execution plan");
+      if (initialTurn.executionPlan) {
+        updateExecutionPlanStatus(
+          session.workspaceDir,
+          initialTurn.executionPlan.id,
+          "in_progress",
+          recorder.runId
+        );
       }
-      updateExecutionPlanStatus(
-        session.workspaceDir,
-        initialTurn.executionPlan.id,
-        "in_progress",
-        recorder.runId
-      );
       const checkpoint = createCheckpoint(session.workspaceDir, {
         label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
         conversationId: initialTurn.conversationId,
@@ -491,7 +485,7 @@ async function processConversationQueue(
       ? "failed"
       : "completed";
   const finishedRecord = await recorder.finish(finalStatus, {}, summary);
-  let finalMode = initialTurn.mode;
+  const finalMode = initialTurn.mode;
   if (initialTurn.executionPlan) {
     if (requiresReplan) {
       updateExecutionPlanStatus(
@@ -500,7 +494,6 @@ async function processConversationQueue(
         "needs_revision",
         recorder.runId
       );
-      finalMode = "plan";
     } else if (finalStatus === "completed") {
       updateExecutionPlanStatus(
         session.workspaceDir,

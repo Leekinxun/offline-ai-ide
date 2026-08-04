@@ -3,6 +3,9 @@ import type * as monaco from "monaco-editor";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { ChatPanel } from "./components/ChatPanel";
+import { TaskSidebar } from "./components/TaskSidebar";
+import { RunDetailsPanel } from "./components/RunDetailsPanel";
+import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
@@ -247,6 +250,13 @@ function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
 }
 
+function remapMovedPath(candidate: string, oldPath: string, newPath: string): string {
+  if (candidate === oldPath) return newPath;
+  return candidate.startsWith(`${oldPath}/`)
+    ? `${newPath}${candidate.slice(oldPath.length)}`
+    : candidate;
+}
+
 function pruneNestedPaths(paths: string[]): string[] {
   const uniquePaths = Array.from(new Set(paths.filter(Boolean))).sort(
     (left, right) => left.length - right.length || left.localeCompare(right)
@@ -330,8 +340,11 @@ function AuthenticatedApp({
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
   const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [workspaceView, setWorkspaceView] = useState<"chat" | "files">("files");
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
   const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
+  const [runDetailsVisible, setRunDetailsVisible] = useState(false);
+  const [editorAssistantVisible, setEditorAssistantVisible] = useState(() => window.innerWidth > 1180);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [teamVisible, setTeamVisible] = useState(false);
@@ -491,6 +504,9 @@ function AuthenticatedApp({
   }, []);
 
   const focusChat = useCallback(() => {
+    setWorkspaceView("chat");
+    setEditorAssistantVisible(false);
+    setRunDetailsVisible(false);
     if (window.innerWidth <= 860) {
       captureDrawerTrigger();
       setSidebarVisible(false);
@@ -515,9 +531,12 @@ function AuthenticatedApp({
   }, [captureDrawerTrigger, chatVisible, closeUtilityPanels]);
 
   const toggleExplorerPanel = useCallback(() => {
+    const switchingToFiles = workspaceView !== "files";
+    setWorkspaceView("files");
+    if (switchingToFiles && window.innerWidth > 1180) setEditorAssistantVisible(true);
     const utilityOpen =
       gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible;
-    const nextOpen = utilityOpen ? true : !sidebarVisible;
+    const nextOpen = switchingToFiles || utilityOpen ? true : !sidebarVisible;
     if (nextOpen && window.innerWidth <= 1100) {
       captureDrawerTrigger();
       setTeamVisible(false);
@@ -526,7 +545,7 @@ function AuthenticatedApp({
     }
     closeUtilityPanels();
     setSidebarVisible(nextOpen);
-  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, sidebarVisible]);
+  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, sidebarVisible, workspaceView]);
 
   const toggleUtilityPanel = useCallback(
     (
@@ -970,6 +989,7 @@ function AuthenticatedApp({
 
   const handleNavigateToFileUpdate = useCallback(
     (update: FileUpdate) => {
+      setWorkspaceView("files");
       applyFileUpdateToTabs(update, true);
       setActiveFilePath(update.path);
       void loadTree();
@@ -1302,6 +1322,8 @@ function AuthenticatedApp({
   // --- File operations ---
   const openFile = useCallback(
     async (path: string) => {
+      setWorkspaceView("files");
+      if (window.innerWidth > 1180) setEditorAssistantVisible(true);
       const existing = openFiles.find((f) => f.path === path);
       if (existing) {
         setActiveFilePath(path);
@@ -1664,35 +1686,63 @@ function AuthenticatedApp({
     [fs, removeDeletedEntriesFromState]
   );
 
+  const updateMovedPathsInEditor = useCallback((oldPath: string, newPath: string) => {
+      setPreviewModes((current) => {
+        let changed = false;
+        const next: typeof current = {};
+        for (const [previewPath, mode] of Object.entries(current)) {
+          const remappedPath = remapMovedPath(previewPath, oldPath, newPath);
+          next[remappedPath] = mode;
+          changed ||= remappedPath !== previewPath;
+        }
+        return changed ? next : current;
+      });
+      setOpenFiles((prev) =>
+        prev.map((file) => {
+          const path = remapMovedPath(file.path, oldPath, newPath);
+          return path !== file.path
+            ? {
+                ...file,
+                path,
+                name: path.split("/").pop() || path,
+                language: getLanguage(path.split("/").pop() || ""),
+              }
+            : file;
+        })
+      );
+      setActiveFilePath((current) =>
+        current ? remapMovedPath(current, oldPath, newPath) : current
+      );
+      setEditorNavigationTarget((current) =>
+        current
+          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
+          : current
+      );
+      setEditorHighlightTarget((current) =>
+        current
+          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
+          : current
+      );
+    }, []);
+
   const handleRenameEntry = useCallback(
     async (oldPath: string, newPath: string) => {
       await fs.renameEntry(oldPath, newPath);
-      setPreviewModes((current) => {
-        if (!Object.prototype.hasOwnProperty.call(current, oldPath)) {
-          return current;
-        }
-
-        const next = { ...current, [newPath]: current[oldPath] };
-        delete next[oldPath];
-        return next;
-      });
-      setOpenFiles((prev) =>
-        prev.map((f) =>
-          f.path === oldPath
-            ? {
-                ...f,
-                path: newPath,
-                name: newPath.split("/").pop() || newPath,
-                language: getLanguage(newPath.split("/").pop() || ""),
-              }
-            : f
-        )
-      );
-      if (activeFilePath === oldPath) {
-        setActiveFilePath(newPath);
-      }
+      updateMovedPathsInEditor(oldPath, newPath);
     },
-    [fs, activeFilePath]
+    [fs, updateMovedPathsInEditor]
+  );
+
+  const handleMoveEntry = useCallback(
+    async (sourcePath: string, targetDirectory: string) => {
+      const result = await fs.moveEntry(sourcePath, targetDirectory);
+      if (result.sourcePath !== result.path) {
+        updateMovedPathsInEditor(result.sourcePath, result.path);
+        showToast(t("app.movedEntry", { path: result.path }));
+      }
+      return result;
+    },
+    [fs, showToast, t, updateMovedPathsInEditor]
   );
 
   const handleDownloadEntry = useCallback(
@@ -2187,12 +2237,17 @@ function AuthenticatedApp({
     showToast(t("app.mergeApplied"));
   }, [diffViewerFile, mergedConflictContent, showToast, t]);
 
-  const activeConversationTitle = chat.currentConversationId
-    ? chat.conversations.find((conversation) => conversation.id === chat.currentConversationId)?.title
+  const activeConversation = chat.currentConversationId
+    ? chat.conversations.find((conversation) => conversation.id === chat.currentConversationId)
+    : null;
+  const activeConversationTitle = activeConversation
+    ? activeConversation.title.trim().startsWith("<think")
+      ? activeConversation.preview.replace(/[#*_`]/g, "").trim().slice(0, 52)
+      : activeConversation.title
     : null;
   const workbenchTaskTitle = chat.isStreaming
     ? t("chat.runInProgress")
-    : activeConversationTitle || activeFile?.name || t("app.openFileToStart");
+    : activeConversationTitle || (workspaceView === "files" ? activeFile?.name : t("workbench.newTask")) || t("app.openFileToStart");
 
   return (
     <div className="app">
@@ -2240,7 +2295,7 @@ function AuthenticatedApp({
             onClick={toggleExplorerPanel}
             title={t("app.toggleSidebar")}
             aria-label={t("app.toggleSidebar")}
-            aria-pressed={sidebarVisible}
+            aria-pressed={workspaceView === "files" && sidebarVisible}
             data-drawer-trigger="sidebar"
           >
             <PanelLeft size={17} />
@@ -2297,7 +2352,7 @@ function AuthenticatedApp({
       </Suspense>
 
       {/* Main Layout */}
-      <div className="main-layout">
+      <div className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible ? " with-editor-assistant" : ""}`}>
         {workspaceDrawerOpen && (
           <button
             type="button"
@@ -2309,11 +2364,31 @@ function AuthenticatedApp({
         <nav className="activity-rail" aria-label={t("app.workspace")}>
           <button
             type="button"
-            className={`activity-rail-btn${sidebarVisible ? " active" : ""}`}
+            className="activity-rail-brand"
+            onClick={focusChat}
+            title={PRODUCT_NAME}
+            aria-label={PRODUCT_NAME}
+          >
+            <BrandMark size={28} title={PRODUCT_NAME} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${workspaceView === "chat" ? " active" : ""}`}
+            onClick={focusChat}
+            title={t("workbench.aiTasks")}
+            aria-label={t("workbench.aiTasks")}
+            aria-pressed={workspaceView === "chat"}
+            data-drawer-trigger="chat"
+          >
+            <MessageSquare size={18} />
+          </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${workspaceView === "files" && sidebarVisible ? " active" : ""}`}
             onClick={toggleExplorerPanel}
             title={t("sidebar.explorer")}
             aria-label={t("sidebar.explorer")}
-            aria-pressed={sidebarVisible}
+            aria-pressed={workspaceView === "files" && sidebarVisible}
             data-drawer-trigger="sidebar"
           >
             <Files size={18} />
@@ -2416,6 +2491,15 @@ function AuthenticatedApp({
           <span className="activity-rail-spacer" />
           <button
             type="button"
+            className="activity-rail-btn"
+            onClick={onToggleTheme}
+            title={t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
+            aria-label={t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
+          >
+            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+          <button
+            type="button"
             className={`activity-rail-btn${settingsVisible ? " active" : ""}`}
             onClick={() => setSettingsVisible(true)}
             title={t("app.settings")}
@@ -2424,14 +2508,47 @@ function AuthenticatedApp({
           >
             <Settings size={18} />
           </button>
+          <details className="activity-user-menu">
+            <summary className="activity-user-avatar" title={username} aria-label={username}>
+              {username.slice(0, 1).toUpperCase()}
+            </summary>
+            <div className="activity-user-popover">
+              <strong>{username}</strong>
+              <button type="button" onClick={() => setSettingsVisible(true)}>
+                <Settings size={14} /> {t("app.settings")}
+              </button>
+              <button type="button" onClick={onLogout}>
+                <LogOut size={14} /> {t("app.logout")}
+              </button>
+            </div>
+          </details>
         </nav>
+        {workspaceView === "chat" && sidebarVisible && (
+          <TaskSidebar
+            workspaceLabel={workspaceLabel}
+            workspaceDir={workspaceDir}
+            conversations={chat.conversations}
+            currentConversationId={chat.currentConversationId}
+            contextState={chat.contextState}
+            loading={chat.historyLoading}
+            loadingId={chat.historyLoadingId}
+            isStreaming={chat.isStreaming}
+            onNewTask={() => {
+              setNewConversationRequest((value) => value + 1);
+              setChatFocusNonce((value) => value + 1);
+            }}
+            onLoadConversation={chat.loadConversation}
+            onRefresh={chat.refreshConversations}
+          />
+        )}
         <Sidebar
           tree={fileTree}
           activeFilePath={activeFilePath}
-          visible={sidebarVisible}
+          visible={sidebarVisible && workspaceView === "files"}
           onFileSelect={openFile}
           onCreateEntry={handleCreateEntry}
           onCopyEntry={handleCopyEntry}
+          onMoveEntry={handleMoveEntry}
           onDeleteEntry={handleDeleteEntry}
           onDeleteEntries={handleDeleteEntries}
           onRenameEntry={handleRenameEntry}
@@ -2447,15 +2564,15 @@ function AuthenticatedApp({
           }}
           token={token}
           activeTeam={team.activeTeam}
-          style={sidebarVisible ? { width: sidebarWidth } : undefined}
+          style={sidebarVisible && workspaceView === "files" ? { width: sidebarWidth } : undefined}
         />
 
         <div
-          className={`resize-handle${!sidebarVisible ? " hidden" : ""}${draggingRef.current === "sidebar" ? " dragging" : ""}`}
+          className={`resize-handle${!sidebarVisible || workspaceView === "chat" ? " hidden" : ""}${draggingRef.current === "sidebar" ? " dragging" : ""}`}
           onMouseDown={(e) => handleResizeStart("sidebar", e)}
         />
 
-        <div className="editor-area">
+        <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
           <TabBar
             openFiles={openFiles}
             activeFilePath={activeFilePath}
@@ -2473,6 +2590,42 @@ function AuthenticatedApp({
                 <code>{activeFile.path}</code>
               </div>
               <div className="editor-context-actions">
+                <span className="editor-online-state">
+                  <i className={chat.connected ? "connected" : ""} />
+                  {chat.connected ? t("chat.online") : t("chat.offline")}
+                </span>
+                <div className="editor-primary-actions" role="group" aria-label={t("workbench.editorActions")}>
+                  <button
+                    type="button"
+                    className={editorAssistantVisible ? "active" : ""}
+                    onClick={() => {
+                      setRunDetailsVisible(false);
+                      setEditorAssistantVisible(true);
+                    }}
+                  >
+                    <Bot size={13} />
+                    <span>{t("workbench.editorAssistant")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={terminalVisible ? "active" : ""}
+                    onClick={() => toggleTerminalPanel()}
+                  >
+                    <TerminalSquare size={13} />
+                    <span>{t("workbench.details.terminal")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={runDetailsVisible ? "active" : ""}
+                    onClick={() => {
+                      setEditorAssistantVisible(false);
+                      setRunDetailsVisible(true);
+                    }}
+                  >
+                    <GitBranch size={13} />
+                    <span>{t("chat.changes")}</span>
+                  </button>
+                </div>
                 {isDebuggablePath(activeFile.path) && (
                   <button
                     type="button"
@@ -2542,6 +2695,16 @@ function AuthenticatedApp({
                   )}
                 </div>
               </div>
+            </div>
+          )}
+          {activeFile && (
+            <div className="editor-breadcrumb-bar" aria-label={t("workbench.fileBreadcrumb")}>
+              {activeFile.path.split("/").map((part, index, parts) => (
+                <React.Fragment key={`${part}-${index}`}>
+                  <span className={index === parts.length - 1 ? "current" : ""}>{part}</span>
+                  {index < parts.length - 1 && <ChevronRight size={11} />}
+                </React.Fragment>
+              ))}
             </div>
           )}
           <div className="editor-main">
@@ -3074,7 +3237,7 @@ function AuthenticatedApp({
         />
 
         <div
-          className={`resize-handle${!chatVisible ? " hidden" : ""}${draggingRef.current === "chat" ? " dragging" : ""}`}
+          className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingRef.current === "chat" ? " dragging" : ""}`}
           onMouseDown={(e) => handleResizeStart("chat", e)}
         />
 
@@ -3087,7 +3250,7 @@ function AuthenticatedApp({
           isStreaming={chat.isStreaming}
           activeRequestIds={chat.activeRequestIds}
           connected={chat.connected}
-          visible={chatVisible}
+          visible={chatVisible && workspaceView === "chat"}
           focusRequest={chatFocusNonce}
           agentMode={chat.agentMode}
           taskTitle={workbenchTaskTitle}
@@ -3150,7 +3313,32 @@ function AuthenticatedApp({
           pendingApprovals={chat.pendingApprovals}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}
-          style={chatVisible ? { width: chatWidth } : undefined}
+          style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
+        />
+        <RunDetailsPanel
+          visible={runDetailsVisible}
+          summary={chat.currentRunSummary}
+          runState={chat.runState}
+          errorCount={problemCounts.errors}
+          warningCount={problemCounts.warnings}
+          onOpenFile={openFile}
+          onOpenDiff={handleOpenGitDiff}
+          onClose={() => {
+            setRunDetailsVisible(false);
+            if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
+          }}
+        />
+        <EditorAssistantPanel
+          visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
+          activeFilePath={activeFilePath}
+          selectionInfo={selectionInfo}
+          messages={chat.messages}
+          connected={chat.connected}
+          isStreaming={chat.isStreaming}
+          agentMode={chat.agentMode}
+          onSend={handleChatSend}
+          onSteer={handleChatSteer}
+          onClose={() => setEditorAssistantVisible(false)}
         />
       </div>
 

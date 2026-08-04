@@ -52,6 +52,7 @@ authRouter.get("/me", (req, res) => {
   res.json({
     username: session.username,
     workspaceDir: session.workspaceDir,
+    workspaceRoot: session.workspaceRoot,
     isAdmin: session.isAdmin,
     isolated: session.isolated,
   });
@@ -70,7 +71,7 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   if (session.isolated) {
     return res.status(403).json({ error: "Isolated Vibe windows are locked to their worktree" });
   }
-  const result = sessionManager.changeWorkspace(session.token, newPath);
+  const result = sessionManager.changeWorkspaceWithinUserRoot(session.token, newPath);
   if (!result) {
     return res.status(403).json({ error: "Path not allowed" });
   }
@@ -85,12 +86,15 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
 
 // GET /api/auth/workspace/list?path=xxx
 authRouter.get("/workspace/list", authMiddleware, (req, res) => {
-  const dir = (req.query.path as string) || "/";
-  const entries = sessionManager.listDirectories(dir);
+  const session = (req as any).userSession;
+  const dir = typeof req.query.path === "string" ? req.query.path : undefined;
+  const result = sessionManager.listUserWorkspaceDirectories(session.token, dir);
+  if (!result) {
+    return res.status(403).json({ error: "Path is outside the user's workspace root" });
+  }
   res.json({
-    path: dir,
-    entries,
-    selectable: sessionManager.isSelectableWorkspace(dir),
-    allowedRoots: sessionManager.getAllowedRoots(),
+    ...result,
+    selectable: true,
+    canNavigateUp: result.path !== result.rootPath,
   });
 });

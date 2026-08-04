@@ -21,6 +21,7 @@ import {
 import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
+import { MoveEntryError, moveWorkspaceEntry } from "../files/moveEntry.js";
 import {
   searchWorkspace,
   WorkspaceSearchError,
@@ -786,6 +787,34 @@ filesRouter.post("/copy", (req, res) => {
       return res.status(error.status).json({ detail: error.message, code: error.code });
     }
     const message = error instanceof Error ? error.message : "Copy failed";
+    return res
+      .status(message === "Path traversal denied" ? 403 : 500)
+      .json({ detail: message });
+  }
+});
+
+// POST /move  { source_path, target_directory }
+filesRouter.post("/move", (req, res) => {
+  if (!requireWorkspaceWrite(req, res)) return;
+  const sourcePath = typeof req.body?.source_path === "string" ? req.body.source_path : "";
+  const targetDirectory =
+    typeof req.body?.target_directory === "string" ? req.body.target_directory : "";
+
+  try {
+    const result = moveWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    maybeRecordTeamActivity(req, {
+      type: "entry_renamed",
+      payload: {
+        oldPath: result.sourcePath,
+        newPath: result.path,
+      },
+    });
+    return res.json({ status: "ok", ...result });
+  } catch (error) {
+    if (error instanceof MoveEntryError) {
+      return res.status(error.status).json({ detail: error.message, code: error.code });
+    }
+    const message = error instanceof Error ? error.message : "Move failed";
     return res
       .status(message === "Path traversal denied" ? 403 : 500)
       .json({ detail: message });
