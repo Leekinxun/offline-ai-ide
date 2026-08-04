@@ -19,7 +19,12 @@ import {
   Copy,
   ClipboardPaste,
 } from "lucide-react";
-import type { CopyEntryResult, MoveEntryResult } from "../hooks/useFileSystem";
+import type {
+  CopyEntryResult,
+  MoveEntryResult,
+  WorkspaceSearchOptions,
+  WorkspaceSearchResponse,
+} from "../hooks/useFileSystem";
 import { useI18n } from "../i18n";
 
 interface SidebarProps {
@@ -43,6 +48,8 @@ interface SidebarProps {
   workspaceLocked?: boolean;
   onChangeWorkspace: (path: string) => Promise<boolean>;
   onSearchInPath: (path: string) => void;
+  onSearchContent: (options: WorkspaceSearchOptions) => Promise<WorkspaceSearchResponse>;
+  onCancelContentSearch: () => void;
   token: string;
   activeTeam?: TeamDetails | null;
   style?: React.CSSProperties;
@@ -73,13 +80,22 @@ function collectTreePaths(nodes: FileNode[]): Set<string> {
   return paths;
 }
 
-function filterTree(nodes: FileNode[], query: string): FileNode[] {
+function filterTree(
+  nodes: FileNode[],
+  query: string,
+  contentMatchPaths: ReadonlySet<string> = new Set()
+): FileNode[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   if (!normalizedQuery) return nodes;
 
   return nodes.flatMap((node) => {
-    const children = node.children ? filterTree(node.children, normalizedQuery) : [];
-    const matches = node.name.toLocaleLowerCase().includes(normalizedQuery);
+    const children = node.children
+      ? filterTree(node.children, normalizedQuery, contentMatchPaths)
+      : [];
+    const matches =
+      node.name.toLocaleLowerCase().includes(normalizedQuery) ||
+      node.path.toLocaleLowerCase().includes(normalizedQuery) ||
+      (node.type === "file" && contentMatchPaths.has(node.path));
     if (!matches && children.length === 0) return [];
 
     return [{
@@ -161,6 +177,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workspaceLocked = false,
   onChangeWorkspace,
   onSearchInPath,
+  onSearchContent,
+  onCancelContentSearch,
   token,
   activeTeam,
   style,
@@ -193,6 +211,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const [treeQuery, setTreeQuery] = useState("");
+  const [contentMatchPaths, setContentMatchPaths] = useState<Set<string>>(() => new Set());
+  const [contentSearchState, setContentSearchState] = useState<"idle" | "loading" | "error">("idle");
   const [rootDropActive, setRootDropActive] = useState(false);
   const [clipboardItem, setClipboardItem] = useState<FileNode | null>(null);
   const dialogInputRef = useRef<HTMLInputElement>(null);
@@ -222,8 +242,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSelectedPaths([]);
     setMultiSelectEnabled(false);
     setTreeQuery("");
+    setContentMatchPaths(new Set());
+    setContentSearchState("idle");
     setClipboardItem(null);
   }, [workspaceDir]);
+
+  useEffect(() => {
+    const query = treeQuery.trim();
+    if (!visible || !query) {
+      onCancelContentSearch();
+      setContentMatchPaths(new Set());
+      setContentSearchState("idle");
+      return;
+    }
+
+    setContentMatchPaths(new Set());
+    setContentSearchState("loading");
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await onSearchContent({ query });
+        if (!active) return;
+        setContentMatchPaths(new Set(response.results.map((result) => result.path)));
+        setContentSearchState("idle");
+      } catch (error) {
+        if (
+          !active ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        setContentMatchPaths(new Set());
+        setContentSearchState("error");
+      }
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      onCancelContentSearch();
+    };
+  }, [onCancelContentSearch, onSearchContent, treeQuery, visible]);
 
   useEffect(() => {
     folderUploadInputRef.current?.setAttribute("webkitdirectory", "");
@@ -629,7 +688,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [folderBrowser, fetchDirectories]);
 
   const workspaceName = workspaceDir.split("/").pop() || workspaceDir;
-  const filteredTree = useMemo(() => filterTree(tree, treeQuery), [tree, treeQuery]);
+  const filteredTree = useMemo(
+    () => filterTree(tree, treeQuery, contentMatchPaths),
+    [contentMatchPaths, tree, treeQuery]
+  );
   const treeStats = useMemo(() => countTreeNodes(filteredTree), [filteredTree]);
 
   if (!visible) return null;
@@ -817,6 +879,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="sidebar-tree-meta" aria-live="polite">
           <span>{treeStats.folders} {t("sidebar.folders")}</span>
           <span>{treeStats.files} {t("sidebar.files")}</span>
+          {treeQuery && contentSearchState === "loading" && (
+            <span className="sidebar-search-status">{t("sidebar.searchingContents")}</span>
+          )}
+          {treeQuery && contentSearchState === "error" && (
+            <span className="sidebar-search-status error">{t("sidebar.contentSearchFailed")}</span>
+          )}
+          {treeQuery && contentSearchState === "idle" && contentMatchPaths.size > 0 && (
+            <span className="sidebar-search-status">
+              {t("sidebar.contentMatchFiles", { count: contentMatchPaths.size })}
+            </span>
+          )}
         </div>
       </div>
       {clipboardItem && (
@@ -921,8 +994,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           <div className="sidebar-tree-empty">
             <Search size={18} aria-hidden="true" />
-            <strong>{treeQuery ? t("sidebar.noMatches") : t("sidebar.emptyWorkspace")}</strong>
-            <span>{treeQuery ? t("sidebar.noMatchesHint") : t("sidebar.emptyWorkspaceHint")}</span>
+            <strong>
+              {treeQuery && contentSearchState === "loading"
+                ? t("sidebar.searchingContents")
+                : treeQuery
+                  ? t("sidebar.noMatches")
+                  : t("sidebar.emptyWorkspace")}
+            </strong>
+            <span>
+              {treeQuery && contentSearchState === "loading"
+                ? t("sidebar.searchingContentsHint")
+                : treeQuery
+                  ? t("sidebar.noMatchesHint")
+                  : t("sidebar.emptyWorkspaceHint")}
+            </span>
           </div>
         )}
       </div>

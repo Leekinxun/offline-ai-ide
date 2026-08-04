@@ -40,6 +40,28 @@ test("persists agent run metrics and timeline events", async () => {
   await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
+test("persists the effective model used by a run", async () => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crownforge-run-model-"));
+  const recorder = new AgentRunRecorder(
+    workspaceDir,
+    "run-model",
+    "conversation-model",
+    "plan",
+    undefined,
+    undefined,
+    undefined,
+    "deep-model"
+  );
+
+  await recorder.start();
+  await recorder.finish("completed");
+
+  assert.equal(readRunRecord(workspaceDir, "run-model").modelName, "deep-model");
+  assert.equal(listRunSummaries(workspaceDir, "conversation-model")[0]?.modelName, "deep-model");
+
+  await fs.rm(workspaceDir, { recursive: true, force: true });
+});
+
 test("persists child run lineage and excludes children from root resume selection", async () => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crownforge-lineage-"));
   const parent = new AgentRunRecorder(workspaceDir, "run-parent", "conversation-1", "code");

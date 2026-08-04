@@ -25,6 +25,7 @@
   - `design/ai-chat-workbench.html`：用户在 2026-08-04 指定的新版 AI 工作台视觉与交互参考
   - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated.png`：2026-08-04 更新稿的编辑器首屏固定验收截图
   - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated-chat.png`：更新稿的对话状态固定验收截图
+  - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-interactions.png`：2026-08-04 最新交互稿的编辑器与 AI 运行过程固定验收截图
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
 ## Approved 2026 redesign baseline
@@ -39,14 +40,15 @@
 
 ### Approved AI workbench reference — 2026-08-04
 
-- Reference: `design/ai-chat-workbench.html`；编辑器固定截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated.png`；对话固定截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated-chat.png`。
-- Shell: 56px Activity Rail + 286px context sidebar + flexible task/editor canvas；编辑器状态可增加 360px AI 协作/活动栏，对话状态默认保持三栏并让中央画布获得剩余宽度。
+- Reference: `design/ai-chat-workbench.html`；最新交互截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-interactions.png`；对话固定截图：`.omx/artifacts/visual-ralph/ai-chat-workbench/reference-updated-chat.png`。
+- Shell: 56px Activity Rail + 286px context sidebar + flexible task/editor canvas；编辑器状态可增加 400px AI 协作/活动栏，对话状态默认保持三栏并让中央画布获得剩余宽度。
 - Default surface: 登录后默认进入文件/编辑器视图；编辑器 Header、Tabs、Breadcrumb、Monaco Canvas 形成纵向主线，当前文件、路径、连接状态和编辑器操作集中在 58px Header。
-- Editor AI collaboration: 桌面编辑器默认打开右侧 AI 协作栏；当前文件路径与代码选择自动成为下一条指令的上下文，切换文件时同步更新；“AI 协作 / 终端 / 变更”在编辑器 Header 内互斥调度。
+- Editor AI collaboration: 桌面编辑器默认打开右侧 AI 协作栏；当前文件路径与代码选择自动成为下一条指令的上下文，切换文件时同步更新；工作模式与管理员已配置模型在发送前可选择，运行期间锁定；“AI 协作 / 终端 / 变更”在编辑器 Header 内互斥调度。
+- Agent run process: AI 协作栏以真实运行事件呈现当前步骤、状态、耗时与可展开详情；运行中“暂停”安全停止当前 run，停止或失败后“继续”从该 run 恢复，完成后“重新运行”复用上一条指令，不使用纯前端伪进度。
 - Chat sidebar: 工作区身份置顶，“新建任务”作为第一主操作；搜索与按日期分组的任务历史形成稳定纵向层级，底部只保留紧凑上下文预算。
 - Task canvas: 58px Task Header 展示任务标题、工作区状态、连接状态与“对话 / 变更”切换；消息正文最大宽度 800px 并居中，工具运行步骤内嵌在 AI 回复中而非散落为独立仪表盘。
 - Composer: 固定在任务画布底部，最大宽度 800px；文本输入、上下文、命令、模型与发送/停止组成一个边界清晰的控制面，背景通过轻量渐隐与内容区分离。
-- Activity detail: 编辑器默认呈现 AI 协作；显式打开变更后切换为“变更 / 检查 / 终端”运行详情。桌面为右侧 360px 固定栏，<=1180px 为覆盖抽屉，<=780px 与左侧栏共同服从单抽屉布局。
+- Activity detail: 编辑器默认呈现 AI 协作；显式打开变更后切换为“变更 / 检查 / 终端”运行详情。桌面为右侧 400px 固定栏，<=1180px 为覆盖抽屉，<=780px 与左侧栏共同服从单抽屉布局。
 - Visual language: 使用 OKLCH 中性色、单一蓝色强调色、hairline 边框、10–16px 克制圆角；普通工作台表面无重阴影，仅 Composer、弹层与覆盖抽屉使用浮层阴影。
 - Fidelity contract: 保留现有文件、Git、Agent、Team、Problems、Run/Test、Checkpoints、终端、设置和 AI 模式能力；新版参考决定布局比例、层级、密度、形状与交互分组，真实业务数据替换原型假数据。
 - Reproduction: `python3 -m http.server 4174 --bind 127.0.0.1`（仓库根目录），访问 `/design/ai-chat-workbench.html`，视口 1440×900。

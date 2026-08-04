@@ -104,6 +104,7 @@ export async function runAgentLoop(
     maxOutputTokens: config.agentMaxTokens,
     maxSteps: config.maxAgentIterations,
   });
+  const modelName = control?.modelName || agentProfile.modelName || config.modelName;
   const runStartedAt = Date.now();
   const runSignal = control?.createAbortSignal();
   const tools = getAllTools({
@@ -129,7 +130,7 @@ export async function runAgentLoop(
     workspaceDir: session.workspaceDir,
     vllmApiUrl: config.vllmApiUrl,
     vllmApiKey: config.vllmApiKey,
-    modelName: agentProfile.modelName || config.modelName,
+    modelName,
     actorName: session.username,
     todoManager,
     taskManager: session.taskManager,
@@ -233,7 +234,7 @@ export async function runAgentLoop(
         messages,
         apiUrl: config.vllmApiUrl,
         apiKey: config.vllmApiKey,
-        model: agentProfile.modelName || config.modelName,
+        model: modelName,
         signal: runSignal,
       });
       messages = result.messages;
@@ -464,7 +465,7 @@ export async function runAgentLoop(
         processed = await processModelTurn({
           apiUrl: config.vllmApiUrl,
           apiKey: config.vllmApiKey,
-          model: agentProfile.modelName || config.modelName,
+          model: modelName,
           providerId: agentProfile.providerId,
           systemPrompt,
           messages,
@@ -950,6 +951,7 @@ export interface AgentLoopControl {
   isStopped: () => boolean;
   createAbortSignal: () => AbortSignal | undefined;
   mode?: AgentMode;
+  modelName?: string;
   conversationId?: string;
   runRecorder?: AgentRunRecorder;
   executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;

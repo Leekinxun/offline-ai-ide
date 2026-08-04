@@ -57,6 +57,7 @@ export interface AgentRunRecord {
   runId: string;
   conversationId: string;
   mode: AgentMode;
+  modelName?: string;
   status: AgentRunStatus;
   startedAt: number;
   updatedAt: number;
@@ -77,6 +78,7 @@ export interface AgentRunSummary {
   runId: string;
   conversationId: string;
   mode: AgentMode;
+  modelName?: string;
   status: AgentRunStatus;
   startedAt: number;
   updatedAt: number;
@@ -227,6 +229,9 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     runId: value.runId,
     conversationId: value.conversationId,
     mode: value.mode,
+    ...(typeof value.modelName === "string" && value.modelName.trim()
+      ? { modelName: value.modelName.trim().slice(0, 200) }
+      : {}),
     status: value.status,
     startedAt,
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : startedAt,
@@ -322,13 +327,15 @@ export class AgentRunRecorder {
     mode: AgentMode,
     resumedFromRunId?: string,
     lineage?: AgentRunLineage,
-    executionPlanId?: string
+    executionPlanId?: string,
+    modelName?: string
   ) {
     const now = Date.now();
     this.record = {
       runId,
       conversationId,
       mode,
+      ...(modelName?.trim() ? { modelName: modelName.trim().slice(0, 200) } : {}),
       status: "running",
       startedAt: now,
       updatedAt: now,
@@ -510,6 +517,7 @@ export function listRunSummaries(
     runId: record.runId,
     conversationId: record.conversationId,
     mode: record.mode,
+    ...(record.modelName ? { modelName: record.modelName } : {}),
     status: record.status,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,

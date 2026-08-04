@@ -131,6 +131,7 @@ export type WsServerMessage =
       conversationId: string;
       runId: string;
       mode: AgentMode;
+      modelName?: string;
       status: AgentRunStatus;
       metrics: AgentRunMetrics;
       event?: AgentRunEvent;

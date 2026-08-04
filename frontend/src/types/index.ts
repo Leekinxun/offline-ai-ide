@@ -129,6 +129,7 @@ export interface AgentRunSummary {
   runId: string;
   conversationId: string;
   mode: AgentMode;
+  modelName?: string;
   status: AgentRunStatus;
   startedAt: number;
   updatedAt: number;

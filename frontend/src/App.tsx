@@ -2562,6 +2562,8 @@ function AuthenticatedApp({
             setWorkspaceSearchScope(path);
             setWorkspaceSearchVisible(true);
           }}
+          onSearchContent={fs.searchWorkspace}
+          onCancelContentSearch={fs.cancelWorkspaceSearch}
           token={token}
           activeTeam={team.activeTeam}
           style={sidebarVisible && workspaceView === "files" ? { width: sidebarWidth } : undefined}
@@ -3336,8 +3338,16 @@ function AuthenticatedApp({
           connected={chat.connected}
           isStreaming={chat.isStreaming}
           agentMode={chat.agentMode}
+          runtimeOptions={chat.runtimeOptions}
+          selectedModelName={chat.selectedModelName}
+          runState={chat.runState}
+          onAgentModeChange={chat.setAgentMode}
+          onModelNameChange={chat.setSelectedModelName}
           onSend={handleChatSend}
           onSteer={handleChatSteer}
+          onStop={chat.stopCurrentRun}
+          onResume={chat.resumeConversation}
+          onRetry={chat.retryLast}
           onClose={() => setEditorAssistantVisible(false)}
         />
       </div>

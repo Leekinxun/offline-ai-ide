@@ -27,7 +27,7 @@
       --font-mono: 'SF Mono', 'Menlo', 'Monaco', monospace;
       --rail: 56px;
       --sidebar: 286px;
-      --activity: 360px;
+      --activity: 400px;
     }
     [data-theme="dark"] {
       --bg: oklch(16% 0.008 250);
@@ -223,6 +223,9 @@
     .assistant-pane { min-height: 0; flex: 1; display: grid; grid-template-rows: auto 1fr auto; background: var(--surface); }
     .assistant-pane[hidden] { display: none; }
     .assistant-context { padding: 11px 12px; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .assistant-control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    .assistant-control { display: grid; gap: 4px; color: var(--muted); font-size: 10px; letter-spacing: .02em; }
+    .assistant-control select { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 0 8px; color: var(--fg); font-size: 11px; }
     .context-label { color: var(--muted); font-size: 10px; letter-spacing: .08em; margin-bottom: 6px; }
     .active-file-context { width: 100%; min-height: 38px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 0 9px; text-align: left; }
     .active-file-context svg { width: 14px; color: var(--muted); }
@@ -235,6 +238,26 @@
     .assistant-message.user .mini-avatar { background: var(--quiet); color: var(--fg); }
     .assistant-message p { margin: 0 0 7px 29px; color: var(--fg); font-size: 12px; line-height: 1.58; }
     .assistant-message .assistant-note { margin-left: 29px; color: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+    .agent-run-card { margin: 9px 0 18px; border: 1px solid var(--border); border-radius: 11px; overflow: hidden; background: var(--surface); }
+    .agent-run-head { min-height: 44px; display: grid; grid-template-columns: 10px minmax(0,1fr) auto auto; align-items: center; gap: 8px; padding: 0 10px; background: var(--quiet); }
+    .agent-run-title { min-width: 0; }
+    .agent-run-title strong { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-run-title span { display: block; color: var(--muted); font-size: 9px; margin-top: 1px; }
+    .agent-run-time { color: var(--muted); font-family: var(--font-mono); font-size: 9px; }
+    .agent-run-toggle { height: 28px; border: 1px solid var(--strong-border); border-radius: 7px; background: var(--surface); padding: 0 8px; font-size: 10px; }
+    .agent-run-steps { padding: 4px 0; }
+    .agent-run-step { border-top: 1px solid var(--border); }
+    .agent-run-step:first-child { border-top: 0; }
+    .agent-run-step-button { width: 100%; min-height: 39px; border: 0; background: transparent; display: grid; grid-template-columns: 15px 16px minmax(0,1fr) auto; align-items: center; gap: 6px; padding: 0 10px; text-align: left; }
+    .agent-run-step-button:hover { background: var(--quiet); }
+    .agent-run-step-button svg { width: 13px; }
+    .agent-run-step-label { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-run-step-state { color: var(--muted); font-size: 9px; }
+    .agent-run-step.done .agent-run-step-state { color: var(--success); }
+    .agent-run-step.running .agent-run-step-state { color: var(--warn); }
+    .agent-run-detail { display: none; padding: 9px 12px; background: var(--code-bg); color: var(--code-fg); font-family: var(--font-mono); font-size: 9px; line-height: 1.6; white-space: pre-wrap; }
+    .agent-run-step.open .agent-run-detail { display: block; }
+    .agent-run-step.open .chev { transform: rotate(90deg); }
     .assistant-composer { margin: 0 10px 10px; border: 1px solid var(--strong-border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-input); overflow: hidden; }
     .assistant-composer textarea { width: 100%; min-height: 64px; max-height: 120px; resize: none; border: 0; outline: 0; background: transparent; padding: 11px 11px 5px; font-size: 12px; line-height: 1.5; }
     .assistant-composer-tools { display: flex; align-items: center; gap: 6px; padding: 6px; }
@@ -498,9 +521,26 @@ frontend/src/App.css</div></div>
       <div class="activity-head"><strong id="activityTitle">运行详情</strong><div class="rail-spacer"></div><button class="small-icon" id="activityClose" aria-label="关闭右侧面板"><svg><use href="#i-close"/></svg></button></div>
       <div class="activity-tabs" id="activityTabs"><button class="active" data-pane="changesPane">变更</button><button data-pane="checksPane">检查</button><button data-pane="terminalPane">终端</button></div>
       <div class="assistant-pane" id="assistantPane" data-od-id="editor-ai-collaboration" hidden>
-        <div class="assistant-context"><div class="context-label">自动附加的编辑上下文</div><button class="active-file-context" id="activeFileContext"><svg><use href="#i-file"/></svg><strong id="assistantActiveFile">frontend/src/components/ChatPanel.tsx</strong><span>已同步</span></button></div>
+        <div class="assistant-context">
+          <div class="assistant-control-grid">
+            <label class="assistant-control">工作模式<select id="assistantMode"><option value="auto">自动执行</option><option value="plan" selected>先计划</option><option value="execute">直接执行</option><option value="review">代码审查</option><option value="ask">仅回答</option></select></label>
+            <label class="assistant-control">模型<select id="assistantModel"><option value="gpt-5.6">GPT-5.6</option><option value="gpt-5.6-deep">GPT-5.6 · 深度</option><option value="gpt-5.6-fast">GPT-5.6 · 快速</option></select></label>
+          </div>
+          <div class="context-label">自动附加的编辑上下文</div><button class="active-file-context" id="activeFileContext"><svg><use href="#i-file"/></svg><strong id="assistantActiveFile">frontend/src/components/ChatPanel.tsx</strong><span>已同步</span></button>
+        </div>
         <div class="assistant-messages" id="assistantMessages">
           <article class="assistant-message"><div class="assistant-message-head"><span class="mini-avatar">CF</span><span>CrewForge</span></div><p>我会持续跟随你当前打开的文件。你切换文件后，新的路径会自动加入下一条指令的上下文。</p><div class="assistant-note">当前：ChatPanel.tsx · 未选择代码</div></article>
+          <section class="agent-run-card" id="assistantRun" data-od-id="agent-run-process">
+            <div class="agent-run-head"><span class="run-pulse" id="assistantRunPulse"></span><div class="agent-run-title"><strong id="assistantRunTitle">正在分析当前文件</strong><span id="assistantRunMeta">先计划 · GPT-5.6</span></div><span class="agent-run-time" id="assistantRunTime">00:08</span><button class="agent-run-toggle" id="assistantRunToggle">暂停</button></div>
+            <div class="agent-run-steps" id="assistantRunSteps">
+              <div class="agent-run-step done"><button class="agent-run-step-button"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-check"/></svg><span class="agent-run-step-label">理解修改目标与约束</span><span class="agent-run-step-state">完成</span></button><div class="agent-run-detail">目标：优化 ChatPanel 的信息层级
+约束：保留编辑器、文件树与当前代码上下文</div></div>
+              <div class="agent-run-step running"><button class="agent-run-step-button"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-file"/></svg><span class="agent-run-step-label">读取 ChatPanel.tsx</span><span class="agent-run-step-state">进行中</span></button><div class="agent-run-detail">frontend/src/components/ChatPanel.tsx
+正在定位消息流、工具步骤与输入器结构…</div></div>
+              <div class="agent-run-step"><button class="agent-run-step-button"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-file"/></svg><span class="agent-run-step-label">生成并应用修改</span><span class="agent-run-step-state">等待</span></button><div class="agent-run-detail">等待前置读取完成。</div></div>
+              <div class="agent-run-step"><button class="agent-run-step-button"><svg class="chev"><use href="#i-chevron"/></svg><svg><use href="#i-terminal"/></svg><span class="agent-run-step-label">运行类型检查与测试</span><span class="agent-run-step-state">等待</span></button><div class="agent-run-detail">将运行 npm run typecheck 与 npm run test。</div></div>
+            </div>
+          </section>
         </div>
         <div class="assistant-composer"><textarea id="assistantInput" aria-label="基于当前文件向 Agent 提问" placeholder="针对当前文件提出修改要求…"></textarea><div class="assistant-composer-tools"><span class="assistant-context-status"><svg><use href="#i-file"/></svg><span id="assistantContextStatus">ChatPanel.tsx 已附加</span></span><button class="assistant-send" id="assistantSend" aria-label="发送给 Agent"><svg><use href="#i-arrow"/></svg></button></div></div>
       </div>
@@ -547,6 +587,11 @@ frontend/src/App.css</div></div>
     let currentWorkspaceMode = 'chat';
     let activeEditorFile = 'ChatPanel.tsx';
     let currentEditorPath = 'frontend/src/components/ChatPanel.tsx';
+    let assistantRunning = true;
+    let assistantSeconds = 8;
+    let assistantProgress = 1;
+    let assistantComplete = false;
+    const assistantModeLabels = { auto: '自动执行', plan: '先计划', execute: '直接执行', review: '代码审查', ask: '仅回答' };
     const fileContents = {
       'ChatPanel.tsx': [
         'import React, { useCallback, useRef, useState } from "react";',
@@ -664,6 +709,8 @@ frontend/src/App.css</div></div>
       $('#assistantActiveFile').textContent = path;
       const fileName = path.split('/').pop();
       $('#assistantContextStatus').textContent = lineNumber ? `${fileName} · 第 ${lineNumber} 行已附加` : `${fileName} 已附加`;
+      const stepLabels = $$('.agent-run-step-label');
+      if (stepLabels[1]) stepLabels[1].textContent = `读取 ${fileName}`;
     }
     function renderEditor(fileName, path) {
       const editor = $('#codeEditor');
@@ -775,6 +822,69 @@ frontend/src/App.css</div></div>
       $$('.activity-pane').forEach(p => p.hidden = p.id !== id);
       openActivity();
     }
+    function syncAssistantControls(showNotice = false) {
+      const mode = $('#assistantMode').value;
+      const model = $('#assistantModel').selectedOptions[0].textContent;
+      $('#assistantRunMeta').textContent = `${assistantModeLabels[mode]} · ${model}`;
+      const placeholders = {
+        auto: '描述目标，Agent 自动决定执行方式…',
+        plan: '先规划当前文件的修改步骤…',
+        execute: '直接修改当前文件…',
+        review: '审查当前文件并指出风险…',
+        ask: '询问当前文件的实现细节…'
+      };
+      $('#assistantInput').placeholder = placeholders[mode];
+      if (showNotice) showToast(`已切换为${assistantModeLabels[mode]} · ${model}`);
+    }
+    function startAssistantRun() {
+      const steps = $$('.agent-run-step');
+      steps.forEach((step, index) => {
+        step.classList.remove('done', 'running', 'open');
+        $('.agent-run-step-state', step).textContent = index === 0 ? '完成' : index === 1 ? '进行中' : '等待';
+        if (index === 0) step.classList.add('done');
+        if (index === 1) step.classList.add('running');
+      });
+      assistantProgress = 1;
+      assistantSeconds = 0;
+      assistantComplete = false;
+      assistantRunning = true;
+      $('#assistantRunPulse').style.visibility = 'visible';
+      $('#assistantRunTitle').textContent = $('#assistantMode').value === 'plan' ? '正在生成并执行计划' : 'Agent 正在处理当前文件';
+      $('#assistantRunToggle').textContent = '暂停';
+      $('#assistantRunTime').textContent = '00:00';
+      syncAssistantControls();
+    }
+    function finishAssistantRun() {
+      assistantComplete = true;
+      assistantRunning = false;
+      $('#assistantRunPulse').style.visibility = 'hidden';
+      $('#assistantRunTitle').textContent = '运行完成 · 等待下一条指令';
+      $('#assistantRunToggle').textContent = '重新运行';
+      const fileName = currentEditorPath.split('/').pop();
+      const reply = document.createElement('article');
+      reply.className = 'assistant-message';
+      reply.innerHTML = '<div class="assistant-message-head"><span class="mini-avatar">CF</span><span>CrewForge</span></div><p></p><div class="assistant-note"></div>';
+      $('p', reply).textContent = `${fileName} 的修改与验证已完成。你可以展开上方步骤查看每次工具调用。`;
+      $('.assistant-note', reply).textContent = '修改完成 · 类型检查与测试通过';
+      $('#assistantMessages').appendChild(reply);
+      $('#assistantMessages').scrollTop = $('#assistantMessages').scrollHeight;
+    }
+    function advanceAssistantRun() {
+      if (!assistantRunning || assistantComplete) return;
+      const steps = $$('.agent-run-step');
+      const current = steps[assistantProgress];
+      if (current) {
+        current.classList.remove('running');
+        current.classList.add('done');
+        $('.agent-run-step-state', current).textContent = '完成';
+      }
+      assistantProgress += 1;
+      if (assistantProgress >= steps.length) { finishAssistantRun(); return; }
+      steps[assistantProgress].classList.add('running');
+      $('.agent-run-step-state', steps[assistantProgress]).textContent = '进行中';
+      const titles = ['正在读取当前文件', '正在应用代码修改', '正在运行验证'];
+      $('#assistantRunTitle').textContent = titles[Math.max(0, assistantProgress - 1)];
+    }
     function sendAssistantMessage() {
       const field = $('#assistantInput');
       const text = field.value.trim();
@@ -785,17 +895,14 @@ frontend/src/App.css</div></div>
       userMessage.className = 'assistant-message user';
       userMessage.innerHTML = '<div class="assistant-message-head"><span class="mini-avatar">你</span><span>你</span></div><p></p><div class="assistant-note"></div>';
       $('p', userMessage).textContent = text;
-      $('.assistant-note', userMessage).textContent = `上下文：${currentEditorPath}`;
+      const modeLabel = assistantModeLabels[$('#assistantMode').value];
+      const modelLabel = $('#assistantModel').selectedOptions[0].textContent;
+      $('.assistant-note', userMessage).textContent = `上下文：${currentEditorPath} · ${modeLabel} · ${modelLabel}`;
       messages.appendChild(userMessage);
-      const reply = document.createElement('article');
-      reply.className = 'assistant-message';
-      reply.innerHTML = '<div class="assistant-message-head"><span class="mini-avatar">CF</span><span>CrewForge</span></div><p></p><div class="assistant-note"></div>';
-      $('p', reply).textContent = `收到。我会以 ${fileName} 为当前修改目标，并结合已打开的代码内容执行。`;
-      $('.assistant-note', reply).textContent = '当前文件已锁定 · 可继续切换文件追加上下文';
-      messages.appendChild(reply);
+      startAssistantRun();
       field.value = '';
       messages.scrollTop = messages.scrollHeight;
-      showToast(`${fileName} 已作为 Agent 当前上下文`);
+      showToast(`${fileName} 已进入 ${modeLabel} 流程`);
     }
     function addMessage(text) {
       if (!text.trim()) return;
@@ -865,9 +972,19 @@ frontend/src/App.css</div></div>
       $$('.file-item').forEach(item => item.style.display = item.textContent.toLowerCase().includes(q) ? 'grid' : 'none');
     });
     $('#activeFileContext').addEventListener('click', () => showToast(`${currentEditorPath} 已作为当前上下文`));
+    $('#assistantMode').addEventListener('change', () => syncAssistantControls(true));
+    $('#assistantModel').addEventListener('change', () => syncAssistantControls(true));
     $('#assistantSend').addEventListener('click', sendAssistantMessage);
     $('#assistantInput').addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAssistantMessage(); }
+    });
+    $$('.agent-run-step-button').forEach(button => button.addEventListener('click', () => button.parentElement.classList.toggle('open')));
+    $('#assistantRunToggle').addEventListener('click', () => {
+      if (assistantComplete) { startAssistantRun(); return; }
+      assistantRunning = !assistantRunning;
+      $('#assistantRunToggle').textContent = assistantRunning ? '暂停' : '继续';
+      $('#assistantRunPulse').style.visibility = assistantRunning ? 'visible' : 'hidden';
+      $('#assistantRunTitle').textContent = assistantRunning ? 'Agent 已继续运行' : '已暂停 · 可调整模式或模型';
     });
     $$('.step-button').forEach(btn => btn.addEventListener('click', () => btn.parentElement.classList.toggle('open')));
     $$('.activity-tabs button').forEach(btn => btn.addEventListener('click', () => setActivityPane(btn.dataset.pane)));
@@ -887,6 +1004,13 @@ frontend/src/App.css</div></div>
       showToast(running ? '任务已继续' : '任务已暂停');
     });
     setInterval(() => { if (running) { seconds++; $('#elapsed').textContent = `${String(Math.floor(seconds / 60)).padStart(2,'0')}:${String(seconds % 60).padStart(2,'0')}`; } }, 1000);
+    setInterval(() => {
+      if (assistantRunning && !assistantComplete) {
+        assistantSeconds++;
+        $('#assistantRunTime').textContent = `${String(Math.floor(assistantSeconds / 60)).padStart(2,'0')}:${String(assistantSeconds % 60).padStart(2,'0')}`;
+      }
+    }, 1000);
+    setInterval(advanceAssistantRun, 2800);
     $$('.rail .icon-btn[data-view]').forEach(btn => btn.addEventListener('click', () => {
       if (btn.dataset.view === 'chat') { setWorkspaceMode('chat'); if (innerWidth <= 780) sidebar.classList.add('open'); }
       if (btn.dataset.view === 'files') { setWorkspaceMode('files'); if (innerWidth <= 780) sidebar.classList.add('open'); showToast('已打开文件树与代码编辑器'); }
@@ -907,6 +1031,7 @@ frontend/src/App.css</div></div>
       if (e.key === 'Escape') { closePalette(); closeSettings(); closeDrawers(); }
     });
     renderEditor('ChatPanel.tsx', 'frontend/src/components/ChatPanel.tsx');
+    syncAssistantControls();
     setWorkspaceMode('files');
   </script>
 </body>

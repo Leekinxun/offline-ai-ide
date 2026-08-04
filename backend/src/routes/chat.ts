@@ -14,12 +14,31 @@ import {
   listManagedWorktrees,
   removeManagedWorktree,
 } from "../chat/worktrees.js";
+import { config } from "../config.js";
+import {
+  listSelectableModelNames,
+  resolveSelectableModelName,
+} from "../agent/agentProfiles.js";
 
 export const chatRouter = Router();
 
 function getSessionWorkspace(req: unknown): string {
   return ((req as any).userSession as UserSession).workspaceDir;
 }
+
+chatRouter.get("/runtime-options", (_req, res) => {
+  const modes = ["ask", "plan", "code", "review"] as const;
+  res.json({
+    defaultModelName: config.modelName,
+    models: listSelectableModelNames(config.agentProfiles, config.modelName),
+    modeModels: Object.fromEntries(
+      modes.map((mode) => [
+        mode,
+        resolveSelectableModelName(mode, undefined, config.agentProfiles, config.modelName),
+      ])
+    ),
+  });
+});
 
 chatRouter.get("/conversations", (req, res) => {
   try {

@@ -144,6 +144,40 @@ export function resolveAgentProfile(
   };
 }
 
+export function listSelectableModelNames(
+  overrides: AgentProfileOverrides = {},
+  defaultModelName = "default"
+): string[] {
+  const names = new Set<string>();
+  const normalizedDefault = defaultModelName.trim();
+  if (normalizedDefault) names.add(normalizedDefault);
+  for (const profile of Object.values(overrides)) {
+    const modelName = profile?.modelName?.trim();
+    if (modelName) names.add(modelName);
+  }
+  return Array.from(names);
+}
+
+export function resolveSelectableModelName(
+  id: AgentProfileId,
+  requestedModelName: unknown,
+  overrides: AgentProfileOverrides = {},
+  defaultModelName = "default"
+): string {
+  const profileModel = resolveAgentProfile(id, overrides, {
+    modelName: defaultModelName,
+  }).modelName || defaultModelName;
+  if (typeof requestedModelName !== "string" || !requestedModelName.trim()) {
+    return profileModel;
+  }
+
+  const requested = requestedModelName.trim();
+  if (!listSelectableModelNames(overrides, defaultModelName).includes(requested)) {
+    throw new Error("Requested model is not configured for this workspace");
+  }
+  return requested;
+}
+
 export function agentProfileAllowsTool(profile: AgentProfile, toolName: string): boolean {
   if (profile.permissions.deny.some((pattern) => matchPattern(pattern, toolName))) return false;
   return profile.permissions.allow.some((pattern) => matchPattern(pattern, toolName));

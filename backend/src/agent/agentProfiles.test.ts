@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   agentProfileAllowsTool,
   estimateUsageCostUsd,
+  listSelectableModelNames,
   normalizeAgentProfileOverrides,
   resolveAgentProfile,
+  resolveSelectableModelName,
 } from "./agentProfiles.js";
 
 test("resolves per-agent model, budgets, pricing, and narrowed permissions", () => {
@@ -24,6 +26,30 @@ test("resolves per-agent model, budgets, pricing, and narrowed permissions", () 
   assert.equal(agentProfileAllowsTool(profile, "read_secret"), false);
   assert.equal(agentProfileAllowsTool(profile, "bash"), false);
   assert.equal(estimateUsageCostUsd(profile, 1_000_000, 500_000), 6);
+});
+
+test("lists configured models and validates per-run model selection", () => {
+  const overrides = normalizeAgentProfileOverrides({
+    plan: { modelName: "deep-model" },
+    code: { modelName: "fast-model" },
+  });
+
+  assert.deepEqual(
+    listSelectableModelNames(overrides, "default-model"),
+    ["default-model", "deep-model", "fast-model"]
+  );
+  assert.equal(
+    resolveSelectableModelName("plan", undefined, overrides, "default-model"),
+    "deep-model"
+  );
+  assert.equal(
+    resolveSelectableModelName("plan", "fast-model", overrides, "default-model"),
+    "fast-model"
+  );
+  assert.throws(
+    () => resolveSelectableModelName("code", "unknown-model", overrides, "default-model"),
+    /not configured/
+  );
 });
 
 test("keeps child defaults narrower than the primary code agent", () => {

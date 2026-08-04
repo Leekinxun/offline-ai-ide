@@ -30,6 +30,8 @@ import {
   updateExecutionPlanStatus,
   type ExecutionPlan,
 } from "../chat/executionPlans.js";
+import { config } from "../config.js";
+import { resolveSelectableModelName } from "../agent/agentProfiles.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -142,6 +144,12 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           }
         }
         const resumeMode = resumableRun.mode;
+        const resumeModelName = resolveSelectableModelName(
+          resumeMode,
+          resumableRun.modelName,
+          config.agentProfiles,
+          config.modelName
+        );
         const requestId =
           typeof data.requestId === "string" && data.requestId.trim()
             ? data.requestId.trim()
@@ -154,7 +162,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           resumeMode,
           resumableRun.runId,
           undefined,
-          executionPlan?.id
+          executionPlan?.id,
+          resumeModelName
         );
         await recorder.start();
         await updateConversationState(session.workspaceDir, conversationId, {
@@ -179,6 +188,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           conversationId,
           runId,
           mode: resumeMode,
+          modelName: resumeModelName,
           status: "running",
           metrics: recorder.snapshot().metrics,
           event: recorder.snapshot().events.at(-1),
@@ -193,6 +203,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
             message: RESUME_PROMPT,
             conversationId,
             mode: resumeMode,
+            modelName: resumeModelName,
             executionPlan,
           },
           steeringQueue,
@@ -215,6 +226,12 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
       const requestedRequestId =
         typeof data.requestId === "string" ? data.requestId.trim() : "";
       let mode = normalizeAgentMode(data.mode);
+      const modelName = resolveSelectableModelName(
+        mode,
+        data.modelName,
+        config.agentProfiles,
+        config.modelName
+      );
 
       if (!userMessage.trim()) {
         wsSend(ws, { type: "error", content: "Empty message" });
@@ -282,6 +299,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         context,
         conversationId,
         mode,
+        modelName,
         executionPlan,
       };
 
@@ -306,7 +324,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         mode,
         undefined,
         undefined,
-        executionPlan?.id
+        executionPlan?.id,
+        modelName
       );
       await recorder.start();
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -319,6 +338,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         conversationId,
         runId,
         mode,
+        modelName,
         status: "running",
         metrics: recorder.snapshot().metrics,
         event: recorder.snapshot().events.at(-1),
@@ -349,6 +369,7 @@ interface PendingUserMessage {
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId: string;
   mode: AgentMode;
+  modelName: string;
   executionPlan?: ExecutionPlan;
 }
 
@@ -415,6 +436,7 @@ async function processConversationQueue(
       isStopped: () => controlState.stopped,
       createAbortSignal: () => controlState.createAbortSignal(),
       mode: initialTurn.mode,
+      modelName: initialTurn.modelName,
       conversationId: activeConversationId,
       runRecorder: recorder,
       requestToolApproval: (input) => approvals.request({
@@ -461,6 +483,7 @@ async function processConversationQueue(
       conversationId: activeConversationId,
       runId: recorder.runId,
       mode: initialTurn.mode,
+      modelName: initialTurn.modelName,
       status: "failed",
       metrics: finishedRecord.metrics,
       event: finishedRecord.events.at(-1),
@@ -521,6 +544,7 @@ async function processConversationQueue(
     conversationId: activeConversationId,
     runId: recorder.runId,
     mode: finalMode,
+    modelName: initialTurn.modelName,
     status: finalStatus,
     metrics: finishedRecord.metrics,
     event: finishedRecord.events.at(-1),
@@ -555,7 +579,8 @@ async function processConversationQueue(
       nextTurn.mode,
       undefined,
       undefined,
-      nextTurn.executionPlan?.id
+      nextTurn.executionPlan?.id,
+      nextTurn.modelName
     );
     await nextRecorder.start();
     await updateConversationState(session.workspaceDir, nextTurn.conversationId, {
@@ -568,6 +593,7 @@ async function processConversationQueue(
       conversationId: nextTurn.conversationId,
       runId: nextRunId,
       mode: nextTurn.mode,
+      modelName: nextTurn.modelName,
       status: "running",
       metrics: nextRecorder.snapshot().metrics,
       event: nextRecorder.snapshot().events.at(-1),

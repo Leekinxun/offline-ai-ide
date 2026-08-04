@@ -34,6 +34,12 @@ interface RunListResponse {
   runs?: AgentRunSummary[];
 }
 
+export interface ChatRuntimeOptions {
+  defaultModelName: string;
+  models: string[];
+  modeModels: Partial<Record<AgentMode, string>>;
+}
+
 interface ForkConversationResponse {
   conversation?: ConversationSummary;
 }
@@ -69,6 +75,12 @@ export function useChat(
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [agentMode, setAgentMode] = useState<AgentMode>("plan");
+  const [runtimeOptions, setRuntimeOptions] = useState<ChatRuntimeOptions>({
+    defaultModelName: "",
+    models: [],
+    modeModels: {},
+  });
+  const [selectedModelName, setSelectedModelName] = useState("");
   const [currentRunSummary, setCurrentRunSummary] = useState<ConversationRunSummary | null>(null);
   const [contextState, setContextState] = useState<ContextState>({
     estimatedTokens: 0,
@@ -126,6 +138,35 @@ export function useChat(
       );
     } finally {
       setHistoryLoading(false);
+    }
+  }, [token]);
+
+  const refreshRuntimeOptions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/chat/runtime-options", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as Partial<ChatRuntimeOptions>;
+      const models = Array.isArray(payload.models)
+        ? payload.models.filter(
+            (model): model is string => typeof model === "string" && Boolean(model.trim())
+          )
+        : [];
+      setRuntimeOptions({
+        defaultModelName:
+          typeof payload.defaultModelName === "string" ? payload.defaultModelName : "",
+        models,
+        modeModels:
+          payload.modeModels && typeof payload.modeModels === "object"
+            ? payload.modeModels
+            : {},
+      });
+      setSelectedModelName((current) =>
+        current && !models.includes(current) ? "" : current
+      );
+    } catch {
+      // Mode defaults remain authoritative when runtime discovery is unavailable.
     }
   }, [token]);
 
@@ -254,6 +295,7 @@ export function useChat(
               runId: data.runId,
               conversationId: data.conversationId,
               mode: data.mode || previousRun?.mode || "code",
+              modelName: data.modelName || previousRun?.modelName,
               status: data.status || "running",
               startedAt: previousRun?.startedAt || event?.timestamp || Date.now(),
               updatedAt: event?.timestamp || Date.now(),
@@ -440,7 +482,8 @@ export function useChat(
     setPendingApprovals([]);
     void refreshConversations();
     void refreshRunHistory(null);
-  }, [refreshConversations, refreshRunHistory, workspaceDir]);
+    void refreshRuntimeOptions();
+  }, [refreshConversations, refreshRunHistory, refreshRuntimeOptions, workspaceDir]);
 
   useEffect(() => {
     void refreshRunHistory(currentConversationId);
@@ -487,10 +530,11 @@ export function useChat(
           history,
           conversationId: currentConversationId,
           mode: requestedMode,
+          ...(selectedModelName ? { modelName: selectedModelName } : {}),
         })
       );
     },
-    [agentMode, currentConversationId, finishRequest, messages]
+    [agentMode, currentConversationId, finishRequest, messages, selectedModelName]
   );
 
   const sendSteering = useCallback(
@@ -524,10 +568,11 @@ export function useChat(
           context,
           conversationId: currentConversationId,
           mode: agentMode,
+          ...(selectedModelName ? { modelName: selectedModelName } : {}),
         })
       );
     },
-    [agentMode, currentConversationId]
+    [agentMode, currentConversationId, selectedModelName]
   );
 
   const stopCurrentRun = useCallback(() => {
@@ -766,6 +811,9 @@ export function useChat(
     forkConversation,
     agentMode,
     setAgentMode,
+    runtimeOptions,
+    selectedModelName,
+    setSelectedModelName,
     currentRunSummary,
     contextState,
     mcpState,
