@@ -86,6 +86,8 @@ assert_contains "$APP_FILE" "aria-valuenow={terminalHeight}" "keyboard-accessibl
 assert_contains "$CSS_FILE" "landing-scroll" "scrollable landing page root"
 assert_contains "$APP_FILE" "editor-compare-workbench" "side-by-side file comparison workspace"
 assert_contains "$CSS_FILE" ".editor-compare-workbench" "responsive comparison layout"
+assert_contains "$CSS_FILE" ".workbench-view-files .editor-compare-picker" "visible editor-first comparison control"
+assert_contains "$CSS_FILE" ":not(.editor-compare-picker):not(.editor-compare-sync):not(.editor-compare-close)" "comparison controls excluded from hidden legacy actions"
 assert_contains "$APP_FILE" "toggleUtilityPanel" "mutually exclusive workbench utility panels"
 assert_contains "$APP_FILE" "toggleExplorerPanel" "Explorer and utility panel exclusivity"
 assert_contains "$APP_FILE" "window.innerWidth <= 860" "single narrow-screen utility drawer"

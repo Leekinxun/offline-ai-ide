@@ -2631,7 +2631,7 @@ function AuthenticatedApp({
                 {isDebuggablePath(activeFile.path) && (
                   <button
                     type="button"
-                    className="editor-compare-sync"
+                    className="editor-run-current"
                     onClick={() => void runCurrentFile()}
                     disabled={readOnlyWorkspace}
                     title={t("debug.runCurrentFile")}

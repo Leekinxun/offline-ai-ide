@@ -2143,7 +2143,8 @@ select:focus-visible,
 
 .editor-compare-picker select:focus-visible,
 .editor-compare-close:focus-visible,
-.editor-compare-sync:focus-visible {
+.editor-compare-sync:focus-visible,
+.editor-run-current:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
@@ -2167,7 +2168,8 @@ select:focus-visible,
   background: var(--bg-hover);
 }
 
-.editor-compare-sync {
+.editor-compare-sync,
+.editor-run-current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -11821,8 +11823,39 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
-.workbench-view-files .editor-context-actions > :not(.editor-online-state):not(.editor-primary-actions):not(.editor-context-statuses) {
+.workbench-view-files .editor-context-actions > :not(.editor-online-state):not(.editor-primary-actions):not(.editor-context-statuses):not(.editor-compare-picker):not(.editor-compare-sync):not(.editor-compare-close) {
   display: none;
+}
+
+.workbench-view-files .editor-compare-picker {
+  display: inline-flex;
+}
+
+.workbench-view-files .editor-compare-picker > span,
+.workbench-view-files .editor-compare-sync > span {
+  display: none;
+}
+
+.workbench-view-files .editor-compare-picker select {
+  width: 132px;
+  min-width: 0;
+  max-width: 132px;
+  height: 34px;
+  border-color: var(--line-subtle);
+  border-radius: 8px;
+  background-color: var(--surface-quiet);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.workbench-view-files .editor-compare-sync,
+.workbench-view-files .editor-compare-close {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-color: var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-quiet);
 }
 
 .workbench-view-files .editor-context-statuses {
