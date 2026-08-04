@@ -518,6 +518,19 @@ export function readConversationMessages(
   return readConversationFile(workspaceDir, conversationId).messages;
 }
 
+export function deleteConversation(
+  workspaceDir: string,
+  conversationId: string
+): Promise<void> {
+  return queueConversationMutation(workspaceDir, conversationId, () => {
+    const conversationPath = getConversationPath(workspaceDir, conversationId);
+    if (!fs.existsSync(conversationPath)) {
+      throw new Error("Conversation not found");
+    }
+    fs.rmSync(conversationPath);
+  });
+}
+
 export function forkConversation(
   workspaceDir: string,
   conversationId: string,

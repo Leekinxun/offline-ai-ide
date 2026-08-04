@@ -1046,6 +1046,12 @@ function AuthenticatedApp({
   }, []);
 
   const chat = useChat(token, workspaceDir, handleAiFileUpdate);
+
+  useEffect(() => {
+    if (workspaceView !== "files" || chat.pendingApprovals.length === 0) return;
+    setRunDetailsVisible(false);
+    setEditorAssistantVisible(true);
+  }, [chat.pendingApprovals.length, workspaceView]);
   const switchConversation = useCallback(
     (direction: -1 | 1) => {
       if (chat.isStreaming || chat.conversations.length === 0) return;
@@ -2538,6 +2544,7 @@ function AuthenticatedApp({
               setChatFocusNonce((value) => value + 1);
             }}
             onLoadConversation={chat.loadConversation}
+            onDeleteConversation={chat.deleteConversation}
             onRefresh={chat.refreshConversations}
           />
         )}
@@ -3283,6 +3290,7 @@ function AuthenticatedApp({
           onClear={chat.clearMessages}
           onRetry={chat.retryLast}
           onLoadConversation={chat.loadConversation}
+          onDeleteConversation={chat.deleteConversation}
           onForkConversation={async (conversationId, upToTimestamp) => {
             try {
               const fork = await chat.forkConversation(conversationId, upToTimestamp);
@@ -3341,6 +3349,7 @@ function AuthenticatedApp({
           runtimeOptions={chat.runtimeOptions}
           selectedModelName={chat.selectedModelName}
           runState={chat.runState}
+          pendingApprovals={chat.pendingApprovals}
           onAgentModeChange={chat.setAgentMode}
           onModelNameChange={chat.setSelectedModelName}
           onSend={handleChatSend}
@@ -3348,6 +3357,8 @@ function AuthenticatedApp({
           onStop={chat.stopCurrentRun}
           onResume={chat.resumeConversation}
           onRetry={chat.retryLast}
+          onToolApproval={chat.respondToToolApproval}
+          onApproveConversationTools={chat.approveConversationTools}
           onClose={() => setEditorAssistantVisible(false)}
         />
       </div>

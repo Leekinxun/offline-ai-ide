@@ -12,7 +12,7 @@ import {
   Sun,
   TerminalSquare,
 } from "lucide-react";
-import { PRODUCT_NAME } from "../brand";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "../brand";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "../i18n";
 
@@ -107,7 +107,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       <main>
         <section className="landing-hero">
           <div className="landing-hero-copy">
-            <div className="landing-badge"><span />{isZh ? "完全离线 · 本地运行 · v0.7.0" : "Fully offline · Local runtime · v0.7.0"}</div>
+            <div className="landing-badge"><span />{isZh ? `完全离线 · 本地运行 · v${PRODUCT_VERSION}` : `Fully offline · Local runtime · v${PRODUCT_VERSION}`}</div>
             <h1>{isZh ? "安静的 AI 编程工作台" : "The quiet AI coding workbench"}</h1>
             <p>{isZh
               ? "把编辑器当作画布，把任务当作主线。接入任意 OpenAI 兼容模型，在本地完成读写、审阅与多智能体协作。"

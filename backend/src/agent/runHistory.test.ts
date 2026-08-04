@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   AgentRunRecorder,
   findLatestResumableRun,
+  hasActiveRunForConversation,
   listChildRuns,
   listRunSummaries,
   readRunRecord,
@@ -16,6 +17,7 @@ test("persists agent run metrics and timeline events", async () => {
   const recorder = new AgentRunRecorder(workspaceDir, "run-1", "conversation-1", "code");
 
   await recorder.start();
+  assert.equal(hasActiveRunForConversation(workspaceDir, "conversation-1"), true);
   await recorder.event(
     {
       kind: "model_response",
@@ -25,6 +27,7 @@ test("persists agent run metrics and timeline events", async () => {
     { modelCalls: 1, totalTokens: 128, estimatedTokensPeak: 200 }
   );
   const finished = await recorder.finish("stopped", { toolCalls: 2, toolErrors: 1 });
+  assert.equal(hasActiveRunForConversation(workspaceDir, "conversation-1"), false);
 
   const record = readRunRecord(workspaceDir, "run-1");
   assert.equal(record.status, "stopped");

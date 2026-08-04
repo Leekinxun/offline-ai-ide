@@ -134,20 +134,22 @@
 
 - Placement: 会话 Fork 和运行回滚属于 Chat 历史上下文操作；Git worktree 与 workspace checkpoint 共同归入现有 Checkpoints/Recovery 抽屉，避免新增 Activity Rail 顶级入口。
 - Conversation fork: 历史会话提供完整 Fork，消息节点提供“从此处 Fork”；成功后直接进入新会话，原会话保持不变。操作使用分支图标、可读 tooltip 和执行中禁用态。
+- Conversation deletion: 任务侧栏和完整历史列表都提供低强调的删除入口，并在执行前明确说明“删除历史不会撤销工作区改动”。服务端拒绝删除仍有活跃运行的对话；删除当前对话后进入空白新对话状态，其他对话与工作区文件保持不变。删除失败必须留在原列表并显示可恢复错误。
 - Run revert: 仅 Code 模式的已结束根运行展示回滚入口。执行前必须说明将恢复运行前工作区、未保存编辑器状态会失效；成功后关闭旧编辑器状态并刷新文件树。
 - Worktree management: Recovery 抽屉使用“快照 / Worktrees”分段切换；Worktree 表面支持基于名称和 revision 创建、打开隔离工作区、列出路径/分支/HEAD，以及确认后移除。非 Git 工作区显示靠近操作区的可恢复错误。
 - Visual and interaction: 复用 `PanelShell`、`dialog-btn`、细边框卡片、状态徽章和 8/12px 间距；危险操作使用语义化 danger 状态但不铺大面积红色。所有动作具备 loading、disabled、empty、error 和成功 toast。
 - Responsive/accessibility: 操作留在现有 Chat/Recovery 抽屉内，在窄屏不新增并列面板；图标按钮提供 `aria-label`/tooltip，分段控件使用 tab 语义，异步错误使用 `role="alert"`。
-- Acceptance: 用户可在两步内完成完整会话 Fork、消息点 Fork、运行回滚或创建 Worktree；任何恢复/移除操作均经过确认，成功后界面状态与文件系统一致。
+- Acceptance: 用户可在两步内完成完整会话 Fork、消息点 Fork、删除已结束对话、运行回滚或创建 Worktree；任何删除、恢复或移除操作均经过确认，成功后界面状态与持久化数据一致。
 
 ### MCP, approval, and compare interaction contract — 2026-07-29
 
 - MCP discovery: 保存 MCP 配置必须立即失效旧发现缓存，下一轮工具发现必须只使用已保存配置；连接成功但工具未注入模型的状态不可被呈现为“可用”。可写工作区中的 Ask、Code、Review、Plan 对话都可发现已启用 MCP 工具，最终可调用范围继续由 Agent profile 与审批策略收窄。
 - MCP activation: 每个已保存的远程或 stdio MCP 服务在连接结果列表中显示“已启用 / 已禁用”状态并提供单步切换；禁用服务不建立连接、不暴露工具，重新启用后立即刷新发现结果。高级服务仍由原配置对象持有 `disabled`，普通 URL 服务复用 `disabledUrls`，避免引入第二套状态源。
 - Conversation approval: 审批区提供“一键批准本次对话”。动作只覆盖当前 WebSocket 生命周期内、同一 conversation id 的当前与后续软审批；硬策略拦截、只读角色、停止任务和断线仍不可绕过。切换到其他对话不得继承该授权。
+- Approval continuity: 待审批操作必须出现在用户当前使用的 AI 表面。完整对话页继续在 Composer 上方显示审批区；文件编辑视图的 `EditorAssistantPanel` 同样在消息区与 Composer 之间显示同一审批队列、单次/会话批准和拒绝操作。编辑视图收到新审批时自动打开协作栏并退出运行详情替代面板，避免被阻塞的任务没有可见下一步。两个表面复用同一状态源与响应函数，切换视图不得丢失、复制或自动批准请求。
 - Compare scrolling: 并排文件对比默认启用同步滚动，并提供可见开关。两个 Monaco 编辑器按各自可滚动范围映射纵向和横向位置，避免不同文件长度导致单边提前触底；程序化镜像滚动不得形成反馈循环，关闭同步后两侧恢复独立滚动。
 - Accessibility and feedback: MCP 启停与同步滚动按钮必须暴露 pressed/disabled 语义和本地化名称；批量批准只在存在待审批项时出现，文案明确授权边界；保存、刷新、启停失败均在原设置/对话表面反馈。
-- Acceptance: 保存并测试通过的 MCP 在下一轮任一对话模式中进入模型工具列表；任一服务可启停且状态重载后保持；批准当前对话后同对话后续软审批不再逐项暂停而其他对话仍需审批；文件对比两侧可同步滚动并可随时关闭。
+- Acceptance: 保存并测试通过的 MCP 在下一轮任一对话模式中进入模型工具列表；任一服务可启停且状态重载后保持；审批请求在完整对话页和编辑器右侧协作栏均可处理；批准当前对话后同对话后续软审批不再逐项暂停而其他对话仍需审批；文件对比两侧可同步滚动并可随时关闭。
 
 ### Editor diagnostics, debug, and isolated vibe windows — 2026-07-30
 

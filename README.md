@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> Current Version: `v0.8.0`
+> Current Version: `v0.9.0`
 >
-> Release Date: `2026-07-25`
+> Release Date: `2026-08-04`
 
 CrownForge is a fully offline, self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration — all running in a single Docker container.
 
@@ -18,6 +18,19 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v0.9.0 · 2026-08-04
+
+- Introduced the updated **chat-first and editor-first Workbench** with a dedicated 400px editor collaboration rail, configured model selection, real Agent run events, elapsed time, expandable steps, stop/resume/rerun controls, and active-file context that follows the editor
+- Kept the selected **Ask / Plan / Code / Review mode** stable across requests so a Code task no longer falls back to Plan before the Agent can operate
+- Added server-validated **per-run model selection** from administrator-configured models and persisted the effective model in run history and live run state
+- Expanded Explorer search to combine **file-name/path matching with file-content search**, including debounced ripgrep results, match counts, loading feedback, and workspace-boundary enforcement
+- Added Explorer **copy path, copy/paste, and drag-to-move** workflows for files and folders, while folder selection now starts at each user's own workspace root instead of the global `/workspace`
+- Restored **side-by-side file comparison** with a visible file picker, synchronized scrolling toggle, read-only reference pane, and responsive vertical layout on narrow screens
+- Surfaced pending **tool approvals inside the editor collaboration rail** and automatically opens that rail when an Agent is blocked waiting for input; the full chat and editor views share the same approval queue and decisions
+- Added confirmed **conversation deletion** to both task-history surfaces, with active-run protection and safe reset when the current conversation is removed; deleting chat history never reverts workspace changes
+- Refined the latest UI interaction design, accessibility labels, compact responsive controls, Chinese/English copy, and regression contracts around comparison, approval continuity, and conversation lifecycle
+- Expanded the repeatable verification suite to **120 backend tests** plus backend/frontend typechecks, production build, JSON hierarchy tests, context benchmark, UI contract, and whitespace validation
 
 ### v0.8.0 · 2026-07-25
 
@@ -113,7 +126,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.8.0` is the current documented release. It turns the redesigned CrownForge Workbench into a safer, more complete IDE workflow with recoverable checkpoints, permission-gated tool execution, persistent diagnostics, cancellable run/test tasks, Node.js and Python debugging, structured review navigation, responsive collaboration surfaces, and an editable JSON hierarchy plugin.
+`v0.9.0` is the current documented release. It completes the editor-first collaboration workflow: file-name and content search, path copy and drag-to-move operations, user-scoped workspace selection, stable Agent modes, configured model selection, real run progress, approvals beside the editor, synchronized file comparison, and deletable conversation history.
 
 ## Workbench Design Baseline
 
@@ -132,21 +145,21 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
 - **Codex-Inspired Workspace UI** — Grouped workspace controls, focused task workflows, command palette and search, responsive side panels, clear status surfaces, light/dark visual tokens, and keyboard-friendly interactions
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
-- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, collaboration notices, and safer save behavior with version-aware conflict handling
+- **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, synchronized side-by-side file comparison, collaboration notices, and safer save behavior with version-aware conflict handling
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
 - **JSON Parser** — JSON files open in a builtin searchable hierarchy editor with statistics, expand/collapse controls, JSONPath/value copy actions, reversible add/edit/rename/delete operations, validation, read-only enforcement, and clear parse-error feedback
 - **Checkpoints & Recovery** — Code tasks create a workspace checkpoint before tool execution; users can also create, inspect, and explicitly restore snapshots from the Checkpoints panel
 - **Problems & Diagnostics** — Monaco markers and persistent TypeScript/Ruff/Cargo checks share one filterable Problems surface with direct file/line navigation
 - **Run, Test & Debug** — Discover allowlisted project tasks, stream and cancel executions, navigate parsed failures, and debug Node.js or Python programs with breakpoints, stepping, runtime-aware status, and call stacks
-- **Tool Approval & Safety Policy** — Side-effecting file and shell tools pause for an explicit decision while protected metadata, secrets, destructive commands, and workspace escapes remain non-bypassable
+- **Tool Approval & Safety Policy** — Side-effecting file and shell tools pause for an explicit decision in both the full chat and editor collaboration rail, while protected metadata, secrets, destructive commands, and workspace escapes remain non-bypassable
 - **Structured Review & Diff** — AI review findings, changed-file summaries, Git groups, conflict states, and Monaco Diff share a consistent navigation path back to the editor
 - **Light / Dark Theme** — Users can switch the UI theme from the title bar; the selected theme is persisted locally and keeps Monaco in sync
 - **Plugin System** — VS Code-style lightweight plugin mode with builtin and external plugins, explicit permissions/scopes, offline install from `plugins/`, an in-app plugin manager, and a shipped Markdown preview example plugin
 - **AI Coding Assistant** — Powered by **Rolex Agent**, it can read, write, edit files, and run shell commands in your workspace, supports Ask / Code / Review / Plan modes, interruptible steering, automatic context compaction with preserved `.transcripts/`, lazy-loaded external MCP tools, and honors team read-only roles
 - **Persistent Agent Context** — Workspace-local `.codex/USER.md` and `.codex/MEMORY.md` are loaded into new agent runs, while reusable `.codex/skills/*/SKILL.md` workflows are catalogued and can be loaded on demand
-- **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat flows, and keeps only the 5 most recent conversations
+- **Persistent Chat History** — Each workspace stores conversation history in `.history/` as `.jsonl` files, supports continue-chat and confirmed deletion flows, protects active runs, and keeps the 30 most recent conversations
 - **Integrated Terminal** — Full PTY terminal (xterm.js) with connection status, responsive panel behavior, Conda pre-installed, automatic `base` activation, Ruff diagnostics, and Python document formatting
-- **File Explorer** — Tree-view file browser with create, rename, file/folder upload, download, batch delete, folder-as-zip download, auto refresh, and session-isolated "Open Folder" switching that reloads the file tree, terminal, AI context, and Git status for the selected directory
+- **File Explorer** — Tree-view file browser with create, rename, copy path, copy/paste, drag-to-move, file/folder upload, download, batch delete, folder-as-zip download, combined name/content search, auto refresh, and session-isolated "Open Folder" switching rooted at the current user's own workspace
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
@@ -440,7 +453,8 @@ Code runs now retain a pre-run checkpoint and step checkpoints before side-effec
 - Each conversation is stored as one `.jsonl` file
 - New conversations receive an LLM-generated short title when possible
 - The history browser in the chat panel lets users continue earlier conversations
-- Only the 5 most recent conversations are retained automatically to prevent unbounded growth
+- Saved conversations can be deleted after confirmation; deleting history does not undo workspace changes
+- The 30 most recent conversations are retained automatically to prevent unbounded growth
 
 ## Architecture
 

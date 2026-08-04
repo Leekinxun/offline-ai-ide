@@ -1,12 +1,18 @@
 import { Router } from "express";
 import {
+  deleteConversation,
   forkConversation,
   listConversationSummaries,
   readConversationMessages,
 } from "../chat/history.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import { sessionManager } from "../auth/sessionManager.js";
-import { listChildRuns, listRunSummaries, readRunRecord } from "../chat/runHistory.js";
+import {
+  hasActiveRunForConversation,
+  listChildRuns,
+  listRunSummaries,
+  readRunRecord,
+} from "../chat/runHistory.js";
 import { findCheckpointForRun, restoreCheckpoint } from "../chat/checkpoints.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 import {
@@ -70,6 +76,22 @@ chatRouter.get("/conversations/:id", (req, res) => {
     res.status(message === "Conversation not found" ? 404 : 400).json({
       error: message,
     });
+  }
+});
+
+chatRouter.delete("/conversations/:id", async (req, res) => {
+  try {
+    const workspaceDir = getSessionWorkspace(req);
+    if (hasActiveRunForConversation(workspaceDir, req.params.id)) {
+      return res.status(409).json({
+        error: "Cannot delete a conversation while it is running",
+      });
+    }
+    await deleteConversation(workspaceDir, req.params.id);
+    res.status(204).end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete conversation";
+    res.status(message === "Conversation not found" ? 404 : 400).json({ error: message });
   }
 });
 

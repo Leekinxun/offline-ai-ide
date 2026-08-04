@@ -35,14 +35,14 @@ import {
   ArchiveRestore,
   GitFork,
   RotateCcw,
-  ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import { ContextStrip } from "./ContextStrip";
 import { TaskHeader } from "./TaskHeader";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
-import { ToolApprovalCard } from "./ToolApprovalCard";
+import { ToolApprovalStack } from "./ToolApprovalStack";
 import { ChangeSummary } from "./ChangeSummary";
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
@@ -109,6 +109,7 @@ interface ChatPanelProps {
   onClear: () => void;
   onRetry: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
+  onDeleteConversation: (conversationId: string) => Promise<void> | void;
   onForkConversation: (conversationId: string, upToTimestamp?: number) => Promise<ConversationSummary>;
   onRefreshConversations: () => Promise<void> | void;
   runState: AgentRunState | null;
@@ -161,6 +162,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onClear,
   onRetry,
   onLoadConversation,
+  onDeleteConversation,
   onForkConversation,
   onRefreshConversations,
   runState,
@@ -323,6 +325,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       }
     },
     [busyHistoryAction, isStreaming, onForkConversation]
+  );
+
+  const handleDeleteConversation = useCallback(
+    async (conversation: ConversationSummary) => {
+      if (busyHistoryAction || isStreaming) return;
+      const title = conversation.title || t("chat.untitledConversation");
+      if (!window.confirm(t("chat.deleteConversationConfirm", { title }))) return;
+      setBusyHistoryAction(`delete:${conversation.id}`);
+      try {
+        await onDeleteConversation(conversation.id);
+      } catch {
+        // The hook keeps the localized history error visible.
+      } finally {
+        setBusyHistoryAction(null);
+      }
+    },
+    [busyHistoryAction, isStreaming, onDeleteConversation, t]
   );
 
   const handleRevertRun = useCallback(
@@ -559,6 +578,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   >
                     <GitFork size={13} />
                   </button>
+                  <button
+                    type="button"
+                    className="chat-history-item-delete"
+                    onClick={() => void handleDeleteConversation(conversation)}
+                    disabled={isStreaming || busyHistoryAction !== null}
+                    title={t("chat.deleteConversation")}
+                    aria-label={t("chat.deleteConversationNamed", {
+                      title: conversation.title || t("chat.untitledConversation"),
+                    })}
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               ))}
             </div>
@@ -737,25 +768,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {pendingApprovals.length > 0 && (
-        <div className="tool-approval-stack">
-          {pendingApprovals[0].conversationId && pendingApprovals[0].name !== "submit_plan" && (
-            <div className="tool-approval-bulk">
-              <span>{t("chat.approval.pendingCount", { count: pendingApprovals.length })}</span>
-              <button
-                type="button"
-                onClick={() => onApproveConversationTools(pendingApprovals[0].conversationId!)}
-              >
-                <ShieldCheck size={14} />
-                {t("chat.approval.allowConversation")}
-              </button>
-            </div>
-          )}
-          {pendingApprovals.map((request) => (
-            <ToolApprovalCard key={request.approvalId} request={request} onRespond={onToolApproval} />
-          ))}
-        </div>
-      )}
+      <ToolApprovalStack
+        requests={pendingApprovals}
+        onRespond={onToolApproval}
+        onApproveConversation={onApproveConversationTools}
+      />
 
       <div className="chat-input-area">
         <div className="chat-composer-context">

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Plus, RefreshCw, Search, Sparkles } from "lucide-react";
+import { Plus, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { ContextState, ConversationSummary } from "../types";
 import { useI18n } from "../i18n";
 
@@ -14,6 +14,7 @@ interface TaskSidebarProps {
   isStreaming: boolean;
   onNewTask: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
+  onDeleteConversation: (conversationId: string) => Promise<void> | void;
   onRefresh: () => Promise<void> | void;
 }
 
@@ -48,10 +49,13 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
   isStreaming,
   onNewTask,
   onLoadConversation,
+  onDeleteConversation,
   onRefresh,
 }) => {
   const { locale, t } = useI18n();
   const [query, setQuery] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase(locale);
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => {
@@ -64,6 +68,28 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
     100,
     Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100)
   );
+
+  const handleDeleteConversation = async (
+    conversation: ConversationSummary,
+    title: string
+  ) => {
+    if (
+      isStreaming ||
+      deletingId ||
+      !window.confirm(t("chat.deleteConversationConfirm", { title }))
+    ) return;
+    setDeletingId(conversation.id);
+    setDeleteError(null);
+    try {
+      await onDeleteConversation(conversation.id);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : t("chat.deleteConversationFailed")
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <aside className="task-sidebar" aria-label={t("workbench.conversations")}> 
@@ -106,32 +132,51 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
 
       <div className="task-list">
         <div className="task-list-label">{t("workbench.recent")}</div>
+        {deleteError && <div className="task-list-error" role="alert">{deleteError}</div>}
         {filteredConversations.length === 0 ? (
           <div className="task-list-empty">{query ? t("workbench.noTaskResults") : t("chat.noHistory")}</div>
         ) : (
-          filteredConversations.map((conversation) => (
-            <button
-              type="button"
-              className={`task-list-item${conversation.id === currentConversationId ? " active" : ""}`}
-              key={conversation.id}
-              onClick={() => void onLoadConversation(conversation.id)}
-              disabled={isStreaming || loadingId === conversation.id}
-            >
-              <span className="task-list-item-title">
-                <strong>{getConversationTitle(conversation, t("chat.untitledConversation"))}</strong>
-                <time>{formatRelativeTime(conversation.updatedAt, locale)}</time>
-              </span>
-              <span className="task-list-item-preview">
-                {conversation.preview || t("chat.messageCount", { count: conversation.messageCount })}
-              </span>
-              <span className="task-list-item-meta">
-                {t(`chat.taskStatus.${conversation.status || "completed"}`)}
-                {conversation.summary?.changedFiles.length
-                  ? ` · ${t("chat.summaryFiles", { count: conversation.summary.changedFiles.length })}`
-                  : ` · ${t("chat.messageCount", { count: conversation.messageCount })}`}
-              </span>
-            </button>
-          ))
+          filteredConversations.map((conversation) => {
+            const title = getConversationTitle(conversation, t("chat.untitledConversation"));
+            const busy = loadingId === conversation.id || deletingId === conversation.id;
+            return (
+              <div
+                className={`task-list-item${conversation.id === currentConversationId ? " active" : ""}`}
+                key={conversation.id}
+              >
+                <button
+                  type="button"
+                  className="task-list-item-main"
+                  onClick={() => void onLoadConversation(conversation.id)}
+                  disabled={isStreaming || busy}
+                >
+                  <span className="task-list-item-title">
+                    <strong>{title}</strong>
+                    <time>{formatRelativeTime(conversation.updatedAt, locale)}</time>
+                  </span>
+                  <span className="task-list-item-preview">
+                    {conversation.preview || t("chat.messageCount", { count: conversation.messageCount })}
+                  </span>
+                  <span className="task-list-item-meta">
+                    {t(`chat.taskStatus.${conversation.status || "completed"}`)}
+                    {conversation.summary?.changedFiles.length
+                      ? ` · ${t("chat.summaryFiles", { count: conversation.summary.changedFiles.length })}`
+                      : ` · ${t("chat.messageCount", { count: conversation.messageCount })}`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="task-list-item-delete"
+                  onClick={() => void handleDeleteConversation(conversation, title)}
+                  disabled={isStreaming || Boolean(deletingId)}
+                  title={t("chat.deleteConversation")}
+                  aria-label={t("chat.deleteConversationNamed", { title })}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
 

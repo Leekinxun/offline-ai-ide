@@ -714,6 +714,40 @@ export function useChat(
     [loadConversation, refreshConversations, token]
   );
 
+  const deleteConversation = useCallback(
+    async (conversationId: string) => {
+      setHistoryLoadingId(conversationId);
+      setHistoryError(null);
+      try {
+        const response = await fetch(
+          `/api/chat/conversations/${encodeURIComponent(conversationId)}`,
+          {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || t("chat.deleteConversationFailed"));
+        }
+        setConversations((previous) =>
+          previous.filter((conversation) => conversation.id !== conversationId)
+        );
+        if (conversationId === currentConversationId) {
+          clearMessages();
+        }
+      } catch (error) {
+        setHistoryError(
+          error instanceof Error ? error.message : t("chat.deleteConversationFailed")
+        );
+        throw error;
+      } finally {
+        setHistoryLoadingId(null);
+      }
+    },
+    [clearMessages, currentConversationId, t, token]
+  );
+
   const loadRun = useCallback(
     async (runId: string) => {
       try {
@@ -809,6 +843,7 @@ export function useChat(
     refreshConversations,
     loadConversation,
     forkConversation,
+    deleteConversation,
     agentMode,
     setAgentMode,
     runtimeOptions,

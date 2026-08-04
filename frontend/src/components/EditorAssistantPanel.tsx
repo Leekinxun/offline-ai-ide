@@ -13,9 +13,18 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { AgentMode, AgentRunEvent, AgentRunState, ChatMessage, SelectionInfo } from "../types";
+import {
+  AgentMode,
+  AgentRunEvent,
+  AgentRunState,
+  ChatMessage,
+  SelectionInfo,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+} from "../types";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
+import { ToolApprovalStack } from "./ToolApprovalStack";
 
 interface EditorAssistantPanelProps {
   visible: boolean;
@@ -28,6 +37,7 @@ interface EditorAssistantPanelProps {
   runtimeOptions: ChatRuntimeOptions;
   selectedModelName: string;
   runState: AgentRunState | null;
+  pendingApprovals: ToolApprovalRequest[];
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
   onSend: (message: string) => void;
@@ -35,6 +45,8 @@ interface EditorAssistantPanelProps {
   onStop: () => void;
   onResume: (conversationId: string, runId?: string) => Promise<void> | void;
   onRetry: () => void;
+  onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
+  onApproveConversationTools: (conversationId: string) => void;
   onClose: () => void;
 }
 
@@ -70,6 +82,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   runtimeOptions,
   selectedModelName,
   runState,
+  pendingApprovals,
   onAgentModeChange,
   onModelNameChange,
   onSend,
@@ -77,6 +90,8 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onStop,
   onResume,
   onRetry,
+  onToolApproval,
+  onApproveConversationTools,
   onClose,
 }) => {
   const { t } = useI18n();
@@ -288,6 +303,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </div>
         </section>
       </div>
+
+      <ToolApprovalStack
+        requests={pendingApprovals}
+        onRespond={onToolApproval}
+        onApproveConversation={onApproveConversationTools}
+        className="editor-assistant-approvals"
+      />
 
       <div className="editor-assistant-composer">
         <textarea

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "../i18n";
-import { PRODUCT_NAME } from "../brand";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "../brand";
 import { ArrowLeft, Moon, ShieldCheck, Sun } from "lucide-react";
 
 interface LoginPageProps {
@@ -97,7 +97,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         <BrandMark
           size={40}
           title={PRODUCT_NAME}
-          subtitle={`${isZh ? "私有 AI 编程工作台" : "Private AI coding workbench"} · v0.7.0`}
+          subtitle={`${isZh ? "私有 AI 编程工作台" : "Private AI coding workbench"} · v${PRODUCT_VERSION}`}
           className="login-stage-brand"
         />
         <div className="login-stage-copy">

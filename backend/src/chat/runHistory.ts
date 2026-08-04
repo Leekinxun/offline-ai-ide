@@ -551,6 +551,17 @@ export function listRunRecords(workspaceDir: string): AgentRunRecord[] {
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
+export function hasActiveRunForConversation(
+  workspaceDir: string,
+  conversationId: string
+): boolean {
+  return listRunRecords(workspaceDir).some(
+    (record) =>
+      record.conversationId === conversationId &&
+      activeRunPaths.has(getRunPath(workspaceDir, record.runId))
+  );
+}
+
 export function readRunRecord(workspaceDir: string, runId: string): AgentRunRecord {
   const record = readRunFile(workspaceDir, runId);
   const runPath = getRunPath(workspaceDir, runId);

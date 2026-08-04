@@ -4018,7 +4018,7 @@ select:focus-visible,
   width: 100%;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 42px 10px 12px;
+  padding: 10px 72px 10px 12px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -4027,10 +4027,10 @@ select:focus-visible,
   text-align: left;
 }
 
-.chat-history-item-fork {
+.chat-history-item-fork,
+.chat-history-item-delete {
   position: absolute;
   top: 8px;
-  right: 8px;
   display: inline-flex;
   width: 26px;
   height: 26px;
@@ -4043,11 +4043,30 @@ select:focus-visible,
   cursor: pointer;
 }
 
+.chat-history-item-fork {
+  right: 38px;
+}
+
+.chat-history-item-delete {
+  right: 8px;
+}
+
 .chat-history-item-fork:hover,
-.chat-history-item-fork:focus-visible {
+.chat-history-item-fork:focus-visible,
+.chat-history-item-delete:hover,
+.chat-history-item-delete:focus-visible {
   border-color: var(--border);
   background: var(--bg-primary);
+}
+
+.chat-history-item-fork:hover,
+.chat-history-item-fork:focus-visible {
   color: var(--accent);
+}
+
+.chat-history-item-delete:hover,
+.chat-history-item-delete:focus-visible {
+  color: var(--danger);
 }
 
 .chat-history-item:hover {
@@ -4061,7 +4080,8 @@ select:focus-visible,
 }
 
 .chat-history-item-main:disabled,
-.chat-history-item-fork:disabled {
+.chat-history-item-fork:disabled,
+.chat-history-item-delete:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -7975,18 +7995,72 @@ select:focus-visible,
   line-height: 1.5;
 }
 
+.task-list-error {
+  margin: 0 7px 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .task-list-item {
-  display: grid;
+  position: relative;
+  display: block;
   width: 100%;
-  gap: 4px;
-  padding: 9px 9px 10px;
+  padding: 0;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--ink);
+  text-align: left;
+}
+
+.task-list-item-main {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 9px 36px 10px 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.task-list-item-delete {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.task-list-item:hover .task-list-item-delete,
+.task-list-item:focus-within .task-list-item-delete {
+  opacity: 1;
+}
+
+.task-list-item-delete:hover,
+.task-list-item-delete:focus-visible {
+  background: var(--surface-panel-strong);
+  color: var(--danger);
+}
+
+.task-list-item-main:disabled,
+.task-list-item-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .task-list-item:hover {
@@ -12270,6 +12344,18 @@ body {
 .editor-assistant-message small {
   color: var(--ink-muted);
   font: 10px var(--font-mono);
+}
+
+.editor-assistant-approvals {
+  max-height: min(46%, 380px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+  border-top-color: color-mix(in srgb, var(--warning) 32%, var(--line-subtle));
+  background: color-mix(in srgb, var(--warning) 3%, var(--surface-workbench));
+}
+
+.editor-assistant-approvals + .editor-assistant-composer {
+  margin-top: 10px;
 }
 
 .editor-assistant-composer {

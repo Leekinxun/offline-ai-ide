@@ -6,7 +6,9 @@ import test from "node:test";
 import {
   appendConversationMessage,
   createConversationId,
+  deleteConversation,
   forkConversation,
+  listConversationSummaries,
   readConversationMessages,
   withStructuredParts,
 } from "./history.js";
@@ -57,6 +59,30 @@ test("forks a conversation at a selected message timestamp", async (t) => {
   assert.equal(fork.messageCount, 1);
   assert.equal(readConversationMessages(workspace, fork.id)[0].content, "first");
   assert.match(fork.title, /^Fork/);
+});
+
+test("deletes a saved conversation without affecting other history", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-history-delete-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const deletedId = createConversationId();
+  const retainedId = createConversationId();
+
+  await appendConversationMessage(workspace, deletedId, {
+    role: "user",
+    content: "delete me",
+    timestamp: 100,
+  });
+  await appendConversationMessage(workspace, retainedId, {
+    role: "user",
+    content: "keep me",
+    timestamp: 200,
+  });
+
+  await deleteConversation(workspace, deletedId);
+
+  assert.deepEqual(listConversationSummaries(workspace).map((entry) => entry.id), [retainedId]);
+  assert.throws(() => readConversationMessages(workspace, deletedId), /not found/i);
+  assert.equal(readConversationMessages(workspace, retainedId)[0].content, "keep me");
 });
 
 test("normalizes explicit structured parts and drops malformed entries", () => {
