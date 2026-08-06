@@ -3357,6 +3357,7 @@ function AuthenticatedApp({
           onStop={chat.stopCurrentRun}
           onResume={chat.resumeConversation}
           onRetry={chat.retryLast}
+          onNewConversation={chat.clearMessages}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}
           onClose={() => setEditorAssistantVisible(false)}

@@ -46,6 +46,18 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local file="$1"
+  local pattern="$2"
+  local description="$3"
+
+  if rg -q --fixed-strings "$pattern" "$file"; then
+    echo "UI contract failed: $description" >&2
+    echo "  unexpected '$pattern' in $file" >&2
+    exit 1
+  fi
+}
+
 assert_contains "$CSS_FILE" ".panel-shell" "shared panel shell"
 assert_contains "$CSS_FILE" "@media (max-width: 860px)" "narrow-screen drawer breakpoint"
 assert_contains "$CSS_FILE" "@media (max-width: 720px)" "compact modal breakpoint"
@@ -118,6 +130,13 @@ assert_contains "$APPROVAL_FILE" "allow_session" "session-scoped tool approval"
 assert_contains "$APPROVAL_FILE" "allow_once" "per-action tool approval"
 assert_contains "$EDITOR_ASSISTANT_FILE" "pendingApprovals" "editor collaboration approval state"
 assert_contains "$EDITOR_ASSISTANT_FILE" "<ToolApprovalStack" "editor collaboration approval controls"
+assert_contains "$EDITOR_ASSISTANT_FILE" "onNewConversation" "editor collaboration new conversation action"
+assert_contains "$EDITOR_ASSISTANT_FILE" 't("chat.newConversation")' "accessible editor collaboration new conversation control"
+assert_contains "$EDITOR_ASSISTANT_FILE" "renderChatTextPart" "shared Markdown rendering in editor collaboration"
+assert_contains "$EDITOR_ASSISTANT_FILE" "editor-assistant-message-content" "responsive editor collaboration message surface"
+assert_contains "$EDITOR_ASSISTANT_FILE" "followLatestMessageRef" "non-disruptive collaboration message follow"
+assert_contains "$CSS_FILE" ".editor-assistant-message-content .chat-markdown p" "compact collaboration Markdown rhythm"
+assert_not_contains "$EDITOR_ASSISTANT_FILE" ".slice(-4)" "editor collaboration must not silently truncate conversation history"
 assert_contains "$APP_FILE" 'chat.pendingApprovals.length === 0' "pending approval opens editor collaboration surface"
 assert_contains "$CSS_FILE" ".checkpoint-panel" "checkpoint panel responsive surface"
 assert_contains "$CSS_FILE" ".problems-panel" "Problems panel responsive surface"

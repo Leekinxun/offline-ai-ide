@@ -12033,6 +12033,17 @@ body {
   cursor: pointer;
 }
 
+.editor-assistant-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.editor-assistant-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .editor-assistant-header button:hover {
   background: var(--surface-quiet);
   color: var(--ink);
@@ -12130,7 +12141,7 @@ body {
   margin-bottom: 17px;
 }
 
-.editor-assistant-message > div {
+.editor-assistant-message-header {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -12138,7 +12149,7 @@ body {
   font-size: 11px;
 }
 
-.editor-assistant-message > div > span {
+.editor-assistant-message-header > span {
   display: grid;
   width: 22px;
   height: 22px;
@@ -12150,15 +12161,111 @@ body {
   font-weight: 700;
 }
 
-.editor-assistant-message.user > div > span {
+.editor-assistant-message.user .editor-assistant-message-header > span {
   background: var(--surface-quiet);
   color: var(--ink);
 }
 
-.editor-assistant-message p,
-.editor-assistant-message small {
+.editor-assistant-message > p,
+.editor-assistant-message > small,
+.editor-assistant-message-content {
   display: block;
   margin-left: 29px;
+}
+
+.editor-assistant-message-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.editor-assistant-message-content .chat-markdown {
+  line-height: 1.58;
+}
+
+.editor-assistant-message-content .chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.editor-assistant-message-content .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.editor-assistant-message-content .chat-markdown h1,
+.editor-assistant-message-content .chat-markdown h2,
+.editor-assistant-message-content .chat-markdown h3,
+.editor-assistant-message-content .chat-markdown h4,
+.editor-assistant-message-content .chat-markdown h5,
+.editor-assistant-message-content .chat-markdown h6 {
+  margin: 9px 0 5px;
+  line-height: 1.4;
+}
+
+.editor-assistant-message-content .chat-markdown h1 {
+  font-size: 14px;
+}
+
+.editor-assistant-message-content .chat-markdown h2 {
+  font-size: 13px;
+}
+
+.editor-assistant-message-content .chat-markdown h3,
+.editor-assistant-message-content .chat-markdown h4,
+.editor-assistant-message-content .chat-markdown h5,
+.editor-assistant-message-content .chat-markdown h6 {
+  font-size: 12px;
+}
+
+.editor-assistant-message-content .chat-markdown p {
+  margin: 5px 0;
+  white-space: pre-wrap;
+}
+
+.editor-assistant-message-content .chat-markdown ul,
+.editor-assistant-message-content .chat-markdown ol {
+  margin: 5px 0;
+  padding-left: 19px;
+}
+
+.editor-assistant-message-content .chat-markdown li {
+  margin: 2px 0;
+}
+
+.editor-assistant-message-content .chat-markdown blockquote {
+  margin: 6px 0;
+  padding-left: 9px;
+}
+
+.editor-assistant-message-content .chat-markdown code {
+  font-size: 11px;
+}
+
+.editor-assistant-message-content .chat-markdown pre {
+  margin: 7px 0;
+  max-width: 100%;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-quiet);
+}
+
+.editor-assistant-message-content .chat-markdown pre code {
+  white-space: pre;
+}
+
+.editor-assistant-message-content .chat-markdown table {
+  display: block;
+  max-width: 100%;
+  margin: 7px 0;
+  overflow-x: auto;
+  font-size: 11px;
+}
+
+.editor-assistant-message-content .chat-markdown th,
+.editor-assistant-message-content .chat-markdown td {
+  padding: 5px 7px;
 }
 
 .editor-agent-run-card {
@@ -12332,7 +12439,7 @@ body {
   font-size: 10px;
 }
 
-.editor-assistant-message p {
+.editor-assistant-message > p {
   margin-top: 0;
   margin-bottom: 7px;
   color: var(--ink);
@@ -12341,7 +12448,7 @@ body {
   white-space: pre-wrap;
 }
 
-.editor-assistant-message small {
+.editor-assistant-message > small {
   color: var(--ink-muted);
   font: 10px var(--font-mono);
 }

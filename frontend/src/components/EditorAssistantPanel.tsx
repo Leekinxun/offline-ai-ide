@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -8,6 +8,7 @@ import {
   FileCode2,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   Send,
   TerminalSquare,
@@ -24,6 +25,7 @@ import {
 } from "../types";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
+import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
 
 interface EditorAssistantPanelProps {
@@ -45,15 +47,15 @@ interface EditorAssistantPanelProps {
   onStop: () => void;
   onResume: (conversationId: string, runId?: string) => Promise<void> | void;
   onRetry: () => void;
+  onNewConversation: () => void;
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversationTools: (conversationId: string) => void;
   onClose: () => void;
 }
 
-function compactMessage(content: string): string {
+function getRenderableMessageContent(content: string): string {
   return content
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/[#*_`]/g, "")
     .trim();
 }
 
@@ -90,17 +92,21 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onStop,
   onResume,
   onRetry,
+  onNewConversation,
   onToolApproval,
   onApproveConversationTools,
   onClose,
 }) => {
   const { t } = useI18n();
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const followLatestMessageRef = useRef(true);
   const [now, setNow] = useState(Date.now());
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
-    () => messages.filter((message) => compactMessage(message.content)).slice(-4),
+    () => messages.filter((message) => getRenderableMessageContent(message.content)),
     [messages]
   );
   const runEvents = useMemo(() => runState?.events.slice(-6) || [], [runState]);
@@ -118,6 +124,19 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   useEffect(() => {
     setExpandedEvents(new Set());
   }, [runState?.runId]);
+
+  useEffect(() => {
+    followLatestMessageRef.current = true;
+  }, [visibleMessages[0]?.timestamp]);
+
+  useEffect(() => {
+    if (!visible || !followLatestMessageRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const container = messagesRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingApprovals.length, runEvents, visible, visibleMessages]);
 
   if (!visible) return null;
 
@@ -141,6 +160,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     if (runState?.status === "completed") onRetry();
   };
 
+  const handleNewConversation = () => {
+    if (isStreaming) return;
+    onNewConversation();
+    setInput("");
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const runControlLabel = isStreaming
     ? t("workbench.pauseRun")
     : runState?.status === "stopped" || runState?.status === "failed"
@@ -156,9 +182,20 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     <aside className="editor-assistant-panel" aria-label={t("workbench.editorAssistant")}>
       <header className="editor-assistant-header">
         <strong>{t("workbench.editorAssistant")}</strong>
-        <button type="button" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
-          <X size={15} />
-        </button>
+        <div className="editor-assistant-header-actions">
+          <button
+            type="button"
+            onClick={handleNewConversation}
+            disabled={isStreaming}
+            title={t("chat.newConversation")}
+            aria-label={t("chat.newConversation")}
+          >
+            <Plus size={15} />
+          </button>
+          <button type="button" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
+            <X size={15} />
+          </button>
+        </div>
       </header>
 
       <section className="editor-assistant-context">
@@ -197,10 +234,18 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         </button>
       </section>
 
-      <div className="editor-assistant-messages">
+      <div
+        className="editor-assistant-messages"
+        ref={messagesRef}
+        onScroll={(event) => {
+          const container = event.currentTarget;
+          followLatestMessageRef.current =
+            container.scrollHeight - container.scrollTop - container.clientHeight < 48;
+        }}
+      >
         {visibleMessages.length === 0 ? (
           <article className="editor-assistant-message">
-            <div><span>CF</span><strong>CrewForge</strong></div>
+            <div className="editor-assistant-message-header"><span>CF</span><strong>CrewForge</strong></div>
             <p>{t("workbench.editorAssistantIntro")}</p>
             <small>
               {fileName
@@ -219,11 +264,17 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         ) : (
           visibleMessages.map((message, index) => (
             <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`}>
-              <div>
+              <div className="editor-assistant-message-header">
                 <span>{message.role === "user" ? t("chat.you") : "CF"}</span>
                 <strong>{message.role === "user" ? t("chat.you") : "CrewForge"}</strong>
               </div>
-              <p>{compactMessage(message.content)}</p>
+              {message.role === "assistant" ? (
+                <div className="editor-assistant-message-content">
+                  {renderChatTextPart(getRenderableMessageContent(message.content), message)}
+                </div>
+              ) : (
+                <p>{getRenderableMessageContent(message.content)}</p>
+              )}
               {message.role === "user" && activeFilePath && (
                 <small>{t("workbench.messageContext", {
                   path: activeFilePath,
@@ -313,6 +364,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
 
       <div className="editor-assistant-composer">
         <textarea
+          ref={textareaRef}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {

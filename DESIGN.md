@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active draft
-- Last refreshed: 2026-08-04
+- Last refreshed: 2026-08-06
 - Primary product surfaces: 营销首页、登录页、工作区壳层、文件浏览器、编辑器、AI 对话、Git、Problems、Run/Test、Checkpoints、Agent Board、终端和设置
 - Evidence reviewed:
   - `../index.html`、`../login.html`、`../workbench.html`：本轮批准的全新视觉与交互基线
@@ -11,6 +11,7 @@
   - `frontend/src/App.tsx`：三栏工作区、顶部操作栏、面板开关、Focus Mode 和响应式布局
   - `frontend/src/App.css`：现有浅色/深色 token、间距、面板和弹层样式
   - `frontend/src/components/ChatPanel.tsx`：Ask/Code/Review/Plan 模式、任务状态、工具调用和输入区
+  - `frontend/src/plugins/builtin/markdownRendererPlugin.tsx`：完整对话与编辑器协作栏共享的 GitHub Flavored Markdown 渲染边界
   - `frontend/src/plugins/builtin/jsonPreviewPlugin.tsx`：JSON 文件的搜索、折叠、统计、复制和错误态可视化
   - `frontend/src/components/GitPanel.tsx`、`AgentBoard.tsx`、`WorkspaceWelcome.tsx`、`CommandPalette.tsx`
   - `frontend/src/components/CheckpointPanel.tsx`、`ProblemsPanel.tsx`、`RunCenterPanel.tsx`：IDE 工作流升级的三类新工作台表面
@@ -45,6 +46,8 @@
 - Default surface: 登录后默认进入文件/编辑器视图；编辑器 Header、Tabs、Breadcrumb、Monaco Canvas 形成纵向主线，当前文件、路径、连接状态和编辑器操作集中在 58px Header。
 - Editor AI collaboration: 桌面编辑器默认打开右侧 AI 协作栏；当前文件路径与代码选择自动成为下一条指令的上下文，切换文件时同步更新；工作模式与管理员已配置模型在发送前可选择，运行期间锁定；“AI 协作 / 终端 / 变更”在编辑器 Header 内互斥调度。
 - Agent run process: AI 协作栏以真实运行事件呈现当前步骤、状态、耗时与可展开详情；运行中“暂停”安全停止当前 run，停止或失败后“继续”从该 run 恢复，完成后“重新运行”复用上一条指令，不使用纯前端伪进度。
+- Message rendering parity: 完整对话与编辑器右侧 AI 协作栏必须复用同一 Chat 文本渲染插件；AI 回复支持 GitHub Flavored Markdown 的标题、列表、链接、引用、行内代码、代码块与表格。协作栏使用适配 400px 窄栏的紧凑标题、段落和列表节奏，保留 AI 输出中的单换行；代码块和表格独立横向滚动，长链接或长单词不得撑破面板。
+- Collaboration reading continuity: 编辑器协作栏不得静默截断为固定消息数量；当前对话消息在同一滚动区完整可读。用户停留在底部时，新消息、流式增量和运行事件自动跟随；用户向上阅读历史后停止抢滚，直到再次回到底部或切换对话。
 - Chat sidebar: 工作区身份置顶，“新建任务”作为第一主操作；搜索与按日期分组的任务历史形成稳定纵向层级，底部只保留紧凑上下文预算。
 - Task canvas: 58px Task Header 展示任务标题、工作区状态、连接状态与“对话 / 变更”切换；消息正文最大宽度 800px 并居中，工具运行步骤内嵌在 AI 回复中而非散落为独立仪表盘。
 - Composer: 固定在任务画布底部，最大宽度 800px；文本输入、上下文、命令、模型与发送/停止组成一个边界清晰的控制面，背景通过轻量渐隐与内容区分离。
@@ -135,11 +138,13 @@
 - Placement: 会话 Fork 和运行回滚属于 Chat 历史上下文操作；Git worktree 与 workspace checkpoint 共同归入现有 Checkpoints/Recovery 抽屉，避免新增 Activity Rail 顶级入口。
 - Conversation fork: 历史会话提供完整 Fork，消息节点提供“从此处 Fork”；成功后直接进入新会话，原会话保持不变。操作使用分支图标、可读 tooltip 和执行中禁用态。
 - Conversation deletion: 任务侧栏和完整历史列表都提供低强调的删除入口，并在执行前明确说明“删除历史不会撤销工作区改动”。服务端拒绝删除仍有活跃运行的对话；删除当前对话后进入空白新对话状态，其他对话与工作区文件保持不变。删除失败必须留在原列表并显示可恢复错误。
+- Conversation creation parity: 完整对话任务侧栏和编辑器右侧 `EditorAssistantPanel` 都必须提供新建对话入口。协作栏入口位于标题区，运行中禁用；触发后只重置对话、审批和运行状态，保持协作栏、当前文件及选择上下文可用于下一条消息，并把焦点返回 Composer。
 - Run revert: 仅 Code 模式的已结束根运行展示回滚入口。执行前必须说明将恢复运行前工作区、未保存编辑器状态会失效；成功后关闭旧编辑器状态并刷新文件树。
 - Worktree management: Recovery 抽屉使用“快照 / Worktrees”分段切换；Worktree 表面支持基于名称和 revision 创建、打开隔离工作区、列出路径/分支/HEAD，以及确认后移除。非 Git 工作区显示靠近操作区的可恢复错误。
 - Visual and interaction: 复用 `PanelShell`、`dialog-btn`、细边框卡片、状态徽章和 8/12px 间距；危险操作使用语义化 danger 状态但不铺大面积红色。所有动作具备 loading、disabled、empty、error 和成功 toast。
 - Responsive/accessibility: 操作留在现有 Chat/Recovery 抽屉内，在窄屏不新增并列面板；图标按钮提供 `aria-label`/tooltip，分段控件使用 tab 语义，异步错误使用 `role="alert"`。
-- Acceptance: 用户可在两步内完成完整会话 Fork、消息点 Fork、删除已结束对话、运行回滚或创建 Worktree；任何删除、恢复或移除操作均经过确认，成功后界面状态与持久化数据一致。
+- Acceptance: 用户可在任一 AI 工作表面一步新建对话，并可在两步内完成完整会话 Fork、消息点 Fork、删除已结束对话、运行回滚或创建 Worktree；任何删除、恢复或移除操作均经过确认，成功后界面状态与持久化数据一致。
+- Acceptance: 同一条包含标题、列表、链接、引用、单换行、行内代码、围栏代码块和表格的 AI 回复，在完整对话与编辑器协作栏中都保持对应 Markdown 语义；协作栏不得显示原始 Markdown 标记、静默丢弃较早消息或发生横向布局溢出，并且流式输出的跟随滚动不会打断用户向上阅读。
 
 ### MCP, approval, and compare interaction contract — 2026-07-29
 
