@@ -12130,6 +12130,43 @@ body {
   font-size: 10px;
 }
 
+.editor-assistant-context button.editor-assistant-recovery {
+  margin-top: 8px;
+  border-color: color-mix(in srgb, var(--warning) 32%, var(--line-subtle));
+  cursor: pointer;
+}
+
+.editor-assistant-context button.editor-assistant-recovery.status-failed {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line-subtle));
+}
+
+.editor-assistant-recovery > span:nth-child(2) {
+  min-width: 0;
+}
+
+.editor-assistant-recovery > span:nth-child(2) strong,
+.editor-assistant-recovery > span:nth-child(2) small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-recovery > span:nth-child(2) small {
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: 9px;
+}
+
+.editor-assistant-recovery .editor-assistant-recovery-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .editor-assistant-messages {
   min-height: 0;
   flex: 1;

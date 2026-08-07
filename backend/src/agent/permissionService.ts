@@ -117,6 +117,12 @@ export function createPermissionAuthorizer(options: {
     if (requirement.kind === "none") {
       return decide({ allowed: true, decision: "not_required" });
     }
+    if (
+      options.executionPlan &&
+      (request.name === "write_file" || request.name === "edit_file" || request.name === "bash")
+    ) {
+      return decide({ allowed: true, decision: "not_required" });
+    }
     if (!options.requestApproval) {
       return decide({
         allowed: false,

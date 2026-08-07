@@ -45,7 +45,8 @@
 - Shell: 56px Activity Rail + 286px context sidebar + flexible task/editor canvas；编辑器状态可增加 400px AI 协作/活动栏，对话状态默认保持三栏并让中央画布获得剩余宽度。
 - Default surface: 登录后默认进入文件/编辑器视图；编辑器 Header、Tabs、Breadcrumb、Monaco Canvas 形成纵向主线，当前文件、路径、连接状态和编辑器操作集中在 58px Header。
 - Editor AI collaboration: 桌面编辑器默认打开右侧 AI 协作栏；当前文件路径与代码选择自动成为下一条指令的上下文，切换文件时同步更新；工作模式与管理员已配置模型在发送前可选择，运行期间锁定；“AI 协作 / 终端 / 变更”在编辑器 Header 内互斥调度。
-- Agent run process: AI 协作栏以真实运行事件呈现当前步骤、状态、耗时与可展开详情；运行中“暂停”安全停止当前 run，停止或失败后“继续”从该 run 恢复，完成后“重新运行”复用上一条指令，不使用纯前端伪进度。
+- Agent run process: AI 协作栏仅在 run 处于 queued/running 时以真实运行事件呈现当前步骤、状态、耗时与可展开详情；运行结束后完整事件卡立即退出消息流，completed 不留下占位，stopped/failed 只在顶部上下文区保留紧凑“继续”入口，避免遮挡最终 AI 回复。
+- Plan approval handoff: Plan 模式的 `submit_plan` 审批是一次明确的 Plan → Code 交接。用户批准后，同一对话自动切换 Code 模式并立即创建执行 run，无需再次发送消息或手动切换模式；批准计划的文件范围和验证命令免除重复软审批，但越界操作、受保护文件、危险命令、只读角色和硬安全策略仍然拒绝。
 - Message rendering parity: 完整对话与编辑器右侧 AI 协作栏必须复用同一 Chat 文本渲染插件；AI 回复支持 GitHub Flavored Markdown 的标题、列表、链接、引用、行内代码、代码块与表格。协作栏使用适配 400px 窄栏的紧凑标题、段落和列表节奏，保留 AI 输出中的单换行；代码块和表格独立横向滚动，长链接或长单词不得撑破面板。
 - Collaboration reading continuity: 编辑器协作栏不得静默截断为固定消息数量；当前对话消息在同一滚动区完整可读。用户停留在底部时，新消息、流式增量和运行事件自动跟随；用户向上阅读历史后停止抢滚，直到再次回到底部或切换对话。
 - Chat sidebar: 工作区身份置顶，“新建任务”作为第一主操作；搜索与按日期分组的任务历史形成稳定纵向层级，底部只保留紧凑上下文预算。
@@ -145,6 +146,7 @@
 - Responsive/accessibility: 操作留在现有 Chat/Recovery 抽屉内，在窄屏不新增并列面板；图标按钮提供 `aria-label`/tooltip，分段控件使用 tab 语义，异步错误使用 `role="alert"`。
 - Acceptance: 用户可在任一 AI 工作表面一步新建对话，并可在两步内完成完整会话 Fork、消息点 Fork、删除已结束对话、运行回滚或创建 Worktree；任何删除、恢复或移除操作均经过确认，成功后界面状态与持久化数据一致。
 - Acceptance: 同一条包含标题、列表、链接、引用、单换行、行内代码、围栏代码块和表格的 AI 回复，在完整对话与编辑器协作栏中都保持对应 Markdown 语义；协作栏不得显示原始 Markdown 标记、静默丢弃较早消息或发生横向布局溢出，并且流式输出的跟随滚动不会打断用户向上阅读。
+- Acceptance: Plan 审批成功后无需额外操作即可看到模式切为 Code、Code run 开始并在批准范围内产生文件修改；任一 run 进入 completed 后消息区只保留 AI 回复，进入 stopped/failed 后完整事件列表消失且顶部仍可一步继续。
 
 ### MCP, approval, and compare interaction contract — 2026-07-29
 

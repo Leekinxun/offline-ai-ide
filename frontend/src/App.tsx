@@ -3356,7 +3356,6 @@ function AuthenticatedApp({
           onSteer={handleChatSteer}
           onStop={chat.stopCurrentRun}
           onResume={chat.resumeConversation}
-          onRetry={chat.retryLast}
           onNewConversation={chat.clearMessages}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}

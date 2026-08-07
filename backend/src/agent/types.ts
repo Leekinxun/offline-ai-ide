@@ -130,6 +130,7 @@ export type WsServerMessage =
       type: "run_state";
       conversationId: string;
       runId: string;
+      requestId?: string;
       mode: AgentMode;
       modelName?: string;
       status: AgentRunStatus;

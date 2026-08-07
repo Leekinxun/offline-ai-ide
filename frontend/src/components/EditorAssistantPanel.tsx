@@ -9,7 +9,6 @@ import {
   Pause,
   Play,
   Plus,
-  RotateCcw,
   Send,
   TerminalSquare,
   X,
@@ -46,7 +45,6 @@ interface EditorAssistantPanelProps {
   onSteer: (message: string) => void;
   onStop: () => void;
   onResume: (conversationId: string, runId?: string) => Promise<void> | void;
-  onRetry: () => void;
   onNewConversation: () => void;
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversationTools: (conversationId: string) => void;
@@ -91,7 +89,6 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onSteer,
   onStop,
   onResume,
-  onRetry,
   onNewConversation,
   onToolApproval,
   onApproveConversationTools,
@@ -157,7 +154,6 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       void onResume(runState.conversationId, runState.runId);
       return;
     }
-    if (runState?.status === "completed") onRetry();
   };
 
   const handleNewConversation = () => {
@@ -171,9 +167,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     ? t("workbench.pauseRun")
     : runState?.status === "stopped" || runState?.status === "failed"
       ? t("workbench.resumeRun")
-      : runState?.status === "completed"
-        ? t("workbench.rerun")
-        : t("workbench.waiting");
+      : t("workbench.waiting");
   const durationMs = runState
     ? (runState.endedAt || (isStreaming ? now : runState.updatedAt)) - runState.startedAt
     : 0;
@@ -232,6 +226,22 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           <strong>{activeFilePath || t("workbench.noActiveFile")}</strong>
           <small>{activeFilePath ? t("workbench.synced") : t("workbench.waiting")}</small>
         </button>
+        {!isStreaming && runState && (runState.status === "failed" || runState.status === "stopped") && (
+          <button
+            type="button"
+            className={`editor-assistant-recovery status-${runState.status}`}
+            onClick={handleRunControl}
+            disabled={!connected}
+            title={runControlLabel}
+          >
+            {runState.status === "failed" ? <AlertCircle size={14} /> : <Pause size={14} />}
+            <span>
+              <strong>{t(`workbench.runStatus.${runState.status}`)}</strong>
+              <small>{t(`chat.mode.${runState.mode}.label`)} · {activeModelName}</small>
+            </span>
+            <span className="editor-assistant-recovery-action"><Play size={12} />{runControlLabel}</span>
+          </button>
+        )}
       </section>
 
       <div
@@ -286,73 +296,73 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           ))
         )}
 
-        <section className={`editor-agent-run-card status-${runState?.status || "idle"}`}>
-          <div className="editor-agent-run-head">
-            <span className={`editor-agent-run-pulse${isStreaming ? " active" : ""}`} />
-            <div>
-              <strong>
-                {runState
-                  ? isStreaming
+        {isStreaming && (!runState || runState.status === "running" || runState.status === "queued") && (
+          <section className={`editor-agent-run-card status-${runState?.status || "idle"}`}>
+            <div className="editor-agent-run-head">
+              <span className={`editor-agent-run-pulse${isStreaming ? " active" : ""}`} />
+              <div>
+                <strong>
+                  {runState
                     ? runState.event?.label || t("workbench.runProcessingFile")
-                    : t(`workbench.runStatus.${runState.status}`)
-                  : t("workbench.runReady")}
-              </strong>
-              <small>{t(`chat.mode.${runState?.mode || agentMode}.label`)} · {activeModelName}</small>
-            </div>
-            <code>{formatDuration(durationMs)}</code>
-            <button
-              type="button"
-              onClick={handleRunControl}
-              disabled={!runState || !connected}
-              title={runControlLabel}
-            >
-              {isStreaming ? <Pause size={12} /> : runState?.status === "completed" ? <RotateCcw size={12} /> : <Play size={12} />}
-              <span>{runControlLabel}</span>
-            </button>
-          </div>
-
-          <div className="editor-agent-run-steps">
-            {runEvents.length === 0 ? (
-              <div className="editor-agent-run-empty">
-                <Circle size={12} />
-                <span>{t("workbench.runReadyStep")}</span>
-                <small>{t("workbench.runWaiting")}</small>
+                    : t("workbench.runReady")}
+                </strong>
+                <small>{t(`chat.mode.${runState?.mode || agentMode}.label`)} · {activeModelName}</small>
               </div>
-            ) : (
-              runEvents.map((event, index) => {
-                const expanded = expandedEvents.has(event.id);
-                const isCurrent = isStreaming && index === runEvents.length - 1;
-                const state = event.isError
-                  ? t("workbench.runStepFailed")
-                  : isCurrent
-                    ? t("workbench.runStepRunning")
-                    : t("workbench.runStepDone");
-                return (
-                  <div className={`editor-agent-run-step${expanded ? " open" : ""}${event.isError ? " failed" : isCurrent ? " running" : " done"}`} key={event.id}>
-                    <button
-                      type="button"
-                      onClick={() => setExpandedEvents((current) => {
-                        const next = new Set(current);
-                        if (next.has(event.id)) next.delete(event.id);
-                        else next.add(event.id);
-                        return next;
-                      })}
-                      aria-expanded={expanded}
-                    >
-                      <ChevronRight className="editor-agent-run-chevron" size={13} />
-                      <EventIcon event={event} />
-                      <span>{event.label}</span>
-                      <small>{state}</small>
-                    </button>
-                    {expanded && (
-                      <pre>{event.detail || event.toolName || t("workbench.runNoDetails")}</pre>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
+              <code>{formatDuration(durationMs)}</code>
+              <button
+                type="button"
+                onClick={handleRunControl}
+                disabled={!runState || !connected}
+                title={runControlLabel}
+              >
+                <Pause size={12} />
+                <span>{runControlLabel}</span>
+              </button>
+            </div>
+
+            <div className="editor-agent-run-steps">
+              {runEvents.length === 0 ? (
+                <div className="editor-agent-run-empty">
+                  <Circle size={12} />
+                  <span>{t("workbench.runReadyStep")}</span>
+                  <small>{t("workbench.runWaiting")}</small>
+                </div>
+              ) : (
+                runEvents.map((event, index) => {
+                  const expanded = expandedEvents.has(event.id);
+                  const isCurrent = index === runEvents.length - 1;
+                  const state = event.isError
+                    ? t("workbench.runStepFailed")
+                    : isCurrent
+                      ? t("workbench.runStepRunning")
+                      : t("workbench.runStepDone");
+                  return (
+                    <div className={`editor-agent-run-step${expanded ? " open" : ""}${event.isError ? " failed" : isCurrent ? " running" : " done"}`} key={event.id}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedEvents((current) => {
+                          const next = new Set(current);
+                          if (next.has(event.id)) next.delete(event.id);
+                          else next.add(event.id);
+                          return next;
+                        })}
+                        aria-expanded={expanded}
+                      >
+                        <ChevronRight className="editor-agent-run-chevron" size={13} />
+                        <EventIcon event={event} />
+                        <span>{event.label}</span>
+                        <small>{state}</small>
+                      </button>
+                      {expanded && (
+                        <pre>{event.detail || event.toolName || t("workbench.runNoDetails")}</pre>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        )}
       </div>
 
       <ToolApprovalStack

@@ -32,6 +32,10 @@ import {
 } from "../chat/executionPlans.js";
 import { config } from "../config.js";
 import { resolveSelectableModelName } from "../agent/agentProfiles.js";
+import {
+  PLAN_CODE_HANDOFF_PROMPT,
+  resolvePlanCodeHandoff,
+} from "../chat/planHandoff.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -569,7 +573,29 @@ async function processConversationQueue(
     return;
   }
 
-  const nextTurn = steeringQueue.shift();
+  const approvedPlan = initialTurn.mode === "plan"
+    ? resolvePlanCodeHandoff({
+        workspaceDir: session.workspaceDir,
+        conversationId: activeConversationId,
+        planRunId: recorder.runId,
+        finalStatus,
+      })
+    : null;
+  const nextTurn: PendingUserMessage | undefined = approvedPlan
+    ? {
+        requestId: createTurnRequestId(),
+        message: PLAN_CODE_HANDOFF_PROMPT,
+        conversationId: activeConversationId,
+        mode: "code",
+        modelName: resolveSelectableModelName(
+          "code",
+          undefined,
+          config.agentProfiles,
+          config.modelName
+        ),
+        executionPlan: approvedPlan,
+      }
+    : steeringQueue.shift();
   if (nextTurn) {
     const nextRunId = createRunId();
     const nextRecorder = new AgentRunRecorder(
@@ -589,9 +615,16 @@ async function processConversationQueue(
       lastRunId: nextRunId,
     });
     wsSend(ws, {
+      type: "conversation_state",
+      conversationId: nextTurn.conversationId,
+      mode: nextTurn.mode,
+      status: "running",
+    });
+    wsSend(ws, {
       type: "run_state",
       conversationId: nextTurn.conversationId,
       runId: nextRunId,
+      requestId: nextTurn.requestId,
       mode: nextTurn.mode,
       modelName: nextTurn.modelName,
       status: "running",

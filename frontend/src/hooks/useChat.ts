@@ -274,6 +274,7 @@ export function useChat(
           break;
 
         case "conversation_state":
+          setAgentMode(data.mode || "code");
           setConversations((prev) =>
             prev.map((conversation) =>
               conversation.id === data.conversationId
@@ -285,6 +286,30 @@ export function useChat(
 
         case "run_state": {
           const event = data.event as AgentRunEvent | undefined;
+          if (data.mode) setAgentMode(data.mode);
+          if (data.requestId && data.status === "running") {
+            setMessages((previous) => {
+              if (previous.some((message) =>
+                message.role === "assistant" && message.requestId === data.requestId
+              )) {
+                return previous;
+              }
+              return [
+                ...previous,
+                {
+                  requestId: data.requestId,
+                  role: "assistant",
+                  content: "",
+                  timestamp: Date.now(),
+                },
+              ];
+            });
+            setActiveRequestIds((previous) =>
+              previous.includes(data.requestId)
+                ? previous
+                : [...previous, data.requestId]
+            );
+          }
           setRunState((previous) => {
             const previousRun = previous?.runId === data.runId ? previous : null;
             const events = previousRun ? [...previousRun.events] : [];
