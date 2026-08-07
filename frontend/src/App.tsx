@@ -62,6 +62,7 @@ import {
   Link2,
   Unlink2,
   Play,
+  Search,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -2401,6 +2402,18 @@ function AuthenticatedApp({
           </button>
           <button
             type="button"
+            className="activity-rail-btn"
+            onClick={() => {
+              setWorkspaceSearchScope("");
+              setWorkspaceSearchVisible(true);
+            }}
+            title={`${t("search.title")} (⇧⌘F / Ctrl+Shift+F)`}
+            aria-label={t("search.title")}
+          >
+            <Search size={18} />
+          </button>
+          <button
+            type="button"
             className={`activity-rail-btn${gitVisible ? " active" : ""}`}
             onClick={() => toggleUtilityPanel("git")}
             title={t("git.title")}
@@ -3571,6 +3584,7 @@ function AuthenticatedApp({
       />
       <WorkspaceSearchPanel
         visible={workspaceSearchVisible}
+        tree={fileTree}
         scopePath={workspaceSearchScope}
         onClose={() => setWorkspaceSearchVisible(false)}
         onClearScope={() => setWorkspaceSearchScope("")}

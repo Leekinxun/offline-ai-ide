@@ -216,6 +216,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [rootDropActive, setRootDropActive] = useState(false);
   const [clipboardItem, setClipboardItem] = useState<FileNode | null>(null);
   const dialogInputRef = useRef<HTMLInputElement>(null);
+  const treeSearchInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetPathRef = useRef("");
@@ -821,6 +822,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <span />
         <button
           type="button"
+          title={t("sidebar.filterPlaceholder")}
+          aria-label={t("sidebar.filterPlaceholder")}
+          onClick={() => {
+            treeSearchInputRef.current?.focus();
+            treeSearchInputRef.current?.select();
+          }}
+        >
+          <Search size={15} />
+        </button>
+        <button
+          type="button"
           title={t("sidebar.newFile")}
           aria-label={t("sidebar.newFile")}
           onClick={() => handleCreateFile()}
@@ -858,6 +870,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <label className="sidebar-search">
           <Search size={15} aria-hidden="true" />
           <input
+            ref={treeSearchInputRef}
             type="search"
             value={treeQuery}
             onChange={(event) => setTreeQuery(event.target.value)}

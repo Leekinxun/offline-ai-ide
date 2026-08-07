@@ -2980,6 +2980,12 @@ select:focus-visible,
   font-size: 11px;
 }
 
+.workspace-search-result-path.kind-file {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 10px;
+}
+
 .workspace-search-result code {
   overflow: hidden;
   color: var(--text-secondary);

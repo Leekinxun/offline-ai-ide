@@ -5,16 +5,79 @@ import {
   WorkspaceSearchResponse,
   WorkspaceSearchResult,
 } from "../hooks/useFileSystem";
+import type { FileNode } from "../types";
 import { useI18n } from "../i18n";
 
 interface WorkspaceSearchPanelProps {
   visible: boolean;
+  tree: FileNode[];
   scopePath: string;
   onClose: () => void;
   onClearScope: () => void;
   onSearch: (options: WorkspaceSearchOptions) => Promise<WorkspaceSearchResponse>;
   onCancelSearch: () => void;
   onOpenResult: (result: WorkspaceSearchResult) => void;
+}
+
+interface DisplaySearchResult extends WorkspaceSearchResult {
+  kind: "file" | "content";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function collectFileMatches(options: {
+  tree: FileNode[];
+  query: string;
+  scopePath: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  wholeWord: boolean;
+}): DisplaySearchResult[] {
+  const query = options.query.trim();
+  if (!query) return [];
+
+  let matcher: RegExp;
+  try {
+    const source = options.isRegex ? query : escapeRegExp(query);
+    matcher = new RegExp(
+      options.wholeWord ? `\\b(?:${source})\\b` : source,
+      options.matchCase ? "u" : "iu"
+    );
+  } catch {
+    return [];
+  }
+
+  const scopePrefix = options.scopePath ? `${options.scopePath.replace(/\/$/, "")}/` : "";
+  const matches: DisplaySearchResult[] = [];
+  const visit = (nodes: FileNode[]) => {
+    for (const node of nodes) {
+      if (node.type === "directory") {
+        if (node.children) visit(node.children);
+        continue;
+      }
+      if (
+        options.scopePath &&
+        node.path !== options.scopePath &&
+        !node.path.startsWith(scopePrefix)
+      ) {
+        continue;
+      }
+      const match = matcher.exec(node.path);
+      if (!match) continue;
+      matches.push({
+        kind: "file",
+        path: node.path,
+        line: 1,
+        column: match.index + 1,
+        matchLength: Math.max(1, match[0].length),
+        preview: node.path,
+      });
+    }
+  };
+  visit(options.tree);
+  return matches.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function renderPreview(result: WorkspaceSearchResult): React.ReactNode {
@@ -32,6 +95,7 @@ function renderPreview(result: WorkspaceSearchResult): React.ReactNode {
 
 export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
   visible,
+  tree,
   scopePath,
   onClose,
   onClearScope,
@@ -128,15 +192,27 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
     wholeWord,
   ]);
 
+  const fileMatches = useMemo(() => collectFileMatches({
+    tree,
+    query,
+    scopePath,
+    isRegex,
+    matchCase,
+    wholeWord,
+  }), [isRegex, matchCase, query, scopePath, tree, wholeWord]);
+  const displayResults = useMemo<DisplaySearchResult[]>(() => [
+    ...fileMatches,
+    ...results.map((result) => ({ ...result, kind: "content" as const })),
+  ], [fileMatches, results]);
   const groupedResults = useMemo(() => {
-    const groups = new Map<string, WorkspaceSearchResult[]>();
-    for (const result of results) {
+    const groups = new Map<string, DisplaySearchResult[]>();
+    for (const result of displayResults) {
       const entries = groups.get(result.path) || [];
       entries.push(result);
       groups.set(result.path, entries);
     }
     return Array.from(groups.entries());
-  }, [results]);
+  }, [displayResults]);
 
   if (!visible) return null;
 
@@ -229,7 +305,7 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
         <div className="workspace-search-results">
           {loading && <div className="workspace-search-progress">{t("search.searching")}</div>}
           {!loading && error && <div className="workspace-search-error">{error}</div>}
-          {!loading && !error && query.trim() && results.length === 0 && (
+          {!loading && !error && query.trim() && displayResults.length === 0 && (
             <div className="command-palette-empty">{t("search.noResults")}</div>
           )}
           {!loading && !query.trim() && <div className="command-palette-empty">{t("search.hint")}</div>}
@@ -249,7 +325,11 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
                     onClose();
                   }}
                 >
-                  <span className="workspace-search-result-path">{result.line}:{result.column}</span>
+                  <span className={`workspace-search-result-path kind-${result.kind}`}>
+                    {result.kind === "file"
+                      ? t("search.fileNameMatch")
+                      : `${result.line}:${result.column}`}
+                  </span>
                   <code>{renderPreview(result)}</code>
                 </button>
               ))}
@@ -257,7 +337,7 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
           ))}
         </div>
         <div className="command-palette-footer">
-          <span>{truncated ? t("search.resultsTruncated", { count: results.length }) : t("search.resultCount", { count: results.length })}</span>
+          <span>{truncated ? t("search.resultsTruncated", { count: displayResults.length }) : t("search.resultCount", { count: displayResults.length })}</span>
           <span>Esc {t("command.close")}</span>
         </div>
       </div>

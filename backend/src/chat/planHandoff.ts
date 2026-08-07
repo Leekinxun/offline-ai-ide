@@ -6,6 +6,17 @@ import {
 export const PLAN_CODE_HANDOFF_PROMPT =
   "The user approved the execution plan. Switch to Code mode and execute the approved plan now. Complete the declared steps, stay within the approved file scope, and run the approved verification commands.";
 
+export const PLAN_HANDOFF_CONFIRMATION =
+  "Plan approved. Switching to Code mode and starting implementation now.";
+
+export function shouldCompletePlanRunAfterTool(options: {
+  mode: string;
+  toolName: string;
+  isError: boolean;
+}): boolean {
+  return options.mode === "plan" && options.toolName === "submit_plan" && !options.isError;
+}
+
 export function resolvePlanCodeHandoff(options: {
   workspaceDir: string;
   conversationId: string;

@@ -39,6 +39,10 @@ import {
 } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import { createCheckpoint } from "../chat/checkpoints.js";
+import {
+  PLAN_HANDOFF_CONFIRMATION,
+  shouldCompletePlanRunAfterTool,
+} from "../chat/planHandoff.js";
 
 const SNAPSHOT_TOOL_NAMES = new Set([
   "write_file",
@@ -797,7 +801,11 @@ export async function runAgentLoop(
           if (!isError && toolCall.function.name === "compress") {
             compressRequested = true;
           }
-          if (!isError && toolCall.function.name === "submit_plan") {
+          if (shouldCompletePlanRunAfterTool({
+            mode,
+            toolName: toolCall.function.name,
+            isError,
+          })) {
             approvedPlanSubmitted = true;
           }
           await runAgentHooks("afterToolExecute", {
@@ -874,9 +882,30 @@ export async function runAgentLoop(
             lastMessage.tool_calls = executedToolCalls;
           }
 
+          if (approvedPlanSubmitted) {
+            break;
+          }
+
           if (await consumeSteeringTurns(currentAssistantMessage)) {
             continue outer;
           }
+        }
+
+        if (mode === "plan" && approvedPlanSubmitted) {
+          const separator = currentAssistantMessage.content ? "\n\n" : "";
+          currentAssistantMessage.content = `${currentAssistantMessage.content}${separator}${PLAN_HANDOFF_CONFIRMATION}`;
+          emit({
+            type: "token",
+            requestId: currentRequestId,
+            content: `${separator}${PLAN_HANDOFF_CONFIRMATION}`,
+          });
+          emit({ type: "done", requestId: currentRequestId });
+          await flushAssistantTurn(
+            currentAssistantMessage,
+            currentRequestId,
+            onAssistantTurnComplete
+          );
+          return persistedAssistantMessages;
         }
 
         if (compressRequested) {

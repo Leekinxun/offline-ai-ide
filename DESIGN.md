@@ -37,6 +37,7 @@
 - Workbench: 56px 工作区 Header + 48px Activity Rail + Explorer + Editor Canvas + Task Dock + 22px Status Bar；编辑器永远是主视觉中心。
 - Theme contract: 所有新增页面和工作台表面都必须消费同一组语义 token；亮色、暗色均为一等主题，主题偏好保存在本地并同步 Monaco。
 - Interaction parity: 保留现有认证、文件、搜索、命令、Git、Agent、Team、终端、设置、AI 对话、面板拖拽和响应式抽屉能力。
+- Explorer search discoverability: 活动栏与资源管理器标题区必须保留可见搜索入口；活动栏与 `Cmd/Ctrl + Shift + F` 打开统一工作区搜索，资源管理器标题按钮聚焦树内搜索框。两种表面都同时匹配文件名、路径和文本文件内容，不能只依赖右键菜单或隐藏快捷键。
 - Visual acceptance: 首页、登录页、工作台在 1440×900 下与批准基线保持相同的信息层级、布局比例、密度和交互分组；允许使用仓库内真实数据替换原型假数据。
 
 ### Approved AI workbench reference — 2026-08-04
@@ -147,6 +148,7 @@
 - Acceptance: 用户可在任一 AI 工作表面一步新建对话，并可在两步内完成完整会话 Fork、消息点 Fork、删除已结束对话、运行回滚或创建 Worktree；任何删除、恢复或移除操作均经过确认，成功后界面状态与持久化数据一致。
 - Acceptance: 同一条包含标题、列表、链接、引用、单换行、行内代码、围栏代码块和表格的 AI 回复，在完整对话与编辑器协作栏中都保持对应 Markdown 语义；协作栏不得显示原始 Markdown 标记、静默丢弃较早消息或发生横向布局溢出，并且流式输出的跟随滚动不会打断用户向上阅读。
 - Acceptance: Plan 审批成功后无需额外操作即可看到模式切为 Code、Code run 开始并在批准范围内产生文件修改；任一 run 进入 completed 后消息区只保留 AI 回复，进入 stopped/failed 后完整事件列表消失且顶部仍可一步继续。
+- Acceptance: `submit_plan` 获批后 Plan loop 必须立即结束，不能继续调用任何编辑工具；紧接着同一对话创建 Code run，并以 Code 权限执行已批准范围。用户从 AI 任务页或编辑器点击活动栏搜索，或按 `Cmd/Ctrl + Shift + F`，都能一步打开工作区搜索并输入文件名、路径片段或文件内容；资源管理器标题区也保留一键聚焦树内搜索的入口。
 
 ### MCP, approval, and compare interaction contract — 2026-07-29
 

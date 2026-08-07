@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createApprovedExecutionPlan } from "./executionPlans.js";
-import { PLAN_CODE_HANDOFF_PROMPT, resolvePlanCodeHandoff } from "./planHandoff.js";
+import {
+  PLAN_CODE_HANDOFF_PROMPT,
+  PLAN_HANDOFF_CONFIRMATION,
+  resolvePlanCodeHandoff,
+  shouldCompletePlanRunAfterTool,
+} from "./planHandoff.js";
 
 const input = {
   goal: "Automatically execute an approved plan",
@@ -62,4 +67,23 @@ test("does not hand off failed, stopped, or unrelated Plan runs", () => {
   } finally {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
+});
+
+test("ends the Plan loop immediately after an approved submit_plan tool", () => {
+  assert.equal(shouldCompletePlanRunAfterTool({
+    mode: "plan",
+    toolName: "submit_plan",
+    isError: false,
+  }), true);
+  assert.equal(shouldCompletePlanRunAfterTool({
+    mode: "plan",
+    toolName: "submit_plan",
+    isError: true,
+  }), false);
+  assert.equal(shouldCompletePlanRunAfterTool({
+    mode: "code",
+    toolName: "submit_plan",
+    isError: false,
+  }), false);
+  assert.match(PLAN_HANDOFF_CONFIRMATION, /Code mode/);
 });
