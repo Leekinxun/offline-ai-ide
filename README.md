@@ -4,9 +4,9 @@
   <img src="frontend/public/favicon.svg" width="88" alt="CrownForge logo" />
 </p>
 
-> Current Version: `v0.9.0`
+> Current Version: `v1.0.0`
 >
-> Release Date: `2026-08-04`
+> Release Date: `2026-08-13`
 
 CrownForge is a self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration. The supplied deployment can run in a single Docker container.
 
@@ -18,6 +18,19 @@ CrownForge is a self-hosted, web-based AI coding workspace featuring a code edit
 ![IDE](docs/screenshots/ide.png)
 
 ## Release Notes
+
+### v1.0.0 · 2026-08-13
+
+- Added explicit **Direct Code and Plan-bound Code execution contracts**, durable plan amendments, mutation evidence, and deterministic completion gates so a run cannot report success while required checks, active descendants, or recorded changes remain unresolved
+- Upgraded recovery to an incremental **checkpoint and mutation journal** model with selective file/hunk rollback, manual-edit conflict detection, corrupt-journal fail-closed behavior, and visible `needs_attention` recovery states
+- Moved mutating child agents into isolated Git worktrees and introduced integrity-bound **ChangeSet v3** capture, independent review revisions, transition CAS, write-ahead integration recovery, fenced cross-process locks, and safe apply/merge/cherry-pick policies
+- Added real **process, filesystem, network, and secret isolation** for Agent and extension commands using macOS Seatbelt or Linux bubblewrap when available, with capability probing and fail-closed behavior when the required boundary cannot be established
+- Made multi-agent execution durable with persisted runs, lineage, leases, task ownership, message delivery, restart recovery, recursive descendant completion checks, bounded trace retention, and independent Reviewer/Verifier evidence
+- Added offline incremental **repository intelligence** with symbol/reference indexing, permission-aware retrieval, context manifests, provenance, deterministic evaluation, and performance budgets
+- Completed the Git delivery loop across local branches, commits, GitHub/GitLab/Gitea PR or MR delivery, CI status, structured findings, webhook feedback, SARIF, and deterministic offline evidence bundles
+- Unified hooks, policy-as-code, skills, plugins, provider routing, model budgets, fallback classification, conflict-aware human editing, and secret-safe operational telemetry behind explicit governance surfaces
+- Finished the Workbench recovery and review experience with keyboard/ARIA contracts, responsive states, English/Chinese parity, safe external links, migration inventory, operator documentation, and legacy ChangeSet read-only handling
+- Replaced best-effort release checks with an exact clean-snapshot gate covering recursively discovered tests, mandatory no-skip security/recovery suites, strict unused TypeScript checks, offline network auditing, frontend contracts, bundle budget, trace overflow, performance, and 100-run stability loops
 
 ### v0.9.0 · 2026-08-04
 
@@ -126,7 +139,7 @@ CrownForge is a self-hosted, web-based AI coding workspace featuring a code edit
 ## Versioning
 
 This repository now documents releases in a lightweight GitHub-style changelog format.
-`v0.9.0` is the current documented release. It completes the editor-first collaboration workflow: file-name and content search, path copy and drag-to-move operations, user-scoped workspace selection, stable Agent modes, configured model selection, real run progress, approvals beside the editor, synchronized file comparison, and deletable conversation history.
+`v1.0.0` is the current documented release. It turns the editor-first collaboration workflow into a verifiable delivery system: execution contracts, isolated worktrees, integrity-bound ChangeSets, durable multi-agent recovery, repository intelligence, provider-neutral delivery, governed extensions, migration contracts, and mandatory release evidence now form one end-to-end path.
 
 Operator and release documentation:
 
@@ -155,6 +168,9 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **Markdown Rendering** — AI chat responses render Markdown through the builtin plugin system, and Markdown files can be previewed with the shipped external preview plugin
 - **JSON Parser** — JSON files open in a builtin searchable hierarchy editor with statistics, expand/collapse controls, JSONPath/value copy actions, reversible add/edit/rename/delete operations, validation, read-only enforcement, and clear parse-error feedback
 - **Checkpoints & Recovery** — Code tasks create a workspace checkpoint before tool execution; users can also create, inspect, and explicitly restore snapshots from the Checkpoints panel
+- **Integrity-Bound ChangeSets** — Mutating child agents work in isolated Git worktrees and return schema-v3 ChangeSets whose capture metadata, patch content, review revision, transition state, integration WAL, and recovery outcome are verified before integration
+- **Deterministic Completion Evidence** — Runs remain incomplete while required checks, mutation-evidence gaps, unresolved review findings, active descendants, or recovery-required ChangeSets remain; completion evidence is persisted for later inspection
+- **Agent Sandbox** — Agent and extension commands use platform isolation, explicit path grants, network policy, resource limits, secret redaction, and descendant-process supervision, failing closed when a promised boundary is unavailable
 - **Problems & Diagnostics** — Monaco markers and persistent TypeScript/Ruff/Cargo checks share one filterable Problems surface with direct file/line navigation
 - **Run, Test & Debug** — Discover allowlisted project tasks, stream and cancel executions, navigate parsed failures, and debug Node.js or Python programs with breakpoints, stepping, runtime-aware status, and call stacks
 - **Tool Approval & Safety Policy** — Side-effecting file and shell tools pause for an explicit decision in both the full chat and editor collaboration rail, while protected metadata, secrets, destructive commands, and workspace escapes remain non-bypassable
@@ -170,6 +186,10 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
+- **Durable Multi-Agent Control Plane** — Agent runs, tasks, leases, lineage, messages, traces, findings, budgets, and recovery state survive restarts; parent completion recursively waits for terminal descendants and independent review evidence
+- **Repository Intelligence** — Incremental offline indexing, symbol/reference relationships, permission-aware retrieval, context manifests, and provenance help agents assemble reproducible context without leaking forbidden paths
+- **Git & Review Delivery** — Local branch/commit workflows, provider-neutral GitHub/GitLab/Gitea delivery, CI status, webhook feedback, structured findings, SARIF, and offline evidence bundles preserve the exact reviewed revision
+- **Governed Extensions & Models** — Hooks, policies, skills, plugins, provider conformance, model budgets, and classified fallbacks share explicit permissions, audit trails, and operator-visible failure states
 - **Task Board** — Create, assign, and track tasks across agents with clearer workspace status and task-oriented UI context
 - **Docker Ready** — Multi-stage Dockerfile with Node.js, Python, Conda, Git, and common dev tools pre-installed
 
@@ -227,14 +247,14 @@ docker build \
 
 ### Verification
 
-The repository includes repeatable local checks for the Agent harness and deployment image:
+The repository includes repeatable local checks for the Agent harness, collaboration safety boundaries, release methodology, and deployment image:
 
 ```bash
 ./scripts/verify.sh
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` runs backend tests/typecheck, JSON hierarchy mutation tests, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable hardened container, checks `/api/health` and Docker health, verifies the served CrownForge shell, and confirms it runs unprivileged with writable workspace/config mounts only. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
+`verify.sh` runs the exact clean-snapshot release workflow. It recursively discovers backend tests, enforces mandatory no-skip security and migration/recovery suites, runs backend/frontend strict unused TypeScript checks, validates browserless UI and workflow contracts, audits offline network access, measures retrieval/trace/overflow performance, enforces the frontend bundle budget, executes 100-run critical and soak loops, and verifies that the source inventory did not change during validation. `docker-smoke.sh` builds the image, starts a disposable hardened container, checks `/api/health` and Docker health, verifies the served CrownForge shell, and confirms it runs unprivileged with writable workspace/config mounts only. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
 
 Or use Docker Compose:
 
