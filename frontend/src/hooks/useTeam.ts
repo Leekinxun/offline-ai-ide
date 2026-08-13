@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TeamDetails, TeamSummary, TeamRole } from "../types";
+import { CollaborationMergeChoice, CollaborationMergeDecision, CollaborationMergePreview, CollaborationState, CollaborationSubject, TeamDetails, TeamSummary, TeamRole } from "../types";
 
 interface TeamStateResponse {
   teams?: TeamSummary[];
   activeTeam?: TeamDetails | null;
   activeTeamId?: string | null;
+  collaboration?: CollaborationState;
 }
 
 interface JoinTeamResponse {
@@ -23,15 +24,22 @@ export function useTeam(
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [collaboration, setCollaboration] = useState<CollaborationState | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const onWorkspaceSyncRef = useRef(onWorkspaceSync);
+  const refreshGenerationRef = useRef(0);
+  const refreshAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     onWorkspaceSyncRef.current = onWorkspaceSync;
   }, [onWorkspaceSync]);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
@@ -39,18 +47,23 @@ export function useTeam(
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        signal: controller.signal,
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload.error || "Failed to load team state");
       }
       const payload = (await res.json()) as TeamStateResponse;
+      if (generation !== refreshGenerationRef.current) return;
       setTeams(Array.isArray(payload.teams) ? payload.teams : []);
       setActiveTeam(payload.activeTeam || null);
       setActiveTeamId(payload.activeTeamId || payload.activeTeam?.id || null);
+      setCollaboration(payload.collaboration || null);
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Failed to load team state");
     } finally {
+      if (generation !== refreshGenerationRef.current) return;
       setLoading(false);
     }
   }, [token]);
@@ -73,6 +86,45 @@ export function useTeam(
     },
     [token]
   );
+
+  const postCollaboration = useCallback(async <T,>(path: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`/api/team/collaboration/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({})) as { error?: string; currentVersion?: number } & T;
+    if (!response.ok) {
+      if (response.status === 409) await refresh();
+      throw new Error(payload.error || `Collaboration request failed (${response.status})`);
+    }
+    await refresh();
+    return payload;
+  }, [refresh, token]);
+
+  const addCollaborationComment = useCallback((input: { body: string; path: string; startLine?: number; endLine?: number; selectedText?: string; evidenceLinks?: string[] }) => {
+    if (!collaboration) return Promise.reject(new Error("Collaboration state is unavailable"));
+    return postCollaboration<{ comment: unknown }>("comments", { ...input, expectedVersion: collaboration.version });
+  }, [collaboration, postCollaboration]);
+
+  const createCollaborationReview = useCallback((input: { assignees: CollaborationSubject[]; path: string; startLine?: number; endLine?: number; selectedText?: string; message?: string }) => {
+    if (!collaboration) return Promise.reject(new Error("Collaboration state is unavailable"));
+    return postCollaboration<{ request: unknown }>("review-requests", { ...input, expectedVersion: collaboration.version });
+  }, [collaboration, postCollaboration]);
+
+  const createMergePreview = useCallback(async (changeSetId: string, path: string): Promise<CollaborationMergePreview> => {
+    const result = await postCollaboration<{ preview: CollaborationMergePreview }>("merge-previews", { changeSetId, path });
+    return result.preview;
+  }, [postCollaboration]);
+
+  const decideMerge = useCallback(async (preview: CollaborationMergePreview, choice: CollaborationMergeChoice, reason?: string, resolvedDigest?: string, supersedesDecisionId?: string): Promise<CollaborationMergeDecision> => {
+    const result = await postCollaboration<{ decision: CollaborationMergeDecision }>("merge-decisions", {
+      previewId: preview.id, expectedPreviewVersion: preview.version, choice, reason, resolvedDigest, supersedesDecisionId,
+      revision: preview.revision, baseDigest: preview.baseDigest, humanDigest: preview.humanDigest,
+      upstreamDigest: preview.upstreamDigest, agentDigest: preview.agentDigest,
+    });
+    return result.decision;
+  }, [postCollaboration]);
 
   const createTeam = useCallback(
     async (name: string, targetWorkspaceDir?: string) => {
@@ -255,6 +307,7 @@ export function useTeam(
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data) as
         | { type: "team_snapshot"; team: TeamDetails | null }
+        | { type: "collaboration_snapshot" | "collaboration_update"; collaboration: CollaborationState }
         | { type: "team_error"; content: string };
 
       if (data.type === "team_snapshot") {
@@ -267,6 +320,8 @@ export function useTeam(
             return [...others, snapshotTeam].sort((a, b) => a.name.localeCompare(b.name));
           });
         }
+      } else if (data.type === "collaboration_snapshot" || data.type === "collaboration_update") {
+        setCollaboration(data.collaboration);
       } else if (data.type === "team_error") {
         setError(data.content);
       }
@@ -279,6 +334,7 @@ export function useTeam(
     void refresh();
     connect();
     return () => {
+      refreshAbortRef.current?.abort();
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
       }
@@ -301,6 +357,18 @@ export function useTeam(
     [activeTeam]
   );
 
+  const registerBuffer = useCallback((input: { path: string; version: number; digest: string; savedDigest: string; baseDigest?: string; revision: string }) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return false;
+    wsRef.current.send(JSON.stringify({ type: "buffer_register", ...input }));
+    return true;
+  }, []);
+
+  const closeBuffer = useCallback((path: string, expectedBufferVersion: number) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return false;
+    wsRef.current.send(JSON.stringify({ type: "buffer_close", path, expectedBufferVersion }));
+    return true;
+  }, []);
+
   return {
     teams,
     activeTeam,
@@ -309,6 +377,7 @@ export function useTeam(
     loading,
     error,
     onlineMembers,
+    collaboration,
     refresh,
     createTeam,
     joinTeam,
@@ -320,5 +389,11 @@ export function useTeam(
     transferOwnership,
     leaveTeam,
     sendPresence,
+    registerBuffer,
+    closeBuffer,
+    addCollaborationComment,
+    createCollaborationReview,
+    createMergePreview,
+    decideMerge,
   };
 }

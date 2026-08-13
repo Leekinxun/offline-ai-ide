@@ -29,6 +29,28 @@
   - `.omx/artifacts/visual-ralph/ai-chat-workbench/reference-interactions.png`：2026-08-04 最新交互稿的编辑器与 AI 运行过程固定验收截图
 - 产品判断：功能骨架已经齐全，下一阶段重点是视觉层级、任务流连贯性和信息密度控制，而不是继续堆叠入口。
 
+### Operational evidence boundary / 运维证据边界
+
+`DESIGN.md` records product intent and acceptance targets; it is not release
+proof by itself. A behavior may be stated as shipped only when it is mapped to
+current automated evidence in the release matrix, with platform conditions and
+known gaps preserved. In particular, accessibility, native-dialog/focus, i18n,
+responsive and offline claims remain conditional until their named WS14 checks
+pass; a static contract must not be presented as browser or assistive-technology
+certification.
+
+`DESIGN.md` 记录产品意图和验收目标，本身不构成发布证明。只有在发布矩阵中映射到
+当前自动化证据，并保留平台条件与已知缺口的行为，才能描述为已交付。尤其是无障碍、
+原生对话框/焦点、国际化、响应式与离线声明，必须在对应 WS14 检查通过后才可按限定
+范围陈述；静态契约不得包装成浏览器或辅助技术认证。
+
+- Storage upgrade/downgrade contract / 存储升级降级契约：
+  [`docs/migrations/storage-migrations.md`](docs/migrations/storage-migrations.md)
+- Operator backup, recovery, secrets and air-gap procedures / 运维备份、恢复、密钥与隔离流程：
+  [`docs/operations/operator-runbook.md`](docs/operations/operator-runbook.md)
+- Claim-to-verification matrix / 声明到验证矩阵：
+  [`docs/verification/release-evidence.md`](docs/verification/release-evidence.md)
+
 ## Approved 2026 redesign baseline
 
 - Visual source of truth: `design/ai-chat-workbench.html` 是工作台最新且优先级最高的视觉参考；营销首页与登录页仍沿用仓库根目录的 `index.html`、`login.html`。默认桌面验收视口为 1440×900。

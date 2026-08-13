@@ -8,9 +8,9 @@
 >
 > 发布时间：`2026-08-04`
 
-CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台，集代码编辑器、集成终端、Rolex Agent 和多智能体协作于一体，一个 Docker 容器即可运行。
+CrownForge 是一个可私有化部署的 Web AI 编程工作台，集代码编辑器、集成终端、Rolex Agent 和多智能体协作于一体；仓库提供单 Docker 容器部署方式。
 
-**无需联网，数据不出内网。** 接入任意 OpenAI 兼容的大模型（vLLM、Ollama、LocalAI 等），即可拥有完全自主可控的 Cursor / Windsurf 替代方案。
+**所有依赖均为本地服务时可离线运行。** 使用 vLLM、Ollama、LocalAI 等本地 OpenAI 兼容模型时，模型流量可留在内网；托管模型、MCP 服务、Git Provider、Delivery Webhook 与更新源需要网络，并可能传输显式配置给它们的数据。已验证边界见[运维手册](docs/operations/operator-runbook.md)与[发布证据矩阵](docs/verification/release-evidence.md)。
 
 [English](README.md)
 
@@ -29,8 +29,8 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - 恢复 **双文件并排对比阅读**，提供可见的文件选择器、同步滚动开关、只读参考编辑器，以及窄屏上下分栏
 - 待处理的 **工具审批会显示在编辑器右侧协作栏**；Agent 等待审批时会自动打开协作栏，完整对话与编辑视图共享同一审批队列和决策
 - 任务侧栏与完整历史列表新增带确认的 **删除对话**；运行中的对话由服务端保护，删除当前对话后安全进入空白新对话，且不会撤销工作区修改
-- 同步完善新版 UI 交互、响应式紧凑控件、键盘/ARIA 语义、中英文文案，以及对比、审批连续性和对话生命周期回归契约
-- 验证套件扩展到 **120 个后端测试**，并继续覆盖前后端类型检查、生产构建、JSON 层级测试、上下文基准、UI Contract 和差异检查
+- 同步完善新版 UI 交互、响应式紧凑控件、无障碍标签、中英文文案，以及对比、审批连续性和对话生命周期回归契约；当前无障碍、国际化与响应式发布边界以证据矩阵为准
+- 验证套件覆盖自动发现的完整后端测试集，并继续覆盖前后端类型检查、生产构建、JSON 层级测试、上下文基准、UI Contract 和差异检查
 
 ### v0.8.0 · 2026-07-25
 
@@ -51,7 +51,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - 新增 `TaskHeader` 与 `ContextStrip`，让当前模式、运行状态、上下文预算、MCP 健康状态和 Memory / Skills 状态一眼可见
 - 新增按文件保存的 Monaco **视图状态恢复**，切换标签页时保留滚动位置、光标、选区和折叠状态
 - Git、Agent、Team、Terminal、Settings、Knowledge 等界面统一使用 `PanelShell` 风格，并补齐加载中 / 空状态 / 错误状态与响应式行为
-- 完善 Tab、命令面板、搜索、Dialog、Esc 关闭、可见焦点、ARIA Dialog 语义、窄屏触控尺寸和 reduced-motion 等键盘与无障碍体验
+- 为 Tab、命令面板、搜索、Dialog、焦点样式、窄屏控件与 reduced-motion 增加静态 UI 契约；真实键盘与辅助技术行为仍以发布证据矩阵为准
 - 新增可重复执行的 **UI Contract** 检查，并纳入 `scripts/verify.sh`，覆盖响应式断点、焦点状态、Dialog 语义、`PanelShell` 和 reduced-motion 支持
 - 提升 Workbench 全局字号，并统一面板、状态和元信息层级，改善远程服务器浏览器中的阅读体验
 - 重构 **资源管理器**：新增工作区身份卡、文件筛选、文件 / 文件夹统计、分组创建操作、可键盘操作的文件树，以及更清晰的空工作区 / 无匹配状态
@@ -122,6 +122,12 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 仓库现在开始以 GitHub 项目常见的轻量级更新记录方式维护版本说明。
 `v0.9.0` 是当前 README 记录的最新版本，完成编辑器侧 AI 协作闭环，并新增文件名/内容联合搜索、路径复制与拖拽移动、按用户限定的文件夹选择、稳定的 Agent 模式、已配置模型选择、真实运行进度、编辑器侧审批、同步文件对比和可删除的对话历史。
 
+运维与发布文档：
+
+- [运维手册](docs/operations/operator-runbook.md) — 备份/恢复、保留策略、沙箱限制、集成、密钥与事故恢复
+- [存储迁移](docs/migrations/storage-migrations.md) — 格式清单、兼容读取、自动备份边界与降级
+- [声明验证矩阵](docs/verification/release-evidence.md) — 测试/脚本证据与平台条件限制
+
 ## 工作台设计基线
 
 真实前端以批准的 `workbench.html` 作为桌面工作台视觉参考，默认验收视口为 1440×900。工作台由以下区域组成：
@@ -145,9 +151,9 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` 会依次执行后端测试与类型检查、上下文性能基准、前端生产构建、前端 UI Contract 检查和差异检查；`docker-smoke.sh` 会构建镜像、启动一次性容器、检查 `/api/health`，并确认容器能够返回 CrownForge 前端页面。端口被占用时可以通过 `CROWNFORGE_SMOKE_PORT` 覆盖默认端口。
+`verify.sh` 会依次执行后端测试与类型检查、上下文性能基准、前端生产构建、前端 UI Contract 检查和差异检查；`docker-smoke.sh` 会构建镜像、启动一次性加固容器、检查 `/api/health` 与 Docker health、确认容器能返回 CrownForge 前端页面，并验证其以非 root 身份运行且只能写入工作区/配置挂载。端口被占用时可以通过 `CROWNFORGE_SMOKE_PORT` 覆盖默认端口。
 
-- **100% 离线 & 私有化部署** — 运行时无需联网，所有数据留在你的基础设施内。适用于内网隔离环境、企业部署和敏感代码场景
+- **支持离线的私有化部署** — 当模型、MCP 与依赖均在本地且关闭外部 Provider delivery 时可不访问公网；托管模型、MCP 和 Git Provider 仍需要经过批准的网络访问
 - **兼容 OpenAI API** — 支持 vLLM、Ollama、LocalAI、DeepSeek、OpenAI 等任何 OpenAI 兼容接口，切换模型无需改代码
 - **Monaco 代码编辑器** — 支持语法高亮、更完整的 Python 语义高亮、TypeScript/React/Vue 高亮优化、智能提示、多标签页、编辑器字体选择、按文件恢复光标/滚动位置、Ctrl/Cmd 点击符号跳转、同步双文件对比、协作提示，以及带版本感知的更安全保存流程
 - **运行、测试与调试** — 发现项目声明的可信任务，流式展示并可停止运行，支持错误定位，并通过 Node Inspector 或 Python `debugpy`/DAP 使用断点、继续、单步和调用栈
@@ -156,7 +162,7 @@ CrownForge 是一个完全离线、可私有化部署的 Web AI 编程工作台�
 - **JSON 可视化** — JSON 文件默认以可搜索的树形结构预览，支持节点统计、展开/折叠、JSONPath/值复制和清晰的解析错误提示
 - **浅色 / 深色主题** — 用户可从标题栏切换界面主题；主题偏好会保存在本地，并与 Monaco 编辑器主题同步
 - **插件系统** — 提供类似 VS Code 的轻量插件模式，支持内置/外部插件、显式权限与作用域、本地 `plugins/` 离线安装、界面内插件管理，以及仓库内自带的 Markdown 预览示例插件
-- **AI 编程助手** — Ask / Plan / Code / Review 是后端强制的能力边界；Plan 只能只读检查并提交结构化交接物，用户明确批准后 Code 才能在声明的文件范围内修改、执行声明的验证命令。运行中仍可通过停止和纠偏追加 follow-up / steering 消息，并会自动遵守团队只读角色权限
+- **AI 编程助手** — Ask / Plan / Code / Review 是后端强制的能力边界；Plan 只能只读检查并提交结构化交接物，计划绑定的 Code 会被限制在获批的文件与验证范围内。直接 Code 运行仍受普通权限与审批策略约束。运行中可停止或追加 follow-up / steering 消息，并会自动遵守团队只读角色权限
 - **历史对话持久化** — 每个工作区会在 `.history/` 下保存 `.jsonl` 会话文件，支持继续和确认删除历史对话、保护运行中任务，并自动只保留最近 30 个会话
 - **集成终端** — 基于 xterm.js 的全功能 PTY 终端，预装 Conda，默认自动激活 `base` 环境，并内置 `ruff`
 - **文件浏览器** — 树形文件管理，支持新建、重命名、复制路径、复制/粘贴、拖拽移动、文件/文件夹上传、下载、批量删除、文件夹 zip 下载、文件名/内容联合搜索和自动刷新；“打开文件夹”从当前用户自己的工作区根目录开始
@@ -176,9 +182,14 @@ docker build -t ai-ide .
 
 docker run -d --name ai-ide \
   -p 3000:3000 \
+  --user 10001:10001 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
   -v ./workspace:/workspace \
   -v ./plugins:/app/plugins \
-  -v ./users.json:/app/users.json \
+  -v ai-ide-config:/app/config \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
   -e MODEL_NAME=your-model-name \
@@ -206,7 +217,15 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./plugins:/app/plugins
-      - ./users.json:/app/users.json  # 容器重建后仍保留用户配置
+      - crewforge-config:/app/config  # 容器重建后仍保留用户和管理员设置
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
       - VLLM_API_KEY=
@@ -218,7 +237,13 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+volumes:
+  crewforge-config:
 ```
+
+容器服务账户的 UID/GID 为 `10001`。Compose 使用命名卷保存可变的用户/管理员设置，只将工作区和可选的外部插件作为可写 bind mount。在 Linux 上，启动前应让 UID/GID 10001 可以写入这些挂载目录（例如：`sudo chown -R 10001:10001 workspace plugins`）。如需由宿主机管理配置，可将一个对 UID/GID 10001 可写的目录挂载到 `/app/config`。本地 `npm run dev` 流程不受影响；临时调试容器如确实需要 root 或可写根文件系统，请显式覆盖 Compose 的安全字段，不要修改生产默认值。
+
+Linux 镜像内置 `bubblewrap`。已批准的 Agent shell 进程通过 `bwrap --die-with-parent --unshare-net` 启动，因此可以执行本地工具，但不能使用父服务的网络命名空间；CrownForge 服务本身仍可访问模型与 MCP 网络。该能力要求 UID 10001 可以创建非特权用户命名空间，可用 `docker compose exec ai-ide bwrap --unshare-net -- /bin/true` 验证宿主机/运行时组合。如果 Docker seccomp、用户命名空间策略或宿主机内核拒绝该探测，CrownForge 会以 fail-closed 方式拒绝 Agent shell。不要为通过探测而添加 `SYS_ADMIN`、全局关闭 seccomp 或改用 root；应在该部署中保持 Agent shell 禁用，或通过宿主机的窄范围容器策略启用非特权用户命名空间。
 
 ### 本地开发
 
@@ -308,8 +333,8 @@ npm run dev
 | `AGENT_MAX_TOKENS` | `8192` | 每次 AI 回复的最大 Token 数 |
 | `SYSTEM_PROMPT` | *（空）* | AI 智能体默认 System Prompt 覆盖项 |
 | `UPLOAD_MAX_FILE_SIZE_MB` | `250` | 单个上传文件大小上限，单位 MB；可由管理员设置页覆盖 |
-| `USERS_CONFIG` | *（自动检测）* | `users.json` 文件路径 |
-| `APP_SETTINGS_CONFIG` | *（自动检测）* | 管理员设置页写入的 `app-settings.json` 路径 |
+| `USERS_CONFIG` | Docker 中为 `/app/config/users.json` | `users.json` 文件路径 |
+| `APP_SETTINGS_CONFIG` | Docker 中为 `/app/config/app-settings.json` | 管理员设置页写入的 `app-settings.json` 路径 |
 
 ### 运行时配置文件
 
@@ -318,7 +343,7 @@ npm run dev
 | `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
 | `app-settings.json` | 存储管理员配置的 LLM、分 Agent 档案、MCP 服务、插件覆盖项和上传大小限制等运行时设置 |
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
-| `<workspace>/.team/teams.json` | 存储团队成员、角色、邀请码、在线状态、文件认领和协作活动等团队数据 |
+| `TEAM_STORE_ROOT/.team/teams.json` | 存储进程全局团队索引中的成员、角色、邀请码、在线状态、文件认领和协作活动；它不同于工作区本地的运行时团队状态 |
 
 如果你使用 Docker 并希望这些设置在重建容器后仍然保留，建议通过挂载文件或卷的方式持久化这两个配置文件。
 本地开发时，`users.json` 和 `app-settings.json` 的默认位置都是项目根目录。
@@ -328,7 +353,7 @@ npm run dev
 用户管理现在有两种方式：
 
 - 推荐：使用管理员账号登录，在界面右上角 **Settings** 中直接新增用户、删除用户、重置密码
-- 兼容方式：直接编辑项目根目录的 `users.json`，或编辑 `USERS_CONFIG` 指向的文件
+- 兼容方式：直接编辑 `USERS_CONFIG` 指向的 `users.json`（Docker 中为 Compose 命名配置卷；本地开发时为项目根目录）
 
 `users.json` 示例：
 
@@ -372,6 +397,8 @@ LLM 运行时配置同样支持两种方式：
 管理员可在 **Settings → Agent 配置档案** 中分别覆盖 `ask`、`code`、`review`、`plan`、`explore`、`subagent` 和 `teammate` 的模型/Provider、轮次/工具/时间/Token/成本预算、工具允许/拒绝规则、计价及 step snapshot。子 Agent 的权限只能在父权限基础上继续收窄。
 
 **Settings → 外部 MCP** 继续兼容旧版 HTTP 地址，同时支持高级 JSON：远程服务可配置请求头和从环境变量读取的 OAuth bearer token，本地服务可通过持久 `stdio` 命令启动。Code 运行会保存运行前基线及危险工具前快照；聊天 API 还提供会话 fork、按运行回滚和受控 Git worktree。
+
+已认证用户可通过 `GET /api/migrations` 检查持久化格式清单与迁移失败。管理员可调用 `POST /api/migrations/run` 执行已注册的工作区迁移，并通过 `POST /api/migrations/app-settings/run` 显式迁移兼容旧版的 app settings。`POST /api/migrations/rollback` 必须传入可回滚格式的规范 ID，例如 `{"formatId":"tasks"}`；缺失、空白或未知 ID 会被拒绝，有效请求会在哈希保护下恢复该格式迁移前的精确字节。迁移产生的单文件备份不能替代[运维手册](docs/operations/operator-runbook.md)要求的停写完整备份。
 
 ### 上传
 

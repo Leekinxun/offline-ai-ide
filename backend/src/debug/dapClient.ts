@@ -41,7 +41,7 @@ export class DapClient extends EventEmitter {
   private closed = false;
 
   constructor(
-    private readonly readable: Readable,
+    readable: Readable,
     private readonly writable: Writable
   ) {
     super();

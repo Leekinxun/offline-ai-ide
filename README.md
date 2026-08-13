@@ -8,9 +8,9 @@
 >
 > Release Date: `2026-08-04`
 
-CrownForge is a fully offline, self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration — all running in a single Docker container.
+CrownForge is a self-hosted, web-based AI coding workspace featuring a code editor, integrated terminal, Rolex Agent, and multi-agent collaboration. The supplied deployment can run in a single Docker container.
 
-**No cloud dependencies. No data leaves your network.** Connect any OpenAI-compatible LLM (vLLM, Ollama, LocalAI, etc.) and get a private Cursor/Windsurf alternative you fully control.
+**Offline-capable when every configured dependency is local.** Local OpenAI-compatible models such as vLLM, Ollama, or LocalAI can keep model traffic on your network. Hosted models, MCP servers, Git providers, delivery webhooks, and update sources require network and may transmit the data you explicitly configure them to receive. See the [operator runbook](docs/operations/operator-runbook.md) and [release evidence matrix](docs/verification/release-evidence.md) for tested boundaries.
 
 [中文文档](README_zh.md)
 
@@ -29,8 +29,8 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Restored **side-by-side file comparison** with a visible file picker, synchronized scrolling toggle, read-only reference pane, and responsive vertical layout on narrow screens
 - Surfaced pending **tool approvals inside the editor collaboration rail** and automatically opens that rail when an Agent is blocked waiting for input; the full chat and editor views share the same approval queue and decisions
 - Added confirmed **conversation deletion** to both task-history surfaces, with active-run protection and safe reset when the current conversation is removed; deleting chat history never reverts workspace changes
-- Refined the latest UI interaction design, accessibility labels, compact responsive controls, Chinese/English copy, and regression contracts around comparison, approval continuity, and conversation lifecycle
-- Expanded the repeatable verification suite to **120 backend tests** plus backend/frontend typechecks, production build, JSON hierarchy tests, context benchmark, UI contract, and whitespace validation
+- Refined UI interaction design, accessibility labels, compact responsive controls, Chinese/English copy, and regression contracts around comparison, approval continuity, and conversation lifecycle; current accessibility/i18n/responsive release limits are recorded in the evidence matrix
+- Expanded the repeatable verification suite across the complete discovered backend test set, backend/frontend typechecks, production build, JSON hierarchy tests, context benchmark, UI contracts, and whitespace validation
 
 ### v0.8.0 · 2026-07-25
 
@@ -51,7 +51,7 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 - Added `TaskHeader` and `ContextStrip` so mode, run state, context budget, MCP health, and Memory / Skills state are readable at a glance
 - Added per-file Monaco **view-state restoration** so switching tabs preserves scroll position, cursor, selection, and folding state
 - Standardized Git, Agent, Team, Terminal, Settings, and Knowledge surfaces with shared `PanelShell` styling, clear loading / empty / error states, and responsive behavior
-- Improved keyboard-friendly Tab / Command Palette / Search / Dialog flows, Escape-to-close behavior, visible focus states, ARIA dialog semantics, touch-sized narrow-screen controls, and reduced-motion support
+- Added static UI contract coverage for Tab / Command Palette / Search / Dialog flows, focus styles, dialog semantics, narrow-screen controls, and reduced motion; live keyboard and assistive-technology behavior remains gated by the release evidence matrix
 - Added a repeatable **UI Contract** check to `scripts/verify.sh` covering responsive breakpoints, focus states, dialog semantics, `PanelShell`, and reduced-motion support
 - Increased the Workbench typography baseline and normalized panel, status, and metadata sizing for better readability on remote browser sessions
 - Reworked the **Explorer** with a visible workspace identity card, inline file filtering, file/folder counts, grouped creation actions, keyboard-accessible tree items, and clearer empty / no-match states
@@ -128,6 +128,12 @@ CrownForge is a fully offline, self-hosted, web-based AI coding workspace featur
 This repository now documents releases in a lightweight GitHub-style changelog format.
 `v0.9.0` is the current documented release. It completes the editor-first collaboration workflow: file-name and content search, path copy and drag-to-move operations, user-scoped workspace selection, stable Agent modes, configured model selection, real run progress, approvals beside the editor, synchronized file comparison, and deletable conversation history.
 
+Operator and release documentation:
+
+- [Operator runbook](docs/operations/operator-runbook.md) — backup/restore, retention, sandbox limits, integrations, secrets and incident recovery
+- [Storage migrations](docs/migrations/storage-migrations.md) — format inventory, compatibility, automatic backup boundaries and downgrade
+- [Claim-to-verification matrix](docs/verification/release-evidence.md) — test/script evidence and platform-conditional limitations
+
 ## Workbench Design Baseline
 
 The live frontend uses the approved `workbench.html` visual reference for the desktop workbench. At the 1440×900 acceptance viewport, the shell is organized as:
@@ -142,7 +148,7 @@ The implementation keeps real workspace data and existing interaction flows behi
 
 ## Features
 
-- **100% Offline & Self-Hosted** — No internet required at runtime; all data stays on your infrastructure. Ideal for air-gapped environments, enterprise use, and sensitive codebases
+- **Offline-Capable & Self-Hosted** — Can operate without public internet when the model, MCP services and dependencies are local and external provider delivery is disabled; hosted endpoints and Git providers still require approved network access
 - **Codex-Inspired Workspace UI** — Grouped workspace controls, focused task workflows, command palette and search, responsive side panels, clear status surfaces, light/dark visual tokens, and keyboard-friendly interactions
 - **OpenAI-Compatible API** — Works with vLLM, Ollama, LocalAI, DeepSeek, OpenAI, or any OpenAI-compatible LLM endpoint — swap models without changing code
 - **Monaco Code Editor** — Full-featured editor with syntax highlighting, deeper Python semantic highlighting, richer TypeScript/React/Vue token coloring, IntelliSense, multi-tab support, selectable editor fonts, per-file cursor/scroll restore, reliable Ctrl/Cmd-click symbol navigation, synchronized side-by-side file comparison, collaboration notices, and safer save behavior with version-aware conflict handling
@@ -176,9 +182,14 @@ docker build -t ai-ide .
 
 docker run -d --name ai-ide \
   -p 3000:3000 \
+  --user 10001:10001 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
   -v ./workspace:/workspace \
   -v ./plugins:/app/plugins \
-  -v ./users.json:/app/users.json \
+  -v ai-ide-config:/app/config \
   -e VLLM_API_URL=http://your-llm-server:8000/v1 \
   -e VLLM_API_KEY=your-api-key \
   -e MODEL_NAME=your-model-name \
@@ -223,7 +234,7 @@ The repository includes repeatable local checks for the Agent harness and deploy
 ./scripts/docker-smoke.sh
 ```
 
-`verify.sh` runs backend tests/typecheck, JSON hierarchy mutation tests, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable container, checks `/api/health`, and verifies the served CrownForge shell. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
+`verify.sh` runs backend tests/typecheck, JSON hierarchy mutation tests, the context performance benchmark, the frontend production build, the frontend UI contract check, and whitespace validation. `docker-smoke.sh` builds the image, starts a disposable hardened container, checks `/api/health` and Docker health, verifies the served CrownForge shell, and confirms it runs unprivileged with writable workspace/config mounts only. Override `CROWNFORGE_SMOKE_PORT` or `CROWNFORGE_SMOKE_IMAGE` when the defaults are occupied.
 
 Or use Docker Compose:
 
@@ -246,7 +257,15 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./plugins:/app/plugins
-      - ./users.json:/app/users.json  # persist users across container rebuilds
+      - crewforge-config:/app/config  # persist users and admin settings
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       - VLLM_API_URL=http://host.docker.internal:8000/v1
       - VLLM_API_KEY=
@@ -264,7 +283,31 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+volumes:
+  crewforge-config:
 ```
+
+The container service account is UID/GID `10001`. The Compose configuration
+uses a named volume for mutable users/admin settings and bind mounts only the
+workspace and optional external plugins. On Linux, grant the service account
+access to any writable bind mount before starting (for example,
+`sudo chown -R 10001:10001 workspace plugins`). To retain a host-managed
+configuration instead, bind a directory at `/app/config` and make it writable
+by UID/GID 10001. Local `npm run dev` is unchanged; for a temporary debugging
+container that must run as root or use a writable root filesystem, override the
+Compose security fields explicitly rather than changing the production defaults.
+
+Linux images include `bubblewrap`. Approved agent shell processes are launched
+with `bwrap --die-with-parent --unshare-net`, so they can execute local tools but
+cannot use the parent server's network namespace; the CrownForge server itself
+retains network access for model and MCP connections. This requires unprivileged
+user namespaces to be available to UID 10001. You can verify the host/runtime
+combination with `docker compose exec ai-ide bwrap --unshare-net -- /bin/true`.
+If Docker's seccomp, user-namespace policy, or the host kernel rejects that probe,
+CrownForge fails agent shell execution closed. Do not add `SYS_ADMIN`, disable
+seccomp globally, or run the service as root to make the probe pass; keep agent
+shell disabled for that deployment or enable unprivileged user namespaces through
+the host's narrowly scoped container policy.
 
 ### Local Development
 
@@ -361,8 +404,8 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `MCP_CONNECT_TIMEOUT` | `10` | MCP connection timeout in seconds |
 | `SYSTEM_PROMPT` | *(empty)* | Optional default system prompt override for the AI agent |
 | `UPLOAD_MAX_FILE_SIZE_MB` | `250` | Per-file upload limit in MB; can be overridden from admin Settings |
-| `USERS_CONFIG` | *(auto-detect)* | Path to `users.json` |
-| `APP_SETTINGS_CONFIG` | *(auto-detect)* | Path to `app-settings.json` for admin-managed LLM settings |
+| `USERS_CONFIG` | `/app/config/users.json` in Docker | Path to `users.json` |
+| `APP_SETTINGS_CONFIG` | `/app/config/app-settings.json` in Docker | Path to `app-settings.json` for admin-managed LLM settings |
 
 ### Runtime Settings Files
 
@@ -374,7 +417,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `<workspace>/.codex/USER.md` | Stores durable user preferences and working conventions |
 | `<workspace>/.codex/MEMORY.md` | Stores durable project facts, decisions, and conventions |
 | `<workspace>/.codex/skills/*/SKILL.md` | Stores reusable workspace workflows discovered by the Agent |
-| `<workspace>/.team/teams.json` | Stores team membership, roles, invites, presence, claims, and activity for shared collaboration |
+| `TEAM_STORE_ROOT/.team/teams.json` | Stores the process-global team index: membership, roles, invites, presence, claims, and collaboration activity; this is distinct from workspace-local runtime team state |
 
 If you run with Docker and want admin changes to survive container recreation, persist these files with bind mounts or a volume-backed path.
 For local development, the default `users.json` and `app-settings.json` locations are the project root.
@@ -384,7 +427,7 @@ For local development, the default `users.json` and `app-settings.json` location
 Users can be managed in two ways:
 
 - Preferred: log in as an admin user and open the in-app **Settings** panel to create users, delete users, or reset passwords
-- Alternative: edit `users.json` manually at the project root (or the path pointed to by `USERS_CONFIG`)
+- Alternative: edit `users.json` manually at the path pointed to by `USERS_CONFIG` (the Compose named config volume in Docker; the project root for local development)
 
 Example `users.json`:
 
@@ -432,6 +475,8 @@ Administrators can add legacy HTTP endpoints or advanced MCP server JSON from **
 **Settings → Agent Profiles** accepts per-agent overrides for `ask`, `code`, `review`, `plan`, `explore`, `subagent`, and `teammate`. Each profile can narrow the model/provider, step/tool/time/token/cost budgets, tool allow/deny patterns, pricing, and workspace step snapshots. Child authorizers can only narrow inherited permissions.
 
 Code runs now retain a pre-run checkpoint and step checkpoints before side-effecting tools. The chat API supports conversation forks, run rollback, and managed Git worktrees under `/api/chat/conversations/:id/fork`, `/api/chat/runs/:runId/revert`, and `/api/chat/worktrees`.
+
+Authenticated operators can inspect persistence inventory and migration failures at `GET /api/migrations`. Admin-only `POST /api/migrations/run` performs registered workspace migrations; `POST /api/migrations/app-settings/run` explicitly migrates legacy-compatible app settings. `POST /api/migrations/rollback` requires a canonical rollback-capable ID such as `{"formatId":"tasks"}` and rejects missing, blank, or unknown IDs; a valid request restores the exact pre-migration bytes for that format behind a hash fence. These per-file backups do not replace the complete quiesced backup described in the [operator runbook](docs/operations/operator-runbook.md).
 
 ### Uploads
 
@@ -506,9 +551,9 @@ ai-ide/
 The AI assistant can:
 
 - **Enforce real mode boundaries** — Ask, Plan, Code, and Review are backend capability contracts, not prompt-only preferences
-- **Require an approved Plan before Code** — Plan submits a structured, auditable handoff; Code can modify only its declared file scope and run its declared verification commands
-- **Read / write / edit files** within the active approved Code plan
-- **Run approved verification commands** via the integrated terminal
+- **Support an approved Plan → Code handoff** — Plan submits a structured, auditable scope; when Code is plan-bound, file and verification actions are constrained to that approved contract. Direct Code runs remain supported under the normal permission and approval policy
+- **Read / write / edit files** within the active workspace and any narrower approved execution contract
+- **Run policy-approved verification commands** via the integrated terminal
 - **Stop active runs** — the Stop control aborts the current LLM/tool loop and reports the run as user-stopped
 - **Honor provider termination reasons** — an Agent run completes only after an explicit `finish_reason: "stop"`; `tool_calls` continues execution, while missing, null, truncated, or contradictory finish reasons fail the run instead of being reported as completed
 - **Accept real-time steering** — follow-up user messages and the Correct control can interrupt after a tool completes and continue the next turn with earlier tool outputs preserved in context

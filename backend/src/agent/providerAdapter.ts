@@ -5,10 +5,17 @@ import {
   type ChatCompletionStreamCallbacks,
 } from "./llm.js";
 import type { OpenAIResponse } from "./types.js";
+import type { CapabilitySupport } from "./modelCapabilities.js";
+
+export interface ProviderChatCompletionOptions extends ChatCompletionOptions {
+  structuredOutput?: boolean;
+  reasoning?: { effort?: "low" | "medium" | "high"; budgetTokens?: number };
+}
 
 export interface ProviderAdapter {
   id: string;
-  createChatCompletion(options: ChatCompletionOptions): Promise<Response>;
+  declaredSupports?: Partial<CapabilitySupport>;
+  createChatCompletion(options: ProviderChatCompletionOptions): Promise<Response>;
   readChatCompletion(
     response: Response,
     callbacks?: ChatCompletionStreamCallbacks,
@@ -20,6 +27,7 @@ const adapters = new Map<string, ProviderAdapter>();
 
 export const openAiCompatibleAdapter: ProviderAdapter = {
   id: "openai-compatible",
+  declaredSupports: { streaming: true, tool_calling: true, cancellation: true, usage_reporting: true },
   createChatCompletion: callChatCompletion,
   readChatCompletion: readChatCompletionResponse,
 };

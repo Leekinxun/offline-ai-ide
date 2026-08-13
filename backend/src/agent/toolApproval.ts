@@ -59,14 +59,16 @@ export function classifyToolApproval(
 
   if (name === "bash") {
     const command = typeof input.command === "string" ? input.command : "";
-    const policy = evaluateShellCommand(command);
+    // This is only a preflight. The execution path repeats the policy check
+    // after this high-risk approval has been granted.
+    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true });
     if (!policy.allowed) {
       return { kind: "blocked", reason: policy.reason || "Shell command blocked" };
     }
     return {
       kind: "approval",
       risk: "high",
-      reason: "Execute a shell command in the workspace",
+      reason: "Execute this command through the compatibility shell in the workspace",
       scope: command,
       canAllowSession: false,
     };
@@ -86,8 +88,8 @@ export function classifyToolApproval(
     return {
       kind: "approval",
       risk: "high",
-      reason: "Call an external integration with provider-defined side effects",
-      scope: name,
+      reason: "Call an external integration that may use the network and perform provider-defined side effects",
+      scope: typeof input.action === "string" ? `${name}:${input.action}` : name,
       canAllowSession: false,
     };
   }
@@ -124,6 +126,7 @@ export interface ToolApprovalRequestEvent extends ToolApprovalRequestInput {
 
 interface PendingApproval {
   conversationId?: string;
+  risk: ToolRisk;
   canAllowSession: boolean;
   sessionKey?: string;
   resolve: (decision: ToolApprovalDecision) => void;
@@ -143,6 +146,7 @@ export class ToolApprovalSession {
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
     if (
       input.name !== "submit_plan" &&
+      input.risk !== "high" &&
       input.conversationId &&
       this.conversationAllowed.has(input.conversationId)
     ) {
@@ -162,6 +166,7 @@ export class ToolApprovalSession {
       timer.unref?.();
       this.pending.set(approvalId, {
         conversationId: input.conversationId,
+        risk: input.risk,
         canAllowSession: input.canAllowSession,
         sessionKey: input.sessionKey,
         resolve,
@@ -176,7 +181,7 @@ export class ToolApprovalSession {
     this.conversationAllowed.add(normalized);
     let resolvedCount = 0;
     for (const [approvalId, pending] of this.pending) {
-      if (pending.conversationId !== normalized) continue;
+      if (pending.conversationId !== normalized || pending.risk === "high") continue;
       this.pending.delete(approvalId);
       clearTimeout(pending.timer);
       pending.resolve("allow_once");
@@ -198,6 +203,11 @@ export class ToolApprovalSession {
     }
     pending.resolve(acceptedDecision);
     return true;
+  }
+
+  pendingCount(conversationId?: string): number {
+    if (!conversationId) return this.pending.size;
+    return [...this.pending.values()].filter((item) => item.conversationId === conversationId).length;
   }
 
   cancelAll(): void {

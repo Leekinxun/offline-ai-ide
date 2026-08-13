@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "snapshot": {
+    "excludedRootEntries": [
+      ".artifacts",
+      ".checkpoints",
+      ".codex",
+      ".git",
+      ".history",
+      ".omx",
+      ".tasks",
+      ".team",
+      ".tmp",
+      "app-settings.json",
+      "users.json",
+      "workspace"
+    ],
+    "excludedDirectoryNames": ["node_modules", "dist", "coverage", ".cache", ".vite"],
+    "excludedRelativePaths": ["backend/workspace"],
+    "excludedFileNames": [".DS_Store"],
+    "excludedSuffixes": [".bak", ".log", ".tmp"],
+    "dependencyLinks": ["backend/node_modules", "frontend/node_modules"]
+  },
+  "frontendBundleBudget": {
+    "mainShellMaxBytes": 650000,
+    "otherJavaScriptMaxBytes": 500000,
+    "exceptions": [
+      {
+        "pattern": "^assets/(?:editor|json|html|css|ts)\\.worker-[^.]+\\.js$",
+        "reason": "Monaco editor and language workers are isolated worker payloads, not the main application shell."
+      },
+      {
+        "pattern": "^assets/monaco-core-[^.]+\\.js$",
+        "reason": "Monaco core is an explicitly separated editor vendor chunk, not the main application shell."
+      }
+    ]
+  },
+  "traceOverflowBudget": {
+    "prefill": 10000,
+    "repetitions": 20,
+    "maxP95Ms": 15000,
+    "maxMs": 15000
+  },
+  "mandatorySecurityTests": [
+    "src/chat/changeSetReleaseSecurity.test.ts",
+    "src/security/g002Adversarial.test.ts",
+    "src/security/g005DeliveryAdversarial.test.ts",
+    "src/security/g006ExtensionPolicy.test.ts",
+    "src/security/g006RuntimeIntegration.test.ts",
+    "src/security/g007StorageMigrationContract.test.ts",
+    "src/security/g008UpgradeRecoveryAdversarial.test.ts",
+    "src/security/retrievalContextRegression.test.ts",
+    "src/security/retrievalPolicy.test.ts"
+  ],
+  "mandatoryRecoveryTests": [
+    "src/chat/changeSetReleaseRecovery.test.ts",
+    "src/chat/checkpointRoutes.test.ts",
+    "src/persistence/migrations.test.ts",
+    "src/security/g007StorageMigrationContract.test.ts",
+    "src/security/g008UpgradeRecoveryAdversarial.test.ts",
+    "src/chat/checkpoints.test.ts",
+    "src/files/mutationRegistry.test.ts"
+  ],
+  "mandatoryTestMarkers": {
+    "security": [
+      {
+        "file": "src/chat/changeSetReleaseSecurity.test.ts",
+        "testName": "schema-v3 integrity binds every capture and transition semantic independent of JSON key order"
+      }
+    ],
+    "recovery": [
+      {
+        "file": "src/chat/changeSetReleaseRecovery.test.ts",
+        "testName": "live after-write-ahead recovery callers conflict without rolling back an active integration"
+      },
+      {
+        "file": "src/chat/changeSetReleaseRecovery.test.ts",
+        "testName": "stale ChangeSet integration locks fail closed across child processes without parent mutation"
+      },
+      {
+        "file": "src/chat/changeSetReleaseRecovery.test.ts",
+        "testName": "stale ChangeSet transition locks reject competing child decisions without last-writer-wins"
+      },
+      {
+        "file": "src/chat/changeSetReleaseRecovery.test.ts",
+        "testName": "stale reused-pid, EPERM, and malformed ChangeSet locks require explicit recovery"
+      },
+      {
+        "file": "src/chat/checkpointRoutes.test.ts",
+        "testName": "recover route reports the actual pre-CAS, post-CAS, idle, and unresolved outcomes"
+      }
+    ]
+  },
+  "requiredReleaseFiles": [
+    "backend/src/chat/changeSetReleaseSecurity.test.ts",
+    "backend/src/chat/changeSetReleaseRecovery.test.ts",
+    "backend/src/chat/changeSetReleaseTestSupport.ts",
+    "backend/src/chat/checkpointRoutes.test.ts",
+    "scripts/verify-release.sh",
+    "scripts/verify-release.mjs",
+    "scripts/verify-clean-snapshot.mjs",
+    "scripts/offline-network-guard.mjs",
+    "scripts/offline-network-guard-self-test.mjs",
+    "scripts/release-methodology.mjs",
+    "scripts/release-methodology.test.mjs",
+    "scripts/strict-static-quality.mjs",
+    "scripts/changeSetRecovery.test.ts",
+    "scripts/frontend-bundle-budget.mjs",
+    "scripts/traceOverflowBenchmark.ts",
+    "scripts/soak-critical-path.ts",
+    "scripts/ws15-critical-loop.sh",
+    "scripts/ws15CriticalPath.ts",
+    "scripts/ws15CriticalPath.test.ts"
+  ],
+  "requiredReleaseTokens": [
+    "release-methodology",
+    "release-methodology.test.mjs",
+    "changeSetRecovery.test.ts",
+    "mandatory-security",
+    "mandatory-migration-recovery",
+    "strict-static-quality",
+    "strict-static-quality-report.json",
+    "--noUnusedLocals",
+    "--noUnusedParameters",
+    "executedChecks",
+    "assertMandatoryTestMarkers",
+    "mandatoryTestMarkers",
+    "discoverBackendTests",
+    "collectGitSourceInventory",
+    "assertSnapshotCompleteness",
+    "--test-concurrency=1",
+    "retrievalBenchmark.ts",
+    "traceStore.bench.ts",
+    "trace-performance-report.json",
+    "trace-overflow-report.json",
+    "--repetitions",
+    "critical-loop-100",
+    "frontend-bundle-budget",
+    "bundle-budget-report.json",
+    "nodeEgressGuardEnabled",
+    "--iterations",
+    "100",
+    "git diff --check"
+  ]
+}

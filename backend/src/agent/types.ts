@@ -134,8 +134,15 @@ export type WsServerMessage =
       mode: AgentMode;
       modelName?: string;
       status: AgentRunStatus;
+      /** Monotonic trace ordering and optimistic state revision for WS consumers. */
+      sequence?: number;
+      version?: number;
       metrics: AgentRunMetrics;
       event?: AgentRunEvent;
+      executionContractKind?: "direct_code" | "approved_plan";
+      completionEvidence?: import("../chat/completionEvidence.js").CompletionEvidence;
+      qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
+      executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;
     }
   | {
       type: "context_state";
@@ -157,6 +164,16 @@ export type WsServerMessage =
         preservedMessageCount: number;
       };
       message?: string;
+    }
+  | ({ type: "context_manifest_state" } & import("./contextManifest.js").ContextManifestState)
+  | {
+      type: "context_index_state";
+      requestId?: string;
+      status: "unavailable" | "idle" | "indexing" | "ready" | "error";
+      generation?: string;
+      indexedFiles?: number;
+      updatedAt?: number;
+      error?: string;
     }
   | {
       type: "mcp_state";
@@ -192,6 +209,10 @@ export type WsServerMessage =
       toolCallCount: number;
       errorCount: number;
       commandCount: number;
+      executionContractKind?: "direct_code" | "approved_plan";
+      completionEvidence?: import("../chat/completionEvidence.js").CompletionEvidence;
+      qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
+      executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;
     }
   | { type: "stopped"; requestId?: string; content?: string }
   | { type: "steering"; requestId: string; content: string }
@@ -237,10 +258,18 @@ export interface ToolContext {
   vllmApiKey: string;
   modelName: string;
   actorName?: string;
+  /** Correlates a primary tool mutation with its request and tool execution. */
+  requestId?: string;
+  toolCallId?: string;
+  /** Set only by the approved primary bash dispatch. */
+  compatibilityShellAuthorized?: boolean;
+  /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
+  filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
   signal?: AbortSignal;
   authorizeTool?: import("./permissionService.js").PermissionAuthorizer;
   lineage?: {
     parentRunId: string;
+    parentTaskId?: number;
     parentConversationId: string;
     parentRequestId: string;
     parentToolCallId: string;
@@ -266,33 +295,100 @@ export interface Task {
   id: number;
   subject: string;
   description: string;
-  status: "pending" | "in_progress" | "completed" | "deleted";
+  status: TaskStatus;
   owner: string | null;
   blockedBy: number[];
   blocks: number[];
+  parentId?: number;
+  required?: boolean;
+  lease?: TaskLease;
+  version?: number;
+  createdAt?: number;
+  updatedAt?: number;
+  completionEvidence?: string[];
+  budget?: OrchestrationBudget;
+  requiresPlanApproval?: boolean;
+  planApproved?: boolean;
+  minimumCompletionQuality?: number;
+  completionQuality?: number;
 }
+
+export type TaskStatus = "pending" | "blocked" | "in_progress" | "paused" | "completed" | "failed" | "cancelled" | "deleted";
+export interface TaskLease { owner: string; token: string; expiresAt: number; claimedAt: number; }
+export type AgentLifecycleStatus = "queued" | "working" | "paused" | "idle" | "stopped" | "interrupted" | "orphaned" | "failed" | "shutdown";
+export interface OrchestrationBudget { maxConcurrentAgents?: number; maxTokens?: number; maxCostUsd?: number; maxDurationMs?: number; usedTokens?: number; usedCostUsd?: number; startedAt?: number; }
 
 // --- Team types ---
 
 export interface TeamConfig {
+  schemaVersion?: 1;
   team_name: string;
   members: TeamMember[];
+  budget?: OrchestrationBudget;
+  workspaceBudget?: OrchestrationBudget;
+  version?: number;
 }
 
 export interface TeamMember {
   name: string;
   role: string;
-  status: "working" | "idle" | "shutdown";
+  status: AgentLifecycleStatus;
   currentTask?: string;
   startedAt?: number;
   updatedAt?: number;
+  id?: string;
+  parentAgentId?: string;
+  parentRunId?: string;
+  parentTaskId?: number;
+  parentConversationId?: string;
+  parentRequestId?: string;
+  parentToolCallId?: string;
+  childRunId?: string;
+  worktreePath?: string;
+  worktreeId?: string;
+  model?: string;
+  permissions?: string[];
+  capabilities?: string[];
+  budget?: OrchestrationBudget;
+  evidence?: string[];
+  checkpoint?: string;
+  version?: number;
+  heartbeatAt?: number;
+  leaseExpiresAt?: number;
+  steering?: string[];
+  requiresPlanApproval?: boolean;
+  planApproved?: boolean;
+  minimumCompletionQuality?: number;
+  completionQuality?: number;
+  executionId?: string;
+  processId?: number;
+  /** Bounded durable inbox receipt set used to make lease redelivery idempotent. */
+  handledMessageIds?: string[];
 }
 
+/** Canonical teammate capability identifiers shared by runtime and transports. */
+export const TEAMMATE_CAPABILITY = {
+  READ_FILE: "read_file",
+  WRITE_FILE: "write_file",
+  EDIT_FILE: "edit_file",
+  BASH: "bash",
+  SEND_MESSAGE: "send_message",
+  CLAIM_TASK: "claim_task",
+  UPDATE_BUDGET: "budget.update",
+} as const;
+
+export const DEFAULT_TEAMMATE_CAPABILITIES = Object.freeze(Object.values(TEAMMATE_CAPABILITY));
+
 export interface InboxMessage {
+  id?: string;
   type: string;
   from: string;
   content: string;
   timestamp: number;
+  recipient?: string;
+  sequence?: number;
+  delivery?: "available" | "leased" | "acked";
+  lease?: { consumer: string; token: string; expiresAt: number };
   [key: string]: unknown;
 }
 

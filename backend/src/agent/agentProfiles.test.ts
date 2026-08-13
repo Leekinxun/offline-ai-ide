@@ -61,8 +61,11 @@ test("keeps child defaults narrower than the primary code agent", () => {
 test("keeps read-only modes narrower than the code profile", () => {
   const code = resolveAgentProfile("code");
   const plan = resolveAgentProfile("plan");
+  const review = resolveAgentProfile("review");
   assert.equal(agentProfileAllowsTool(code, "mcp_weather__forecast"), true);
   assert.equal(agentProfileAllowsTool(plan, "mcp_weather__forecast"), false);
   assert.equal(agentProfileAllowsTool(plan, "submit_plan"), true);
   assert.equal(agentProfileAllowsTool(plan, "bash"), true);
+  assert.equal(agentProfileAllowsTool(review, "report_review_finding"), true);
+  assert.equal(agentProfileAllowsTool(plan, "report_review_finding"), false);
 });

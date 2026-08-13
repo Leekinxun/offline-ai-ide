@@ -38,19 +38,23 @@ WORKDIR /app
 # System tools for terminal usage
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
+    bubblewrap \
     git \
     curl \
+    grep \
     wget \
     vim \
     procps \
     ca-certificates \
     build-essential \
     python3 \
+    && test "$(command -v bwrap)" = /usr/bin/bwrap \
     && rm -rf /var/lib/apt/lists/*
 
-# Git: mark /workspace as safe so mounted volumes work regardless of owner
-RUN git config --global --add safe.directory /workspace \
-    && git config --global init.defaultBranch main
+# Git: mark /workspace as safe so mounted volumes work regardless of owner.
+# System scope makes this available to the unprivileged runtime account.
+RUN git config --system --add safe.directory /workspace \
+    && git config --system init.defaultBranch main
 
 # Install Miniconda
 RUN if [ "$TARGETARCH" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then \
@@ -90,10 +94,6 @@ RUN set -eu; \
     /opt/conda/bin/ruff --version; \
     /opt/conda/bin/python -c "import debugpy; print(debugpy.__version__)"
 
-# Initialize conda for bash so terminal users get conda ready
-RUN conda init bash && \
-    echo "conda activate base" >> /root/.bashrc
-
 # Copy backend build artifacts + production deps
 COPY --from=backend-builder /build/backend/dist ./dist
 COPY --from=backend-builder /build/backend/node_modules ./node_modules
@@ -102,18 +102,31 @@ COPY --from=backend-builder /build/backend/package.json .
 # Copy built frontend
 COPY --from=frontend-builder /build/frontend/dist ./static
 
-# Copy shipped external plugins so Docker images work out of the box
-COPY plugins ./plugins
+# Copy shipped external plugins so Docker images work out of the box.
+# Runtime state is deliberately kept outside the read-only application tree.
+COPY --chown=10001:10001 plugins ./plugins
+COPY --chown=10001:10001 users.json ./config/users.json
+COPY --chown=10001:10001 app-settings.json ./config/app-settings.json
 
-# Copy users config
-COPY users.json ./users.json
-
-# Create default workspace and plugin directory
-RUN mkdir -p /workspace /app/plugins
+# The service and the terminal/agent subprocesses run as this dedicated account.
+# /workspace and /app/config are the only persistent writable locations; /tmp is
+# supplied as tmpfs by Compose (and the smoke test) when the root filesystem is read-only.
+RUN groupadd --gid 10001 crewforge \
+    && useradd --uid 10001 --gid crewforge --create-home --shell /bin/bash crewforge \
+    && mkdir -p /workspace /app/plugins /app/config \
+    && chown -R crewforge:crewforge /workspace /app/plugins /app/config /home/crewforge \
+    && printf '%s\n' \
+      '. /opt/conda/etc/profile.d/conda.sh' \
+      'conda activate base' \
+      >> /home/crewforge/.bashrc
 
 EXPOSE 3000
 
 ENV WORKSPACE_DIR=/workspace
+ENV USERS_CONFIG=/app/config/users.json
+ENV APP_SETTINGS_CONFIG=/app/config/app-settings.json
+ENV HOME=/home/crewforge
+ENV TMPDIR=/tmp
 ENV DEBUGPY_PYTHON_EXECUTABLE=/opt/conda/bin/python
 ENV VLLM_API_URL=http://host.docker.internal:8000/v1
 ENV VLLM_API_KEY=
@@ -122,5 +135,7 @@ ENV STATIC_DIR=static
 ENV PORT=3000
 ENV MAX_AGENT_ITERATIONS=30
 ENV AGENT_MAX_TOKENS=8192
+
+USER 10001:10001
 
 CMD ["node", "dist/index.js"]

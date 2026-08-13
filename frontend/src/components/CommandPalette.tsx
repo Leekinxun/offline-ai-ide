@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Bot, Bug, CircleAlert, Command, FileCode2, GitBranch, History, Search, Settings, ShieldCheck, Sparkles, TerminalSquare, TestTube2, Users, WandSparkles, X, Plus } from "lucide-react";
 import { FileNode } from "../types";
 import { useI18n } from "../i18n";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 export type CommandPaletteMode = "commands" | "files";
 
@@ -44,6 +45,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalDialogFocus<HTMLDivElement>({ open: visible, onClose, initialFocusRef: inputRef });
 
   useEffect(() => {
     if (!visible) return;
@@ -223,7 +225,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div className="command-palette-overlay" onMouseDown={onClose}>
-      <div className="command-palette" role="dialog" aria-modal="true" aria-label={mode === "files" ? t("command.quickOpen") : t("command.commandPalette")} onMouseDown={(event) => event.stopPropagation()}>
+      <div ref={dialogRef} tabIndex={-1} className="command-palette" role="dialog" aria-modal="true" aria-label={mode === "files" ? t("command.quickOpen") : t("command.commandPalette")} onMouseDown={(event) => event.stopPropagation()}>
         <div className="command-palette-input-row">
           {mode === "files" ? <Search size={17} /> : <Command size={17} />}
           <input

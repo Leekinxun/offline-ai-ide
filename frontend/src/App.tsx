@@ -5,6 +5,7 @@ import { TabBar } from "./components/TabBar";
 import { ChatPanel } from "./components/ChatPanel";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
+import type { DetailTab } from "./components/RunDetailsPanel";
 import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
@@ -15,6 +16,8 @@ import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
+import { ActionConfirmDialog } from "./components/ActionConfirmDialog";
+import { useModalDialogFocus } from "./components/useModalDialogFocus";
 import { GitPanel } from "./components/GitPanel";
 import { AgentBoard } from "./components/AgentBoard";
 import { CheckpointPanel } from "./components/CheckpointPanel";
@@ -114,6 +117,12 @@ const EDITOR_FONT_OPTIONS = [
     family: "'Monaco', 'Menlo', 'Courier New', monospace",
   },
 ];
+
+async function sha256Text(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export default function App() {
   const { t } = useI18n();
@@ -345,6 +354,7 @@ function AuthenticatedApp({
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
   const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
   const [runDetailsVisible, setRunDetailsVisible] = useState(false);
+  const [runDetailsTab, setRunDetailsTab] = useState<DetailTab>("changes");
   const [editorAssistantVisible, setEditorAssistantVisible] = useState(() => window.innerWidth > 1180);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
@@ -370,6 +380,9 @@ function AuthenticatedApp({
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
+  const [claimSaveConfirmation, setClaimSaveConfirmation] = useState<{ file: OpenFile; username: string } | null>(null);
+  const [claimSaveBusy, setClaimSaveBusy] = useState(false);
+  const [claimSaveError, setClaimSaveError] = useState<string | null>(null);
   const [mergeSelections, setMergeSelections] = useState<Record<string, "local" | "remote">>(
     {}
   );
@@ -388,6 +401,8 @@ function AuthenticatedApp({
     useState<EditorHighlightTarget | null>(null);
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
   const lastWorkspaceMtimeRef = useRef(0);
+  const savedBufferContentRef = useRef<Record<string, string>>({});
+  const collaborationBufferVersionRef = useRef<Record<string, number>>({});
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -402,6 +417,7 @@ function AuthenticatedApp({
   const startWidthRef = useRef(0);
   const startHeightRef = useRef(0);
   const drawerTriggerRef = useRef<HTMLElement | null>(null);
+  const mainLayoutRef = useRef<HTMLDivElement>(null);
   const previousDrawerRef = useRef<string | null>(null);
   const layoutBeforeFocusRef = useRef({
     sidebar: true,
@@ -694,6 +710,7 @@ function AuthenticatedApp({
                         : null
     : null;
   const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
+  const compactModalDrawerOpen = compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible);
 
   const closeWorkspaceDrawers = useCallback(() => {
     setSidebarVisible(false);
@@ -734,6 +751,39 @@ function AuthenticatedApp({
       });
     }
   }, [activeWorkspaceDrawer]);
+
+  useEffect(() => {
+    const layout = mainLayoutRef.current;
+    if (!layout) return;
+    const clearBoundaries = () => {
+      layout.querySelectorAll<HTMLElement>('[data-compact-modal-inert="true"]').forEach((element) => {
+        element.removeAttribute("inert");
+        element.removeAttribute("aria-hidden");
+        element.removeAttribute("data-compact-modal-inert");
+      });
+    };
+    const applyBoundaries = () => {
+      clearBoundaries();
+      if (!compactModalDrawerOpen || !activeWorkspaceDrawer) return;
+      const activeDrawer = layout.querySelector<HTMLElement>(`[data-workspace-drawer="${activeWorkspaceDrawer}"]`);
+      if (!activeDrawer) return;
+      const isolate = (container: HTMLElement) => {
+        Array.from(container.children).forEach((child) => {
+          if (!(child instanceof HTMLElement) || child.classList.contains("mobile-drawer-scrim")) return;
+          if (child === activeDrawer) return;
+          if (child.contains(activeDrawer)) { isolate(child); return; }
+          child.setAttribute("inert", "");
+          child.setAttribute("aria-hidden", "true");
+          child.setAttribute("data-compact-modal-inert", "true");
+        });
+      };
+      isolate(layout);
+    };
+    applyBoundaries();
+    const observer = new MutationObserver(applyBoundaries);
+    observer.observe(layout, { childList: true, subtree: true });
+    return () => { observer.disconnect(); clearBoundaries(); };
+  }, [activeWorkspaceDrawer, compactModalDrawerOpen]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -1458,15 +1508,8 @@ function AuthenticatedApp({
     const file = openFiles.find((f) => f.path === activeFilePath);
     if (!file) return false;
     if (activeClaim && activeClaim.username !== username) {
-      const confirmed = window.confirm(
-        t("team.claimConflictConfirm", {
-          username: activeClaim.username,
-        })
-      );
-      if (!confirmed) {
-        showToast(t("team.claimConflictCancelled"));
-        return false;
-      }
+      setClaimSaveConfirmation({ file, username: activeClaim.username });
+      return false;
     }
     try {
       const result = await fs.writeFile(
@@ -1536,36 +1579,8 @@ function AuthenticatedApp({
         return false;
       }
       if (claimError.code === "TEAM_CLAIM_CONFLICT" && claimError.claim?.username) {
-        const confirmed = window.confirm(
-          t("team.claimConflictConfirm", {
-            username: claimError.claim.username,
-          })
-        );
-        if (!confirmed) {
-          showToast(t("team.claimConflictCancelled"));
-          return false;
-        }
-        try {
-          const result = await fs.writeFile(file.path, file.content, true, file.version);
-          setOpenFiles((prev) =>
-            prev.map((f) =>
-              f.path === activeFilePath
-                ? {
-                    ...f,
-                    modified: false,
-                    version: result.version,
-                    updatedAt: result.updatedAt,
-                    ...buildClearedRemoteState(),
-                  }
-                : f
-            )
-          );
-          showToast(t("app.fileSaved"));
-          return true;
-        } catch {
-          showToast(t("app.failedToSaveFile"));
-          return false;
-        }
+        setClaimSaveConfirmation({ file, username: claimError.claim.username });
+        return false;
       }
       showToast(t("app.failedToSaveFile"));
       return false;
@@ -1581,6 +1596,25 @@ function AuthenticatedApp({
     t,
     username,
   ]);
+
+  const forceSaveClaimedFile = useCallback(async () => {
+    const pending = claimSaveConfirmation;
+    if (!pending) return;
+    setClaimSaveBusy(true);
+    setClaimSaveError(null);
+    try {
+      const result = await fs.writeFile(pending.file.path, pending.file.content, true, pending.file.version);
+      setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? { ...file, modified: false, version: result.version, updatedAt: result.updatedAt, ...buildClearedRemoteState() } : file));
+      showToast(t("app.fileSaved"));
+      setClaimSaveConfirmation(null);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : t("app.failedToSaveFile");
+      setClaimSaveError(message);
+      showToast(message);
+    } finally {
+      setClaimSaveBusy(false);
+    }
+  }, [claimSaveConfirmation, fs, showToast, t]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -1886,6 +1920,10 @@ function AuthenticatedApp({
             content: activeFile.content,
             language: activeFile.language,
             selection: selectionInfo?.text,
+            dirty: activeFile.modified,
+            selectionRange: selectionInfo
+              ? { startLine: selectionInfo.startLine, endLine: selectionInfo.endLine }
+              : undefined,
           }
         : undefined;
       chat.sendMessage(message, context);
@@ -1902,6 +1940,10 @@ function AuthenticatedApp({
             content: activeFile.content,
             language: activeFile.language,
             selection: selectionInfo?.text,
+            dirty: activeFile.modified,
+            selectionRange: selectionInfo
+              ? { startLine: selectionInfo.startLine, endLine: selectionInfo.endLine }
+              : undefined,
           }
         : undefined;
       chat.sendSteering(message, context);
@@ -2022,6 +2064,47 @@ function AuthenticatedApp({
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
+
+  useEffect(() => {
+    if (!activeFile || readOnlyWorkspace || !activeFile.version) return;
+    if (!activeFile.modified) {
+      savedBufferContentRef.current[activeFile.path] = activeFile.content;
+      const registeredVersion = collaborationBufferVersionRef.current[activeFile.path];
+      if (registeredVersion !== undefined) {
+        team.closeBuffer(activeFile.path, registeredVersion);
+        delete collaborationBufferVersionRef.current[activeFile.path];
+      }
+      return;
+    }
+    const savedContent = savedBufferContentRef.current[activeFile.path];
+    if (savedContent === undefined) return;
+    const timer = window.setTimeout(() => {
+      const version = (collaborationBufferVersionRef.current[activeFile.path] || 0) + 1;
+      void Promise.all([sha256Text(activeFile.content), sha256Text(savedContent)]).then(([digest, savedDigest]) => {
+        if (team.registerBuffer({ path: activeFile.path, version, digest, savedDigest, baseDigest: savedDigest, revision: activeFile.version! })) {
+          collaborationBufferVersionRef.current[activeFile.path] = version;
+        }
+      }).catch((reason) => showToast(reason instanceof Error ? reason.message : t("collaboration.bufferFailed")));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [activeFile?.content, activeFile?.modified, activeFile?.path, activeFile?.version, readOnlyWorkspace, showToast, t, team.closeBuffer, team.registerBuffer]);
+
+  useEffect(() => {
+    if (!activeFile) return;
+    const timer = window.setTimeout(() => {
+      void chat.contextManifest.preview({
+        path: activeFile.path,
+        content: activeFile.content,
+        language: activeFile.language,
+        selection: selectionInfo?.text,
+        dirty: activeFile.modified,
+        selectionRange: selectionInfo
+          ? { startLine: selectionInfo.startLine, endLine: selectionInfo.endLine }
+          : undefined,
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [activeFile?.language, activeFile?.modified, activeFile?.path, chat.contextManifest.preview, selectionInfo?.endLine, selectionInfo?.startLine, selectionInfo?.text]);
   const toggleBreakpoint = useCallback((path: string, line: number) => {
     setBreakpointsByPath((previous) => {
       const current = previous[path] || [];
@@ -2174,6 +2257,14 @@ function AuthenticatedApp({
     activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
   const diffViewerFile =
     diffViewerPath ? openFiles.find((file) => file.path === diffViewerPath) || null : null;
+  const closeDiffViewer = useCallback(() => {
+    setDiffViewerPath(null);
+    setMergeSelections({});
+  }, []);
+  const diffDialogRef = useModalDialogFocus<HTMLDivElement>({
+    open: Boolean(diffViewerFile?.remoteContent !== undefined),
+    onClose: closeDiffViewer,
+  });
   const conflictSourceMessage = diffViewerFile ? getConflictSourceMessage(diffViewerFile) : null;
   const conflictHunks = useMemo(
     () =>
@@ -2349,6 +2440,9 @@ function AuthenticatedApp({
           token={token}
           currentUsername={username}
           isAdmin={isAdmin}
+          teamRole={team.activeTeam?.role || null}
+          readOnlyWorkspace={readOnlyWorkspace}
+          workspaceId={workspaceDir}
           visible={settingsVisible}
           editorFont={editorFont}
           editorFontOptions={editorFontOptions}
@@ -2359,7 +2453,7 @@ function AuthenticatedApp({
       </Suspense>
 
       {/* Main Layout */}
-      <div className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible ? " with-editor-assistant" : ""}`}>
+      <div ref={mainLayoutRef} className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible ? " with-editor-assistant" : ""}`}>
         {workspaceDrawerOpen && (
           <button
             type="button"
@@ -2368,7 +2462,7 @@ function AuthenticatedApp({
             onClick={closeWorkspaceDrawers}
           />
         )}
-        <nav className="activity-rail" aria-label={t("app.workspace")}>
+        <nav className="activity-rail" data-compact-modal-background inert={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-hidden={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-label={t("app.workspace")}>
           <button
             type="button"
             className="activity-rail-brand"
@@ -2641,6 +2735,7 @@ function AuthenticatedApp({
                     className={runDetailsVisible ? "active" : ""}
                     onClick={() => {
                       setEditorAssistantVisible(false);
+                      setRunDetailsTab("changes");
                       setRunDetailsVisible(true);
                     }}
                   >
@@ -2812,6 +2907,7 @@ function AuthenticatedApp({
                       content={activeFile.content}
                       language={activeFile.language}
                       path={activeFile.path}
+                      collaboration={team.collaboration}
                       theme={theme}
                       fontFamily={editorFont}
                       readOnly={readOnlyWorkspace}
@@ -2856,6 +2952,7 @@ function AuthenticatedApp({
                       content={compareFile.content}
                       language={compareFile.language}
                       path={compareFile.path}
+                      collaboration={team.collaboration}
                       theme={theme}
                       fontFamily={editorFont}
                       readOnly
@@ -2934,6 +3031,7 @@ function AuthenticatedApp({
                           content={activeFile.content}
                           language={activeFile.language}
                           path={activeFile.path}
+                          collaboration={team.collaboration}
                           theme={theme}
                           fontFamily={editorFont}
                           readOnly={readOnlyWorkspace}
@@ -2985,6 +3083,7 @@ function AuthenticatedApp({
                   content={activeFile.content}
                   language={activeFile.language}
                   path={activeFile.path}
+                  collaboration={team.collaboration}
                   theme={theme}
                   fontFamily={editorFont}
                   readOnly={readOnlyWorkspace}
@@ -3067,6 +3166,7 @@ function AuthenticatedApp({
               loading={team.loading}
               error={team.error}
               activeFilePath={activeFilePath}
+              collaboration={team.collaboration}
               drawerMode={compactWorkspace}
               onClose={() => setTeamVisible(false)}
               onRefresh={team.refresh}
@@ -3124,10 +3224,6 @@ function AuthenticatedApp({
               }}
               onTransferOwnership={async (memberUsername) => {
                 if (!team.activeTeam) return;
-                const confirmed = window.confirm(
-                  t("team.transferOwnerConfirm", { username: memberUsername })
-                );
-                if (!confirmed) return;
                 try {
                   await team.transferOwnership(team.activeTeam.id, memberUsername);
                   showToast(t("team.ownerTransferredToast", { username: memberUsername }));
@@ -3138,10 +3234,6 @@ function AuthenticatedApp({
               }}
               onRemoveMember={async (memberUsername) => {
                 if (!team.activeTeam) return;
-                const confirmed = window.confirm(
-                  t("team.removeMemberConfirm", { username: memberUsername })
-                );
-                if (!confirmed) return;
                 try {
                   await team.removeMember(team.activeTeam.id, memberUsername);
                   showToast(t("team.memberRemovedToast", { username: memberUsername }));
@@ -3153,10 +3245,6 @@ function AuthenticatedApp({
               onLeaveTeam={async () => {
                 if (!team.activeTeam) return;
                 const leavingTeamName = team.activeTeam.name;
-                const confirmed = window.confirm(
-                  t("team.leaveTeamConfirm", { name: leavingTeamName })
-                );
-                if (!confirmed) return;
                 try {
                   await team.leaveTeam(team.activeTeam.id);
                   showToast(t("team.leftTeamToast", { name: leavingTeamName }));
@@ -3174,6 +3262,10 @@ function AuthenticatedApp({
                     : t("team.releasedToast", { path })
                 );
               }}
+              onAddComment={team.addCollaborationComment}
+              onCreateReview={team.createCollaborationReview}
+              onCreateMergePreview={team.createMergePreview}
+              onDecideMerge={team.decideMerge}
               />
             </Suspense>
           </div>
@@ -3185,10 +3277,21 @@ function AuthenticatedApp({
           token={token}
           workspaceDir={workspaceDir}
           theme={theme}
+          drawerMode={compactWorkspace}
+          readOnly={readOnlyWorkspace}
+          conversationId={chat.currentConversationId}
+          runId={chat.runState?.runId || null}
           requestedDiffPath={gitDiffRequest?.path}
           requestedDiffId={gitDiffRequest?.id}
           onOpenFile={openFile}
           onAskReview={handleGitReview}
+          onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
+          onOpenFollowUpRun={async (followUpRunId) => {
+            await chat.loadRun(followUpRunId);
+            setRunDetailsTab("delivery");
+            setRunDetailsVisible(true);
+            if (compactWorkspace) setGitVisible(false);
+          }}
           onClose={() => setGitVisible(false)}
         />
         <AgentBoard
@@ -3202,6 +3305,7 @@ function AuthenticatedApp({
           key={`checkpoints:${workspaceDir}`}
           visible={checkpointsVisible}
           token={token}
+          workspaceDir={workspaceDir}
           conversationId={chat.currentConversationId}
           runId={chat.runState?.runId || null}
           readOnly={readOnlyWorkspace}
@@ -3279,11 +3383,16 @@ function AuthenticatedApp({
           onAgentModeChange={chat.setAgentMode}
           currentRunSummary={chat.currentRunSummary}
           contextState={chat.contextState}
+          contextManifest={chat.contextManifest}
+          contextReadOnly={readOnlyWorkspace}
           mcpState={chat.mcpState}
           knowledgeState={chat.knowledgeState}
           historyRequest={chatHistoryRequest}
           newConversationRequest={newConversationRequest}
           onOpenSettings={() => setSettingsVisible(true)}
+          collaboration={team.collaboration}
+          activeFilePath={activeFilePath}
+          onOpenCollaboration={() => setTeamVisible(true)}
           onOpenFile={openFile}
           onOpenDiff={handleOpenGitDiff}
           onOpenReviewFinding={(finding) => void handleNavigateToLocation(finding.path, {
@@ -3321,11 +3430,12 @@ function AuthenticatedApp({
           runHistoryError={chat.runHistoryError}
           onLoadRun={chat.loadRun}
           onResumeRun={chat.resumeConversation}
-          onRevertRun={async (runId) => {
+          onRevertRun={async (runId, options) => {
             try {
-              await chat.revertRun(runId);
+              const result = await chat.revertRun(runId, options) as { mode?: string };
               await handleWorkspaceRestored();
-              showToast(t("chat.runReverted"));
+              showToast(result.mode === "legacy-full-restore" ? t("chat.runRevertedLegacy") : t("chat.runReverted"));
+              return result;
             } catch (error) {
               showToast(error instanceof Error ? error.message : t("chat.revertRunFailed"));
               throw error;
@@ -3336,14 +3446,20 @@ function AuthenticatedApp({
           pendingApprovals={chat.pendingApprovals}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}
+          onPlanAmendmentDecision={chat.decidePlanAmendment}
           style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
         />
         <RunDetailsPanel
+          token={token}
+          workspaceDir={workspaceDir}
           visible={runDetailsVisible}
           summary={chat.currentRunSummary}
           runState={chat.runState}
           errorCount={problemCounts.errors}
           warningCount={problemCounts.warnings}
+          contextManifest={chat.contextManifest}
+          activeTab={runDetailsTab}
+          onTabChange={setRunDetailsTab}
           onOpenFile={openFile}
           onOpenDiff={handleOpenGitDiff}
           onClose={() => {
@@ -3354,6 +3470,7 @@ function AuthenticatedApp({
         <EditorAssistantPanel
           visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
           activeFilePath={activeFilePath}
+          activeFileDirty={Boolean(activeFile?.modified)}
           selectionInfo={selectionInfo}
           messages={chat.messages}
           connected={chat.connected}
@@ -3362,6 +3479,9 @@ function AuthenticatedApp({
           runtimeOptions={chat.runtimeOptions}
           selectedModelName={chat.selectedModelName}
           runState={chat.runState}
+          currentRunSummary={chat.currentRunSummary}
+          contextManifest={chat.contextManifest}
+          contextReadOnly={readOnlyWorkspace}
           pendingApprovals={chat.pendingApprovals}
           onAgentModeChange={chat.setAgentMode}
           onModelNameChange={chat.setSelectedModelName}
@@ -3372,6 +3492,7 @@ function AuthenticatedApp({
           onNewConversation={chat.clearMessages}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}
+          onPlanAmendmentDecision={chat.decidePlanAmendment}
           onClose={() => setEditorAssistantVisible(false)}
         />
       </div>
@@ -3403,12 +3524,11 @@ function AuthenticatedApp({
       {diffViewerFile && diffViewerFile.remoteContent !== undefined && (
           <div
             className="settings-modal-overlay"
-          onClick={() => {
-            setDiffViewerPath(null);
-            setMergeSelections({});
-          }}
+          onClick={closeDiffViewer}
         >
           <div
+            ref={diffDialogRef}
+            tabIndex={-1}
             className="settings-modal diff-modal panel-shell"
             role="dialog"
             aria-modal="true"
@@ -3423,10 +3543,7 @@ function AuthenticatedApp({
                 className="settings-modal-close"
                 aria-label={t("common.close")}
                 title={t("common.close")}
-                onClick={() => {
-                  setDiffViewerPath(null);
-                  setMergeSelections({});
-                }}
+                onClick={closeDiffViewer}
               >
                 ×
               </button>
@@ -3572,6 +3689,14 @@ function AuthenticatedApp({
           </div>
         </div>
       )}
+
+      <ActionConfirmDialog
+        intent={claimSaveConfirmation ? { id: `claim-save:${claimSaveConfirmation.file.path}:${claimSaveConfirmation.username}`, title: t("team.confirmAction"), description: t("team.claimConflictConfirm", { username: claimSaveConfirmation.username }), confirmLabel: t("common.confirm"), tone: "danger" } : null}
+        busy={claimSaveBusy}
+        error={claimSaveError}
+        onClose={() => { setClaimSaveConfirmation(null); setClaimSaveError(null); showToast(t("team.claimConflictCancelled")); }}
+        onConfirm={() => forceSaveClaimedFile()}
+      />
 
       <CommandPalette
         visible={commandPaletteVisible}

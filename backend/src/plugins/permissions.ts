@@ -5,6 +5,12 @@ export const PLUGIN_PERMISSIONS = [
   "editor.preview",
   "editor.modify",
   "command.register",
+  "hook.command.execute",
+  "hook.http.request",
+  "hook.mcp.call",
+  "agent.profile.use",
+  "memory.read",
+  "memory.write",
   "ui.messages",
 ] as const;
 
@@ -12,6 +18,9 @@ export const PLUGIN_SCOPES = [
   "chat",
   "editor",
   "command",
+  "hook",
+  "agent",
+  "memory",
   "ui",
 ] as const;
 
@@ -44,6 +53,10 @@ export function derivePluginScopes(
       scopes.add("command");
       continue;
     }
+
+    if (permission.startsWith("hook.")) { scopes.add("hook"); continue; }
+    if (permission.startsWith("agent.")) { scopes.add("agent"); continue; }
+    if (permission.startsWith("memory.")) { scopes.add("memory"); continue; }
 
     if (permission.startsWith("ui.")) {
       scopes.add("ui");

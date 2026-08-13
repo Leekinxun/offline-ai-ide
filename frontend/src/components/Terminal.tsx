@@ -5,6 +5,7 @@ import { RotateCw, TerminalSquare, Trash2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { useI18n } from "../i18n";
 import { PanelHeader, PanelState } from "./PanelChrome";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface TerminalProps {
   visible: boolean;
@@ -30,7 +31,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useModalDialogFocus<HTMLDivElement>({ open: visible && drawerMode, onClose: onClose || (() => undefined) });
   const initialized = useRef(false);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -170,13 +171,6 @@ export const Terminal: React.FC<TerminalProps> = ({
       aria-labelledby="terminal-panel-title"
       tabIndex={-1}
       data-workspace-drawer="terminal"
-      onKeyDownCapture={(event) => {
-        if (drawerMode && event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          onClose?.();
-        }
-      }}
     >
       <PanelHeader
         titleId="terminal-panel-title"

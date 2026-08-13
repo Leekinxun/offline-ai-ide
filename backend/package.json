@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "test": "node --import tsx --test src/agent/*.test.ts src/auth/*.test.ts src/chat/*.test.ts src/debug/*.test.ts src/diagnostics/*.test.ts src/files/*.test.ts src/plugins/*.test.ts src/run/*.test.ts",
+    "test": "node --import tsx --test src/agent/*.test.ts src/auth/*.test.ts src/chat/*.test.ts src/debug/*.test.ts src/diagnostics/*.test.ts src/files/*.test.ts src/indexing/*.test.ts src/persistence/*.test.ts src/plugins/*.test.ts src/run/*.test.ts src/security/*.test.ts",
     "benchmark": "tsx src/agent/benchmark.ts",
+    "eval:retrieval": "tsx src/indexing/retrievalEvaluation.ts --assert",
+    "benchmark:retrieval": "tsx src/indexing/retrievalBenchmark.ts --profile smoke --assert",
+    "benchmark:retrieval:reference": "tsx src/indexing/retrievalBenchmark.ts --profile reference --assert",
     "start": "node dist/index.js"
   },
   "dependencies": {

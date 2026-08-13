@@ -15,7 +15,10 @@ function getManager(): TeamManager {
   return teamManagerInstance;
 }
 
-export function getTeamManager(session: UserSession): TeamManager {
+/** Test-only dependency seam; production callers never replace the singleton. */
+export function setTeamManagerForTests(manager: TeamManager | null): void { teamManagerInstance = manager; ACTIVE_TEAM_BY_TOKEN.clear(); }
+
+export function getTeamManager(_session: UserSession): TeamManager {
   return getManager();
 }
 

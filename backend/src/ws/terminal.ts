@@ -4,6 +4,47 @@ import { spawn, type ChildProcess } from "child_process";
 import type { UserSession } from "../auth/sessionManager.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 
+const INHERITED_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "HOME"] as const;
+
+/**
+ * Terminal sessions are an interactive user-controlled workspace feature, not
+ * an AI sandbox.  Keep the launcher environment deliberately small so host
+ * credentials and runtime injection knobs do not cross this boundary.
+ */
+export function terminalEnvironment(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_ENV) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+  env.PATH ||= "/usr/bin:/bin";
+  env.TERM = "xterm-256color";
+  env.COLORTERM = "truecolor";
+  return env;
+}
+
+function terminateProcessGroup(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    if (process.platform !== "win32") process.kill(-pid, "SIGTERM");
+    else process.kill(pid, "SIGTERM");
+  } catch { /* process already exited or does not own a group */ }
+  const forceKill = setTimeout(() => {
+    try {
+      if (process.platform !== "win32") process.kill(-pid, "SIGKILL");
+      else process.kill(pid, "SIGKILL");
+    } catch { /* process already exited */ }
+  }, 1_000);
+  forceKill.unref?.();
+}
+
+function workspaceRoot(workspaceDir: string): string {
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const root = fs.realpathSync.native(workspaceDir);
+  if (!fs.statSync(root).isDirectory()) throw new Error("Terminal workspace is not a directory");
+  return root;
+}
+
 // Try to load node-pty; it may fail on some platforms (e.g. macOS + Node 22)
 let pty: typeof import("node-pty") | null = null;
 try {
@@ -28,11 +69,7 @@ function spawnWithPty(ws: WebSocket, workspaceDir: string): boolean {
       cols: 80,
       rows: 24,
       cwd: workspaceDir,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
-      } as Record<string, string>,
+      env: terminalEnvironment(),
     });
 
     shell.onData((data) => {
@@ -51,7 +88,11 @@ function spawnWithPty(ws: WebSocket, workspaceDir: string): boolean {
       } catch {}
     });
 
-    ws.on("close", () => { shell.kill(); });
+    ws.on("close", () => {
+      // node-pty's child is normally the session/process-group leader.
+      terminateProcessGroup(shell.pid);
+      try { shell.kill(); } catch { /* already exited */ }
+    });
     return true;
   } catch (e: any) {
     console.warn("node-pty spawn failed, falling back to child_process:", e.message);
@@ -81,6 +122,12 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     `    os.execvp(${JSON.stringify(shellPath)}, [${JSON.stringify(shellPath)}, "-i"])`,
     "else:",
     "    os.close(slave)",
+    "    def terminate(_signal, _frame):",
+    "        try: os.killpg(pid, signal.SIGTERM)",
+    "        except OSError: pass",
+    "        raise SystemExit",
+    "    signal.signal(signal.SIGTERM, terminate)",
+    "    signal.signal(signal.SIGHUP, terminate)",
     "    try:",
     "        while True:",
     "            r, _, _ = select.select([sys.stdin, master], [], [])",
@@ -101,12 +148,8 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
 
   const proc: ChildProcess = spawn("python3", ["-u", "-c", pyScript], {
     cwd: workspaceDir,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-      PYTHONUNBUFFERED: "1",
-    },
+    env: { ...terminalEnvironment(), PYTHONUNBUFFERED: "1" },
+    detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -130,7 +173,7 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     } catch {}
   });
 
-  ws.on("close", () => { proc.kill(); });
+  ws.on("close", () => { terminateProcessGroup(proc.pid); });
 }
 
 export function handleTerminalWs(ws: WebSocket, session: UserSession): void {
@@ -143,11 +186,11 @@ export function handleTerminalWs(ws: WebSocket, session: UserSession): void {
       return;
     }
 
-    fs.mkdirSync(session.workspaceDir, { recursive: true });
+    const workspaceDir = workspaceRoot(session.workspaceDir);
 
     // Try node-pty first (full PTY support), fall back to child_process
-    if (!spawnWithPty(ws, session.workspaceDir)) {
-      spawnWithChildProcess(ws, session.workspaceDir);
+    if (!spawnWithPty(ws, workspaceDir)) {
+      spawnWithChildProcess(ws, workspaceDir);
     }
   } catch (e: any) {
     console.error("Terminal spawn failed:", e.message);

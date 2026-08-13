@@ -12,7 +12,10 @@ export type ProviderErrorCode =
   | "timeout"
   | "invalid_request"
   | "network"
-  | "response_parse";
+  | "response_parse"
+  | "capability_mismatch"
+  | "fallback_contract_mismatch"
+  | "budget_exhausted";
 
 export class ProviderRequestError extends Error {
   readonly code: ProviderErrorCode;
@@ -20,6 +23,8 @@ export class ProviderRequestError extends Error {
   readonly body?: string;
   readonly attempts: number;
   readonly retryable: boolean;
+  readonly recoverable: boolean;
+  readonly state?: "retrying" | "fallback" | "overflow" | "cancelled" | "failed" | "budget_exhausted";
 
   constructor(options: {
     code: ProviderErrorCode;
@@ -28,6 +33,8 @@ export class ProviderRequestError extends Error {
     body?: string;
     attempts?: number;
     retryable?: boolean;
+    recoverable?: boolean;
+    state?: ProviderRequestError["state"];
     cause?: unknown;
   }) {
     super(options.message, { cause: options.cause });
@@ -37,6 +44,8 @@ export class ProviderRequestError extends Error {
     this.body = options.body;
     this.attempts = options.attempts || 1;
     this.retryable = options.retryable || false;
+    this.recoverable = options.recoverable ?? false;
+    this.state = options.state;
   }
 }
 

@@ -3,6 +3,7 @@ import { AlertCircle, AlertTriangle, Info, Pause, Play, RefreshCw, X } from "luc
 import type { EditorProblem } from "../hooks/useEditorProblems";
 import { useDiagnostics, type WorkspaceDiagnostic } from "../hooks/useDiagnostics";
 import { useI18n } from "../i18n";
+import { TaskStateStrip } from "./TaskStateStrip";
 
 type Problem = WorkspaceDiagnostic & { id: string };
 
@@ -52,7 +53,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({ visible, token, ed
   if (!visible) return null;
   const counts = (severity: Problem["severity"]) => allProblems.filter((item) => item.severity === severity).length;
 
-  return <aside className="problems-panel panel-shell workspace-drawer" aria-label={t("problems.title")} tabIndex={-1} data-workspace-drawer="problems">
+  return <aside className="problems-panel panel-shell workspace-drawer" role="complementary" aria-label={t("problems.title")} tabIndex={-1} data-workspace-drawer="problems" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}>
     <div className="workbench-panel-header">
       <div className="workbench-panel-title"><AlertCircle size={15} /><strong>{t("problems.title")}</strong></div>
       <div className="workbench-panel-actions">
@@ -61,6 +62,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({ visible, token, ed
         <button className="sidebar-action-btn" type="button" onClick={onClose} title={t("problems.close")} aria-label={t("problems.close")}><X size={14} /></button>
       </div>
     </div>
+    <TaskStateStrip requested={t("problems.validationRequest")} running={t(`problems.session.${diagnostics.session.status}`)} runningTone={diagnostics.running ? "running" : diagnostics.error ? "danger" : "neutral"} evidence={allProblems.length ? t("taskState.evidenceCount", { count: allProblems.length }) : t("taskState.noEvidence")} evidenceTone={counts("error") ? "danger" : allProblems.length ? "warning" : "success"} action={t(diagnostics.session.status === "stopped" ? "problems.startWatching" : "problems.stopWatching")} actionTone={diagnostics.session.status === "stopped" ? "neutral" : "warning"} onAction={() => void (diagnostics.session.status === "stopped" ? diagnostics.startWatching() : diagnostics.stopWatching())} compact />
     <div className="problems-toolbar" role="group" aria-label={t("problems.filter")}> 
       {(["all", "error", "warning", "info"] as const).map((value) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{t(`problems.${value}`)}{value !== "all" ? ` ${counts(value)}` : ""}</button>)}
     </div>

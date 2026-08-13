@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   RotateCcw,
@@ -12,11 +12,17 @@ import { usePlugins } from "../hooks/usePlugins";
 import { useI18n } from "../i18n";
 import { runRegisteredPluginCommand } from "../plugins/runtime";
 import type { PluginManagerEntry } from "../hooks/usePlugins";
+import { useExtensionPolicy } from "../hooks/useExtensionPolicy";
+import type { PermissionExplanation, RegisteredExtensionPolicyPlugin, TeamRole } from "../types";
+
+const permissionExplanationKey = (permission: string, hookId?: string) => hookId ? `hook:${hookId}:${permission}` : `plugin:${permission}`;
 
 interface PluginManagerPanelProps {
   visible: boolean;
   token: string;
   isAdmin: boolean;
+  teamRole?: TeamRole | null;
+  readOnly?: boolean;
   onShowToast: (message: string) => void;
 }
 
@@ -46,6 +52,8 @@ interface PluginRowProps {
   onRestoreDefault: (plugin: PluginManagerEntry) => void;
   onRunCommand: (commandId: string, title: string) => void;
   runningCommandId: string | null;
+  explanations: Record<string, PermissionExplanation>;
+  serverBinding?: RegisteredExtensionPolicyPlugin;
 }
 
 function PluginRow({
@@ -56,6 +64,8 @@ function PluginRow({
   onRestoreDefault,
   onRunCommand,
   runningCommandId,
+  explanations,
+  serverBinding,
 }: PluginRowProps) {
   const { t } = useI18n();
   const showReloadHint = plugin.status === "detected" || plugin.requiresReload;
@@ -152,6 +162,15 @@ function PluginRow({
         {plugin.manifest.author && <span>{t("plugin.author")}: {plugin.manifest.author}</span>}
       </div>
 
+      {plugin.manifest.permissions.length > 0 && <div className="plugin-effective-permissions" aria-label={t("plugin.effectivePermissions")}>
+        {plugin.manifest.permissions.map((permission) => {
+          const explanation = explanations[permissionExplanationKey(permission)];
+          return <details key={permission}><summary><span>{permission}</span><span className={`settings-status-badge ${explanation?.allowed ? "enabled" : "disabled-state"}`}>{explanation ? (explanation.allowed ? t("plugin.allowed") : t("plugin.denied")) : t(serverBinding ? "common.loading" : "plugin.serverBindingUnavailable")}</span></summary>{explanation && <div className="plugin-permission-explain">{explanation.layers.map((layer) => <div key={layer.id}><strong>{layer.id}</strong><span>{layer.allowed ? t("plugin.allowed") : t("plugin.denied")} · {layer.reason}</span></div>)}<code>{JSON.stringify(explanation.effectiveSandbox)}</code></div>}</details>;
+        })}
+      </div>}
+
+      {(serverBinding?.hooks.length || plugin.manifest.hooks?.length) ? <div className="plugin-hook-list"><strong>{t("plugin.hooks")}</strong>{(serverBinding?.hooks || plugin.manifest.hooks || []).map((hook) => <div className="plugin-hook-row" key={hook.id}><span>{hook.id} · {hook.event}</span>{"transport" in hook && hook.transport && <span>{t("plugin.transport")}: {hook.transport.kind}</span>}<span className={`settings-status-badge ${hook.failureMode === "closed" || hook.blocksCompletion ? "danger" : "neutral"}`}>{hook.failureMode === "closed" ? t("plugin.failClosed") : t("plugin.failOpen")}{hook.blocksCompletion ? ` · ${t("plugin.blocksCompletion")}` : ""}</span>{serverBinding && plugin.manifest.permissions.map((permission) => { const explanation = explanations[permissionExplanationKey(permission, hook.id)]; return explanation ? <details className="plugin-hook-policy" key={`${hook.id}:${permission}`}><summary>{permission} · {explanation.allowed ? t("plugin.allowed") : t("plugin.denied")}</summary><div className="plugin-permission-explain">{explanation.layers.map((layer) => <div key={layer.id}><strong>{layer.id}</strong><span>{layer.allowed ? t("plugin.allowed") : t("plugin.denied")} · {layer.reason}</span></div>)}<code>{JSON.stringify(explanation.effectiveSandbox)}</code></div></details> : null; })}</div>)}</div> : null}
+
       {plugin.commands.length > 0 && (
         <div className="settings-plugin-commands">
           <div className="settings-plugin-commands-title">
@@ -200,10 +219,15 @@ export const PluginManagerPanel: React.FC<PluginManagerPanelProps> = ({
   visible,
   token,
   isAdmin,
+  teamRole = null,
+  readOnly = false,
   onShowToast,
 }) => {
   const { t } = useI18n();
   const [runningCommandId, setRunningCommandId] = useState<string | null>(null);
+  const [permissionExplanations, setPermissionExplanations] = useState<Record<string, Record<string, PermissionExplanation>>>({});
+  const [policyDraft, setPolicyDraft] = useState({ allow: "", deny: "", readPaths: "", writePaths: "", networkOrigins: "", secretEnv: "" });
+  const [policySaving, setPolicySaving] = useState(false);
   const {
     plugins,
     pluginsDir,
@@ -215,6 +239,29 @@ export const PluginManagerPanel: React.FC<PluginManagerPanelProps> = ({
     clearPluginOverride,
     summary,
   } = usePlugins(visible, token, isAdmin);
+  const extensionPolicy = useExtensionPolicy(token, visible);
+  const canManageWorkspacePolicy = isAdmin || teamRole === null || teamRole === "owner" || teamRole === "admin";
+
+  useEffect(() => {
+    const workspace = extensionPolicy.policy?.workspace;
+    if (!workspace) return;
+    setPolicyDraft({ allow: workspace.permissions.allow.join("\n"), deny: (workspace.permissions.deny || []).join("\n"), readPaths: (workspace.sandbox.readPaths || []).join("\n"), writePaths: (workspace.sandbox.writePaths || []).join("\n"), networkOrigins: (workspace.sandbox.networkOrigins || []).join("\n"), secretEnv: (workspace.sandbox.secretEnv || []).join("\n") });
+  }, [extensionPolicy.policy?.workspace]);
+
+  useEffect(() => {
+    if (!extensionPolicy.policy || !plugins.length) return;
+    let cancelled = false;
+    const registered = new Map(extensionPolicy.policy.plugins.map((plugin) => [plugin.id, plugin]));
+    const requests = plugins.flatMap((plugin) => {
+      const binding = registered.get(plugin.manifest.id);
+      if (!binding) return [];
+      const base = plugin.manifest.permissions.map(async (permission) => ({ pluginId: binding.id, key: permissionExplanationKey(permission), explanation: await extensionPolicy.explain(permission, { pluginId: binding.id }) }));
+      const hooks = binding.hooks.flatMap((hook) => plugin.manifest.permissions.map(async (permission) => ({ pluginId: binding.id, key: permissionExplanationKey(permission, hook.id), explanation: await extensionPolicy.explain(permission, { pluginId: binding.id, ...(hook.profileId ? { profileId: hook.profileId } : {}), skillIds: hook.skillIds, hookId: hook.id }) })));
+      return [...base, ...hooks];
+    });
+    void Promise.all(requests).then((items) => { if (!cancelled) setPermissionExplanations(items.reduce<Record<string, Record<string, PermissionExplanation>>>((result, item) => ({ ...result, [item.pluginId]: { ...(result[item.pluginId] || {}), [item.key]: item.explanation } }), {})); }).catch((reason) => { if (!cancelled) onShowToast(reason instanceof Error ? reason.message : t("plugin.policyFailed")); });
+    return () => { cancelled = true; };
+  }, [extensionPolicy.explain, extensionPolicy.policy, onShowToast, plugins, t]);
 
   const builtinPlugins = useMemo(
     () => plugins.filter((plugin) => plugin.manifest.kind === "builtin"),
@@ -333,6 +380,20 @@ export const PluginManagerPanel: React.FC<PluginManagerPanelProps> = ({
         </span>
       </div>
 
+      <div className="settings-plugin-policy-card">
+        <div className="settings-plugin-section-title">{t("plugin.effectivePolicy")}</div>
+        {extensionPolicy.error && <div className="settings-error-banner" role="alert">{extensionPolicy.error}</div>}
+        {extensionPolicy.policy && <>
+          <div className="settings-plugin-meta"><span>{t("plugin.adminPolicyVersion")}: {extensionPolicy.policy.admin.version}</span><span>{t("plugin.workspacePolicyVersion")}: {extensionPolicy.policy.workspace.version}</span><span>{t("plugin.adminPolicyBinding")}: {extensionPolicy.policy.workspace.adminPolicyVersion}</span></div>
+          {canManageWorkspacePolicy && !readOnly && <form className="plugin-policy-form" onSubmit={(event) => { event.preventDefault(); const lines = (value: string) => value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); setPolicySaving(true); void extensionPolicy.updateWorkspace({ id: "workspace", allow: lines(policyDraft.allow), deny: lines(policyDraft.deny) }, { readPaths: lines(policyDraft.readPaths), writePaths: lines(policyDraft.writePaths), networkOrigins: lines(policyDraft.networkOrigins), secretEnv: lines(policyDraft.secretEnv) }).then(() => onShowToast(t("plugin.policySaved"))).catch((reason) => onShowToast(reason instanceof Error ? reason.message : t("plugin.policyFailed"))).finally(() => setPolicySaving(false)); }}>
+            {(["allow", "deny", "readPaths", "writePaths", "networkOrigins", "secretEnv"] as const).map((field) => <label key={field}>{t(`plugin.policy.${field}`)}<textarea rows={2} value={policyDraft[field]} onChange={(event) => setPolicyDraft((current) => ({ ...current, [field]: event.target.value }))} /></label>)}
+            <button className="settings-inline-btn" type="submit" disabled={policySaving}>{policySaving ? t("common.loading") : t("plugin.saveWorkspacePolicy")}</button>
+          </form>}
+          {!canManageWorkspacePolicy && <div className="settings-plugin-message">{t("plugin.workspacePolicyOwnerOnly")}</div>}
+          {canManageWorkspacePolicy && readOnly && <div className="settings-plugin-message">{t("plugin.readOnlyPolicy")}</div>}
+        </>}
+      </div>
+
       {error && <div className="settings-error-banner" style={{ margin: 0 }}>{error}</div>}
 
       {plugins.length === 0 && !loading ? (
@@ -357,6 +418,8 @@ export const PluginManagerPanel: React.FC<PluginManagerPanelProps> = ({
                     onRestoreDefault={handleRestoreDefault}
                     onRunCommand={handleRunCommand}
                     runningCommandId={runningCommandId}
+                    explanations={permissionExplanations[plugin.manifest.id] || {}}
+                    serverBinding={extensionPolicy.policy?.plugins.find((candidate) => candidate.id === plugin.manifest.id)}
                   />
                 ))}
               </div>
@@ -383,6 +446,8 @@ export const PluginManagerPanel: React.FC<PluginManagerPanelProps> = ({
                     onRestoreDefault={handleRestoreDefault}
                     onRunCommand={handleRunCommand}
                     runningCommandId={runningCommandId}
+                    explanations={permissionExplanations[plugin.manifest.id] || {}}
+                    serverBinding={extensionPolicy.policy?.plugins.find((candidate) => candidate.id === plugin.manifest.id)}
                   />
                 ))}
               </div>

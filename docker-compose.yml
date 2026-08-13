@@ -9,9 +9,24 @@ services:
     ports:
       - "9798:3000"
     volumes:
-      - ./workspace:/workspace
-      - ./plugins:/app/plugins
-      - ./users.json:/app/users.json
+      # These are the only persistent writable paths. On Linux, make a bind
+      # mounted workspace/plugins directory writable by UID/GID 10001.
+      - ./workspace:/workspace:rw
+      - ./plugins:/app/plugins:rw
+      - crewforge-config:/app/config:rw
+    user: "${CROWNFORGE_UID:-10001}:${CROWNFORGE_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /run:rw,nosuid,size=16m,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: "2.0"
+    init: true
     environment:
       # LLM API (OpenAI-compatible: vLLM / OpenAI / DeepSeek / etc.)
       - VLLM_API_URL=http://host.docker.internal:8000/v1
@@ -31,3 +46,12 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  crewforge-config:

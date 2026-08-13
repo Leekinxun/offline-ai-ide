@@ -184,7 +184,7 @@ function normalizeLocaleMessages(messages: LocaleMessageDictionary): LocaleMessa
 }
 
 function registerLocaleBundle(
-  manifest: RuntimePluginManifest,
+  _manifest: RuntimePluginManifest,
   bundle: LocaleBundle
 ): void {
   const locale = bundle.locale.trim();

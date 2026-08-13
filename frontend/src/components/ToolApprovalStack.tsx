@@ -1,4 +1,4 @@
-import React from "react";
+import { forwardRef } from "react";
 import { ShieldCheck } from "lucide-react";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "../types";
 import { useI18n } from "../i18n";
@@ -11,12 +11,12 @@ interface ToolApprovalStackProps {
   className?: string;
 }
 
-export const ToolApprovalStack: React.FC<ToolApprovalStackProps> = ({
+export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>(({
   requests,
   onRespond,
   onApproveConversation,
   className,
-}) => {
+}, ref) => {
   const { t } = useI18n();
   if (requests.length === 0) return null;
 
@@ -25,6 +25,9 @@ export const ToolApprovalStack: React.FC<ToolApprovalStackProps> = ({
 
   return (
     <section
+      ref={ref}
+      id="pending-tool-approvals"
+      tabIndex={-1}
       className={`tool-approval-stack${className ? ` ${className}` : ""}`}
       aria-label={pendingLabel}
     >
@@ -45,4 +48,5 @@ export const ToolApprovalStack: React.FC<ToolApprovalStackProps> = ({
       ))}
     </section>
   );
-};
+});
+ToolApprovalStack.displayName = "ToolApprovalStack";

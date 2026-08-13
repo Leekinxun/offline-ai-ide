@@ -1,0 +1,16 @@
+.task-state-strip { min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--line-subtle, var(--border-light)); background: var(--surface-quiet, var(--bg-secondary)); }
+.task-state-strip dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.task-state-cell { min-width: 0; padding: 6px 7px; border: 1px solid var(--line-subtle, var(--border-light)); border-radius: 7px; background: var(--surface-panel-strong, var(--bg-primary)); }
+.task-state-cell dt { margin-bottom: 3px; color: var(--ink-muted, var(--text-tertiary)); font-size: 9px; font-weight: 700; }
+.task-state-cell dd { min-width: 0; margin: 0; color: var(--ink, var(--text-primary)); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.task-state-cell.tone-running { border-color: color-mix(in srgb, var(--accent-forge, var(--accent)) 38%, var(--line-subtle, var(--border-light))); }
+.task-state-cell.tone-success { border-color: color-mix(in srgb, var(--success) 36%, var(--line-subtle, var(--border-light))); }
+.task-state-cell.tone-warning { border-color: color-mix(in srgb, var(--warning) 38%, var(--line-subtle, var(--border-light))); }
+.task-state-cell.tone-danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--line-subtle, var(--border-light))); }
+.task-state-action button { width: 100%; min-height: 40px; padding: 5px 7px; border: 1px solid var(--line-subtle, var(--border-light)); border-radius: 6px; background: var(--action, var(--accent)); color: var(--action-contrast, white); font: inherit; cursor: pointer; }
+.task-state-action button:disabled { cursor: not-allowed; opacity: .55; }
+.task-state-action small { display: block; margin-top: 4px; color: var(--ink-muted, var(--text-tertiary)); }
+.task-state-strip.compact { padding-block: 6px; }
+@media (max-width: 1024px) { .task-state-strip dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 780px) { .task-state-strip { padding: 7px 8px; } .task-state-strip dl { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .task-state-action button { transition: none !important; } }

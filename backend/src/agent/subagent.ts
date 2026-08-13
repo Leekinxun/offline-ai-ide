@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 import { safePath } from "../utils/safePath.js";
+import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "./permissionService.js";
 import { runWorkspaceCommand } from "./shell.js";
 import { processModelTurn } from "./modelProcessor.js";
+import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./providerRouting.js";
 import { AgentRunRecorder, createRunId } from "../chat/runHistory.js";
 import {
   estimateUsageCostUsd,
@@ -20,6 +22,9 @@ import { runAgentHooks } from "./agentHooks.js";
 import { requireModelTurnAction } from "./finishReason.js";
 import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
+import { createManagedWorktree, updateManagedWorktreeMetadata } from "../chat/worktrees.js";
+import { captureChangeSet } from "../chat/changeSets.js";
+import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps, recordKnownFileMutation } from "../files/mutationRegistry.js";
 
 const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
   {
@@ -84,33 +89,37 @@ const SUB_TOOLS_WRITE: OpenAIToolDef[] = [
 
 function subRead(filePath: string, cwd: string): string {
   try {
-    return fs.readFileSync(safePath(filePath, cwd), "utf-8").slice(0, 50000);
+    return readAuthorizedWorkspaceFile(cwd, filePath).content.slice(0, 50000);
   } catch (e: any) {
     return `Error: ${e.message}`;
   }
 }
 
-function subWrite(filePath: string, content: string, cwd: string): string {
+function subWrite(filePath: string, content: string, cwd: string, runId?: string, toolCallId?: string): string {
   const decision = evaluateWorkspaceWrite(filePath);
   if (!decision.allowed) return `Error: ${decision.reason || "Write blocked by workspace policy"}`;
   try {
     const full = safePath(filePath, cwd);
+    const previous = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : "";
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
+    recordKnownFileMutation({ workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: "subagent", mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: previous, runId, toolCallId });
     return `Wrote ${content.length} bytes to ${filePath}`;
   } catch (e: any) {
     return `Error: ${e.message}`;
   }
 }
 
-function subEdit(filePath: string, oldText: string, newText: string, cwd: string): string {
+function subEdit(filePath: string, oldText: string, newText: string, cwd: string, runId?: string, toolCallId?: string): string {
   const decision = evaluateWorkspaceWrite(filePath);
   if (!decision.allowed) return `Error: ${decision.reason || "Edit blocked by workspace policy"}`;
   try {
     const full = safePath(filePath, cwd);
     const c = fs.readFileSync(full, "utf-8");
     if (!c.includes(oldText)) return `Error: Text not found in ${filePath}`;
-    fs.writeFileSync(full, c.replace(oldText, newText), "utf-8");
+    const content = c.replace(oldText, newText);
+    fs.writeFileSync(full, content, "utf-8");
+    recordKnownFileMutation({ workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: "subagent", mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: c, runId, toolCallId });
     return `Edited ${filePath}`;
   } catch (e: any) {
     return `Error: ${e.message}`;
@@ -125,7 +134,8 @@ async function dispatchSubTool(
   authorize: PermissionAuthorizer,
   toolCallId: string,
   onAuthorized?: () => Promise<void>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  runId?: string
 ): Promise<string> {
   const permission = await authorize({
     requestId: agentName,
@@ -138,13 +148,13 @@ async function dispatchSubTool(
   await onAuthorized?.();
   switch (name) {
     case "bash":
-      return runWorkspaceCommand(args.command as string, cwd, signal);
+      return runWorkspaceCommand(args.command as string, cwd, signal, { compatibilityShellAuthorized: true });
     case "read_file":
       return subRead(args.path as string, cwd);
     case "write_file":
-      return subWrite(args.path as string, args.content as string, cwd);
+      return subWrite(args.path as string, args.content as string, cwd, runId, toolCallId);
     case "edit_file":
-      return subEdit(args.path as string, args.old_text as string, args.new_text as string, cwd);
+      return subEdit(args.path as string, args.old_text as string, args.new_text as string, cwd, runId, toolCallId);
     default:
       return `Unknown tool: ${name}`;
   }
@@ -182,15 +192,32 @@ export async function runSubagent(
         profile,
       });
   const agentName = `subagent:${agentType}`;
+  // Bash is intentionally treated as write-capable: command intent cannot be proven
+  // read-only before execution, so every subagent receives an isolated checkout.
+  let worktree;
+  const childRunId = createRunId();
+  try {
+    worktree = createManagedWorktree(workspaceDir, {
+      name: agentName,
+      ownerId: agentName,
+      parentRunId: lineage?.parentRunId,
+      childRunId,
+      toolCallId: lineage?.parentToolCallId,
+    });
+  } catch (error) {
+    return `(subagent: isolated worktree allocation failed; refusing to run: ${error instanceof Error ? error.message : String(error)})`;
+  }
+  const childWorkspaceDir = worktree.path;
   const recorder = lineage
     ? new AgentRunRecorder(
         workspaceDir,
-        createRunId(),
+        childRunId,
         lineage.parentConversationId,
         "code",
         undefined,
         {
           parentRunId: lineage.parentRunId,
+          parentTaskId: lineage.parentTaskId,
           parentToolCallId: lineage.parentToolCallId,
           parentRequestId: lineage.parentRequestId,
           agentName,
@@ -200,7 +227,7 @@ export async function runSubagent(
   await recorder?.start();
   if (recorder && profile.stepSnapshots) {
     try {
-      const checkpoint = createCheckpoint(workspaceDir, {
+      const checkpoint = createCheckpoint(childWorkspaceDir, {
         label: `Before ${agentName}`,
         conversationId: lineage?.parentConversationId,
         runId: recorder.runId,
@@ -221,15 +248,34 @@ export async function runSubagent(
     }
   }
   let recorderFinished = false;
+  let mutationEvidenceBlocker = "";
   const finish = async (
     status: "completed" | "stopped" | "failed",
     output: string
   ): Promise<string> => {
+    let changeSetSuffix = "";
+    try {
+      const mutationEvidenceGaps = listMutationEvidenceGaps(childWorkspaceDir, { runId: childRunId });
+      if (mutationEvidenceGaps.length && !mutationEvidenceBlocker) {
+        mutationEvidenceBlocker = `Mutation evidence incomplete: ${mutationEvidenceGaps.map((gap) => `${gap.path}:${gap.reason}`).join(", ")}`;
+      }
+      const changeSet = captureChangeSet(workspaceDir, worktree.id, { status, agentName, parentRunId: lineage?.parentRunId, parentTaskId: lineage?.parentTaskId, childRunId, toolCallId: lineage?.parentToolCallId, mutationEvidenceGaps });
+      changeSetSuffix = `\nChangeSet ${changeSet.id} (${changeSet.status})`;
+      await recorder?.event({ kind: "tool_result", label: "Subagent ChangeSet captured", detail: `${changeSet.id} (${changeSet.status})` });
+    } catch (error) {
+      updateManagedWorktreeMetadata(workspaceDir, worktree.id, "needs_attention", "pending");
+      changeSetSuffix = `\nChangeSet capture failed: ${error instanceof Error ? error.message : String(error)}`;
+      mutationEvidenceBlocker ||= `Mutation evidence capture failed: ${error instanceof Error ? error.message : String(error)}`;
+      await recorder?.event({ kind: "error", label: "Subagent ChangeSet capture failed", isError: true, detail: changeSetSuffix });
+    }
     if (recorder && !recorderFinished) {
       recorderFinished = true;
-      await recorder.finish(status);
+      await recorder.finish(status === "stopped" ? "stopped" : mutationEvidenceBlocker ? "failed" : status);
     }
-    return output;
+    const effectiveOutput = mutationEvidenceBlocker && !output.startsWith("Error:")
+      ? `Error: ${mutationEvidenceBlocker}${output ? `\n${output}` : ""}`
+      : output;
+    return `${effectiveOutput}${changeSetSuffix}`;
   };
   let completedNaturally = false;
 
@@ -255,6 +301,12 @@ export async function runSubagent(
     let data;
     let providerAttempts = 1;
     try {
+      const executionContract = buildProviderExecutionContract({
+        id: `${profile.id}:isolated-subagent`,
+        permissions: profile.permissions.allow,
+        isolation: `managed_worktree:${worktree.id}`,
+        tools: tools.map((tool) => tool.function.name),
+      });
       const processed = await processModelTurn({
         apiUrl: vllmApiUrl,
         apiKey: vllmApiKey,
@@ -262,6 +314,8 @@ export async function runSubagent(
         providerId: profile.providerId,
         messages,
         tools,
+        executionContract,
+        fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens),
         fallbackMaxOutputTokens: profile.budget.maxOutputTokens,
         maxOutputTokens: profile.budget.maxOutputTokens,
         temperature: 0.3,
@@ -271,6 +325,27 @@ export async function runSubagent(
           runId: recorder?.runId,
           conversationId: lineage?.parentConversationId,
           requestId: lineage?.parentRequestId,
+        },
+        contextAudit: {
+          storeWorkspaceDir: workspaceDir,
+          effectiveWorkspaceDir: childWorkspaceDir,
+          scope: {
+            kind: "managed_worktree",
+            scopeId: worktree.id,
+            worktreeId: worktree.id,
+            baseSha: worktree.baseSha,
+            headSha: worktree.head,
+          },
+          purpose: "subagent",
+          runId: recorder?.runId,
+          conversationId: lineage?.parentConversationId,
+          requestId: lineage?.parentRequestId,
+          agentId: profile.id,
+        },
+        onContextManifest: async (state) => {
+          if (recorder && !recorder.snapshot().contextManifestIds.includes(state.manifestId)) {
+            await recorder.attachContextManifest(state.manifestId);
+          }
         },
       });
       data = processed.response;
@@ -371,6 +446,34 @@ export async function runSubagent(
       );
       let output: string;
       let snapshotId: string | undefined;
+      let bashMutationsCaptured = false;
+      let mutationEvidenceFailure = "";
+      const captureBashMutations = async (): Promise<void> => {
+        if (tc.function.name !== "bash" || !snapshotId || bashMutationsCaptured) return;
+        bashMutationsCaptured = true;
+        try {
+          const capture = captureCheckpointMutationsDetailed(childWorkspaceDir, {
+            checkpointId: snapshotId,
+            runId: childRunId,
+            toolCallId: tc.id,
+            actor: agentName,
+          });
+          if (capture.skipped.length) {
+            mutationEvidenceFailure = `Mutation evidence incomplete: ${capture.skipped.map((entry) => `${entry.path}:${entry.reason}`).join(", ")}`;
+            mutationEvidenceBlocker ||= mutationEvidenceFailure;
+          }
+        } catch (error) {
+          mutationEvidenceFailure = `Mutation journal unavailable: ${error instanceof Error ? error.message : String(error)}`;
+          mutationEvidenceBlocker ||= mutationEvidenceFailure;
+          await recorder?.event({
+            kind: "error",
+            label: "Subagent bash mutation capture failed",
+            toolName: tc.function.name,
+            isError: true,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
       try {
         if ((toolMetrics?.toolCalls || 0) >= profile.budget.maxToolCalls) {
           throw new Error(`Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`);
@@ -384,14 +487,14 @@ export async function runSubagent(
         output = await dispatchSubTool(
           tc.function.name,
           args,
-          workspaceDir,
+          childWorkspaceDir,
           agentName,
           authorize,
           tc.id,
           async () => {
-            if (profile.stepSnapshots && ["bash", "write_file", "edit_file"].includes(tc.function.name)) {
+            if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
               try {
-                const checkpoint = createCheckpoint(workspaceDir, {
+                const checkpoint = createCheckpoint(childWorkspaceDir, {
                   label: `Before ${agentName} · ${tc.function.name}`,
                   conversationId: lineage?.parentConversationId,
                   runId: recorder?.runId,
@@ -400,13 +503,15 @@ export async function runSubagent(
                 });
                 snapshotId = checkpoint.id;
               } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
                 await recorder?.event({
                   kind: "error",
                   label: "Subagent step snapshot unavailable",
                   toolName: tc.function.name,
                   isError: true,
-                  detail: error instanceof Error ? error.message : String(error),
+                  detail,
                 });
+                throw new Error(`Required mutation checkpoint unavailable: ${detail}`);
               }
             }
             await runAgentHooks("beforeToolExecute", {
@@ -426,16 +531,20 @@ export async function runSubagent(
               ...(snapshotId ? { snapshotId } : {}),
             });
           },
-          signal
+          signal,
+          childRunId
         );
       } catch (error) {
         if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+          await captureBashMutations();
           await finish("stopped", "");
           signal?.throwIfAborted();
           throw error;
         }
         output = `Error: ${error instanceof Error ? error.message : String(error)}`;
       }
+      await captureBashMutations();
+      if (mutationEvidenceFailure) output = `Error: ${mutationEvidenceFailure}${output ? `\nTool output:\n${output}` : ""}`;
       const isError = output.startsWith("Error:");
       const denied = output.startsWith("Error: Tool denied:");
       await recorder?.toolState({

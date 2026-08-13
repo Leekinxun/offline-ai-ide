@@ -16,6 +16,7 @@ import { pushTeamSnapshot } from "../ws/team.js";
 import {
   buildFileVersion,
   lookupKnownFileMutation,
+  notifyWorkspaceMutation,
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
@@ -751,6 +752,7 @@ filesRouter.post("/create", (req, res) => {
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.writeFileSync(full, "", "utf-8");
     }
+    notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: relPath, operation: "create", ...(is_directory ? { scope: "prefix" as const } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_created",
       payload: {
@@ -773,6 +775,7 @@ filesRouter.post("/copy", (req, res) => {
 
   try {
     const result = copyWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: result.path, operation: "create", ...(result.type === "directory" ? { scope: "prefix" as const } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_copied",
       payload: {
@@ -802,6 +805,7 @@ filesRouter.post("/move", (req, res) => {
 
   try {
     const result = moveWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    if (result.sourcePath !== result.path) notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: result.path, previousPath: result.sourcePath, operation: "rename", ...(result.type === "directory" ? { scope: "prefix" as const } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_renamed",
       payload: {
@@ -929,7 +933,9 @@ filesRouter.delete("/delete", (req, res) => {
     if (!fs.existsSync(full)) {
       return res.status(404).json({ detail: "Not found" });
     }
+    const scope = fs.lstatSync(full).isDirectory() ? "prefix" as const : "file" as const;
     fs.rmSync(full, { recursive: true, force: true });
+    notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: relPath, operation: "delete", ...(scope === "prefix" ? { scope } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_deleted",
       payload: {
@@ -957,8 +963,10 @@ filesRouter.post("/rename", (req, res) => {
     if (fs.existsSync(newFull)) {
       return res.status(409).json({ detail: "Target already exists" });
     }
+    const scope = fs.lstatSync(oldFull).isDirectory() ? "prefix" as const : "file" as const;
     fs.mkdirSync(path.dirname(newFull), { recursive: true });
     fs.renameSync(oldFull, newFull);
+    notifyWorkspaceMutation({ workspaceDir: wsDir, path: new_path, previousPath: old_path, operation: "rename", ...(scope === "prefix" ? { scope } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_renamed",
       payload: {

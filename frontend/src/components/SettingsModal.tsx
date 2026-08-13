@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   KeyRound,
@@ -24,14 +24,21 @@ import {
   McpServerPreview,
   McpSettings,
   ModelCapabilities,
+  TeamRole,
 } from "../types";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { KnowledgeManagerPanel } from "./KnowledgeManagerPanel";
+import { ModelGovernancePanel } from "./ModelGovernancePanel";
+import { ActionConfirmDialog } from "./ActionConfirmDialog";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface SettingsModalProps {
   token: string;
   currentUsername: string;
   isAdmin: boolean;
+  teamRole?: TeamRole | null;
+  readOnlyWorkspace?: boolean;
+  workspaceId: string;
   visible: boolean;
   editorFont: string;
   editorFontOptions: EditorFontOption[];
@@ -114,6 +121,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   token,
   currentUsername,
   isAdmin,
+  teamRole = null,
+  readOnlyWorkspace = false,
+  workspaceId,
   visible,
   editorFont,
   editorFontOptions,
@@ -132,6 +142,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [inspectingMcp, setInspectingMcp] = useState(false);
   const [togglingMcpEndpoint, setTogglingMcpEndpoint] = useState<string | null>(null);
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilities | null>(null);
+  const [modelCapabilityError, setModelCapabilityError] = useState<string | null>(null);
   const [loadingModelCapabilities, setLoadingModelCapabilities] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
@@ -151,6 +162,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [mcpServers, setMcpServers] = useState<McpServerPreview[]>([]);
   const [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null);
   const [nextPassword, setNextPassword] = useState("");
+  const [confirmation, setConfirmation] = useState<
+    | { kind: "delete-user"; user: AdminUser }
+    | { kind: "reject-registration"; username: string }
+    | null
+  >(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const closePasswordDialog = useCallback(() => {
+    if (updatingPassword) return;
+    setPasswordTarget(null);
+    setNextPassword("");
+    setError(null);
+  }, [updatingPassword]);
+  const passwordDialogRef = useModalDialogFocus<HTMLDivElement>({
+    open: visible && Boolean(passwordTarget),
+    onClose: closePasswordDialog,
+    initialFocusRef: passwordInputRef,
+  });
+  const nestedModalOpen = Boolean(passwordTarget || confirmation);
+
+  useEffect(() => {
+    if (!visible) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    requestAnimationFrame(() => closeRef.current?.focus());
+    return () => { requestAnimationFrame(() => returnFocusRef.current?.focus()); };
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (confirmation || passwordTarget) return;
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab" || !modalRef.current) return;
+      const focusable = Array.from(modalRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmation, onClose, passwordTarget, visible]);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -158,10 +213,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const data = await adminSettings.fetchSettings();
       setSettings(data);
+      setModelCapabilityError(null);
       try {
         setModelCapabilities(await adminSettings.fetchLlmCapabilities());
-      } catch {
+      } catch (capabilityError) {
         setModelCapabilities(null);
+        setModelCapabilityError(
+          capabilityError instanceof Error
+            ? capabilityError.message
+            : t("settings.failedToDetectModelCapabilities")
+        );
       }
       setLlmForm({
         vllmApiUrl: data.llm.vllmApiUrl,
@@ -256,16 +317,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleDeleteUser = async (user: AdminUser) => {
     if (deletingUsername) return;
-    if (!window.confirm(t("settings.confirmDeleteUser", { username: user.username }))) {
-      return;
-    }
-
     setDeletingUsername(user.username);
     setError(null);
     try {
       await adminSettings.deleteUser(user.username);
       await loadSettings();
       onShowToast(t("settings.userDeleted", { username: user.username }));
+      setConfirmation(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToDeleteUser"));
     } finally {
@@ -293,13 +351,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleRejectRegistration = async (username: string) => {
     if (reviewingRegistration) return;
-    if (!window.confirm(t("settings.confirmRejectRegistration", { username }))) return;
     setReviewingRegistration({ username, action: "reject" });
     setError(null);
     try {
       await adminSettings.rejectRegistration(username);
       await loadSettings();
       onShowToast(t("settings.registrationRejected", { username }));
+      setConfirmation(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToRejectRegistration"));
     } finally {
@@ -366,10 +424,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setError(null);
     try {
       const saved = await adminSettings.updateLlmSettings(payload);
+      setModelCapabilityError(null);
       try {
         setModelCapabilities(await adminSettings.fetchLlmCapabilities(true));
-      } catch {
+      } catch (capabilityError) {
         setModelCapabilities(null);
+        setModelCapabilityError(
+          capabilityError instanceof Error
+            ? capabilityError.message
+            : t("settings.failedToDetectModelCapabilities")
+        );
       }
       setLlmForm({
         vllmApiUrl: saved.vllmApiUrl,
@@ -391,10 +455,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const refreshModelCapabilities = async () => {
     if (loadingModelCapabilities) return;
     setLoadingModelCapabilities(true);
+    setModelCapabilityError(null);
     try {
       setModelCapabilities(await adminSettings.fetchLlmCapabilities(true));
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("settings.failedToDetectModelCapabilities"));
+      setModelCapabilityError(e instanceof Error ? e.message : t("settings.failedToDetectModelCapabilities"));
     } finally {
       setLoadingModelCapabilities(false);
     }
@@ -589,7 +654,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <>
       <div className="settings-modal-overlay" onClick={onClose}>
-        <div className="settings-modal panel-shell" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onClick={(e) => e.stopPropagation()}>
+        <div ref={modalRef} className="settings-modal panel-shell" role="dialog" aria-modal={nestedModalOpen ? undefined : true} inert={passwordTarget || confirmation ? true : undefined} aria-hidden={passwordTarget || confirmation ? true : undefined} aria-labelledby="settings-modal-title" onClick={(e) => e.stopPropagation()}>
           <div className="settings-modal-header">
             <div className="settings-modal-title">
               <Settings size={18} />
@@ -598,7 +663,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <small>{t("settings.subtitle")}</small>
               </div>
             </div>
-            <button className="settings-modal-close" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
+            <button ref={closeRef} className="settings-modal-close" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
               <X size={16} />
             </button>
           </div>
@@ -654,6 +719,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               visible={visible}
               token={token}
               isAdmin={isAdmin}
+              teamRole={teamRole}
+              readOnly={readOnlyWorkspace}
+              onShowToast={onShowToast}
+            />
+
+            <ModelGovernancePanel
+              token={token}
+              visible={visible}
+              modelName={llmForm.modelName || settings?.llm.modelName || ""}
+              workspaceId={workspaceId}
+              readOnly={readOnlyWorkspace}
               onShowToast={onShowToast}
             />
 
@@ -732,7 +808,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               type="button"
                               className="settings-inline-btn danger"
                               disabled={Boolean(reviewingRegistration)}
-                              onClick={() => void handleRejectRegistration(registration.username)}
+                              onClick={() => { setError(null); setConfirmation({ kind: "reject-registration", username: registration.username }); }}
                             >
                               <X size={14} />
                               {action === "reject"
@@ -847,6 +923,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           className="settings-inline-btn"
                           onClick={() => {
+                            setError(null);
                             setPasswordTarget(user);
                             setNextPassword("");
                           }}
@@ -856,7 +933,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </button>
                         <button
                           className="settings-inline-btn danger"
-                          onClick={() => void handleDeleteUser(user)}
+                          onClick={() => { setError(null); setConfirmation({ kind: "delete-user", user }); }}
                           disabled={
                             deletingUsername === user.username ||
                             user.username === currentUsername ||
@@ -1193,6 +1270,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {modelCapabilities?.warning && (
                       <small className="settings-help-text">{modelCapabilities.warning}</small>
                     )}
+                    {modelCapabilityError && (
+                      <small className="settings-error-banner" role="alert">{modelCapabilityError}</small>
+                    )}
                   </div>
 
                   <label className="settings-field settings-field-wide">
@@ -1255,41 +1335,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       {passwordTarget && (
         <div
           className="settings-password-overlay"
-          onClick={() => {
-            if (updatingPassword) return;
-            setPasswordTarget(null);
-            setNextPassword("");
-          }}
+          onMouseDown={closePasswordDialog}
         >
           <div
+            ref={passwordDialogRef}
             className="dialog settings-password-dialog"
-            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-password-dialog-title"
+            aria-describedby="settings-password-dialog-description"
+            aria-busy={updatingPassword}
+            tabIndex={-1}
+            onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="dialog-title">
+            <div className="dialog-title" id="settings-password-dialog-title">
               {t("settings.changePasswordFor", {
                 username: passwordTarget.username,
               })}
             </div>
+            <p id="settings-password-dialog-description" className="sr-only">{t("settings.enterNewPassword")}</p>
             <input
+              ref={passwordInputRef}
               className="dialog-input"
               type="password"
               value={nextPassword}
               onChange={(e) => setNextPassword(e.target.value)}
               placeholder={t("settings.enterNewPassword")}
-              autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   void handleUpdatePassword();
                 }
               }}
             />
+            {error && <div className="settings-error-banner" role="alert" aria-live="assertive">{error}</div>}
             <div className="dialog-actions">
               <button
                 className="dialog-btn"
-                onClick={() => {
-                  setPasswordTarget(null);
-                  setNextPassword("");
-                }}
+                onClick={closePasswordDialog}
                 disabled={updatingPassword}
               >
                 {t("common.cancel")}
@@ -1305,6 +1387,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
       )}
+      <ActionConfirmDialog
+        intent={confirmation ? {
+          id: confirmation.kind === "delete-user" ? `settings:delete-user:${confirmation.user.username}` : `settings:reject-registration:${confirmation.username}`,
+          title: t("settings.confirmActionTitle"),
+          description: confirmation.kind === "delete-user"
+            ? t("settings.confirmDeleteUser", { username: confirmation.user.username })
+            : t("settings.confirmRejectRegistration", { username: confirmation.username }),
+          confirmLabel: t("common.confirm"),
+          tone: "danger",
+        } : null}
+        busy={confirmation?.kind === "delete-user" ? deletingUsername === confirmation.user.username : confirmation?.kind === "reject-registration" ? reviewingRegistration?.username === confirmation.username && reviewingRegistration.action === "reject" : false}
+        error={error}
+        onClose={() => { setConfirmation(null); setError(null); }}
+        onConfirm={() => {
+          if (!confirmation) return;
+          if (confirmation.kind === "delete-user") return handleDeleteUser(confirmation.user);
+          return handleRejectRegistration(confirmation.username);
+        }}
+      />
     </>
   );
 };

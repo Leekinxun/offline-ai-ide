@@ -89,6 +89,30 @@ type ActiveDebugSession = ActiveNodeDebugSession | ActivePythonDebugSession;
 
 const sessions = new Map<string, ActiveDebugSession>();
 const MAX_OUTPUT = 200_000;
+const INHERITED_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TMP", "TEMP"] as const;
+const BLOCKED_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_[A-Z_]+|BASH_ENV|ENV|PYTHONPATH|RUBYOPT|PERL5OPT)$/;
+
+/** Debuggees are supervised processes, not an OS-level sandbox. */
+export function debugEnvironment(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_ENV) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+  env.PATH ||= "/usr/bin:/bin";
+  for (const [key, value] of Object.entries(extra)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(key) || BLOCKED_ENV.test(key) || typeof value !== "string") {
+      throw new Error(`Blocked debugger environment variable: ${key}`);
+    }
+  }
+  return { ...env, ...extra };
+}
+
+function canonicalWorkspaceRoot(workspaceDir: string): string {
+  const root = fs.realpathSync.native(workspaceDir);
+  if (!fs.statSync(root).isDirectory()) throw new Error("Debug workspace is not a directory");
+  return root;
+}
 
 function appendOutput(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
@@ -100,8 +124,8 @@ function validateTarget(
   targetPath: string
 ): { absoluteTarget: string; runtime: DebugRuntime } {
   if (!targetPath || path.isAbsolute(targetPath)) throw new Error("Debug target must be a workspace-relative file");
-  const workspaceRoot = fs.realpathSync.native(workspaceDir);
-  const requested = path.resolve(workspaceDir, targetPath);
+  const workspaceRoot = canonicalWorkspaceRoot(workspaceDir);
+  const requested = path.resolve(workspaceRoot, targetPath);
   if (!fs.existsSync(requested) || !fs.statSync(requested).isFile()) throw new Error("Debug target does not exist");
   const absolute = fs.realpathSync.native(requested);
   const relative = path.relative(workspaceRoot, absolute);
@@ -122,11 +146,11 @@ function publicState(active?: ActiveDebugSession): DebugSessionState | null {
 }
 
 export function getDebugSession(workspaceDir: string): DebugSessionState | null {
-  return publicState(sessions.get(workspaceDir));
+  try { return publicState(sessions.get(canonicalWorkspaceRoot(workspaceDir))); } catch { return null; }
 }
 
 function requirePausedSession(workspaceDir: string): ActiveDebugSession {
-  const active = sessions.get(workspaceDir);
+  const active = sessions.get(canonicalWorkspaceRoot(workspaceDir));
   if (!active || active.state.status !== "paused") throw new Error("Debugger is not paused");
   return active;
 }
@@ -243,7 +267,7 @@ function stopChild(active: ActiveDebugSessionBase): void {
   } catch { try { active.child.kill("SIGTERM"); } catch { /* already stopped */ } }
 }
 
-async function connectInspector(active: ActiveNodeDebugSession, inspectorUrl: string, absoluteTarget: string): Promise<void> {
+async function connectInspector(active: ActiveNodeDebugSession, inspectorUrl: string): Promise<void> {
   if (active.inspector) return;
   const socket = new WebSocket(inspectorUrl);
   active.inspector = socket;
@@ -376,7 +400,7 @@ function startNodeDebugSession(
   const child = spawn(process.execPath, ["--inspect-brk=127.0.0.1:0", absoluteTarget], {
     cwd: workspaceDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    env: debugEnvironment({ NO_COLOR: "1", FORCE_COLOR: "0" }),
     detached: process.platform !== "win32",
   });
   let resolveBreakpointSetup: (() => void) | undefined;
@@ -416,7 +440,7 @@ function startNodeDebugSession(
     state.stderr = appendOutput(state.stderr, text);
     state.updatedAt = Date.now();
     const match = state.stderr.match(/Debugger listening on (ws:\/\/[^\s]+)/);
-    if (match) void connectInspector(active, match[1], absoluteTarget);
+    if (match) void connectInspector(active, match[1]);
     if (text.includes("Waiting for the debugger to disconnect")) {
       active.inspector?.close();
       state.status = "stopped";
@@ -443,7 +467,11 @@ function workspacePythonExecutable(workspaceDir: string): string {
     : [".venv/bin/python", "venv/bin/python"];
   for (const candidate of candidates) {
     const absolute = path.join(workspaceDir, candidate);
-    if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) return absolute;
+    if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) {
+      const resolved = fs.realpathSync.native(absolute);
+      const relative = path.relative(canonicalWorkspaceRoot(workspaceDir), resolved);
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return resolved;
+    }
   }
   return config.pythonExecutable;
 }
@@ -625,7 +653,7 @@ function startPythonDebugSession(
     {
       cwd: process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      env: debugEnvironment({ PYTHONUNBUFFERED: "1" }),
       detached: process.platform !== "win32",
     }
   );
@@ -687,12 +715,13 @@ function startPythonDebugSession(
 }
 
 export function startDebugSession(workspaceDir: string, targetPath: string, lines: number[]): DebugSessionState {
-  const previous = sessions.get(workspaceDir);
+  const root = canonicalWorkspaceRoot(workspaceDir);
+  const previous = sessions.get(root);
   if (previous && ["starting", "running", "paused"].includes(previous.state.status)) throw new Error("A debug session is already active");
-  const { absoluteTarget, runtime } = validateTarget(workspaceDir, targetPath);
+  const { absoluteTarget, runtime } = validateTarget(root, targetPath);
   return runtime === "python"
-    ? startPythonDebugSession(workspaceDir, absoluteTarget, lines)
-    : startNodeDebugSession(workspaceDir, absoluteTarget, lines);
+    ? startPythonDebugSession(root, absoluteTarget, lines)
+    : startNodeDebugSession(root, absoluteTarget, lines);
 }
 
 export async function getDebugScopes(workspaceDir: string, frameId: string): Promise<DebugScope[]> {
@@ -874,7 +903,7 @@ export async function debugCommand(workspaceDir: string, action: "continue" | "s
 }
 
 export async function stopDebugSession(workspaceDir: string): Promise<DebugSessionState> {
-  const active = sessions.get(workspaceDir);
+  const active = sessions.get(canonicalWorkspaceRoot(workspaceDir));
   if (!active) throw new Error("No debug session exists");
   if (active.runtime === "node") {
     active.inspector?.close();

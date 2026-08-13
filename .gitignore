@@ -23,3 +23,8 @@ workspace/
 # Team/task runtime data
 .team/
 .tasks/
+
+# Release/runtime state (never source-controlled or removed by verification)
+.history/
+.checkpoints/
+.artifacts/

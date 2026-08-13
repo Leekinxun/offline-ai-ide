@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import { evaluateContextPath, readAuthorizedWorkspaceFile } from "../agent/contextPolicy.js";
+import { findRepositoryDefinition } from "../indexing/repositoryIndex.js";
 
 export interface FileSelectionRange {
   startLine: number;
@@ -503,14 +505,9 @@ function findImportedDefinition(
   currentPath: string,
   symbol: string
 ): DefinitionLocation | null {
-  const currentFullPath = resolveWorkspaceRelative(workspaceDir, currentPath);
-  if (!currentFullPath || !fs.existsSync(currentFullPath) || !fs.statSync(currentFullPath).isFile()) {
-    return null;
-  }
-
   let currentContent: string;
   try {
-    currentContent = fs.readFileSync(currentFullPath, "utf-8");
+    currentContent = readAuthorizedWorkspaceFile(workspaceDir, currentPath).content;
   } catch {
     return null;
   }
@@ -523,14 +520,9 @@ function findImportedDefinition(
 
   if (!importTarget) return null;
 
-  const targetFullPath = resolveWorkspaceRelative(workspaceDir, importTarget.path);
-  if (!targetFullPath || !fs.existsSync(targetFullPath) || !fs.statSync(targetFullPath).isFile()) {
-    return null;
-  }
-
   let targetContent: string;
   try {
-    targetContent = fs.readFileSync(targetFullPath, "utf-8");
+    targetContent = readAuthorizedWorkspaceFile(workspaceDir, importTarget.path).content;
   } catch {
     return null;
   }
@@ -585,6 +577,7 @@ function walkWorkspaceFiles(
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
       if (SKIP_DIRECTORIES.has(entry.name)) continue;
       const nextRelDir = relDir
@@ -596,6 +589,7 @@ function walkWorkspaceFiles(
 
     const relPath = relDir ? path.posix.join(relDir, entry.name) : entry.name;
     if (!SEARCHABLE_EXTENSIONS.has(path.extname(relPath).toLowerCase())) continue;
+    if (!evaluateContextPath(relPath).allowed) continue;
     visit(relPath);
   }
 }
@@ -611,12 +605,9 @@ function findFileNameFallback(
     const baseName = path.basename(relPath, path.extname(relPath));
     if (baseName !== symbol) return;
 
-    const fullPath = resolveWorkspaceRelative(workspaceDir, relPath);
-    if (!fullPath) return;
-
     let content = "";
     try {
-      content = fs.readFileSync(fullPath, "utf-8");
+      content = readAuthorizedWorkspaceFile(workspaceDir, relPath).content;
     } catch {
       return;
     }
@@ -651,6 +642,9 @@ export function findDefinitionInWorkspace(
   const normalizedSymbol = symbol.trim();
   if (!normalizedSymbol) return null;
 
+  const indexed = findRepositoryDefinition(workspaceDir, normalizedSymbol, currentPath);
+  if (indexed) return indexed;
+
   const normalizedCurrentPath = currentPath
     ? normalizeWorkspacePath(currentPath)
     : undefined;
@@ -671,12 +665,9 @@ export function findDefinitionInWorkspace(
   walkWorkspaceFiles(workspaceDir, "", (relPath) => {
     if (relPath === normalizedCurrentPath) return;
 
-    const fullPath = resolveWorkspaceRelative(workspaceDir, relPath);
-    if (!fullPath) return;
-
     let content: string;
     try {
-      content = fs.readFileSync(fullPath, "utf-8");
+      content = readAuthorizedWorkspaceFile(workspaceDir, relPath).content;
     } catch {
       return;
     }

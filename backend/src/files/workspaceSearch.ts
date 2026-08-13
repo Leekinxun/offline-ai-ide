@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import { rgPath } from "@vscode/ripgrep";
+import { evaluateContextPath } from "../agent/contextPolicy.js";
 
 export interface WorkspaceSearchResult {
   path: string;
@@ -180,6 +181,8 @@ export function searchWorkspace(
       const lineText = event.data.lines?.text;
       const lineNumber = event.data.line_number;
       if (!resultPath || typeof lineText !== "string" || !lineNumber) return;
+      const policy = evaluateContextPath(normalizeResultPath(resultPath));
+      if (!policy.allowed) return;
 
       const preview = lineText.replace(/[\r\n]+$/, "").slice(0, 1000);
       for (const submatch of event.data.submatches || []) {
@@ -189,7 +192,7 @@ export function searchWorkspace(
           break;
         }
         results.push({
-          path: normalizeResultPath(resultPath),
+          path: policy.normalizedPath!,
           line: lineNumber,
           column: byteOffsetToColumn(lineText, submatch.start),
           matchLength: Math.max(1, byteLengthBetween(lineText, submatch.start, submatch.end)),

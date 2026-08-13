@@ -9,3 +9,16 @@ test("accepts editor.modify as an explicit editor capability", () => {
   });
   assert.deepEqual(derivePluginScopes(parsed.permissions), ["editor"]);
 });
+
+test("rejects path-qualified, symlink-like, and wildcard network grants", () => {
+  for (const grant of [
+    "editor.modify:../../outside",
+    "editor.modify:linked/secret.txt",
+    "network:*",
+    "network.connect:*.example.test",
+  ]) {
+    const parsed = parsePluginPermissions([grant]);
+    assert.deepEqual(parsed.permissions, []);
+    assert.match(parsed.error || "", /Unknown permission/);
+  }
+});

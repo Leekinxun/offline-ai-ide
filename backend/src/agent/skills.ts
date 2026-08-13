@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { listRunRecords } from "../chat/runHistory.js";
 
 const MAX_SKILL_BODY = 24_000;
@@ -13,6 +14,8 @@ export interface WorkspaceSkill {
   path: string;
   body: string;
   metadata: Record<string, string>;
+  permissions: string[];
+  signatureStatus: "verified" | "invalid" | "legacy-restricted";
 }
 
 export interface ManagedWorkspaceSkill extends Omit<WorkspaceSkill, "body"> {
@@ -60,6 +63,10 @@ export function listWorkspaceSkills(workspaceDir: string): WorkspaceSkill[] {
       const skillPath = path.join(root, entry.name, "SKILL.md");
       let raw: string;
       try {
+        if (fs.lstatSync(skillPath).isSymbolicLink()) continue;
+        const canonicalRoot = fs.realpathSync.native(root);
+        const canonicalSkill = fs.realpathSync.native(skillPath);
+        if (!canonicalSkill.startsWith(`${canonicalRoot}${path.sep}`)) continue;
         raw = fs.readFileSync(skillPath, "utf-8");
       } catch {
         continue;
@@ -155,6 +162,7 @@ export function loadWorkspaceSkill(workspaceDir: string, name: unknown): string 
   if (!isWorkspaceSkillEnabled(workspaceDir, skill.name)) {
     throw new Error(`Skill is disabled: ${skill.name}`);
   }
+  if (skill.signatureStatus === "invalid") throw new Error(`Skill signature is invalid: ${skill.name}`);
   return `# Skill: ${skill.name}\nPath: ${skill.path}\n\n${skill.body}`;
 }
 
@@ -198,7 +206,33 @@ function parseSkill(raw: string, folderName: string, relativePath: string): Work
     path: relativePath,
     body: body.trim().slice(0, MAX_SKILL_BODY),
     metadata,
+    permissions: splitList(metadata.permissions),
+    signatureStatus: verifyWorkspaceSkillSignature(metadata, body, trustedSkillKeys()),
   };
+}
+
+function splitList(value: string | undefined): string[] {
+  return Array.from(new Set((value || "").split(",").map((item) => item.trim()).filter(Boolean))).sort();
+}
+
+function trustedSkillKeys(): Record<string, string> {
+  try { const parsed = JSON.parse(process.env.CREWFORGE_SKILL_TRUST_KEYS || "{}"); return parsed && typeof parsed === "object" ? parsed : {}; }
+  catch { return {}; }
+}
+
+export function verifyWorkspaceSkillSignature(
+  metadata: Record<string, string>,
+  body: string,
+  trustedKeys: Record<string, string>
+): "verified" | "invalid" | "legacy-restricted" {
+  const signature = metadata.signature;
+  const keyId = metadata.signingKeyId || metadata.keyId;
+  if (!signature && !keyId) return "legacy-restricted";
+  if (!signature || !keyId || !trustedKeys[keyId]) return "invalid";
+  const signedMetadata = Object.fromEntries(Object.entries(metadata).filter(([key]) => !["signature", "signingKeyId", "keyId"].includes(key)).sort(([a], [b]) => a.localeCompare(b)));
+  const payload = Buffer.from(JSON.stringify({ metadata: signedMetadata, body: body.trim() }), "utf8");
+  try { return crypto.verify(null, payload, trustedKeys[keyId], Buffer.from(signature, "base64")) ? "verified" : "invalid"; }
+  catch { return "invalid"; }
 }
 
 function isWorkspaceSkillEnabled(workspaceDir: string, name: string): boolean {

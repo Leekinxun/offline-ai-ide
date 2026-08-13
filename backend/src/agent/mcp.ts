@@ -6,6 +6,8 @@ import {
   type McpServerConfig,
 } from "../config.js";
 import { OpenAIToolDef } from "./types.js";
+import { evaluateNetworkAccess, normalizeNetworkHost, type NetworkGrant } from "./networkPolicy.js";
+import { redactSecrets } from "./secretRedaction.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const MCP_CLIENT_NAME = "crownforge";
@@ -98,6 +100,85 @@ interface RuntimeMcpServer {
   disabled: boolean;
 }
 
+interface RemoteMcpTarget {
+  url: URL;
+  grant: NetworkGrant;
+}
+
+const INHERITED_STDIO_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TEMP", "TMP"] as const;
+const BLOCKED_STDIO_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_[A-Z_]+|BASH_ENV|ENV|PYTHONPATH|RUBYOPT|PERL5OPT)$/;
+
+function remoteTarget(value: string): RemoteMcpTarget | undefined {
+  // URL normalisation loses an empty username ("http://@host"), so reject
+  // userinfo from the original authority before parsing.
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(value)) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return undefined;
+  const host = normalizeNetworkHost(url.hostname.replace(/^\[|\]$/g, ""));
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  if (!host || !Number.isSafeInteger(port) || port < 1 || port > 65_535) return undefined;
+  return { url, grant: { host, port } };
+}
+
+function hasExactRemoteGrant(url: URL, grant: NetworkGrant): boolean {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  return evaluateNetworkAccess(host, port, [grant]).allowed;
+}
+
+function minimalStdioEnvironment(extra: Readonly<Record<string, string>> | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_STDIO_ENV) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(key) || BLOCKED_STDIO_ENV.test(key) || typeof value !== "string") {
+      throw new Error("MCP stdio environment contains a blocked or invalid variable");
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
+function redactMcpText(value: string, explicitSecrets: readonly string[] = []): string {
+  let redacted = value
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, "[REDACTED]")
+    .replace(/\b(?:sk|pk|ghp|github_pat)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED]")
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]{8,}/gi, "$1[REDACTED]");
+  for (const secret of explicitSecrets) {
+    if (secret) redacted = redacted.split(secret).join("[REDACTED]");
+  }
+  return redacted;
+}
+
+function redactMcpError(error: unknown, explicitSecrets: readonly string[] = []): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(redactMcpText(message, explicitSecrets));
+}
+
+function terminateProcessGroup(child: ChildProcessWithoutNullStreams | undefined): void {
+  if (!child?.pid) return;
+  try {
+    if (process.platform === "win32") child.kill("SIGTERM");
+    else process.kill(-child.pid, "SIGTERM");
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  const forceKill = setTimeout(() => {
+    try {
+      if (process.platform === "win32") child.kill("SIGKILL");
+      else if (child.pid) process.kill(-child.pid, "SIGKILL");
+    } catch { /* Process has already exited. */ }
+  }, 1_000);
+  forceKill.unref?.();
+}
+
 class McpEndpointSession {
   private sessionId: string | undefined;
   private initialized = false;
@@ -108,6 +189,8 @@ class McpEndpointSession {
   private stdioProcess: ChildProcessWithoutNullStreams | undefined;
   private stdioBuffer = "";
   private stdioError = "";
+  private readonly remoteTarget: RemoteMcpTarget | undefined;
+  private oauthToken: string | undefined;
   private readonly stdioPending = new Map<
     number,
     { resolve: (response: JsonRpcResponse) => void; reject: (error: Error) => void }
@@ -117,7 +200,9 @@ class McpEndpointSession {
     public readonly server: RuntimeMcpServer,
     private readonly timeoutMs: number,
     private readonly connectTimeoutMs: number
-  ) {}
+  ) {
+    this.remoteTarget = server.config.transport === "remote" ? remoteTarget(server.config.url) : undefined;
+  }
 
   get baseUrl(): string {
     return this.server.endpoint;
@@ -135,7 +220,7 @@ class McpEndpointSession {
     const initializationHealth = await this.ensureInitialized();
     const response = await this.request("tools/list", {}, this.timeoutMs, true);
     if (response.error) {
-      throw new Error(`MCP tools/list error: ${JSON.stringify(response.error)}`);
+      throw new Error(`MCP tools/list error: ${redactMcpText(JSON.stringify(redactSecrets(response.error)), this.oauthToken ? [this.oauthToken] : [])}`);
     }
     if (initializationHealth.attempts > 0) {
       this.lastLatencyMs += initializationHealth.latencyMs;
@@ -158,7 +243,7 @@ class McpEndpointSession {
       signal
     );
     if (response.error) {
-      throw new Error(`MCP tools/call error: ${JSON.stringify(response.error)}`);
+      throw new Error(`MCP tools/call error: ${redactMcpText(JSON.stringify(redactSecrets(response.error)), this.oauthToken ? [this.oauthToken] : [])}`);
     }
 
     const content = response.result?.content;
@@ -171,7 +256,8 @@ class McpEndpointSession {
           : JSON.stringify(item)
       )
       .join("\n");
-    return response.result?.isError ? `[MCP Error] ${output}` : output;
+    const redacted = redactMcpText(output, this.oauthToken ? [this.oauthToken] : []);
+    return response.result?.isError ? `[MCP Error] ${redacted}` : redacted;
   }
 
   private async ensureInitialized(signal?: AbortSignal): Promise<{ latencyMs: number; attempts: number }> {
@@ -186,7 +272,7 @@ class McpEndpointSession {
       },
     }, this.connectTimeoutMs, true, signal);
     if (response.error) {
-      throw new Error(`MCP initialize error: ${JSON.stringify(response.error)}`);
+      throw new Error(`MCP initialize error: ${redactMcpText(JSON.stringify(redactSecrets(response.error)), this.oauthToken ? [this.oauthToken] : [])}`);
     }
     this.initialized = true;
     if (this.server.config.transport === "stdio") {
@@ -205,6 +291,9 @@ class McpEndpointSession {
     if (this.server.config.transport === "stdio") {
       return this.requestStdio(method, params, timeoutMs, externalSignal);
     }
+    if (!this.remoteTarget || !hasExactRemoteGrant(this.remoteTarget.url, this.remoteTarget.grant)) {
+      throw new Error("MCP remote endpoint is not a valid explicitly granted HTTP(S) host and port");
+    }
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
@@ -217,6 +306,7 @@ class McpEndpointSession {
           `MCP OAuth token environment variable is not set: ${this.server.config.oauthTokenEnv}`
         );
       }
+      this.oauthToken = token;
       headers.Authorization = `Bearer ${token}`;
     }
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
@@ -228,7 +318,7 @@ class McpEndpointSession {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetch(this.server.config.url, {
+        const response = await fetch(this.remoteTarget.url, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -240,14 +330,19 @@ class McpEndpointSession {
           signal: externalSignal
             ? AbortSignal.any([controller.signal, externalSignal])
             : controller.signal,
+          // A redirect is a new network destination. Never follow it implicitly.
+          redirect: "manual",
         });
 
         const sessionId = response.headers.get("mcp-session-id")?.trim();
         if (sessionId) this.sessionId = sessionId;
 
         const body = await response.text();
+        if (response.status >= 300 && response.status < 400) {
+          throw new Error("MCP redirect denied: remote endpoints must not change destination");
+        }
         if (!response.ok) {
-          const error = new Error(`MCP request failed (${response.status}): ${body.slice(0, 500)}`);
+          const error = new Error(`MCP request failed (${response.status}): ${redactMcpText(body.slice(0, 500), this.oauthToken ? [this.oauthToken] : [])}`);
           if (retryable && attempt < maxAttempts && isRetryableStatus(response.status)) {
             lastError = error;
             await delay(150 * 2 ** (attempt - 1));
@@ -265,7 +360,7 @@ class McpEndpointSession {
           await delay(150 * 2 ** (attempt - 1));
           continue;
         }
-        throw error;
+        throw redactMcpError(error, this.oauthToken ? [this.oauthToken] : []);
       } finally {
         clearTimeout(timeout);
       }
@@ -277,7 +372,7 @@ class McpEndpointSession {
     this.initialized = false;
     const process = this.stdioProcess;
     this.stdioProcess = undefined;
-    if (process && !process.killed) process.kill();
+    terminateProcessGroup(process);
     this.rejectStdioPending(new Error("MCP stdio session closed"));
   }
 
@@ -301,10 +396,16 @@ class McpEndpointSession {
         callback();
       };
       const timeout = setTimeout(
-        () => finish(() => reject(new Error(`MCP stdio request timed out after ${timeoutMs}ms`))),
+        () => {
+          terminateProcessGroup(this.stdioProcess);
+          finish(() => reject(new Error(`MCP stdio request timed out after ${timeoutMs}ms`)));
+        },
         timeoutMs
       );
-      const onAbort = () => finish(() => reject(new DOMException("Aborted", "AbortError")));
+      const onAbort = () => {
+        terminateProcessGroup(this.stdioProcess);
+        finish(() => reject(new DOMException("Aborted", "AbortError")));
+      };
       externalSignal?.addEventListener("abort", onAbort, { once: true });
       this.stdioPending.set(id, {
         resolve: (response) => finish(() => {
@@ -331,15 +432,18 @@ class McpEndpointSession {
     this.stdioBuffer = "";
     this.stdioError = "";
     const child = spawn(this.server.config.command, this.server.config.args || [], {
-      env: { ...process.env, ...(this.server.config.env || {}) },
+      env: minimalStdioEnvironment(this.server.config.env),
       stdio: "pipe",
+      shell: false,
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
     this.stdioProcess = child;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.consumeStdioOutput(chunk));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      this.stdioError = `${this.stdioError}${chunk}`.slice(-1000);
+      this.stdioError = redactMcpText(`${this.stdioError}${chunk}`.slice(-1000));
     });
     child.once("error", (error) => {
       this.initialized = false;
@@ -462,7 +566,7 @@ export class McpClient {
           const actualName = typeof rawTool.name === "string" ? rawTool.name.trim() : "";
           if (!actualName) continue;
           const description =
-            typeof rawTool.description === "string" ? rawTool.description.trim() : "";
+            typeof rawTool.description === "string" ? redactMcpText(rawTool.description.trim()) : "";
           if (
             hideUnactivated ||
             (server.lazy && !selection.isToolActivated(endpointKeyValue, actualName))
@@ -497,7 +601,7 @@ export class McpClient {
           toolCount: 0,
           tools: [],
           ...session.health,
-          error: error instanceof Error ? error.message : String(error),
+          error: redactMcpText(error instanceof Error ? error.message : String(error)),
         });
       }
     }
@@ -590,6 +694,35 @@ export class McpClient {
     const binding = this.bindings.get(toolName);
     if (!binding) throw new Error(`MCP tool is no longer available: ${toolName}`);
     return binding.endpoint.callTool(binding.actualName, arguments_, signal);
+  }
+
+  /** Server-owned exact binding for signed extension hooks; never accepts a client-derived endpoint. */
+  async callConfiguredTool(
+    serverId: string,
+    toolName: string,
+    arguments_: Record<string, unknown>,
+    policy: { networkOrigins: string[]; secretEnv: string[]; signal?: AbortSignal }
+  ): Promise<string> {
+    const settings = this.settingsProvider();
+    const server = runtimeServers(settings).find((candidate) => candidate.config.id === serverId && !candidate.disabled);
+    if (!server) throw new Error(`MCP server is not configured or enabled: ${serverId}`);
+    if (!toolName.trim()) throw new Error("MCP tool name is required");
+    if (server.config.transport === "remote") {
+      const target = remoteTarget(server.config.url);
+      if (!target || !policy.networkOrigins.includes(target.url.origin)) throw new Error(`MCP server origin is not granted: ${serverId}`);
+      if (server.config.oauthTokenEnv && !policy.secretEnv.includes(server.config.oauthTokenEnv)) throw new Error(`MCP server secret environment variable is not granted: ${server.config.oauthTokenEnv}`);
+      for (const [name] of Object.entries(server.config.headers || {})) {
+        if (/authorization|cookie|api[-_]key|token/i.test(name)) throw new Error(`MCP hook cannot use literal sensitive header: ${name}`);
+      }
+    } else {
+      const ungranted = Object.keys(server.config.env || {}).find((name) => !policy.secretEnv.includes(name));
+      if (ungranted) throw new Error(`MCP stdio environment variable is not granted: ${ungranted}`);
+    }
+    const endpoint = this.getSession(server, settings.timeout, settings.connectTimeout);
+    const tools = await endpoint.listTools();
+    const known = tools.some((tool) => typeof tool.name === "string" && tool.name.trim() === toolName);
+    if (!known) throw new Error(`MCP tool is not exposed by server '${serverId}': ${toolName}`);
+    return endpoint.callTool(toolName, arguments_, policy.signal);
   }
 
   private getSession(

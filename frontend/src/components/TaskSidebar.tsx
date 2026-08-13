@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Plus, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { ContextState, ConversationSummary } from "../types";
 import { useI18n } from "../i18n";
+import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 
 interface TaskSidebarProps {
   workspaceLabel: string;
@@ -56,6 +57,8 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
   const [query, setQuery] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
+  const [confirmIntent, setConfirmIntent] = useState<ActionConfirmIntent | null>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase(locale);
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => {
@@ -69,19 +72,24 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
     Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100)
   );
 
-  const handleDeleteConversation = async (
+  const handleDeleteConversation = (
     conversation: ConversationSummary,
     title: string
   ) => {
-    if (
-      isStreaming ||
-      deletingId ||
-      !window.confirm(t("chat.deleteConversationConfirm", { title }))
-    ) return;
-    setDeletingId(conversation.id);
+    if (isStreaming || deletingId) return;
+    setDeleteError(null);
+    setPendingDelete(conversation);
+    setConfirmIntent({ id: `delete:${conversation.id}`, title: t("chat.deleteConversation"), description: t("chat.deleteConversationConfirm", { title }), confirmLabel: t("chat.deleteConversation"), tone: "danger" });
+  };
+
+  const executeDeleteConversation = async () => {
+    if (!pendingDelete) return;
+    setDeletingId(pendingDelete.id);
     setDeleteError(null);
     try {
-      await onDeleteConversation(conversation.id);
+      await onDeleteConversation(pendingDelete.id);
+      setConfirmIntent(null);
+      setPendingDelete(null);
     } catch (error) {
       setDeleteError(
         error instanceof Error ? error.message : t("chat.deleteConversationFailed")
@@ -130,7 +138,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
         </label>
       </div>
 
-      <div className="task-list">
+      <div className="task-list" role="list" aria-label={t("workbench.recent")}>
         <div className="task-list-label">{t("workbench.recent")}</div>
         {deleteError && <div className="task-list-error" role="alert">{deleteError}</div>}
         {filteredConversations.length === 0 ? (
@@ -143,12 +151,14 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
               <div
                 className={`task-list-item${conversation.id === currentConversationId ? " active" : ""}`}
                 key={conversation.id}
+                role="listitem"
               >
                 <button
                   type="button"
                   className="task-list-item-main"
                   onClick={() => void onLoadConversation(conversation.id)}
                   disabled={isStreaming || busy}
+                  aria-current={conversation.id === currentConversationId ? "page" : undefined}
                 >
                   <span className="task-list-item-title">
                     <strong>{title}</strong>
@@ -167,7 +177,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
                 <button
                   type="button"
                   className="task-list-item-delete"
-                  onClick={() => void handleDeleteConversation(conversation, title)}
+                  onClick={() => handleDeleteConversation(conversation, title)}
                   disabled={isStreaming || Boolean(deletingId)}
                   title={t("chat.deleteConversation")}
                   aria-label={t("chat.deleteConversationNamed", { title })}
@@ -185,10 +195,17 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
           <span>{t("workbench.currentContext")}</span>
           <strong>{Math.round(contextPercent)}%</strong>
         </div>
-        <div className="task-context-meter" aria-hidden="true">
+        <div className="task-context-meter" role="progressbar" aria-label={t("workbench.currentContext")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(contextPercent)}>
           <span style={{ width: `${contextPercent}%` }} />
         </div>
       </footer>
+      <ActionConfirmDialog
+        intent={confirmIntent}
+        busy={deletingId !== null}
+        error={deleteError}
+        onClose={() => { setConfirmIntent(null); setPendingDelete(null); setDeleteError(null); }}
+        onConfirm={() => executeDeleteConversation()}
+      />
     </aside>
   );
 };

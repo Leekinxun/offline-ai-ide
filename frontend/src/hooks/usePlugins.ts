@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getRegisteredPluginCommands,
   getPluginLoadStates,
@@ -56,19 +56,25 @@ export function usePlugins(visible: boolean, token: string, isAdmin: boolean) {
   const [loading, setLoading] = useState(false);
   const [savingPluginId, setSavingPluginId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refreshControllerRef = useRef<AbortController | null>(null);
+  const generationRef = useRef(0);
 
   useEffect(() => subscribePluginLoadStates(setLoadStates), []);
 
   const refresh = useCallback(async () => {
+    const generation = ++generationRef.current;
+    refreshControllerRef.current?.abort();
+    const controller = new AbortController(); refreshControllerRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/plugins", { cache: "no-store" });
+      const response = await fetch("/api/plugins", { cache: "no-store", headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
       if (!response.ok) {
         throw new Error(`Failed to load plugins: ${response.status}`);
       }
 
       const payload = (await response.json()) as PluginRegistryResponse;
+      if (generation !== generationRef.current) return;
       setRegistryPlugins(Array.isArray(payload.plugins) ? payload.plugins : []);
       setPluginsDir(payload.pluginsDir || null);
       setPluginOverrides(
@@ -77,17 +83,19 @@ export function usePlugins(visible: boolean, token: string, isAdmin: boolean) {
           : {}
       );
     } catch (nextError) {
+      if (controller.signal.aborted) return;
       setError(
         nextError instanceof Error ? nextError.message : "Failed to load plugins"
       );
     } finally {
-      setLoading(false);
+      if (generation === generationRef.current) setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) { refreshControllerRef.current?.abort(); return; }
     void refresh();
+    return () => refreshControllerRef.current?.abort();
   }, [refresh, visible]);
 
   const plugins = useMemo(() => {

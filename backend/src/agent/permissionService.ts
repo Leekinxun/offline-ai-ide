@@ -8,6 +8,9 @@ import { agentProfileAllowsTool, type AgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
 import { evaluateModeCapability } from "./modeCapabilities.js";
+import { PolicyAuditLog, type PolicyAuditSink } from "./policyAudit.js";
+import { redactSecrets } from "./secretRedaction.js";
+import path from "node:path";
 
 export interface PermissionRequest {
   requestId: string;
@@ -50,25 +53,44 @@ export function createPermissionAuthorizer(options: {
   requestApproval?: (input: ToolApprovalRequestInput) => Promise<ToolApprovalDecision>;
   profile?: AgentProfile;
   runId?: string;
+  /** When both workspace and runId are supplied, decisions are durably audited. */
+  workspace?: string;
+  auditLog?: PolicyAuditSink;
   executionPlan?: ExecutionPlan;
 }): PermissionAuthorizer {
+  const audit = options.auditLog ?? (options.workspace && options.runId
+    ? new PolicyAuditLog(path.join(options.workspace, ".crewforge", "policy-audit.jsonl"))
+    : undefined);
   return async (request) => {
+    const safeInput = redactSecrets(request.input);
     await runAgentHooks("beforePermissionCheck", {
       agentId: request.agentName,
       runId: options.runId,
       requestId: request.requestId,
       toolCallId: request.toolCallId,
       toolName: request.name,
-      input: request.input,
+      input: safeInput,
     });
     const decide = async (result: PermissionResult): Promise<PermissionResult> => {
+      if (audit && options.workspace && options.runId) {
+        audit.append({
+          runId: options.runId,
+          workspace: options.workspace,
+          requestId: request.requestId,
+          toolCallId: request.toolCallId,
+          toolName: request.name,
+          allowed: result.allowed,
+          ...(result.reason ? { reason: result.reason } : {}),
+          input: safeInput,
+        });
+      }
       await runAgentHooks("afterPermissionDecision", {
         agentId: request.agentName,
         runId: options.runId,
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         toolName: request.name,
-        input: request.input,
+        input: safeInput,
         metadata: {
           allowed: result.allowed,
           reason: result.reason,

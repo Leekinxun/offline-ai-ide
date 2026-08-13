@@ -7,6 +7,7 @@ import {
   FileSelectionRange,
   OpenFile,
   SelectionInfo,
+  CollaborationState,
 } from "../types";
 import { getEditorThemeName } from "../editor/theme";
 import { useI18n } from "../i18n";
@@ -59,6 +60,7 @@ interface EditorProps {
   highlightTarget: HighlightTarget | null;
   onNavigationComplete: (requestId: number) => void;
   onHighlightComplete: (requestId: number) => void;
+  collaboration?: CollaborationState | null;
 }
 
 function escapeRegExp(value: string): string {
@@ -248,6 +250,7 @@ export const Editor: React.FC<EditorProps> = ({
   highlightTarget,
   onNavigationComplete,
   onHighlightComplete,
+  collaboration,
 }) => {
   const onSaveRef = useRef(onSave);
   const onFormatRef = useRef(onFormat);
@@ -260,6 +263,7 @@ export const Editor: React.FC<EditorProps> = ({
   const highlightDecorationIdsRef = useRef<string[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
   const symbolDecorationIdsRef = useRef<string[]>([]);
+  const collaborationDecorationIdsRef = useRef<string[]>([]);
   const pluginCleanupRef = useRef<(() => void) | null>(null);
   const { locale, t } = useI18n();
 
@@ -745,6 +749,18 @@ export const Editor: React.FC<EditorProps> = ({
     const editor = editorRef.current;
     const model = editor?.getModel();
     if (!editor || !model) return;
+    const claims = collaboration?.claims.filter((claim) => claim.anchor.path === path && claim.anchor.status !== "stale") || [];
+    const comments = collaboration?.comments.filter((comment) => comment.anchor.path === path && comment.anchor.status !== "stale") || [];
+    collaborationDecorationIdsRef.current = editor.deltaDecorations(collaborationDecorationIdsRef.current, [
+      ...claims.map((claim) => ({ range: new monaco.Range(Math.min(claim.anchor.startLine, model.getLineCount()), 1, Math.min(claim.anchor.endLine, model.getLineCount()), 1), options: { isWholeLine: true, className: `editor-collaboration-claim ${claim.subject.kind}`, glyphMarginClassName: `editor-collaboration-glyph ${claim.subject.kind}`, glyphMarginHoverMessage: { value: `${claim.subject.kind}: ${claim.subject.id}` } } })),
+      ...comments.map((comment) => ({ range: new monaco.Range(Math.min(comment.anchor.startLine, model.getLineCount()), 1, Math.min(comment.anchor.endLine, model.getLineCount()), 1), options: { isWholeLine: false, glyphMarginClassName: "editor-collaboration-comment-glyph", glyphMarginHoverMessage: { value: `${comment.author.id}: ${comment.body}` } } })),
+    ]);
+  }, [collaboration, editorRef, path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
     const owner = "crownforge-python";
     if (language !== "python" || !onValidateDocument) {
       monaco.editor.setModelMarkers(model, owner, []);
@@ -828,7 +844,7 @@ export const Editor: React.FC<EditorProps> = ({
           fontLigatures: true,
           lineHeight: 20,
           minimap: { enabled: false },
-          glyphMargin: Boolean(onToggleBreakpoint),
+          glyphMargin: Boolean(onToggleBreakpoint || collaboration),
           scrollBeyondLastLine: false,
           renderLineHighlight: "line",
           cursorBlinking: "smooth",

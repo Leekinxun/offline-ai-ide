@@ -14,15 +14,24 @@ import { checkpointsRouter } from "./routes/checkpoints.js";
 import { diagnosticsRouter } from "./routes/diagnostics.js";
 import { runRouter } from "./routes/run.js";
 import { debugRouter } from "./routes/debug.js";
+import { gitDeliveryRouter } from "./routes/gitDelivery.js";
+import { deliveryRouter, deliveryWebhookRouter } from "./routes/delivery.js";
+import { extensionsPolicyRouter } from "./routes/extensionsPolicy.js";
+import { modelGovernanceRouter } from "./routes/modelGovernance.js";
+import { migrationsRouter } from "./routes/migrations.js";
 import { authMiddleware } from "./auth/middleware.js";
 import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
 import { handleTerminalWs } from "./ws/terminal.js";
 import { handleTeamWs } from "./ws/team.js";
 import { UserSession } from "./auth/sessionManager.js";
+import { reloadExternalPlugins } from "./plugins/registry.js";
 
 const app = express();
+reloadExternalPlugins();
 app.use(cors());
+// Signed webhook verification requires the exact bytes received from the provider.
+app.use("/api/delivery/webhooks", deliveryWebhookRouter);
 app.use(express.json({ limit: "10mb" }));
 
 // Auth routes (no middleware — login/logout must be public)
@@ -38,6 +47,11 @@ app.use("/api/checkpoints", authMiddleware, checkpointsRouter);
 app.use("/api/diagnostics", authMiddleware, diagnosticsRouter);
 app.use("/api/run", authMiddleware, runRouter);
 app.use("/api/debug", authMiddleware, debugRouter);
+app.use("/api/git-delivery", authMiddleware, gitDeliveryRouter);
+app.use("/api/delivery", authMiddleware, deliveryRouter);
+app.use("/api/extension-policy", authMiddleware, extensionsPolicyRouter);
+app.use("/api/model-governance", authMiddleware, modelGovernanceRouter);
+app.use("/api/migrations", authMiddleware, migrationsRouter);
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });

@@ -4,6 +4,9 @@ import path from "path";
 import type { ToolFileUpdate } from "../agent/types.js";
 import type { AgentMode } from "../agent/types.js";
 import type { ReviewFinding } from "./reviewFindings.js";
+import type { CompletionEvidence } from "./completionEvidence.js";
+
+export type ExecutionContractKind = "direct_code" | "approved_plan";
 
 const HISTORY_DIR_NAME = ".history";
 const CONVERSATION_FILE_EXTENSION = ".jsonl";
@@ -62,6 +65,9 @@ export interface ConversationRunSummary {
   errorCount: number;
   commandCount: number;
   reviewFindings?: ReviewFinding[];
+  executionContractKind?: ExecutionContractKind;
+  completionEvidence?: CompletionEvidence;
+  qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
 }
 
 export function normalizeConversationRunSummary(raw: unknown): ConversationRunSummary | null {
@@ -102,6 +108,8 @@ export function normalizeConversationRunSummary(raw: unknown): ConversationRunSu
         }];
       }).slice(0, 100)
     : [];
+  const completionEvidence = normalizeCompletionEvidence(candidate.completionEvidence);
+  const qualityGate = candidate.qualityGate && typeof candidate.qualityGate === "object" && candidate.qualityGate.schemaVersion === 1 ? candidate.qualityGate : undefined;
 
   return {
     changedFiles,
@@ -109,7 +117,41 @@ export function normalizeConversationRunSummary(raw: unknown): ConversationRunSu
     errorCount: count(candidate.errorCount),
     commandCount: count(candidate.commandCount),
     ...(reviewFindings.length > 0 || Array.isArray(candidate.reviewFindings) ? { reviewFindings } : {}),
+    executionContractKind: candidate.executionContractKind === "approved_plan"
+      ? "approved_plan"
+      : "direct_code",
+    ...(completionEvidence ? { completionEvidence } : {}),
+    ...(qualityGate ? { qualityGate } : {}),
   };
+}
+
+export function normalizeCompletionEvidence(raw: unknown): CompletionEvidence | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<CompletionEvidence>;
+  if (
+    value.schemaVersion !== 1 ||
+    !value.ledger || typeof value.ledger !== "object" ||
+    !["completed", "validation_failed", "needs_attention", "failed", "stopped"].includes(value.outcome || "")
+  ) return null;
+  const ledger = value.ledger;
+  if (
+    !Array.isArray(ledger.changedFiles) ||
+    !Array.isArray(ledger.verification) ||
+    !Array.isArray(ledger.criteria) ||
+    !Array.isArray(ledger.blockers)
+  ) return null;
+  if (!ledger.changedFiles.every((entry) => typeof entry === "string")) return null;
+  if (!ledger.verification.every((entry) =>
+    entry && typeof entry.command === "string" &&
+    ["pending", "passed", "failed", "timed_out", "cancelled"].includes(entry.status)
+  )) return null;
+  if (!ledger.criteria.every((entry) =>
+    entry && typeof entry.criterion === "string" &&
+    ["pending", "passed", "failed"].includes(entry.state) &&
+    Array.isArray(entry.evidenceRefs) && entry.evidenceRefs.every((reference) => typeof reference === "string")
+  )) return null;
+  if (!ledger.blockers.every((entry) => ["childRun", "approval", "amendment", "conflict", "check", "changeEvidence", "quality"].includes(entry))) return null;
+  return value as CompletionEvidence;
 }
 
 export interface ConversationSummary {

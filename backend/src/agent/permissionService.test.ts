@@ -3,6 +3,10 @@ import test from "node:test";
 import { createPermissionAuthorizer, narrowPermissionAuthorizer } from "./permissionService.js";
 import { resolveAgentProfile } from "./agentProfiles.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { PolicyAuditLog } from "./policyAudit.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const request = {
   requestId: "request-1",
@@ -123,4 +127,20 @@ test("derived child permissions can only narrow the parent authorizer", async ()
   assert.equal((await child({ ...request, name: "read_file" })).allowed, true);
   assert.equal((await child(request)).allowed, false);
   assert.equal(parentCalls, 1);
+});
+
+test("permission decisions are audited with redacted input when workspace and run context exist", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "permission-audit-"));
+  try {
+    const audit = new PolicyAuditLog(path.join(workspace, "audit.jsonl"));
+    const authorize = createPermissionAuthorizer({
+      mode: "code", readOnly: false, workspace, runId: "run-1", auditLog: audit,
+    });
+    const result = await authorize({ ...request, name: "read_file", input: { token: "do-not-log" } });
+    assert.equal(result.allowed, true);
+    assert.equal(audit.verify().valid, true);
+    assert.doesNotMatch(fs.readFileSync(path.join(workspace, "audit.jsonl"), "utf8"), /do-not-log/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
 });

@@ -5,6 +5,10 @@ import {
   normalizeAgentProfileOverrides,
   type AgentProfileOverrides,
 } from "./agent/agentProfiles.js";
+import type {
+  DeliveryProviderConfig,
+  DeliveryRuntimeSettings,
+} from "./integrations/delivery/types.js";
 
 interface LlmRuntimeSettings {
   vllmApiUrl: string;
@@ -13,7 +17,10 @@ interface LlmRuntimeSettings {
   maxTokens: number;
   maxAgentIterations: number;
   systemPrompt?: string;
+  fallbacks?: ModelFallbackSettings[];
 }
+
+export interface ModelFallbackSettings { apiUrl: string; apiKey?: string; model: string; providerId?: string; maxOutputTokens?: number; }
 
 interface PluginOverrideSettings {
   enabled: boolean;
@@ -58,12 +65,61 @@ interface PersistedPluginSettings {
   overrides?: Record<string, Partial<PluginOverrideSettings>>;
 }
 
-interface PersistedAppSettings {
+export interface PersistedAppSettings {
+  schemaVersion?: 1;
   llm?: Partial<LlmRuntimeSettings>;
   plugins?: PersistedPluginSettings;
   app?: Partial<AppRuntimeSettings>;
   mcp?: Partial<McpRuntimeSettings>;
   agents?: AgentProfileOverrides;
+  delivery?: Partial<DeliveryRuntimeSettings>;
+}
+
+export interface AppSettingsMigrationStatus { state: "current" | "legacy_compatible" | "migrated" | "failed"; fromVersion: number; toVersion: 1; backupCreated: boolean; error?: string; }
+let appSettingsMigrationStatus: AppSettingsMigrationStatus = { state: "current", fromVersion: 1, toVersion: 1, backupCreated: false };
+export function getAppSettingsMigrationStatus(): AppSettingsMigrationStatus { return { ...appSettingsMigrationStatus }; }
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function normalizeDeliveryProviders(value: unknown): DeliveryProviderConfig[] {
+  if (!Array.isArray(value)) return [];
+  const providers: DeliveryProviderConfig[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const raw = candidate as Record<string, unknown>;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    const kind = raw.kind;
+    const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl.trim().replace(/\/+$/, "") : "";
+    const tokenEnv = typeof raw.tokenEnv === "string" ? raw.tokenEnv.trim() : "";
+    if (!id || ids.has(id) || !["github", "gitlab", "gitea"].includes(String(kind)) || !ENV_NAME.test(tokenEnv)) continue;
+    try {
+      const parsed = new URL(baseUrl);
+      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) continue;
+    } catch { continue; }
+    const webhookSecretEnv = typeof raw.webhookSecretEnv === "string" && ENV_NAME.test(raw.webhookSecretEnv.trim()) ? raw.webhookSecretEnv.trim() : undefined;
+    const tokenKind = ["bearer", "private-token", "gitea-token"].includes(String(raw.tokenKind)) ? raw.tokenKind as DeliveryProviderConfig["tokenKind"] : undefined;
+    providers.push({
+      id,
+      kind: kind as DeliveryProviderConfig["kind"],
+      baseUrl,
+      tokenEnv,
+      ...(tokenKind ? { tokenKind } : {}),
+      ...(webhookSecretEnv ? { webhookSecretEnv } : {}),
+      ...(typeof raw.gitRemoteName === "string" && raw.gitRemoteName.trim() ? { gitRemoteName: raw.gitRemoteName.trim() } : {}),
+      ...(typeof raw.apiVersion === "string" && raw.apiVersion.trim() ? { apiVersion: raw.apiVersion.trim() } : {}),
+      ...(raw.disabled === true ? { disabled: true } : {}),
+    });
+    ids.add(id);
+  }
+  return providers;
+}
+
+function parseDeliveryProvidersEnv(): unknown {
+  const value = process.env.DELIVERY_PROVIDERS;
+  if (!value) return [];
+  try { return JSON.parse(value); }
+  catch { console.warn("Ignoring invalid DELIVERY_PROVIDERS JSON"); return []; }
 }
 
 function parsePositiveInteger(
@@ -95,6 +151,19 @@ function parseUrlList(value: unknown): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function normalizeModelFallbacks(value: unknown): ModelFallbackSettings[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 3).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const raw = candidate as Record<string, unknown>;
+    const apiUrl = typeof raw.apiUrl === "string" ? raw.apiUrl.trim().replace(/\/+$/, "") : "";
+    const model = typeof raw.model === "string" ? raw.model.trim() : "";
+    try { const parsed = new URL(apiUrl); if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) return []; } catch { return []; }
+    if (!model) return [];
+    return [{ apiUrl, model: model.slice(0, 200), ...(typeof raw.apiKey === "string" ? { apiKey: raw.apiKey } : {}), ...(typeof raw.providerId === "string" && raw.providerId.trim() ? { providerId: raw.providerId.trim().slice(0, 100) } : {}), ...(Number.isSafeInteger(raw.maxOutputTokens) && Number(raw.maxOutputTokens) > 0 ? { maxOutputTokens: Number(raw.maxOutputTokens) } : {}) }];
+  });
 }
 
 function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
@@ -220,16 +289,72 @@ function resolvePluginsDir(): string {
   return path.resolve(process.cwd(), "plugins");
 }
 
-function loadPersistedAppSettings(configPath: string): PersistedAppSettings {
+function readRegularSettingsFile(configPath: string): string {
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0; let fd: number | undefined;
+  try {
+    fd = fs.openSync(configPath, fs.constants.O_RDONLY | noFollow);
+    if (!fs.fstatSync(fd).isFile()) throw new Error("App settings path must be a regular file");
+    return fs.readFileSync(fd, "utf8");
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function writeExclusivePrivateFile(filePath: string, bytes: string): void {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
+  const fd = fs.openSync(filePath, flags, 0o600);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error("Private backup target must be a regular file");
+    fs.fchmodSync(fd, 0o600); fs.writeFileSync(fd, bytes, "utf8"); fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+}
+
+function replacePrivateSettingsFile(configPath: string, bytes: string): void {
+  if (fs.existsSync(configPath) && fs.lstatSync(configPath).isSymbolicLink()) throw new Error("App settings path cannot be a symlink");
+  const temp = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  writeExclusivePrivateFile(temp, bytes);
+  try { fs.renameSync(temp, configPath); fs.chmodSync(configPath, 0o600); }
+  catch (error) { try { fs.unlinkSync(temp); } catch { /* best effort cleanup */ } throw error; }
+}
+
+export function loadPersistedAppSettings(configPath: string): PersistedAppSettings {
   try {
     if (!fs.existsSync(configPath)) {
-      return {};
+      appSettingsMigrationStatus = { state: "current", fromVersion: 1, toVersion: 1, backupCreated: false };
+      return { schemaVersion: 1 };
     }
-    const raw = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(raw) as PersistedAppSettings;
+    const raw = readRegularSettingsFile(configPath);
+    const parsed = JSON.parse(raw) as PersistedAppSettings & { schemaVersion?: number };
+    if (parsed.schemaVersion === undefined) {
+      appSettingsMigrationStatus = { state: "legacy_compatible", fromVersion: 0, toVersion: 1, backupCreated: false };
+      return parsed;
+    }
+    if (parsed.schemaVersion !== 1) throw new Error(`Unsupported app settings schema version: ${parsed.schemaVersion}`);
+    appSettingsMigrationStatus = { state: "current", fromVersion: 1, toVersion: 1, backupCreated: false };
+    return parsed;
   } catch (error) {
     console.warn(`Failed to load app settings from ${configPath}:`, error);
-    return {};
+    appSettingsMigrationStatus = { state: "failed", fromVersion: 0, toVersion: 1, backupCreated: false, error: error instanceof Error ? error.message : String(error) };
+    return { schemaVersion: 1 };
+  }
+}
+
+/** Explicit operator-controlled migration; ordinary module load is read-only. */
+export function migrateAppSettingsFile(configPath: string): AppSettingsMigrationStatus {
+  try {
+    const raw = readRegularSettingsFile(configPath);
+    const parsed = JSON.parse(raw) as PersistedAppSettings & { schemaVersion?: number };
+    if (parsed.schemaVersion === 1) return appSettingsMigrationStatus = { state: "current", fromVersion: 1, toVersion: 1, backupCreated: false };
+    if (parsed.schemaVersion !== undefined) throw new Error(`Unsupported app settings schema version: ${parsed.schemaVersion}`);
+    const backupPath = `${configPath}.migration-v0-${Date.now()}.bak`;
+    writeExclusivePrivateFile(backupPath, raw);
+    const migrated = { ...parsed, schemaVersion: 1 as const };
+    replacePrivateSettingsFile(configPath, `${JSON.stringify(migrated, null, 2)}\n`);
+    appSettingsMigrationStatus = { state: "migrated", fromVersion: 0, toVersion: 1, backupCreated: true };
+    return getAppSettingsMigrationStatus();
+  } catch (error) {
+    appSettingsMigrationStatus = { state: "failed", fromVersion: 0, toVersion: 1, backupCreated: false, error: error instanceof Error ? error.message : String(error) };
+    return getAppSettingsMigrationStatus();
   }
 }
 
@@ -238,6 +363,7 @@ let persistedAppSettings = loadPersistedAppSettings(appSettingsPath);
 const persistedLlmSettings = persistedAppSettings.llm || {};
 const persistedRuntimeSettings = persistedAppSettings.app || {};
 const persistedMcpSettings = persistedAppSettings.mcp || {};
+const persistedDeliverySettings = persistedAppSettings.delivery || {};
 const initialAgentSettings = normalizeAgentProfileOverrides(persistedAppSettings.agents);
 const initialMcpUrls = parseUrlList(
   persistedMcpSettings.baseUrls ||
@@ -251,14 +377,13 @@ const initialMcpDisabledUrls = parseUrlList(
   persistedMcpSettings.disabledUrls || process.env.MCP_DISABLED_URLS
 );
 const initialMcpServers = normalizeMcpServers(persistedMcpSettings.servers);
+const initialDeliveryProviders = normalizeDeliveryProviders(
+  persistedDeliverySettings.providers || parseDeliveryProvidersEnv()
+);
 
 function savePersistedAppSettings(): void {
   fs.mkdirSync(path.dirname(config.appSettingsPath), { recursive: true });
-  fs.writeFileSync(
-    config.appSettingsPath,
-    `${JSON.stringify(persistedAppSettings, null, 2)}\n`,
-    "utf-8"
-  );
+  replacePrivateSettingsFile(config.appSettingsPath, `${JSON.stringify(persistedAppSettings, null, 2)}\n`);
 }
 
 export const config = {
@@ -287,6 +412,7 @@ export const config = {
     persistedLlmSettings.maxTokens,
     parsePositiveInteger(process.env.AGENT_MAX_TOKENS, 8192)
   ),
+  modelFallbacks: normalizeModelFallbacks(persistedLlmSettings.fallbacks),
   mcpBaseUrls: initialMcpUrls,
   mcpLazyUrls: initialMcpLazyUrls,
   mcpDisabledUrls: initialMcpDisabledUrls,
@@ -307,6 +433,15 @@ export const config = {
     parsePositiveInteger(process.env.UPLOAD_MAX_FILE_SIZE_MB, 250)
   ),
   appSettingsPath,
+  deliveryProviders: initialDeliveryProviders,
+  deliveryPollIntervalSeconds: parsePositiveInteger(
+    persistedDeliverySettings.pollIntervalSeconds,
+    parsePositiveInteger(process.env.DELIVERY_POLL_INTERVAL_SECONDS, 60)
+  ),
+  deliveryRequestTimeoutSeconds: parsePositiveInteger(
+    persistedDeliverySettings.requestTimeoutSeconds,
+    parsePositiveInteger(process.env.DELIVERY_REQUEST_TIMEOUT_SECONDS, 20)
+  ),
 };
 
 export function getAgentSettings(): AgentProfileOverrides {
@@ -355,6 +490,23 @@ export function updateMcpSettings(next: McpRuntimeSettings): McpRuntimeSettings 
   savePersistedAppSettings();
 
   return getMcpSettings();
+}
+
+export function getDeliverySettings(): DeliveryRuntimeSettings {
+  return {
+    providers: normalizeDeliveryProviders(config.deliveryProviders),
+    pollIntervalSeconds: config.deliveryPollIntervalSeconds,
+    requestTimeoutSeconds: config.deliveryRequestTimeoutSeconds,
+  };
+}
+
+export function updateDeliverySettings(next: DeliveryRuntimeSettings): DeliveryRuntimeSettings {
+  config.deliveryProviders = normalizeDeliveryProviders(next.providers);
+  config.deliveryPollIntervalSeconds = parsePositiveInteger(next.pollIntervalSeconds, 60);
+  config.deliveryRequestTimeoutSeconds = parsePositiveInteger(next.requestTimeoutSeconds, 20);
+  persistedAppSettings = { ...persistedAppSettings, delivery: getDeliverySettings() };
+  savePersistedAppSettings();
+  return getDeliverySettings();
 }
 
 export function updateAppSettings(

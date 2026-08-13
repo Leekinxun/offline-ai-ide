@@ -9,6 +9,7 @@ import {
   SkillSummary,
   SkillUsageRecord,
 } from "../types";
+import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 
 interface KnowledgeManagerPanelProps {
   token: string;
@@ -39,6 +40,9 @@ export const KnowledgeManagerPanel: React.FC<KnowledgeManagerPanelProps> = ({
   const [skillUsage, setSkillUsage] = useState<SkillUsageRecord[]>([]);
   const [loadingSkillDetail, setLoadingSkillDetail] = useState(false);
   const [updatingSkill, setUpdatingSkill] = useState<string | null>(null);
+  const [pendingClearScope, setPendingClearScope] = useState<MemoryScope | null>(null);
+  const [confirmIntent, setConfirmIntent] = useState<ActionConfirmIntent | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const applyMemory = useCallback((entries: MemoryEntry[]) => {
     setMemory(entries);
@@ -113,14 +117,27 @@ export const KnowledgeManagerPanel: React.FC<KnowledgeManagerPanelProps> = ({
     }
   };
 
-  const handleClearMemory = async (scope: MemoryScope) => {
-    if (savingMemory || !window.confirm(t("settings.memoryClearConfirm"))) return;
+  const handleClearMemory = (scope: MemoryScope) => {
+    if (savingMemory) return;
+    setPendingClearScope(scope);
+    setConfirmError(null);
+    setConfirmIntent({ id: `clear-memory:${scope}`, title: t("common.clear"), description: t("settings.memoryClearConfirm"), confirmLabel: t("common.clear"), tone: "danger" });
+  };
+
+  const executeClearMemory = async () => {
+    if (!pendingClearScope) return;
+    const scope = pendingClearScope;
     setSavingMemory(scope);
+    setConfirmError(null);
     try {
       applyMemory(await adminSettings.deleteMemory(scope));
       onShowToast(t("settings.memoryCleared"));
+      setConfirmIntent(null);
+      setPendingClearScope(null);
     } catch (error) {
-      onShowToast(error instanceof Error ? error.message : t("settings.memorySaveFailed"));
+      const message = error instanceof Error ? error.message : t("settings.memorySaveFailed");
+      setConfirmError(message);
+      onShowToast(message);
     } finally {
       setSavingMemory(null);
     }
@@ -260,6 +277,13 @@ export const KnowledgeManagerPanel: React.FC<KnowledgeManagerPanelProps> = ({
           </div>
         </div>
       </section>
+      <ActionConfirmDialog
+        intent={confirmIntent}
+        busy={savingMemory !== null}
+        error={confirmError}
+        onClose={() => { setConfirmIntent(null); setPendingClearScope(null); setConfirmError(null); }}
+        onConfirm={() => executeClearMemory()}
+      />
     </>
   );
 };

@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { FileNode, TeamClaim, TeamPresence } from "../types";
 import { ChevronRight, Download, File, Folder } from "lucide-react";
 import { useI18n } from "../i18n";
+import { resolveVisibleTreeIndex } from "./fileTreeKeyboardContract";
 
 export const FILE_TREE_DRAG_TYPE = "application/x-crewforge-file-path";
 
@@ -21,6 +22,8 @@ interface FileTreeProps {
   presence?: TeamPresence[];
   filterQuery?: string;
   depth?: number;
+  rovingPath?: string;
+  onRovingPathChange?: (path: string) => void;
 }
 
 export const FileTree: React.FC<FileTreeProps> = ({
@@ -39,10 +42,23 @@ export const FileTree: React.FC<FileTreeProps> = ({
   presence,
   filterQuery = "",
   depth = 0,
+  rovingPath,
+  onRovingPathChange,
 }) => {
+  const { t } = useI18n();
+  const [rootRovingPath, setRootRovingPath] = useState(nodes[0]?.path || "");
+  const treeRef = useRef<HTMLDivElement>(null);
+  const effectiveRovingPath = rovingPath ?? rootRovingPath;
+  const setRovingPath = onRovingPathChange ?? setRootRovingPath;
+  useEffect(() => {
+    if (depth !== 0 || !treeRef.current) return;
+    const visibleItems = Array.from(treeRef.current.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+    if (!visibleItems.length) return;
+    if (!visibleItems.some((item) => item.dataset.treePath === effectiveRovingPath)) setRootRovingPath(visibleItems[0].dataset.treePath || "");
+  }, [depth, effectiveRovingPath, nodes]);
   return (
-    <>
-      {nodes.map((node) => (
+    <div ref={depth === 0 ? treeRef : undefined} role={depth === 0 ? "tree" : "group"} aria-label={depth === 0 ? t("sidebar.explorer") : undefined} aria-multiselectable={depth === 0 || undefined}>
+      {nodes.map((node, index) => (
         <FileTreeItem
           key={node.path}
           node={node}
@@ -60,9 +76,14 @@ export const FileTree: React.FC<FileTreeProps> = ({
           presence={presence}
           filterQuery={filterQuery}
           depth={depth}
+          position={index + 1}
+          setSize={nodes.length}
+          tabStop={effectiveRovingPath === node.path}
+          rovingPath={effectiveRovingPath}
+          onRovingPathChange={setRovingPath}
         />
       ))}
-    </>
+    </div>
   );
 };
 
@@ -82,6 +103,11 @@ interface FileTreeItemProps {
   presence?: TeamPresence[];
   filterQuery: string;
   depth: number;
+  position: number;
+  setSize: number;
+  tabStop: boolean;
+  rovingPath: string;
+  onRovingPathChange: (path: string) => void;
 }
 
 const FileTreeItem: React.FC<FileTreeItemProps> = ({
@@ -100,12 +126,18 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   presence,
   filterQuery,
   depth,
+  position,
+  setSize,
+  tabStop,
+  rovingPath,
+  onRovingPathChange,
 }) => {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [dropActive, setDropActive] = useState(false);
 
   const activateNode = useCallback((event?: React.MouseEvent) => {
+    onRovingPathChange(node.path);
     if (multiSelectEnabled || event?.ctrlKey || event?.metaKey) {
       onToggleSelect(node.path, !selectedPaths.has(node.path));
       return;
@@ -116,7 +148,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
     } else {
       onFileSelect(node.path);
     }
-  }, [multiSelectEnabled, node, onFileSelect, onToggleSelect, selectedPaths]);
+  }, [multiSelectEnabled, node, onFileSelect, onRovingPathChange, onToggleSelect, selectedPaths]);
 
   const handleClick = useCallback((event: React.MouseEvent) => {
     activateNode(event);
@@ -128,9 +160,42 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   const isSelected = selectedPaths.has(node.path);
   const claim = claims?.find((entry) => entry.path === node.path);
   const viewers = presence?.filter((entry) => entry.activeFilePath === node.path) || [];
+  const moveFocus = (target: HTMLElement | undefined) => {
+    if (!target) return;
+    if (target.dataset.treePath) onRovingPathChange(target.dataset.treePath);
+    target.focus();
+  };
+
+  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const current = event.currentTarget;
+    const tree = current.closest('[role="tree"]');
+    const items = tree ? Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]')) : [];
+    const index = items.indexOf(current);
+    const navigationIndex = resolveVisibleTreeIndex(index, items.length, event.key);
+    if (navigationIndex !== null) { event.preventDefault(); moveFocus(items[navigationIndex]); return; }
+    if (event.key === "ArrowRight" && node.type === "directory") {
+      event.preventDefault();
+      if (!isExpanded) setExpanded(true);
+      else moveFocus(items[index + 1]);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (node.type === "directory" && isExpanded && !isFilterActive) { onRovingPathChange(node.path); setExpanded(false); return; }
+      const wrapper = current.closest<HTMLElement>('[data-tree-node]');
+      const parentWrapper = wrapper?.parentElement?.closest<HTMLElement>('[data-tree-node]');
+      moveFocus(parentWrapper?.querySelector<HTMLElement>(':scope > [role="treeitem"]') || undefined);
+      return;
+    }
+    if (event.altKey && event.key.toLowerCase() === "d") { event.preventDefault(); void onDownload(node.path, node.type); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === " ") { event.preventDefault(); onToggleSelect(node.path, !isSelected); return; }
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    activateNode();
+  };
 
   return (
-    <div>
+    <div data-tree-node={node.path}>
       <div
         className={`tree-item${isActive ? " active" : ""}${isSelected ? " selected" : ""}${dropActive ? " drop-target" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
@@ -188,15 +253,17 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onDropFiles(node.path, event.dataTransfer.files);
           }
         }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          activateNode();
-        }}
+        onKeyDown={handleTreeKeyDown}
         role="treeitem"
-        tabIndex={0}
+        data-tree-path={node.path}
+        tabIndex={tabStop ? 0 : -1}
+        onFocus={() => onRovingPathChange(node.path)}
         aria-selected={isActive || isSelected}
         aria-expanded={node.type === "directory" ? isExpanded : undefined}
+        aria-level={depth + 1}
+        aria-posinset={position}
+        aria-setsize={setSize}
+        aria-keyshortcuts="Alt+D Control+Space"
       >
         {node.type === "directory" && (
           <ChevronRight
@@ -205,6 +272,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
           />
         )}
         <input
+          tabIndex={-1}
           type="checkbox"
           className={`tree-item-checkbox${multiSelectEnabled ? " visible" : ""}`}
           checked={isSelected}
@@ -228,6 +296,8 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
           </span>
         )}
         <button
+          type="button"
+          tabIndex={-1}
           className="tree-item-action"
           title={
             node.type === "directory"
@@ -260,6 +330,8 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             presence={presence}
             filterQuery={filterQuery}
             depth={depth + 1}
+            rovingPath={rovingPath}
+            onRovingPathChange={onRovingPathChange}
           />
         </div>
       )}

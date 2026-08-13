@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "baselines": [
+    { "file": "docs/screenshots/baseline/ai-running-dark-1280x720.jpg", "width": 1280, "height": 720, "sha256": "46be3f96571197d3bf87e9b2369dfacee8c37283c4f83a68ecae7b5c9303a997" },
+    { "file": "docs/screenshots/baseline/workbench-diff-light-1280x720.jpg", "width": 1280, "height": 720, "sha256": "0b847e67b697306f315603bdc5cb166d69808c4b1e48bca5b09de5d84a53add4" },
+    { "file": "docs/screenshots/baseline/workbench-review-light-1280x720.jpg", "width": 1280, "height": 720, "sha256": "2cd7d303cad5a9d3ae86a43353510791e36361cedd391a1bce150f1f87769a57" },
+    { "file": "docs/screenshots/baseline/workbench-team-light-1024x800.jpg", "width": 1024, "height": 800, "sha256": "c9b97c0d0ee584b20c70ab6151ce249f7e450c7a19a4c71cea9c9356c22dfad2" },
+    { "file": "docs/screenshots/baseline/workbench-terminal-light-768x800.jpg", "width": 768, "height": 800, "sha256": "89490604d96d7139a7d64063b1b5964bc5a7a52e9e62558c937e2535c3596a61" }
+  ]
+}

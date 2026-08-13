@@ -2,6 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { processModelTurn } from "./modelProcessor.js";
 import { OpenAIMessage } from "./types.js";
+import { redactSecrets } from "./secretRedaction.js";
+import type { ContextAuditOptions, ContextManifestState } from "./contextManifest.js";
+import type { ModelFallbackCandidate } from "./modelProcessor.js";
+import type { ProviderExecutionContract } from "./providerConformance.js";
 
 export type ContextStatus = "ready" | "compacting" | "warning";
 
@@ -115,7 +119,7 @@ async function persistTranscript(
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(
     fullPath,
-    messages.map((message) => JSON.stringify(message)).join("\n") + "\n",
+    redactSecrets(messages).map((message) => JSON.stringify(message)).join("\n") + "\n",
     "utf-8"
   );
   return relativePath;
@@ -151,6 +155,10 @@ export async function compactMessages(options: {
   apiKey?: string;
   model: string;
   signal?: AbortSignal;
+  contextAudit?: Omit<ContextAuditOptions, "purpose" | "agentId"> & { agentId?: string };
+  onContextManifest?: (state: ContextManifestState) => Promise<void> | void;
+  executionContract?: ProviderExecutionContract;
+  fallbacks?: ModelFallbackCandidate[];
 }): Promise<ContextCompactionResult> {
   const estimatedTokensBefore = estimateMessageTokens(options.messages);
   const transcriptPath = await persistTranscript(options.workspaceDir, options.messages);
@@ -173,11 +181,27 @@ export async function compactMessages(options: {
     apiUrl: options.apiUrl,
     apiKey: options.apiKey,
     model: options.model,
+    executionContract: options.executionContract,
+    fallbacks: options.fallbacks,
     messages: [{ role: "user", content: prompt }],
     fallbackMaxOutputTokens: 2000,
     maxOutputTokens: 2000,
     temperature: 0.1,
     signal: options.signal,
+    contextAudit: {
+      storeWorkspaceDir: options.contextAudit?.storeWorkspaceDir || options.workspaceDir,
+      effectiveWorkspaceDir: options.contextAudit?.effectiveWorkspaceDir || options.workspaceDir,
+      scope: options.contextAudit?.scope || { kind: "workspace", scopeId: "workspace" },
+      purpose: "compaction",
+      runId: options.contextAudit?.runId,
+      conversationId: options.contextAudit?.conversationId,
+      requestId: options.contextAudit?.requestId,
+      agentId: options.contextAudit?.agentId || "context-compactor",
+      policyVersion: options.contextAudit?.policyVersion,
+      controlsVersion: options.contextAudit?.controlsVersion,
+      messageSources: [{ kind: "compaction_input", sourceType: "conversation_transcript", reason: "Older conversation context selected for compaction", trust: "model_generated", integrity: "verified_digest", freshness: "fresh" }],
+    },
+    onContextManifest: options.onContextManifest,
   });
   const summary = processed.response.choices?.[0]?.message?.content?.trim();
   if (!summary) {

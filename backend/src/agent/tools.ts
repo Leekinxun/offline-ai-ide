@@ -11,13 +11,15 @@ import { TodoManager } from "./todoManager.js";
 import { TaskManager } from "./taskManager.js";
 import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
+import { beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
 import { runSubagent } from "./subagent.js";
-import { recordKnownFileMutation } from "../files/mutationRegistry.js";
+import { recordFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import { runWorkspaceCommand } from "./shell.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
+import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 
 // ---- Tool handler type ----
 
@@ -35,6 +37,20 @@ export type ToolHandler = (
     teammateManager: TeammateManager;
   }
 ) => Promise<string | ToolExecutionResult>;
+
+// Tool calls may be retried by providers. Keep command responses stable within the
+// process so a retry cannot create a second task/message while a lease is active.
+const COMMAND_RESULTS = new Map<string, string>();
+function idempotentCommand(ctx: ToolContext, key: unknown, run: () => string): string {
+  const id = typeof key === "string" ? key.trim() : "";
+  if (!id) return run();
+  const cacheKey = `${ctx.workspaceDir}:${id}`;
+  const existing = COMMAND_RESULTS.get(cacheKey);
+  if (existing !== undefined) return existing;
+  const result = run(); COMMAND_RESULTS.set(cacheKey, result);
+  if (COMMAND_RESULTS.size > 10_000) COMMAND_RESULTS.delete(COMMAND_RESULTS.keys().next().value!);
+  return result;
+}
 
 // ---- Core tool implementations ----
 
@@ -62,14 +78,80 @@ function createSelectionRange(
   };
 }
 
+function normalizeNonEmptyStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+const REVIEW_SEVERITIES = new Set(["critical", "error", "warning", "info"]);
+const REVIEW_LENSES = new Set(["correctness", "security", "performance", "test", "api_contract", "maintainability"]);
+
+/**
+ * Validate the review tool payload at the execution boundary. The model schema
+ * is advisory, so this is also the guard used before a finding is persisted.
+ */
+function sanitizeReviewFinding(args: Record<string, unknown>, workspaceDir: string):
+  | { finding: Record<string, unknown> }
+  | { error: string } {
+  const severity = typeof args.severity === "string" ? args.severity : "";
+  const lens = typeof args.lens === "string" ? args.lens : "";
+  const rawPath = typeof args.path === "string"
+    ? args.path.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").replace(/\/{2,}/g, "/")
+    : "";
+  const line = typeof args.line === "number" ? args.line : Number.NaN;
+  const column = typeof args.column === "number" ? args.column : undefined;
+  const message = typeof args.message === "string" ? args.message.trim() : "";
+  const reviewedRevision = typeof args.reviewedRevision === "string" ? args.reviewedRevision.trim() : "";
+  const reproduction = typeof args.reproduction === "string" ? args.reproduction.trim() : "";
+  const evidence = normalizeNonEmptyStringArray(args.evidence)
+    .map((value) => value.slice(0, 2_000))
+    .slice(0, 20);
+
+  if (!REVIEW_SEVERITIES.has(severity)) return { error: "severity must be critical, error, warning, or info" };
+  if (!REVIEW_LENSES.has(lens)) return { error: "lens is not a supported review lens" };
+  if (!rawPath || rawPath.length > 1_000 || path.posix.isAbsolute(rawPath) || /^[A-Za-z]:\//.test(rawPath) || rawPath.split("/").some((part) => part === "" || part === "." || part === "..")) {
+    return { error: "path must be a safe workspace-relative path" };
+  }
+  try {
+    // Detect both traversal and symlink escapes, even though this tool is read-only.
+    safePath(rawPath, workspaceDir);
+  } catch {
+    return { error: "path must resolve inside the workspace" };
+  }
+  if (!Number.isSafeInteger(line) || line < 1 || line > 10_000_000) return { error: "line must be a positive integer" };
+  if (column !== undefined && (!Number.isSafeInteger(column) || column < 1 || column > 1_000_000)) return { error: "column must be a positive integer" };
+  if (!message || message.length > 4_000) return { error: "message must be 1 to 4000 characters" };
+  if (!reviewedRevision || reviewedRevision.length > 160) return { error: "reviewedRevision must be 1 to 160 characters" };
+  if (reproduction.length > 2_000) return { error: "reproduction must be at most 2000 characters" };
+  if ((severity === "critical" || severity === "error") && evidence.length === 0 && !reproduction) {
+    return { error: "critical and error findings require direct evidence or a reproduction" };
+  }
+
+  return {
+    finding: {
+      severity,
+      lens,
+      path: rawPath,
+      line,
+      ...(column === undefined ? {} : { column }),
+      message,
+      evidence,
+      reviewedRevision,
+      ...(reproduction ? { reproduction } : {}),
+    },
+  };
+}
+
 async function runReadFile(
   filePath: string,
   limit: number | undefined,
   cwd: string
 ): Promise<string> {
   try {
-    const full = safePath(filePath, cwd);
-    const content = fs.readFileSync(full, "utf-8");
+    const content = readAuthorizedWorkspaceFile(cwd, filePath).content;
     const lines = content.split("\n");
     if (limit && limit < lines.length) {
       return [...lines.slice(0, limit), `... (${lines.length - limit} more lines)`].join("\n");
@@ -84,22 +166,29 @@ async function runWriteFile(
   filePath: string,
   content: string,
   cwd: string,
-  actorName?: string
+  context: Pick<ToolContext, "actorName" | "runId" | "toolCallId">
 ): Promise<string | ToolExecutionResult> {
   try {
     const policy = evaluateWorkspaceWrite(filePath);
     if (!policy.allowed) return `Error: Write blocked by workspace policy: ${policy.reason}`;
     const full = safePath(filePath, cwd);
+    const preimageContent = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
+    if (preimageContent === content) {
+      return `No changes to ${filePath}`;
+    }
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, "utf-8");
     const stat = fs.statSync(full);
-    recordKnownFileMutation({
+    recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
-      actor: actorName,
+      actor: context.actorName,
       mtimeMs: stat.mtimeMs,
-      content,
+      runId: context.runId,
+      toolCallId: context.toolCallId,
+      preimageContent,
+      postimageContent: content,
     });
     return {
       output: `Wrote ${content.length} bytes to ${filePath}`,
@@ -118,7 +207,7 @@ async function runEditFile(
   oldText: string,
   newText: string,
   cwd: string,
-  actorName?: string
+  context: Pick<ToolContext, "actorName" | "runId" | "toolCallId">
 ): Promise<string | ToolExecutionResult> {
   try {
     const policy = evaluateWorkspaceWrite(filePath);
@@ -130,15 +219,21 @@ async function runEditFile(
       return `Error: Text not found in ${filePath}`;
     }
     const updatedContent = content.replace(oldText, newText);
+    if (updatedContent === content) {
+      return `No changes to ${filePath}`;
+    }
     fs.writeFileSync(full, updatedContent, "utf-8");
     const stat = fs.statSync(full);
-    recordKnownFileMutation({
+    recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
-      actor: actorName,
+      actor: context.actorName,
       mtimeMs: stat.mtimeMs,
-      content: updatedContent,
+      runId: context.runId,
+      toolCallId: context.toolCallId,
+      preimageContent: content,
+      postimageContent: updatedContent,
     });
     return {
       output: `Edited ${filePath}`,
@@ -189,8 +284,44 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     }, null, 2);
   },
 
+  submit_completion_evidence: async (args, _ctx) =>
+    JSON.stringify({ accepted: true, criterionEvidence: args.criterionEvidence || args.criteria || {} }),
+
+  report_review_finding: async (args, ctx) => {
+    if (ctx.mode !== "review") return "Error: report_review_finding is only available in Review mode";
+    const result = sanitizeReviewFinding(args, ctx.workspaceDir);
+    return "error" in result
+      ? `Error: report_review_finding ${result.error}`
+      : JSON.stringify(result.finding);
+  },
+
+  request_plan_amendment: async (args) => {
+    const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+    const requestedFiles = normalizeNonEmptyStringArray(args.requestedFiles);
+    const requestedVerificationCommands = normalizeNonEmptyStringArray(
+      args.requestedVerificationCommands
+    );
+    if (!reason) return "Error: request_plan_amendment requires a non-empty reason";
+    if (requestedFiles.length === 0 && requestedVerificationCommands.length === 0) {
+      return "Error: request_plan_amendment requires at least one requested file or verification command";
+    }
+    return JSON.stringify({
+      accepted: true,
+      reason,
+      requestedFiles,
+      requestedVerificationCommands,
+    });
+  },
+
   bash: async (args, ctx) =>
-    runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal),
+    runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
+      compatibilityShellAuthorized: ctx.compatibilityShellAuthorized === true,
+      filesystem: {
+        workspaceDir: ctx.workspaceDir,
+        readPaths: ctx.filesystemSandbox?.readPaths || [],
+        writePaths: ctx.filesystemSandbox?.writePaths || [],
+      },
+    }),
 
   read_file: async (args, ctx) =>
     runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir),
@@ -200,7 +331,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       args.path as string,
       args.content as string,
       ctx.workspaceDir,
-      ctx.actorName
+      ctx
     ),
 
   edit_file: async (args, ctx) =>
@@ -209,7 +340,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       args.old_text as string,
       args.new_text as string,
       ctx.workspaceDir,
-      ctx.actorName
+      ctx
     ),
 
   TodoWrite: async (args, ctx) =>
@@ -222,13 +353,19 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   task_get: async (args, ctx) =>
     ctx.taskManager.get(args.task_id as number),
 
-  task_update: async (args, ctx) =>
-    ctx.taskManager.update(
-      args.task_id as number,
+  task_update: async (args, ctx) => {
+    const taskId = args.task_id as number;
+    const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
+    const attemptToken = args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    return ctx.taskManager.update(
+      taskId,
       args.status as string | undefined,
       args.add_blocked_by as number[] | undefined,
-      args.add_blocks as number[] | undefined
-    ),
+      args.add_blocks as number[] | undefined,
+      { completionGateToken: gate?.attemptToken }
+    );
+  },
 
   task_list: async (_args, ctx) =>
     ctx.taskManager.listAll(),
@@ -236,9 +373,42 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   claim_task: async (args, ctx) =>
     ctx.taskManager.claim(args.task_id as number, "lead"),
 
+  /** Structured, lease-aware task adapter. Legacy task_* tools remain supported. */
+  task_command: async (args, ctx) => {
+    const action = args.action;
+    const taskId = Number(args.task_id);
+    const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
+    const attemptToken = action === "update" && args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    return idempotentCommand(ctx, args.idempotency_key, () => {
+      if (action === "create") return ctx.taskManager.create(String(args.subject || ""), String(args.description || ""));
+      if (action === "get") return JSON.stringify(ctx.taskManager.getTask(taskId));
+      if (action === "list") return JSON.stringify(ctx.taskManager.listTasks());
+      if (action === "update") return ctx.taskManager.update(taskId, args.status as string | undefined, args.add_blocked_by as number[] | undefined, args.add_blocks as number[] | undefined, { evidence: args.evidence as string[] | undefined, expectedVersion: args.expected_version as number | undefined, completionGateToken: gate?.attemptToken });
+      if (action === "claim") return JSON.stringify({ lease: ctx.taskManager.claimLease(taskId, String(args.owner || ctx.actorName || "lead"), Number(args.lease_ms) || 30_000, args.expected_version as number | undefined) });
+      if (action === "renew") return JSON.stringify({ renewed: ctx.taskManager.renewLease(taskId, String(args.owner || ctx.actorName || "lead"), String(args.lease_token || ""), Number(args.lease_ms) || 30_000) });
+      if (action === "release_expired") return JSON.stringify({ released: ctx.taskManager.releaseExpiredLeases() });
+      return JSON.stringify({ error: "unknown task command" });
+    });
+  },
+
+  /** Structured durable message adapter. lease and ack require their returned token. */
+  message_command: async (args, ctx) => idempotentCommand(ctx, args.idempotency_key, () => {
+    const action = args.action;
+    const agent = String(args.agent || ctx.actorName || "lead");
+    if (action === "send") return ctx.messageBus.send(agent, String(args.to || ""), String(args.content || ""), String(args.msg_type || "message"), { idempotencyKey: args.idempotency_key });
+    if (action === "lease") return JSON.stringify(ctx.messageBus.leaseInbox(agent, String(args.consumer || agent), Number(args.limit) || 50, Number(args.lease_ms) || 30_000));
+    if (action === "ack") return JSON.stringify({ acked: ctx.messageBus.ack(agent, String(args.message_id || ""), String(args.lease_token || "")) });
+    if (action === "reclaim_expired") return JSON.stringify({ reclaimed: ctx.messageBus.reclaimExpired() });
+    if (action === "list") return JSON.stringify(ctx.messageBus.list(typeof args.agent === "string" ? args.agent : undefined));
+    return JSON.stringify({ error: "unknown message command" });
+  }),
+
   // --- Subagent ---
-  task: async (args, ctx) =>
-    runSubagent(
+  task: async (args, ctx) => {
+    const parentTaskId = Number.isSafeInteger(args.parent_task_id) && Number(args.parent_task_id) > 0 ? Number(args.parent_task_id) : undefined;
+    if (parentTaskId) ctx.taskManager.getTask(parentTaskId);
+    return runSubagent(
       args.prompt as string,
       (args.agent_type as string) || "Explore",
       ctx.workspaceDir,
@@ -247,18 +417,29 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx.vllmApiKey,
       ctx.authorizeTool,
       ctx.signal,
-      ctx.lineage
-    ),
+      ctx.lineage && {
+        ...ctx.lineage,
+        ...(parentTaskId ? { parentTaskId } : {}),
+      }
+    );
+  },
 
   // --- Team tools ---
-  spawn_teammate: async (args, ctx) =>
-    ctx.teammateManager.spawn(
+  spawn_teammate: async (args, ctx) => {
+    const parentTaskId = Number.isSafeInteger(args.parent_task_id) && Number(args.parent_task_id) > 0 ? Number(args.parent_task_id) : undefined;
+    if (parentTaskId) ctx.taskManager.getTask(parentTaskId);
+    return ctx.teammateManager.spawn(
       args.name as string,
       args.role as string,
       args.prompt as string,
       ctx.authorizeTool,
-      ctx.signal
-    ),
+      ctx.signal,
+      ctx.lineage && {
+        ...ctx.lineage,
+        ...(parentTaskId ? { parentTaskId } : {}),
+      }
+    );
+  },
 
   list_teammates: async (_args, ctx) =>
     ctx.teammateManager.listAll(),
@@ -282,6 +463,82 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 // ---- Tool definitions (OpenAI function-calling format) ----
 
 export const CORE_TOOLS: OpenAIToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "report_review_finding",
+      description: "Record one machine-readable review finding. Critical and error findings require direct evidence or a reproduction.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          severity: { type: "string", enum: ["critical", "error", "warning", "info"] },
+          lens: { type: "string", enum: ["correctness", "security", "performance", "test", "api_contract", "maintainability"] },
+          path: { type: "string", minLength: 1, maxLength: 1000, description: "Safe workspace-relative file path" },
+          line: { type: "integer", minimum: 1, maximum: 10000000 },
+          column: { type: "integer", minimum: 1, maximum: 1000000 },
+          message: { type: "string", minLength: 1, maxLength: 4000 },
+          evidence: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 2000 } },
+          reviewedRevision: { type: "string", minLength: 1, maxLength: 160 },
+          reproduction: { type: "string", maxLength: 2000 },
+        },
+        required: ["severity", "lens", "path", "line", "message", "evidence", "reviewedRevision"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "request_plan_amendment",
+      description: "Request an amendment to the approved execution plan when required work exceeds its file or verification-command scope. This records no workspace state.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            minLength: 1,
+            pattern: "\\S",
+            description: "Why the approved plan must be amended",
+          },
+          requestedFiles: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", minLength: 1, pattern: "\\S" },
+            description: "Additional relative file or directory scope requested",
+          },
+          requestedVerificationCommands: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", minLength: 1, pattern: "\\S" },
+            description: "Additional exact verification commands requested",
+          },
+        },
+        required: ["reason"],
+        anyOf: [
+          { required: ["requestedFiles"] },
+          { required: ["requestedVerificationCommands"] },
+        ],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "submit_completion_evidence",
+      description: "Submit explicit acceptance-criterion evidence by mapping each exact criterion text or zero-based index to prior successful tool-call ids. This records no workspace state.",
+      parameters: {
+        type: "object",
+        properties: {
+          criterionEvidence: {
+            type: "object",
+            description: "Keys are exact acceptance criterion text or zero-based indexes; values are successful prior tool-call id arrays.",
+            additionalProperties: { type: "array", items: { type: "string" } },
+          },
+        },
+        required: ["criterionEvidence"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -454,6 +711,20 @@ export const TASK_TOOLS: OpenAIToolDef[] = [
   {
     type: "function",
     function: {
+      name: "task_command",
+      description: "Run a structured task command. Claims return a lease token; renewals require that token. Supplying idempotency_key makes retries safe.",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "get", "list", "update", "claim", "renew", "release_expired"] },
+        task_id: { type: "integer" }, subject: { type: "string" }, description: { type: "string" }, status: { type: "string" },
+        owner: { type: "string" }, lease_token: { type: "string" }, lease_ms: { type: "integer" }, expected_version: { type: "integer" },
+        add_blocked_by: { type: "array", items: { type: "integer" } }, add_blocks: { type: "array", items: { type: "integer" } },
+        evidence: { type: "array", items: { type: "string" } }, idempotency_key: { type: "string" },
+      }, required: ["action"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "task_create",
       description: "Create a persistent file task.",
       parameters: {
@@ -521,6 +792,17 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
   {
     type: "function",
     function: {
+      name: "message_command",
+      description: "Run a durable message command. Leasing returns message lease tokens; ack requires the matching token. idempotency_key makes sends retry-safe.",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["send", "lease", "ack", "reclaim_expired", "list"] }, agent: { type: "string" }, to: { type: "string" }, content: { type: "string" }, msg_type: { type: "string" },
+        consumer: { type: "string" }, limit: { type: "integer" }, lease_ms: { type: "integer" }, message_id: { type: "string" }, lease_token: { type: "string" }, idempotency_key: { type: "string" },
+      }, required: ["action"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "task",
       description: "Spawn a subagent for isolated exploration or work. Returns a summary when done.",
       parameters: {
@@ -528,6 +810,7 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
         properties: {
           prompt: { type: "string" },
           agent_type: { type: "string", enum: ["Explore", "general-purpose"] },
+          parent_task_id: { type: "integer", description: "Optional durable parent task binding." },
         },
         required: ["prompt"],
       },
@@ -544,6 +827,7 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
           name: { type: "string" },
           role: { type: "string" },
           prompt: { type: "string" },
+          parent_task_id: { type: "integer", description: "Optional durable parent task binding." },
         },
         required: ["name", "role", "prompt"],
       },
@@ -658,15 +942,20 @@ export function getAllTools(options?: {
       "bash",
       "write_file",
       "edit_file",
+      "submit_completion_evidence",
+      "request_plan_amendment",
     ]);
     return allTools.filter((tool) => codeContractTools.has(tool.function.name));
   }
   if (!options?.readOnly && options?.mode !== "ask" && options?.mode !== "review" && options?.mode !== "plan") {
-    return allTools;
+    return allTools.filter((tool) =>
+      tool.function.name !== "request_plan_amendment" && tool.function.name !== "report_review_finding"
+    );
   }
   return allTools.filter((tool) =>
     READ_ONLY_TOOL_NAMES.has(tool.function.name) ||
     ((options?.mode === "review" || options?.mode === "plan") && tool.function.name === "bash") ||
+    (options?.mode === "review" && tool.function.name === "report_review_finding") ||
     (options?.mode === "plan" && tool.function.name === "submit_plan")
   );
 }

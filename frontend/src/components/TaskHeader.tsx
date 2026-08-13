@@ -9,6 +9,7 @@ import {
   PanelsTopLeft,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import { CompletionEvidence, ExecutionContract } from "../types";
 
 interface TaskHeaderProps {
   taskTitle: string;
@@ -27,6 +28,8 @@ interface TaskHeaderProps {
   onOpenIsolatedWindow: () => void;
   creatingIsolatedWindow: boolean;
   isolatedWindow: boolean;
+  executionContract?: ExecutionContract;
+  completionEvidence?: CompletionEvidence;
 }
 
 export const TaskHeader: React.FC<TaskHeaderProps> = ({
@@ -46,6 +49,8 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   onOpenIsolatedWindow,
   creatingIsolatedWindow,
   isolatedWindow,
+  executionContract,
+  completionEvidence,
 }) => {
   const { t } = useI18n();
   const statusLabel = isStreaming
@@ -67,9 +72,10 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
           </span>
           <div className="chat-header-heading">
             <span className="chat-header-title" title={taskTitle}>{taskTitle}</span>
+            {executionContract && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`} title={executionContract.planId || undefined}>{t(`chat.contract.${executionContract.kind}`)}</span>}
           </div>
         </div>
-        <div className="task-header-status" aria-live="polite">
+        <div className="task-header-status" role="status" aria-live="polite" aria-atomic="true">
           <span
             className={`task-header-status-dot${
               isStreaming ? " running" : connected ? " connected" : ""

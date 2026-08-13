@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { useModalDialogFocus } from "../../components/useModalDialogFocus";
 import { derivePluginScopes } from "../permissions";
 import type { BuiltinPluginDefinition } from "../types";
 import {
@@ -246,19 +247,11 @@ const JsonMutationDialog: React.FC<{
   const firstInputRef = useRef<
     HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null
   >(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useModalDialogFocus<HTMLElement>({ open: true, onClose: onCancel, initialFocusRef: firstInputRef });
 
   const parentIsArray = action.kind === "add" && Array.isArray(action.parent);
   const needsKey = action.kind === "rename" || (action.kind === "add" && !parentIsArray);
   const needsValue = action.kind === "add" || action.kind === "edit";
-
-  useEffect(() => {
-    returnFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    firstInputRef.current?.focus();
-    return () => returnFocusRef.current?.focus();
-  }, []);
 
   const title =
     action.kind === "add"
@@ -331,6 +324,8 @@ const JsonMutationDialog: React.FC<{
       }}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         className={`json-preview-dialog${action.kind === "delete" ? " danger" : ""}`}
         role="dialog"
         aria-modal="true"

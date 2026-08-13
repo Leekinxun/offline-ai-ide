@@ -1,9 +1,15 @@
 import type { ExecutionPlan } from "../chat/executionPlans.js";
 import type { AgentMode } from "./types.js";
+import {
+  amendmentRequired,
+  resolveCodeExecutionContract,
+} from "./executionContract.js";
 
 export interface ModeCapabilityDecision {
   allowed: boolean;
   reason?: string;
+  decision?: "amendment_required";
+  amendmentRequired?: boolean;
   requiresReplan?: boolean;
 }
 
@@ -38,38 +44,47 @@ export function evaluateModeCapability(options: {
   if (mode === "review") {
     if (INSPECTION_TOOLS.has(toolName)) return { allowed: true };
     if (toolName === "bash") return evaluateInspectionCommand(input.command);
+    if (toolName === "report_review_finding") return { allowed: true };
     return denied("Review mode is read-only and cannot modify workspace state");
   }
 
-  if (!executionPlan) return { allowed: true };
+  if (toolName === "report_review_finding") {
+    return denied("report_review_finding is only available in Review mode");
+  }
+
+  const contract = resolveCodeExecutionContract(executionPlan);
+  if (toolName === "request_plan_amendment" && contract.kind === "direct_code") {
+    return denied("Plan-amendment requests are only available while executing an approved plan");
+  }
+  if (contract.kind === "direct_code") return { allowed: true };
+  const approvedPlan = contract.plan;
   if (INSPECTION_TOOLS.has(toolName)) return { allowed: true };
+  if (toolName === "submit_completion_evidence") return { allowed: true };
+  if (toolName === "request_plan_amendment") return { allowed: true };
 
   if (toolName === "write_file" || toolName === "edit_file") {
     const target = typeof input.path === "string" ? normalizePath(input.path) : "";
-    const allowed = executionPlan.files.some((entry) => scopeContains(entry, target));
+    const allowed = approvedPlan.files.some((entry) => scopeContains(entry, target));
     return allowed
       ? { allowed: true }
-      : denied(
-          `Execution plan scope violation: ${target || "missing path"} is not in the approved file scope`,
-          true
+      : amendmentRequired(
+          `Execution plan scope violation: ${target || "missing path"} is not in the approved file scope`
         );
   }
 
   if (toolName === "bash") {
     const command = typeof input.command === "string" ? input.command.trim() : "";
-    if (executionPlan.verificationCommands.includes(command)) return { allowed: true };
+    if (approvedPlan.verificationCommands.includes(command)) return { allowed: true };
     const inspection = evaluateInspectionCommand(command);
     return inspection.allowed
       ? inspection
-      : denied(
-          "Execution plan scope violation: shell commands must be read-only inspection commands or an approved verification command",
-          true
+      : amendmentRequired(
+          "Execution plan scope violation: shell commands must be read-only inspection commands or an approved verification command"
         );
   }
 
-  return denied(
-    `Execution plan scope violation: ${toolName} is not part of the approved execution capability set`,
-    true
+  return amendmentRequired(
+    `Execution plan scope violation: ${toolName} is not part of the approved execution capability set`
   );
 }
 
@@ -104,6 +119,6 @@ function scopeContains(scopeValue: string, targetValue: string): boolean {
   return Boolean(scope && target && (scope === target || target.startsWith(`${scope}/`)));
 }
 
-function denied(reason: string, requiresReplan = false): ModeCapabilityDecision {
-  return { allowed: false, reason, ...(requiresReplan ? { requiresReplan: true } : {}) };
+function denied(reason: string): ModeCapabilityDecision {
+  return { allowed: false, reason };
 }

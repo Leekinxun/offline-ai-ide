@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "forbiddenFrontendPatterns": [
+    "window.confirm(",
+    "window.prompt(",
+    "window.alert(",
+    "alert("
+  ],
+  "forbiddenDocumentationPatterns": [
+    "<workspace>/.team/teams.json",
+    "latest successful backup",
+    "optional `formatId`",
+    "no migration API currently invokes",
+    "no route or CLI currently invokes",
+    "并可选传入 `formatId`",
+    "120 backend tests",
+    "120 个后端测试"
+  ],
+  "locale": {
+    "file": "frontend/src/i18n/messages.ts",
+    "englishExport": "EN_MESSAGES",
+    "chineseExport": "ZH_CN_MESSAGES",
+    "minimumKeys": 1000
+  },
+  "verificationEntry": {
+    "files": ["scripts/verify.sh", "scripts/verify-release.sh", "scripts/verify-release.mjs", "scripts/verify-clean-snapshot.mjs"],
+    "required": ["verify-release.sh", "backend-unit-integration", "fileTreeNavigation.test.ts", "performance-context", "frontend-production-build", "scripts/ui-contract.sh", "scripts/ws14-release-contract.mjs", "--check"]
+  },
+  "conditionalModalDrawers": [
+    { "id": "agent-drawer-modality", "file": "frontend/src/components/AgentBoard.tsx", "openState": "agentsVisible" },
+    { "id": "team-drawer-modality", "file": "frontend/src/components/TeamPanel.tsx", "openState": "teamVisible" },
+    { "id": "git-drawer-modality", "file": "frontend/src/components/GitPanel.tsx", "openState": "gitVisible" },
+    { "id": "terminal-drawer-modality", "file": "frontend/src/components/Terminal.tsx", "openState": "terminalVisible" }
+  ],
+  "componentContracts": [
+    {
+      "id": "file-tree-keyboard",
+      "file": "frontend/src/components/FileTree.tsx",
+      "required": ["role=\"tree\"", "role=\"treeitem\"", "resolveVisibleTreeIndex", "ArrowLeft", "ArrowRight", "aria-expanded", "aria-selected"]
+    },
+    {
+      "id": "file-tree-navigation-contract",
+      "file": "frontend/src/components/fileTreeKeyboardContract.ts",
+      "required": ["ArrowDown", "ArrowUp", "Home", "End", "Math.min", "Math.max"]
+    },
+    {
+      "id": "task-list-semantics",
+      "file": "frontend/src/components/TaskSidebar.tsx",
+      "required": ["role=\"list\"", "role=\"listitem\"", "aria-current"]
+    },
+    {
+      "id": "agent-list-semantics",
+      "file": "frontend/src/components/AgentBoard.tsx",
+      "required": ["role=\"list\"", "role=\"listitem\"", "aria-live=\"polite\"", "useModalDialogFocus"]
+    },
+    {
+      "id": "checkpoint-tabs",
+      "file": "frontend/src/components/CheckpointPanel.tsx",
+      "required": ["role=\"tablist\"", "role=\"tab\"", "role=\"tabpanel\"", "aria-controls", "aria-labelledby", "ArrowRight", "ArrowLeft", "Home", "End"]
+    },
+    {
+      "id": "run-details-tabs",
+      "file": "frontend/src/components/RunDetailsPanel.tsx",
+      "required": ["role=\"tablist\"", "role=\"tab\"", "role=\"tabpanel\"", "aria-controls", "aria-labelledby", "ArrowRight", "ArrowLeft", "Home", "End"]
+    },
+    {
+      "id": "git-delivery-tabs",
+      "file": "frontend/src/components/GitPanel.tsx",
+      "required": ["role=\"tablist\"", "role=\"tab\"", "role=\"tabpanel\"", "aria-controls", "aria-labelledby", "ArrowRight", "ArrowLeft", "Home", "End"]
+    },
+    {
+      "id": "tool-approval",
+      "file": "frontend/src/components/ToolApprovalCard.tsx",
+      "required": ["aria-live=\"assertive\"", "autoFocus", "chat.approval.allowOnce", "chat.approval.deny"]
+    },
+    {
+      "id": "operation-approval-dialog",
+      "file": "frontend/src/components/OperationApprovalDialog.tsx",
+      "required": ["role=\"dialog\"", "aria-modal=\"true\"", "aria-labelledby", "aria-describedby", "useModalDialogFocus", "initialFocusRef"]
+    },
+    {
+      "id": "change-diff-dialog",
+      "file": "frontend/src/components/ChangeDiffDialog.tsx",
+      "required": ["role=\"dialog\"", "aria-modal=\"true\"", "aria-labelledby", "useModalDialogFocus", "initialFocusRef"]
+    },
+    {
+      "id": "settings-dialog",
+      "file": "frontend/src/components/SettingsModal.tsx",
+      "required": ["role=\"dialog\"", "<ActionConfirmDialog", "useModalDialogFocus", "aria-modal=\"true\"", "aria-labelledby", "event.key === \"Escape\"", "returnFocusRef", "querySelectorAll<HTMLElement>"]
+    },
+    {
+      "id": "status-announcements",
+      "file": "frontend/src/components/TaskHeader.tsx",
+      "required": ["role=\"status\"", "aria-live=\"polite\"", "aria-atomic=\"true\""]
+    },
+    {
+      "id": "delivery-status-announcements",
+      "file": "frontend/src/components/ProviderDeliveryPanel.tsx",
+      "required": ["role=\"status\"", "role=\"alert\"", "aria-live=\"polite\""]
+    },
+    {
+      "id": "offline-status-announcements",
+      "file": "frontend/src/components/OfflineBundlePanel.tsx",
+      "required": ["role=\"status\"", "role=\"alert\"", "aria-live=\"polite\""]
+    }
+  ],
+  "responsiveBaselines": [
+    {
+      "id": "multi-agent-drawer",
+      "component": "frontend/src/components/AgentBoard.tsx",
+      "componentTokens": ["data-workspace-drawer=\"agents\"", "aria-labelledby=\"agent-board-title\""],
+      "cssTokens": ["@media (max-width: 1100px)", "@media (max-width: 860px)", ".agent-board"]
+    },
+    {
+      "id": "team-drawer",
+      "component": "frontend/src/components/TeamPanel.tsx",
+      "componentTokens": ["data-workspace-drawer=\"team\"", "aria-labelledby=\"team-panel-title\""],
+      "cssTokens": ["@media (max-width: 1100px)", "@media (max-width: 860px)", ".team-panel"]
+    },
+    {
+      "id": "delivery-approval",
+      "component": "frontend/src/components/OperationApprovalDialog.tsx",
+      "componentTokens": ["delivery-approval-dialog", "aria-modal=\"true\""],
+      "cssTokens": ["@media (max-width: 780px)", ".delivery-approval-dialog", ".delivery-approval-actions"]
+    },
+    {
+      "id": "delivery-offline",
+      "component": "frontend/src/components/ProviderDeliveryPanel.tsx",
+      "componentTokens": ["delivery-offline-state", "delivery-stale-card"],
+      "cssTokens": ["@media (max-width: 780px)", ".delivery-offline-state", ".delivery-form"]
+    }
+  ],
+  "recordedVisualBaselines": [
+    { "file": "docs/screenshots/baseline/ai-running-dark-1280x720.jpg", "width": 1280, "height": 720 },
+    { "file": "docs/screenshots/baseline/workbench-diff-light-1280x720.jpg", "width": 1280, "height": 720 },
+    { "file": "docs/screenshots/baseline/workbench-review-light-1280x720.jpg", "width": 1280, "height": 720 },
+    { "file": "docs/screenshots/baseline/workbench-team-light-1024x800.jpg", "width": 1024, "height": 800 },
+    { "file": "docs/screenshots/baseline/workbench-terminal-light-768x800.jpg", "width": 768, "height": 800 }
+  ],
+  "documentation": [
+    {
+      "id": "storage-migrations",
+      "file": "docs/migrations/storage-migrations.md",
+      "required": ["# Storage migrations", "## Material format matrix", "## Upgrade sequence", "## Downgrade and rollback", "Forward behavior", "Compatibility read", "Backup and downgrade", "Verification", "TEAM_STORE_ROOT/.team/teams.json", "POST /api/migrations/app-settings/run", "{\"formatId\":\"tasks\"}", "statusError", "preserve the complete `.codex/migrations/`", "do not run migration or rollback", "active_lock", "returns `409`", "quiesce writes", "superseded", "benign and nonblocking"]
+    },
+    {
+      "id": "operator-runbook",
+      "file": "docs/operations/operator-runbook.md",
+      "required": ["# Operator runbook", "## Backup", "## Retention", "## Process and sandbox profiles", "## Git and provider integrations", "## Secrets", "## Incident recovery", "## Air-gapped transfer and application update", "## Downgrade", "TEAM_STORE_ROOT/.team/teams.json", "POST /api/migrations/app-settings/run", "{\"formatId\":\"tasks\"}", "statusError", "preserve the complete `.codex/migrations/`", "do not run migration/rollback", "active_lock", "returns `409`", "quiesce writes", "superseded", "benign and nonblocking"]
+    },
+    {
+      "id": "release-evidence",
+      "file": "docs/verification/release-evidence.md",
+      "required": ["# Release claim-to-verification matrix", "WS14-A11Y", "WS14-I18N", "WS14-MIGRATION", "WS14-RESPONSIVE", "WS14-OFFLINE", "node scripts/ws14-release-contract.mjs", "scripts/ui-contract.sh", "backend/src/security/g007StorageMigrationContract.test.ts", "./scripts/verify.sh", "TEAM_STORE_ROOT/.team/teams.json", "POST /api/migrations/app-settings/run", "{\"formatId\":\"tasks\"}", "statusError", "complete `.codex/migrations/` control state", "active_lock", "returns `409`", "quiesced", "superseded", "benign/nonblocking"]
+    },
+    {
+      "id": "readme-storage-contract",
+      "file": "README.md",
+      "required": ["TEAM_STORE_ROOT/.team/teams.json", "POST /api/migrations/app-settings/run", "{\"formatId\":\"tasks\"}"]
+    },
+    {
+      "id": "readme-storage-contract-zh",
+      "file": "README_zh.md",
+      "required": ["TEAM_STORE_ROOT/.team/teams.json", "POST /api/migrations/app-settings/run", "{\"formatId\":\"tasks\"}"]
+    }
+  ],
+  "migrationSurfaces": [
+    {
+      "id": "history",
+      "implementation": ["backend/src/chat/history.ts", "backend/src/chat/runHistory.ts"],
+      "tests": ["backend/src/chat/history.test.ts", "backend/src/agent/runHistory.test.ts"]
+    },
+    {
+      "id": "checkpoints",
+      "implementation": ["backend/src/chat/checkpoints.ts", "backend/src/chat/changeSets.ts"],
+      "tests": ["backend/src/chat/checkpoints.test.ts", "backend/src/chat/changeSets.test.ts"]
+    },
+    {
+      "id": "agent-state",
+      "implementation": ["backend/src/agent/taskManager.ts", "backend/src/agent/messageBus.ts", "backend/src/agent/orchestrationStore.ts"],
+      "tests": ["backend/src/agent/taskManager.test.ts", "backend/src/agent/messageBus.test.ts", "backend/src/agent/tools.orchestration.test.ts"]
+    },
+    {
+      "id": "settings",
+      "implementation": ["backend/src/config.ts", "backend/src/extensions/policy/store.ts"],
+      "tests": ["backend/src/security/g007StorageMigrationContract.test.ts"]
+    }
+  ]
+}

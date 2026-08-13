@@ -1,139 +1,62 @@
-import fs from "fs";
-import path from "path";
-import { Task } from "./types.js";
+import crypto from "crypto";
+import { OrchestrationStore } from "./orchestrationStore.js";
+import { Task, TaskLease, TaskStatus } from "./types.js";
+import { assertCompletionGateToken, beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
+import { isTerminalRunStatus, listRunSummaries } from "../chat/runHistory.js";
+
+interface TaskState { schemaVersion: 1; version: number; nextId: number; tasks: Record<string, Task>; }
+const terminal = new Set<TaskStatus>(["completed", "failed", "cancelled", "deleted"]);
 
 export class TaskManager {
-  private tasksDir: string;
-
-  constructor(workspaceDir: string) {
-    this.tasksDir = path.join(workspaceDir, ".tasks");
-    try {
-      fs.mkdirSync(this.tasksDir, { recursive: true });
-    } catch {
-      // Workspace may not be writable during import; defer creation
-    }
+  private readonly store: OrchestrationStore<TaskState>;
+  constructor(private readonly workspaceDir: string) { this.store = new OrchestrationStore(workspaceDir, "tasks", () => ({ schemaVersion: 1, version: 1, nextId: 1, tasks: {} })); }
+  private validateStatus(status: string): asserts status is TaskStatus { if (!(["pending", "blocked", "in_progress", "paused", "completed", "failed", "cancelled", "deleted"] as string[]).includes(status)) throw new Error(`Invalid task status: ${status}`); }
+  private requiredDescendants(state: TaskState, parentId: number): Task[] { const result: Task[] = []; const visit = (id: number) => { for (const task of Object.values(state.tasks)) if (task.parentId === id) { if (task.required !== false) result.push(task); visit(task.id); } }; visit(parentId); return result; }
+  private assertNoDependencyCycles(state: TaskState): void { const visiting = new Set<number>(); const visited = new Set<number>(); const visit = (id: number) => { if (visiting.has(id)) throw new Error("Task dependency cycle detected"); if (visited.has(id)) return; visiting.add(id); for (const dep of state.tasks[String(id)]?.blockedBy || []) visit(dep); visiting.delete(id); visited.add(id); }; Object.values(state.tasks).forEach((task) => visit(task.id)); }
+  private dependenciesDone(state: TaskState, task: Task): boolean { return task.blockedBy.every((id) => state.tasks[String(id)]?.status === "completed"); }
+  private normalize(state: TaskState, task: Task): void { if (!terminal.has(task.status) && !this.dependenciesDone(state, task)) task.status = "blocked"; }
+  create(subject: string, description = "", options: Partial<Pick<Task, "parentId" | "required" | "blockedBy" | "blocks" | "budget" | "requiresPlanApproval" | "minimumCompletionQuality">> = {}): string {
+    if (!subject.trim()) throw new Error("Task subject is required");
+    return JSON.stringify(this.store.transact((state) => {
+      if (options.parentId && !state.tasks[String(options.parentId)]) throw new Error(`Parent task ${options.parentId} not found`);
+      const id = state.nextId++; const now = Date.now();
+      const task: Task = { id, subject: subject.slice(0, 500), description: description.slice(0, 20_000), status: "pending", owner: null, blockedBy: [...new Set(options.blockedBy || [])], blocks: [...new Set(options.blocks || [])], parentId: options.parentId, required: options.required ?? true, budget: options.budget ? { ...options.budget, usedTokens: options.budget.usedTokens || 0, usedCostUsd: options.budget.usedCostUsd || 0, startedAt: options.budget.startedAt || now } : undefined, requiresPlanApproval: options.requiresPlanApproval, planApproved: options.requiresPlanApproval ? false : undefined, minimumCompletionQuality: options.minimumCompletionQuality, version: 1, createdAt: now, updatedAt: now, completionEvidence: [] };
+      for (const dep of task.blockedBy) if (!state.tasks[String(dep)]) throw new Error(`Dependency task ${dep} not found`);
+      this.normalize(state, task); state.tasks[String(id)] = task; this.assertNoDependencyCycles(state); state.version++; return task;
+    }), null, 2);
   }
-
-  private ensureDir(): void {
-    fs.mkdirSync(this.tasksDir, { recursive: true });
+  getTask(tid: number): Task { const task = this.store.snapshot().tasks[String(tid)]; if (!task) throw new Error(`Task ${tid} not found`); return task; }
+  get(tid: number): string { return JSON.stringify(this.getTask(tid), null, 2); }
+  update(tid: number, status?: string, addBlockedBy?: number[], addBlocks?: number[], options: { evidence?: string[]; expectedVersion?: number; owner?: string; leaseToken?: string; completionGateToken?: string } = {}): string {
+    if (status === "completed") assertCompletionGateToken(this.workspaceDir, `task:${tid}`, options.completionGateToken);
+    return JSON.stringify(this.store.transact((state) => {
+      const task = state.tasks[String(tid)]; if (!task) throw new Error(`Task ${tid} not found`);
+      if (options.expectedVersion !== undefined && task.version !== options.expectedVersion) throw new Error("Task version conflict");
+      if (addBlockedBy) for (const id of addBlockedBy) { if (id === tid || !state.tasks[String(id)]) throw new Error(`Invalid dependency ${id}`); if (!task.blockedBy.includes(id)) task.blockedBy.push(id); }
+      if (addBlocks) for (const id of addBlocks) { if (id === tid || !state.tasks[String(id)]) throw new Error(`Invalid blocked task ${id}`); if (!task.blocks.includes(id)) task.blocks.push(id); }
+      this.assertNoDependencyCycles(state);
+      if (options.evidence) task.completionEvidence = options.evidence.map((item) => item.slice(0, 2000)).slice(0, 50);
+      if (status) { this.validateStatus(status); if (status === "completed") { if (task.lease && task.lease.expiresAt > Date.now() && (task.lease.owner !== options.owner || task.lease.token !== options.leaseToken)) throw new Error("A current task lease is required for completion"); const incomplete = this.requiredDescendants(state, tid).filter((child) => child.status !== "completed"); if (incomplete.length) throw new Error(`Task ${tid} is blocked by required children/descendants: ${incomplete.map((child) => child.id).join(", ")}`); const activeRuns = listRunSummaries(this.workspaceDir).filter((run) => run.parentTaskId === tid && !isTerminalRunStatus(run.status)); if (activeRuns.length) throw new Error(`Task ${tid} is blocked by nonterminal agent descendants: ${activeRuns.map((run) => run.runId).join(", ")}`); if (!this.dependenciesDone(state, task)) throw new Error(`Task ${tid} has incomplete dependencies`); if (task.requiresPlanApproval && !task.planApproved) throw new Error("Task plan approval gate is unmet"); if (task.minimumCompletionQuality !== undefined && (task.completionQuality === undefined || task.completionQuality < task.minimumCompletionQuality)) throw new Error("Task completion quality gate is unmet"); if ((task.minimumCompletionQuality !== undefined || task.requiresPlanApproval) && !task.completionEvidence?.length) throw new Error("Task completion evidence gate is unmet"); } task.status = status; if (terminal.has(status)) task.lease = undefined; }
+      task.updatedAt = Date.now(); task.version = (task.version || 0) + 1; state.version++;
+      Object.values(state.tasks).forEach((other) => { if (other.status === "blocked" && this.dependenciesDone(state, other)) { other.status = "pending"; other.updatedAt = Date.now(); } }); return task;
+    }), null, 2);
   }
-
-  private nextId(): number {
-    this.ensureDir();
-    const files = fs.readdirSync(this.tasksDir).filter((f) => f.match(/^task_\d+\.json$/));
-    const ids = files.map((f) => parseInt(f.split("_")[1]));
-    return ids.length > 0 ? Math.max(...ids) + 1 : 1;
+  /** CAS claim. Returns null when another live owner has the lease or work is blocked. */
+  claimLease(tid: number, owner: string, leaseMs = 30_000, expectedVersion?: number): TaskLease | null { return this.store.transact((state) => { const task = state.tasks[String(tid)]; const now = Date.now(); if (!task || terminal.has(task.status) || !this.dependenciesDone(state, task) || (task.budget?.maxDurationMs && task.createdAt && now - task.createdAt > task.budget.maxDurationMs) || (expectedVersion !== undefined && task.version !== expectedVersion) || (task.lease && task.lease.expiresAt > now && task.lease.owner !== owner)) return null; const lease = { owner, token: crypto.randomUUID(), claimedAt: now, expiresAt: now + Math.max(1000, leaseMs) }; task.owner = owner; task.lease = lease; task.status = "in_progress"; task.version = (task.version || 0) + 1; task.updatedAt = now; return lease; }); }
+  claim(tid: number, owner: string): string { return this.claimLease(tid, owner) ? `Claimed task #${tid} for ${owner}` : `Task #${tid} is unavailable`; }
+  renewLease(tid: number, owner: string, token: string, leaseMs = 30_000): boolean { return this.store.transact((state) => { const task = state.tasks[String(tid)]; if (!task?.lease || task.lease.owner !== owner || task.lease.token !== token || task.lease.expiresAt <= Date.now()) return false; task.lease.expiresAt = Date.now() + Math.max(1000, leaseMs); task.updatedAt = Date.now(); return true; }); }
+  complete(tid: number, owner: string, token: string, evidence: string[] = []): string { return this.update(tid, "completed", undefined, undefined, { owner, leaseToken: token, evidence }); }
+  async completeAfterQualityGate(tid: number, owner: string, token: string, evidence: string[] = [], runId = `task-${tid}`): Promise<string> {
+    const scopeId = `task:${tid}`;
+    const attemptToken = beginCompletionAttempt({ workspaceDir: this.workspaceDir, runId, scopeId });
+    const gate = await runRepositoryCompletionGate({ workspaceDir: this.workspaceDir, runId, scopeId, attemptToken, agentId: owner });
+    return this.update(tid, "completed", undefined, undefined, { owner, leaseToken: token, evidence, completionGateToken: gate.attemptToken });
   }
-
-  private load(tid: number): Task {
-    const filePath = path.join(this.tasksDir, `task_${tid}.json`);
-    if (!fs.existsSync(filePath)) throw new Error(`Task ${tid} not found`);
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  }
-
-  private save(task: Task): void {
-    this.ensureDir();
-    fs.writeFileSync(
-      path.join(this.tasksDir, `task_${task.id}.json`),
-      JSON.stringify(task, null, 2)
-    );
-  }
-
-  create(subject: string, description: string = ""): string {
-    const task: Task = {
-      id: this.nextId(),
-      subject,
-      description,
-      status: "pending",
-      owner: null,
-      blockedBy: [],
-      blocks: [],
-    };
-    this.save(task);
-    return JSON.stringify(task, null, 2);
-  }
-
-  get(tid: number): string {
-    return JSON.stringify(this.load(tid), null, 2);
-  }
-
-  update(
-    tid: number,
-    status?: string,
-    addBlockedBy?: number[],
-    addBlocks?: number[]
-  ): string {
-    const task = this.load(tid);
-
-    if (status) {
-      task.status = status as Task["status"];
-      if (status === "completed") {
-        // Remove this task from others' blockedBy
-        this.ensureDir();
-        for (const f of fs.readdirSync(this.tasksDir).filter((x) => x.match(/^task_\d+\.json$/))) {
-          const other = JSON.parse(fs.readFileSync(path.join(this.tasksDir, f), "utf-8")) as Task;
-          if (other.blockedBy.includes(tid)) {
-            other.blockedBy = other.blockedBy.filter((id) => id !== tid);
-            this.save(other);
-          }
-        }
-      }
-      if (status === "deleted") {
-        const filePath = path.join(this.tasksDir, `task_${tid}.json`);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        return `Task ${tid} deleted`;
-      }
-    }
-
-    if (addBlockedBy) {
-      task.blockedBy = [...new Set([...task.blockedBy, ...addBlockedBy])];
-    }
-    if (addBlocks) {
-      task.blocks = [...new Set([...task.blocks, ...addBlocks])];
-    }
-
-    this.save(task);
-    return JSON.stringify(task, null, 2);
-  }
-
-  listAll(): string {
-    this.ensureDir();
-    const files = fs.readdirSync(this.tasksDir).filter((f) => f.match(/^task_\d+\.json$/));
-    if (files.length === 0) return "No tasks.";
-
-    const tasks = files
-      .sort()
-      .map((f) => JSON.parse(fs.readFileSync(path.join(this.tasksDir, f), "utf-8")) as Task);
-
-    const markers: Record<string, string> = {
-      pending: "[ ]",
-      in_progress: "[>]",
-      completed: "[x]",
-    };
-
-    return tasks
-      .map((t) => {
-        const m = markers[t.status] || "[?]";
-        const owner = t.owner ? ` @${t.owner}` : "";
-        const blocked = t.blockedBy.length > 0 ? ` (blocked by: ${t.blockedBy.join(", ")})` : "";
-        return `${m} #${t.id}: ${t.subject}${owner}${blocked}`;
-      })
-      .join("\n");
-  }
-
-  claim(tid: number, owner: string): string {
-    const task = this.load(tid);
-    task.owner = owner;
-    task.status = "in_progress";
-    this.save(task);
-    return `Claimed task #${tid} for ${owner}`;
-  }
-
-  getUnclaimed(): Task[] {
-    this.ensureDir();
-    const files = fs.readdirSync(this.tasksDir).filter((f) => f.match(/^task_\d+\.json$/));
-    return files
-      .map((f) => JSON.parse(fs.readFileSync(path.join(this.tasksDir, f), "utf-8")) as Task)
-      .filter((t) => t.status === "pending" && !t.owner && t.blockedBy.length === 0);
-  }
+  approvePlan(tid: number, expectedVersion: number): Task { return this.store.transact((state) => { const task = state.tasks[String(tid)]; if (!task) throw new Error(`Task ${tid} not found`); if (task.version !== expectedVersion) throw new Error("Task version conflict"); task.planApproved = true; task.version = (task.version || 0) + 1; task.updatedAt = Date.now(); return structuredClone(task); }); }
+  recordCompletionEvidence(tid: number, evidence: string[], quality: number, expectedVersion: number): Task { return this.store.transact((state) => { const task = state.tasks[String(tid)]; if (!task) throw new Error(`Task ${tid} not found`); if (task.version !== expectedVersion) throw new Error("Task version conflict"); if (!Number.isFinite(quality) || quality < 0 || quality > 1) throw new Error("Completion quality must be between 0 and 1"); const clean = evidence.filter((item) => typeof item === "string" && item.trim()).map((item) => item.slice(0, 2000)).slice(0, 50); if (!clean.length) throw new Error("Completion evidence is required"); task.completionEvidence = clean; task.completionQuality = quality; task.version = (task.version || 0) + 1; task.updatedAt = Date.now(); return structuredClone(task); }); }
+  recordUsage(tid: number, owner: string, token: string, tokens: number, costUsd: number): boolean { return this.store.transact((state) => { const task = state.tasks[String(tid)]; if (!task?.lease || task.lease.owner !== owner || task.lease.token !== token || task.lease.expiresAt <= Date.now()) return false; if (!Number.isSafeInteger(tokens) || tokens < 0 || !Number.isFinite(costUsd) || costUsd < 0) throw new Error("Invalid task usage"); const budget = task.budget ||= { startedAt: Date.now(), usedTokens: 0, usedCostUsd: 0 }; const nextTokens = (budget.usedTokens || 0) + tokens; const nextCost = (budget.usedCostUsd || 0) + costUsd; if ((budget.maxTokens !== undefined && nextTokens > budget.maxTokens) || (budget.maxCostUsd !== undefined && nextCost > budget.maxCostUsd) || (budget.maxDurationMs !== undefined && Date.now() - (budget.startedAt || Date.now()) > budget.maxDurationMs)) return false; budget.usedTokens = nextTokens; budget.usedCostUsd = nextCost; task.version = (task.version || 0) + 1; return true; }); }
+  releaseExpiredLeases(now = Date.now()): number { return this.store.transact((state) => { let count = 0; Object.values(state.tasks).forEach((task) => { if (task.lease && task.lease.expiresAt <= now) { task.lease = undefined; task.owner = null; if (task.status === "in_progress") task.status = this.dependenciesDone(state, task) ? "pending" : "blocked"; task.updatedAt = now; count++; } }); return count; }); }
+  getUnclaimed(): Task[] { this.releaseExpiredLeases(); const state = this.store.snapshot(); return Object.values(state.tasks).filter((task) => task.status === "pending" && !task.owner && this.dependenciesDone(state, task)); }
+  listTasks(): Task[] { return Object.values(this.store.snapshot().tasks).sort((a, b) => a.id - b.id); }
+  listAll(): string { const tasks = this.listTasks(); if (!tasks.length) return "No tasks."; return tasks.map((task) => `${task.status === "completed" ? "[x]" : task.status === "in_progress" ? "[>]" : "[ ]"} #${task.id}: ${task.subject}${task.owner ? ` @${task.owner}` : ""}${task.blockedBy.length ? ` (blocked by: ${task.blockedBy.join(", ")})` : ""}`).join("\n"); }
 }

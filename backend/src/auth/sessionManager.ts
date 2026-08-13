@@ -6,6 +6,7 @@ import { MessageBus } from "../agent/messageBus.js";
 import { TeammateManager } from "../agent/teammateManager.js";
 import { config } from "../config.js";
 import { setActiveTeamId } from "../team/sessionBridge.js";
+import { reconcileChangeSetReviewRuns } from "../chat/changeSetReviewRun.js";
 
 interface UserConfig {
   username: string;
@@ -62,6 +63,15 @@ function createSessionSingletons(workspaceDir: string) {
   const taskManager = new TaskManager(workspaceDir);
   const messageBus = new MessageBus(workspaceDir);
   const teammateManager = new TeammateManager(workspaceDir, messageBus, taskManager);
+  // Durable orchestration state can outlive the process; reconcile it before a
+  // new session exposes stale "working" agents or expired work/message leases.
+  taskManager.releaseExpiredLeases();
+  messageBus.reclaimExpired();
+  teammateManager.reconcile();
+  // Review attempts are separately leased durable work. Resume or mark any
+  // orphaned attempt as soon as the workspace becomes active, without waiting
+  // for a review-runs UI/API read.
+  void Promise.resolve().then(() => reconcileChangeSetReviewRuns(workspaceDir)).catch(() => { /* best-effort startup recovery */ });
   return { taskManager, messageBus, teammateManager };
 }
 

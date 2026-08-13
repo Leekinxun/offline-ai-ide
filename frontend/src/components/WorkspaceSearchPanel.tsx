@@ -7,6 +7,7 @@ import {
 } from "../hooks/useFileSystem";
 import type { FileNode } from "../types";
 import { useI18n } from "../i18n";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface WorkspaceSearchPanelProps {
   visible: boolean;
@@ -117,6 +118,7 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
   const [useIgnoreFiles, setUseIgnoreFiles] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalDialogFocus<HTMLDivElement>({ open: visible, onClose, initialFocusRef: inputRef });
 
   useEffect(() => {
     if (!visible) {
@@ -219,6 +221,8 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
   return (
     <div className="command-palette-overlay" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="workspace-search-panel command-palette"
         role="dialog"
         aria-modal="true"

@@ -18,6 +18,7 @@ import {
   AgentRunEvent,
   AgentRunState,
   ChatMessage,
+  ConversationRunSummary,
   SelectionInfo,
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -26,10 +27,14 @@ import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { ContextInspector } from "./ContextInspector";
+import type { ContextManifestController } from "../hooks/useContextManifest";
+import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 
 interface EditorAssistantPanelProps {
   visible: boolean;
   activeFilePath: string | null;
+  activeFileDirty: boolean;
   selectionInfo: SelectionInfo | null;
   messages: ChatMessage[];
   connected: boolean;
@@ -38,6 +43,9 @@ interface EditorAssistantPanelProps {
   runtimeOptions: ChatRuntimeOptions;
   selectedModelName: string;
   runState: AgentRunState | null;
+  currentRunSummary: ConversationRunSummary | null;
+  contextManifest: ContextManifestController;
+  contextReadOnly: boolean;
   pendingApprovals: ToolApprovalRequest[];
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
@@ -48,6 +56,7 @@ interface EditorAssistantPanelProps {
   onNewConversation: () => void;
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversationTools: (conversationId: string) => void;
+  onPlanAmendmentDecision: (planId: string, amendmentId: string, decision: "approved" | "rejected") => Promise<void> | void;
   onClose: () => void;
 }
 
@@ -74,6 +83,7 @@ function EventIcon({ event }: { event: AgentRunEvent }) {
 export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   visible,
   activeFilePath,
+  activeFileDirty,
   selectionInfo,
   messages,
   connected,
@@ -82,6 +92,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   runtimeOptions,
   selectedModelName,
   runState,
+  currentRunSummary,
+  contextManifest,
+  contextReadOnly,
   pendingApprovals,
   onAgentModeChange,
   onModelNameChange,
@@ -92,15 +105,18 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onNewConversation,
   onToolApproval,
   onApproveConversationTools,
+  onPlanAmendmentDecision,
   onClose,
 }) => {
   const { t } = useI18n();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
   const [now, setNow] = useState(Date.now());
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
+  const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
     () => messages.filter((message) => getRenderableMessageContent(message.content)),
@@ -110,6 +126,11 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const modeModelName =
     runtimeOptions.modeModels[agentMode] || runtimeOptions.defaultModelName || t("workbench.modelDefault");
   const activeModelName = runState?.modelName || selectedModelName || modeModelName;
+  const completionEvidence = runState?.completionEvidence || currentRunSummary?.completionEvidence;
+  const qualityGate = runState?.qualityGate || currentRunSummary?.qualityGate;
+  const evidenceOutcome = qualityGate?.status === "blocked" || (runState?.status === "failed" && completionEvidence?.outcome === "completed") ? "failed" : completionEvidence?.outcome;
+  const executionPlan = runState?.executionPlan || currentRunSummary?.executionPlan;
+  const pendingAmendments = executionPlan?.amendmentRequests?.filter((item) => item.status === "pending") || [];
 
   useEffect(() => {
     if (!isStreaming) return;
@@ -121,6 +142,20 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   useEffect(() => {
     setExpandedEvents(new Set());
   }, [runState?.runId]);
+
+  useEffect(() => {
+    if (!contextInspectorOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setContextInspectorOpen(false);
+      window.requestAnimationFrame(() => contextTriggerRef.current?.focus());
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [contextInspectorOpen]);
 
   useEffect(() => {
     followLatestMessageRef.current = true;
@@ -171,11 +206,20 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const durationMs = runState
     ? (runState.endedAt || (isStreaming ? now : runState.updatedAt)) - runState.startedAt
     : 0;
+  const taskRunStatus = isStreaming ? "running" : runState?.status || "queued";
+  const taskRunTone: TaskStateTone = taskRunStatus === "running" || taskRunStatus === "queued" ? "running" : taskRunStatus === "completed" ? "success" : taskRunStatus === "failed" ? "danger" : "warning";
+  const taskEvidenceCount = (completionEvidence?.ledger.verification.length || 0) + (completionEvidence?.ledger.criteria.length || 0) + (currentRunSummary?.changedFiles.length || 0);
+  const taskAction = isStreaming ? t("workbench.pauseRun") : runState?.status === "failed" || runState?.status === "stopped" ? t("workbench.resumeRun") : t("chat.focusComposer");
+  const handleTaskAction = () => {
+    if (isStreaming || runState?.status === "failed" || runState?.status === "stopped") { handleRunControl(); return; }
+    textareaRef.current?.focus();
+  };
 
   return (
     <aside className="editor-assistant-panel" aria-label={t("workbench.editorAssistant")}>
       <header className="editor-assistant-header">
         <strong>{t("workbench.editorAssistant")}</strong>
+        {(runState?.executionContract || runState?.executionContractKind) && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`}>{t(`chat.contract.${runState.executionContract?.kind || runState.executionContractKind}`)}</span>}
         <div className="editor-assistant-header-actions">
           <button
             type="button"
@@ -191,6 +235,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </button>
         </div>
       </header>
+      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
 
       <section className="editor-assistant-context">
         <div className="editor-assistant-control-grid">
@@ -221,11 +266,47 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </label>
         </div>
         <span>{t("workbench.autoAttachedContext")}</span>
-        <button type="button" disabled={!activeFilePath} title={activeFilePath || t("workbench.noActiveFile")}>
+        <button
+          ref={contextTriggerRef}
+          type="button"
+          disabled={!activeFilePath && contextManifest.draftManifests.length === 0}
+          title={activeFilePath || t("workbench.noActiveFile")}
+          aria-expanded={contextInspectorOpen}
+          onClick={() => setContextInspectorOpen((open) => !open)}
+        >
           <FileCode2 size={14} />
           <strong>{activeFilePath || t("workbench.noActiveFile")}</strong>
-          <small>{activeFilePath ? t("workbench.synced") : t("workbench.waiting")}</small>
+          <small>{activeFilePath
+            ? activeFileDirty
+              ? t("context.freshness.dirty")
+              : t("workbench.synced")
+            : t("workbench.waiting")}</small>
         </button>
+        {contextInspectorOpen && (
+          <ContextInspector
+            manifests={contextManifest.draftManifests}
+            selectedManifestId={contextManifest.draftManifest?.id}
+            indexState={contextManifest.indexState}
+            mode="draft"
+            loading={contextManifest.loading}
+            readOnly={contextReadOnly}
+            preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
+            error={contextManifest.error}
+            emptyHint={t("context.noPreviewSources")}
+            mutationBySource={contextManifest.mutationBySource}
+            onPin={(key) => void contextManifest.pinSource(key)}
+            onUnpin={(key) => void contextManifest.unpinSource(key)}
+            onExclude={(key) => void contextManifest.excludeSource(key)}
+            onRestore={(key) => void contextManifest.restoreSource(key)}
+            onRefreshSource={(key) => void contextManifest.refreshSources([key])}
+            onRefreshAll={() => void (
+              contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
+                ? contextManifest.rebuildIndex()
+                : contextManifest.refreshSources()
+            )}
+            onRetry={() => void contextManifest.retryPreview()}
+          />
+        )}
         {!isStreaming && runState && (runState.status === "failed" || runState.status === "stopped") && (
           <button
             type="button"
@@ -243,6 +324,17 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </button>
         )}
       </section>
+
+      {(completionEvidence || pendingAmendments.length > 0) && <section className="editor-assistant-context" aria-label={t("chat.evidence")}>
+        {completionEvidence && <div className="run-check-list">
+          <div className={evidenceOutcome === "completed" ? "" : "warning"} role={evidenceOutcome === "completed" ? undefined : "alert"}>{evidenceOutcome === "completed" ? <Check size={14} /> : <AlertCircle size={14} />}<span>{t("chat.outcome")}</span><strong>{t(`chat.outcome.${evidenceOutcome}`)}</strong></div>
+          {completionEvidence.ledger.verification.map((check, index) => <div className={check.status === "passed" ? "" : "warning"} key={`${check.command}-${index}`}><Check size={14} /><span><code>{check.command}</code><small>{check.toolCallId || "—"} · {check.outputDigest || "—"}</small></span><strong>{t(`chat.verification.${check.status}`)}{check.exitCode !== undefined ? ` (${check.exitCode})` : ""}</strong></div>)}
+          {completionEvidence.ledger.criteria.map((criterion, index) => <div className={criterion.state === "passed" ? "" : "warning"} key={`${criterion.criterion}-${index}`}><Check size={14} /><span>{criterion.criterion}<small>{criterion.evidenceRefs.join(", ") || "—"}</small></span><strong>{t(`chat.criterion.${criterion.state}`)}</strong></div>)}
+          {completionEvidence.ledger.blockers.map((blocker) => <div className="warning" key={blocker}><AlertCircle size={14} /><span>{t("chat.blocker")}</span><strong>{blocker}</strong></div>)}
+        </div>}
+        {qualityGate && <div className={`editor-assistant-recovery status-${qualityGate.status === "blocked" ? "failed" : "completed"}`} role={qualityGate.status === "blocked" ? "alert" : undefined}>{qualityGate.status === "blocked" ? <AlertCircle size={14} /> : <Check size={14} />}<span><strong>{t("chat.qualityGate")} · {t(`chat.qualityGate.${qualityGate.status}`)}</strong>{qualityGate.error && <small>{qualityGate.error}</small>}</span></div>}
+        {pendingAmendments.map((amendment) => <div className="editor-assistant-recovery status-failed" key={amendment.id}><AlertCircle size={14} /><span><strong>{t("chat.amendmentPending")}</strong><small>{amendment.reason}<br />{amendment.requestedFiles.join(", ")}<br />{amendment.requestedVerificationCommands.join(", ")}</small></span><button type="button" aria-label={`${t("chat.approve")}: ${amendment.reason}`} onClick={() => void onPlanAmendmentDecision(executionPlan!.id, amendment.id, "approved")}>{t("chat.approve")}</button><button type="button" aria-label={`${t("chat.reject")}: ${amendment.reason}`} onClick={() => void onPlanAmendmentDecision(executionPlan!.id, amendment.id, "rejected")}>{t("chat.reject")}</button></div>)}
+      </section>}
 
       <div
         className="editor-assistant-messages"

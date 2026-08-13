@@ -5,6 +5,9 @@ import type { AgentMode } from "./types.js";
 import { buildMemoryPrompt, loadMemorySnapshot } from "./memory.js";
 import { buildSkillsPrompt } from "./skills.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { codeModeInstruction, resolveCodeExecutionContract } from "./executionContract.js";
+import type { ContextSourceHint } from "./contextManifest.js";
+import { redactSecrets } from "./secretRedaction.js";
 
 const DEFAULT_BASE_INSTRUCTIONS = `# Role and Purpose
 
@@ -77,7 +80,7 @@ const MODE_INSTRUCTIONS: Record<AgentMode, string> = {
   review:
     "Inspect changes and run focused checks without modifying files. Put each actionable, file-locatable finding on its own line using exactly `- [critical|error|warning|info] relative/path:line:column — concise finding`, ordered by severity. If there are no actionable findings, write `No findings.`.",
   plan: "Inspect the repository and produce an ordered implementation plan. Do not modify source files or persisted task state. Before finishing, call submit_plan exactly once with the complete file scope, steps, risks, exact verification commands, and acceptance criteria. The submitted plan becomes executable only after explicit user approval.",
-  code: "Execute only the approved Plan artifact supplied below. Modify only its declared file scope and run only its declared verification commands. If the plan is incomplete or the request requires work outside its scope, stop and require a new Plan.",
+  code: "",
 };
 
 function joinSections(sections: Array<string | undefined>): string {
@@ -87,27 +90,86 @@ function joinSections(sections: Array<string | undefined>): string {
     .join("\n\n");
 }
 
-function loadWorkspaceGuidance(workspaceDir: string): string {
-  const candidates = [
-    path.join(workspaceDir, "AGENTS.md"),
-    path.join(workspaceDir, ".codex", "AGENTS.md"),
-  ];
-  const sections: string[] = [];
+interface WorkspaceGuidanceSection { path: string; text: string; }
 
-  for (const candidate of candidates) {
+function isContained(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+/**
+ * Read only the two explicitly authorized project-instruction files. This is a
+ * narrow exception for `.codex/AGENTS.md`; it does not make `.codex` available
+ * to indexing, search, pins, editor context, or any other retrieval surface.
+ */
+function readAuthorizedInstructionFile(
+  workspaceDir: string,
+  relativePath: string
+): string | null {
+  const root = fs.realpathSync.native(path.resolve(workspaceDir));
+  let cursor = root;
+  for (const segment of relativePath.split("/")) {
+    cursor = path.join(cursor, segment);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(cursor); } catch { return null; }
+    if (stat.isSymbolicLink()) return null;
+  }
+  const stat = fs.lstatSync(cursor);
+  if (!stat.isFile()) return null;
+  const canonical = fs.realpathSync.native(cursor);
+  if (!isContained(canonical, root)) return null;
+  let descriptor: number | undefined;
+  let buffer: Buffer;
+  try {
+    descriptor = fs.openSync(canonical, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    if (!fs.fstatSync(descriptor).isFile()) return null;
+    buffer = fs.readFileSync(descriptor);
+  } catch { return null; }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  if (buffer.includes(0)) return null;
+  return redactSecrets(buffer.toString("utf8")).trim().slice(0, 20_000) || null;
+}
+
+function normalizeInstructionScope(workspaceDir: string, scopePath: string | undefined): string[] {
+  if (!scopePath || scopePath === ".") return [];
+  const root = fs.realpathSync.native(path.resolve(workspaceDir));
+  const lexical = path.resolve(root, scopePath);
+  if (!isContained(lexical, root)) return [];
+  const relative = path.relative(root, lexical);
+  const parts = relative.split(path.sep).filter(Boolean);
+  if (parts.length && path.extname(parts.at(-1) || "")) parts.pop();
+  let cursor = root;
+  const directories: string[] = [];
+  for (const part of parts) {
+    cursor = path.join(cursor, part);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(cursor); } catch { break; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) break;
+    const canonical = fs.realpathSync.native(cursor);
+    if (!isContained(canonical, root)) break;
+    directories.push(path.relative(root, canonical).split(path.sep).join("/"));
+  }
+  return directories;
+}
+
+function loadWorkspaceGuidance(workspaceDir: string, scopePath?: string): WorkspaceGuidanceSection[] {
+  const sections: WorkspaceGuidanceSection[] = [];
+  const orderedPaths = [
+    "AGENTS.md",
+    ".codex/AGENTS.md",
+    ...normalizeInstructionScope(workspaceDir, scopePath).map((directory) => `${directory}/AGENTS.md`),
+  ];
+  for (const relativePath of Array.from(new Set(orderedPaths))) {
     try {
-      if (!fs.existsSync(candidate)) continue;
-      const content = fs.readFileSync(candidate, "utf-8").trim();
-      if (!content) continue;
-      const source = path.relative(workspaceDir, candidate);
-      sections.push(`## ${source}\n<INSTRUCTIONS>\n${content.slice(0, 20_000)}\n</INSTRUCTIONS>`);
+      const content = readAuthorizedInstructionFile(workspaceDir, relativePath);
+      if (content) sections.push({
+        path: relativePath,
+        text: `# Project Instructions\n\n## ${relativePath}\n<INSTRUCTIONS>\n${content}\n</INSTRUCTIONS>`,
+      });
     } catch {
-      // Guidance is best-effort; an unreadable instruction file must not block a task.
+      // Guidance is best-effort; any boundary ambiguity fails closed by omission.
     }
   }
-
-  if (sections.length === 0) return "";
-  return `# Project Instructions\n\nSources are ordered from broad to specific; later instructions override earlier ones when they conflict.\n\n${sections.join("\n\n")}`;
+  return sections;
 }
 
 function loadPersistentContext(workspaceDir: string): string {
@@ -140,15 +202,22 @@ function buildTodoContext(todoState: string): string {
 ${todoState || "No active todos."}`;
 }
 
-function buildActiveConstraints(mode: AgentMode, readOnlyWorkspace: boolean): string {
+function buildActiveConstraints(
+  mode: AgentMode,
+  readOnlyWorkspace: boolean,
+  executionPlan?: ExecutionPlan
+): string {
   const readOnlyConstraint = readOnlyWorkspace
     ? "\n- This workspace is read-only for the current turn. Do not modify files, run shell commands, manage teammates, or change persisted tasks."
     : "";
+  const modeInstruction = mode === "code"
+    ? codeModeInstruction(resolveCodeExecutionContract(executionPlan))
+    : MODE_INSTRUCTIONS[mode];
   return `# Active Runtime Constraints
 
 ## Interaction Mode: ${mode.toUpperCase()}
 
-- ${MODE_INSTRUCTIONS[mode]}${readOnlyConstraint}`;
+- ${modeInstruction}${readOnlyConstraint}`;
 }
 
 function buildExecutionPlanContext(plan?: ExecutionPlan): string {
@@ -166,19 +235,46 @@ function buildExecutionPlanContext(plan?: ExecutionPlan): string {
 export function buildSystemPrompt(
   workspaceDir: string,
   todoState: string,
-  options?: { readOnlyWorkspace?: boolean; mode?: AgentMode; executionPlan?: ExecutionPlan }
+  options?: { readOnlyWorkspace?: boolean; mode?: AgentMode; executionPlan?: ExecutionPlan; scopePath?: string; targetPath?: string; activePath?: string }
 ): string {
+  return buildSystemPromptBundle(workspaceDir, todoState, options).text;
+}
+
+export interface SystemPromptBundle {
+  text: string;
+  sources: ContextSourceHint[];
+}
+
+export function buildSystemPromptBundle(
+  workspaceDir: string,
+  todoState: string,
+  options?: { readOnlyWorkspace?: boolean; mode?: AgentMode; executionPlan?: ExecutionPlan; scopePath?: string; targetPath?: string; activePath?: string }
+): SystemPromptBundle {
   const readOnlyWorkspace = Boolean(options?.readOnlyWorkspace);
   const mode = options?.mode || "code";
   const configuredBase = config.systemPrompt.trim() || DEFAULT_BASE_INSTRUCTIONS;
-
-  return joinSections([
-    configuredBase,
-    buildWorkspaceContext(workspaceDir, readOnlyWorkspace),
-    buildTodoContext(todoState),
-    loadWorkspaceGuidance(workspaceDir),
-    loadPersistentContext(workspaceDir),
-    buildExecutionPlanContext(options?.executionPlan),
-    buildActiveConstraints(mode, readOnlyWorkspace),
-  ]);
+  const parts: Array<{ text: string; source: ContextSourceHint }> = [];
+  const add = (text: string, source: ContextSourceHint) => { if (text.trim()) parts.push({ text, source }); };
+  add(configuredBase, { kind: "system_instruction", sourceType: "platform_runtime", reason: "Configured agent role and operating instructions", trust: "platform", integrity: "verified_digest" });
+  add(buildWorkspaceContext(workspaceDir, readOnlyWorkspace), { kind: "workspace_scope", sourceType: "runtime_workspace", reason: "Effective workspace capability boundary", trust: "platform", integrity: "verified_digest" });
+  add(buildTodoContext(todoState), { kind: "todo_state", sourceType: "runtime_todo", reason: "Current run task state", trust: "local_tool_output", integrity: "observed" });
+  const instructionScope = options?.scopePath || options?.targetPath || options?.activePath;
+  for (const guidance of loadWorkspaceGuidance(workspaceDir, instructionScope)) {
+    add(guidance.text, {
+      kind: "project_instruction",
+      sourceType: "workspace_guidance",
+      reason: "Explicitly authorized repository-scoped instruction file",
+      path: guidance.path,
+      trust: "workspace_instruction",
+      integrity: "observed",
+      ruleIds: ["authorized_instruction_file"],
+    });
+  }
+  add(loadPersistentContext(workspaceDir), { kind: "persistent_context", sourceType: "workspace_memory_and_skills", reason: "Enabled persistent memory and skill catalog", trust: "workspace_instruction", integrity: "observed" });
+  add(buildExecutionPlanContext(options?.executionPlan), { kind: "execution_plan", sourceType: "approved_execution_plan", reason: "User-approved execution constraints", planId: options?.executionPlan?.id, trust: "approved_user_artifact", integrity: "verified_digest" });
+  add(buildActiveConstraints(mode, readOnlyWorkspace, options?.executionPlan), { kind: "runtime_constraint", sourceType: "mode_capability", reason: "Server-enforced active interaction constraints", trust: "platform", integrity: "verified_digest" });
+  return {
+    text: joinSections(parts.map((part) => part.text)),
+    sources: parts.map((part) => ({ ...part.source, content: part.text, freshness: "fresh" })),
+  };
 }

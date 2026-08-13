@@ -1,6 +1,7 @@
 import type React from "react";
 import type * as monaco from "monaco-editor";
 import type { ChatMessage } from "../types";
+import type { ExtensionHookDeclaration } from "../types";
 import type { PluginPermission, PluginScope } from "./permissions";
 
 export interface PluginStateOverride {
@@ -25,6 +26,11 @@ export interface RuntimePluginManifest {
   directoryName?: string;
   directoryPath?: string;
   validationError?: string;
+  signatureStatus?: "verified" | "invalid" | "legacy-restricted";
+  signingKeyId?: string;
+  hooks?: Array<Pick<ExtensionHookDeclaration, "id" | "event" | "failureMode" | "blocksCompletion"> & Partial<Omit<ExtensionHookDeclaration, "id" | "event" | "failureMode" | "blocksCompletion">> & { profileId?: string; skillIds?: string[] }>;
+  profiles?: string[];
+  skills?: string[];
 }
 
 export interface ExternalPluginManifest extends RuntimePluginManifest {

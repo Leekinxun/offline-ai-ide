@@ -4,268 +4,59 @@ import path from "path";
 
 const CHECKPOINT_DIR = ".checkpoints";
 const INDEX_FILE = "index.json";
+const BLOBS_DIR = "blobs";
+const MANIFESTS_DIR = "manifests";
 const MAX_CHECKPOINTS = 12;
+const MIN_CHECKPOINTS = 4;
+const MAX_CONFIGURED_CHECKPOINTS = 100;
 const MAX_FILES = 20_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-const EXCLUDED_NAMES = new Set([
-  ".git",
-  ".history",
-  ".checkpoints",
-  ".team",
-  ".codex",
-  ".omx",
-  "node_modules",
-  "dist",
-  "build",
-  "coverage",
-  "target",
-  ".next",
-  ".cache",
-]);
+export const CHECKPOINT_EXCLUDED_NAMES = new Set([".git", ".history", ".checkpoints", ".team", ".codex", ".omx", ".crewforge", "node_modules", "dist", "build", "coverage", "target", ".next", ".cache"]);
 
-export interface WorkspaceCheckpoint {
-  id: string;
-  label: string;
-  createdAt: number;
-  conversationId?: string;
-  runId?: string;
-  kind?: "manual" | "run" | "step" | "revert";
-  toolCallId?: string;
-  fileCount: number;
-  totalBytes: number;
-  files: string[];
-}
-
+export interface WorkspaceCheckpoint { id: string; label: string; createdAt: number; conversationId?: string; runId?: string; kind?: "manual" | "run" | "step" | "revert"; toolCallId?: string; fileCount: number; totalBytes: number; files: string[]; storageVersion?: 2 | 3; manifest?: string; }
+export interface CheckpointManifest { version: 2; checkpointId: string; files: SnapshotEntry[]; }
+export interface IncrementalCheckpointManifest { version: 3; checkpointId: string; parentId?: string; changes: Array<({ operation: "upsert" } & SnapshotEntry) | { operation: "delete"; path: string }>; }
+interface SnapshotEntry { path: string; sha256: string; size: number; }
 export type PublicWorkspaceCheckpoint = Omit<WorkspaceCheckpoint, "files">;
+export interface CheckpointSettings { schemaVersion: 1; maxCheckpoints: number; }
+export interface CheckpointStorageStats { logicalBytes: number; blobBytes: number; manifestBytes: number; journalBytes: number; checkpointCount: number; blobCount: number; retention: CheckpointSettings; }
+export class CheckpointPersistenceError extends Error { readonly code = "checkpoint_persistence_invalid"; constructor(readonly filePath: string, cause?: unknown) { super(`Checkpoint persistence is invalid or unreadable: ${path.basename(filePath)}${cause instanceof Error ? ` · ${cause.message}` : ""}`, { cause }); } }
 
-function checkpointRoot(workspaceDir: string): string {
-  return path.join(workspaceDir, CHECKPOINT_DIR);
-}
+const checkpointRoot = (workspaceDir: string) => path.join(workspaceDir, CHECKPOINT_DIR);
+const indexPath = (workspaceDir: string) => path.join(checkpointRoot(workspaceDir), INDEX_FILE);
+const blobPath = (workspaceDir: string, hash: string) => path.join(checkpointRoot(workspaceDir), BLOBS_DIR, hash);
+const manifestPath = (workspaceDir: string, id: string) => path.join(checkpointRoot(workspaceDir), MANIFESTS_DIR, `${id}.json`);
+const settingsPath = (workspaceDir: string) => path.join(checkpointRoot(workspaceDir), "settings.json");
+const normalizeRelative = (value: string) => value.split(path.sep).join("/");
+const hashBuffer = (value: Buffer) => crypto.createHash("sha256").update(value).digest("hex");
+const publicCheckpoint = (checkpoint: WorkspaceCheckpoint): PublicWorkspaceCheckpoint => { const { files: _files, ...metadata } = checkpoint; return metadata; };
 
-function indexPath(workspaceDir: string): string {
-  return path.join(checkpointRoot(workspaceDir), INDEX_FILE);
-}
+function safeRelativePath(value: string): string | null { const normalized = value.replace(/\\/g, "/"); const parts = normalized.split("/"); if (!normalized || path.isAbsolute(normalized) || parts.some((part) => !part || part === "." || part === "..") || CHECKPOINT_EXCLUDED_NAMES.has(parts[0])) return null; return normalized; }
+function safeWorkspaceTarget(workspaceDir: string, relative: string): string { const safe = safeRelativePath(relative); if (!safe) throw new Error(`Unsafe checkpoint path: ${relative}`); const workspace = path.resolve(workspaceDir); let cursor = workspace; for (const part of safe.split("/")) { cursor = path.join(cursor, part); if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) throw new Error(`Checkpoint path crosses a symbolic link: ${relative}`); } if (!path.resolve(cursor).startsWith(`${workspace}${path.sep}`)) throw new Error(`Unsafe checkpoint path: ${relative}`); return cursor; }
+function secureRegularFile(target: string, expectedRoot: string): string { const resolvedRoot = path.resolve(expectedRoot); if (!fs.existsSync(resolvedRoot) || fs.lstatSync(resolvedRoot).isSymbolicLink()) throw new Error("Checkpoint storage root is unsafe"); const realRoot = fs.realpathSync(resolvedRoot); if (!fs.existsSync(target)) throw new Error("Checkpoint storage file is missing"); const stat = fs.lstatSync(target); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Checkpoint storage file is unsafe"); const realTarget = fs.realpathSync(target); if (!realTarget.startsWith(`${realRoot}${path.sep}`)) throw new Error("Checkpoint storage file escapes its store"); return realTarget; }
+function atomicWrite(target: string, data: string | Buffer): void { fs.mkdirSync(path.dirname(target), { recursive: true }); const temporary = `${target}.tmp-${process.pid}-${crypto.randomBytes(3).toString("hex")}`; fs.writeFileSync(temporary, data); fs.renameSync(temporary, target); }
+function isCheckpoint(value: unknown): value is WorkspaceCheckpoint { if (!value || typeof value !== "object") return false; const x = value as Partial<WorkspaceCheckpoint>; return typeof x.id === "string" && typeof x.label === "string" && typeof x.createdAt === "number" && typeof x.fileCount === "number" && typeof x.totalBytes === "number" && Array.isArray(x.files) && x.files.every((entry) => typeof entry === "string"); }
+function readIndex(workspaceDir: string): WorkspaceCheckpoint[] { const file = indexPath(workspaceDir); try { const parsed = JSON.parse(fs.readFileSync(file, "utf8")); if (!Array.isArray(parsed) || !parsed.every(isCheckpoint)) throw new CheckpointPersistenceError(file); return parsed; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; if (error instanceof CheckpointPersistenceError) throw error; throw new CheckpointPersistenceError(file, error); } }
+function writeIndex(workspaceDir: string, checkpoints: WorkspaceCheckpoint[]): void { atomicWrite(indexPath(workspaceDir), JSON.stringify(checkpoints, null, 2)); }
+function walkWorkspace(workspaceDir: string): Array<{ relative: string; absolute: string; size: number }> { const files: Array<{ relative: string; absolute: string; size: number }> = []; const visit = (directory: string, prefix = "") => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { if (CHECKPOINT_EXCLUDED_NAMES.has(entry.name) || entry.isSymbolicLink()) continue; const absolute = path.join(directory, entry.name); const relative = normalizeRelative(prefix ? path.join(prefix, entry.name) : entry.name); if (entry.isDirectory()) visit(absolute, relative); else if (entry.isFile()) { const size = fs.statSync(absolute).size; if (size > MAX_FILE_BYTES) continue; files.push({ relative, absolute, size }); if (files.length > MAX_FILES) throw new Error(`Checkpoint exceeds ${MAX_FILES} files`); } } }; visit(workspaceDir); return files; }
+function validateEntry(value: unknown, seen: Set<string>): SnapshotEntry { if (!value || typeof value !== "object") throw new Error("Checkpoint manifest entry is invalid"); const entry = value as Partial<SnapshotEntry>; const relative = typeof entry.path === "string" ? safeRelativePath(entry.path) : null; if (!relative || seen.has(relative) || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256) || typeof entry.size !== "number" || entry.size < 0 || entry.size > MAX_FILE_BYTES) throw new Error("Checkpoint manifest entry is invalid"); seen.add(relative); return { path: relative, sha256: entry.sha256, size: entry.size }; }
+function parseManifest(workspaceDir: string, checkpoint: WorkspaceCheckpoint): CheckpointManifest | IncrementalCheckpointManifest { const manifestsRoot = path.join(checkpointRoot(workspaceDir), MANIFESTS_DIR); const target = checkpoint.manifest && path.resolve(checkpoint.manifest).startsWith(`${path.resolve(manifestsRoot)}${path.sep}`) ? checkpoint.manifest : manifestPath(workspaceDir, checkpoint.id); let value: any; try { const secureTarget = secureRegularFile(target, manifestsRoot); if (fs.statSync(secureTarget).size > 16 * 1024 * 1024) throw new Error("oversized manifest"); value = JSON.parse(fs.readFileSync(secureTarget, "utf8")); } catch (error) { throw new CheckpointPersistenceError(target, new Error(`Checkpoint manifest is missing or invalid: ${error instanceof Error ? error.message : "read failed"}`, { cause: error })); } if (value?.checkpointId !== checkpoint.id) throw new CheckpointPersistenceError(target, new Error("Checkpoint manifest id does not match index")); const seen = new Set<string>(); if (value.version === 2 && Array.isArray(value.files)) return { version: 2, checkpointId: checkpoint.id, files: value.files.map((entry: unknown) => validateEntry(entry, seen)) }; if (value.version === 3 && Array.isArray(value.changes)) { const changes = value.changes.map((change: any) => { if (change?.operation === "delete") { const relative = typeof change.path === "string" ? safeRelativePath(change.path) : null; if (!relative || seen.has(relative)) throw new Error("Checkpoint manifest change is invalid"); seen.add(relative); return { operation: "delete" as const, path: relative }; } if (change?.operation !== "upsert") throw new Error("Checkpoint manifest change is invalid"); return { operation: "upsert" as const, ...validateEntry(change, seen) }; }); if (value.parentId !== undefined && (typeof value.parentId !== "string" || !/^\d+-[a-f0-9]{8}$/.test(value.parentId))) throw new Error("Checkpoint parent id is invalid"); return { version: 3, checkpointId: checkpoint.id, ...(value.parentId ? { parentId: value.parentId } : {}), changes }; } throw new CheckpointPersistenceError(target, new Error("Checkpoint manifest schema is invalid")); }
+function legacySnapshot(workspaceDir: string, checkpoint: WorkspaceCheckpoint): Map<string, SnapshotEntry> { const result = new Map<string, SnapshotEntry>(); const filesRoot = path.join(checkpointRoot(workspaceDir), checkpoint.id, "files"); let totalBytes = 0; for (const raw of checkpoint.files) { const relative = safeRelativePath(raw); if (!relative || result.has(relative)) throw new Error("Legacy checkpoint path is invalid"); const source = secureRegularFile(path.join(filesRoot, ...relative.split("/")), filesRoot); const stat = fs.statSync(source); if (stat.size > MAX_FILE_BYTES) throw new Error(`Checkpoint file is too large: ${relative}`); totalBytes += stat.size; if (totalBytes > MAX_TOTAL_BYTES) throw new Error(`Checkpoint exceeds ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)} MB`); const content = fs.readFileSync(source); result.set(relative, { path: relative, sha256: hashBuffer(content), size: content.byteLength }); } return result; }
+function resolveSnapshot(workspaceDir: string, checkpointId: string, index = readIndex(workspaceDir), visiting = new Set<string>()): Map<string, SnapshotEntry> { if (visiting.has(checkpointId)) throw new Error("Checkpoint parent cycle detected"); const checkpoint = index.find((entry) => entry.id === checkpointId); if (!checkpoint) throw new Error(`Checkpoint parent is missing: ${checkpointId}`); if (!checkpoint.storageVersion) return legacySnapshot(workspaceDir, checkpoint); visiting.add(checkpointId); const manifest = parseManifest(workspaceDir, checkpoint); let result = new Map<string, SnapshotEntry>(); if (manifest.version === 2) for (const entry of manifest.files) result.set(entry.path, entry); else { if (manifest.parentId) result = resolveSnapshot(workspaceDir, manifest.parentId, index, visiting); for (const change of manifest.changes) if (change.operation === "delete") result.delete(change.path); else result.set(change.path, { path: change.path, sha256: change.sha256, size: change.size }); } visiting.delete(checkpointId); if (result.size > MAX_FILES) throw new Error(`Checkpoint exceeds ${MAX_FILES} files`); const totalBytes = [...result.values()].reduce((sum, entry) => sum + entry.size, 0); if (totalBytes > MAX_TOTAL_BYTES) throw new Error(`Checkpoint exceeds ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)} MB`); return result; }
+function verifySnapshotBlobs(workspaceDir: string, snapshot: Map<string, SnapshotEntry>): void { const blobsRoot = path.join(checkpointRoot(workspaceDir), BLOBS_DIR); for (const entry of snapshot.values()) { const source = secureRegularFile(blobPath(workspaceDir, entry.sha256), blobsRoot); const stat = fs.statSync(source); if (stat.size !== entry.size || stat.size > MAX_FILE_BYTES) throw new Error(`Checkpoint blob is corrupt: ${entry.path}`); const content = fs.readFileSync(source); if (hashBuffer(content) !== entry.sha256) throw new Error(`Checkpoint blob is corrupt: ${entry.path}`); } }
+function compactManifest(workspaceDir: string, checkpoint: WorkspaceCheckpoint, snapshot: Map<string, SnapshotEntry>): void { const manifest: IncrementalCheckpointManifest = { version: 3, checkpointId: checkpoint.id, changes: [...snapshot.values()].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => ({ operation: "upsert", ...entry })) }; atomicWrite(manifestPath(workspaceDir, checkpoint.id), JSON.stringify(manifest)); checkpoint.storageVersion = 3; checkpoint.manifest = manifestPath(workspaceDir, checkpoint.id); }
+export function readCheckpointSettings(workspaceDir: string): CheckpointSettings { const file = settingsPath(workspaceDir); try { const value = JSON.parse(fs.readFileSync(file, "utf8")); if (value?.schemaVersion === 1 && Number.isInteger(value.maxCheckpoints) && value.maxCheckpoints >= MIN_CHECKPOINTS && value.maxCheckpoints <= MAX_CONFIGURED_CHECKPOINTS) return { schemaVersion: 1, maxCheckpoints: value.maxCheckpoints }; throw new CheckpointPersistenceError(file); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 1, maxCheckpoints: MAX_CHECKPOINTS }; if (error instanceof CheckpointPersistenceError) throw error; throw new CheckpointPersistenceError(file, error); } }
+function pruneRetention(workspaceDir: string, checkpoints: WorkspaceCheckpoint[], protectedIds = new Set<string>()): WorkspaceCheckpoint[] { const maxCheckpoints = readCheckpointSettings(workspaceDir).maxCheckpoints; const protectedRuns = new Set<string>(); for (const checkpoint of checkpoints) if (checkpoint.kind === "run" && checkpoint.runId && protectedRuns.size < 4 && !protectedRuns.has(checkpoint.runId)) { protectedRuns.add(checkpoint.runId); protectedIds.add(checkpoint.id); } const retained: WorkspaceCheckpoint[] = []; const stale: WorkspaceCheckpoint[] = []; for (const checkpoint of checkpoints) (retained.length < maxCheckpoints || protectedIds.has(checkpoint.id) ? retained : stale).push(checkpoint); while (retained.length > maxCheckpoints) { let target = -1; for (let index = retained.length - 1; index > 0; index -= 1) if (!protectedIds.has(retained[index].id)) { target = index; break; } if (target < 0) break; stale.push(...retained.splice(target, 1)); } const retainedIds = new Set(retained.map((entry) => entry.id)); for (const checkpoint of retained) if (checkpoint.storageVersion === 3) { const manifest = parseManifest(workspaceDir, checkpoint); if (manifest.version === 3 && manifest.parentId && !retainedIds.has(manifest.parentId)) compactManifest(workspaceDir, checkpoint, resolveSnapshot(workspaceDir, checkpoint.id, checkpoints)); } for (const checkpoint of stale) { fs.rmSync(path.join(checkpointRoot(workspaceDir), checkpoint.id), { recursive: true, force: true }); fs.rmSync(manifestPath(workspaceDir, checkpoint.id), { force: true }); } return retained; }
+function pruneBlobs(workspaceDir: string, checkpoints = readIndex(workspaceDir), dryRun = false): string[] { const referenced = new Set<string>(); try { for (const checkpoint of checkpoints) if (checkpoint.storageVersion) for (const entry of resolveSnapshot(workspaceDir, checkpoint.id, checkpoints).values()) referenced.add(entry.sha256); } catch (error) { if (error instanceof CheckpointPersistenceError) throw error; throw new CheckpointPersistenceError(checkpointRoot(workspaceDir), error); } const directory = path.join(checkpointRoot(workspaceDir), BLOBS_DIR); if (!fs.existsSync(directory)) return []; const stale = fs.readdirSync(directory).filter((name) => /^[a-f0-9]{64}$/.test(name) && !referenced.has(name)); if (!dryRun) for (const name of stale) fs.rmSync(path.join(directory, name), { force: true }); return stale; }
 
-function normalizeRelative(value: string): string {
-  return value.split(path.sep).join("/");
-}
-
-function publicCheckpoint(checkpoint: WorkspaceCheckpoint): PublicWorkspaceCheckpoint {
-  const { files: _files, ...metadata } = checkpoint;
-  return metadata;
-}
-
-function readIndex(workspaceDir: string): WorkspaceCheckpoint[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(indexPath(workspaceDir), "utf-8"));
-    return Array.isArray(parsed) ? parsed.filter(isCheckpoint) : [];
-  } catch {
-    return [];
-  }
-}
-
-function isCheckpoint(value: unknown): value is WorkspaceCheckpoint {
-  if (!value || typeof value !== "object") return false;
-  const item = value as Partial<WorkspaceCheckpoint>;
-  return (
-    typeof item.id === "string" &&
-    typeof item.label === "string" &&
-    typeof item.createdAt === "number" &&
-    typeof item.fileCount === "number" &&
-    typeof item.totalBytes === "number" &&
-    Array.isArray(item.files) &&
-    item.files.every((entry) => typeof entry === "string")
-  );
-}
-
-function writeIndex(workspaceDir: string, checkpoints: WorkspaceCheckpoint[]): void {
-  const root = checkpointRoot(workspaceDir);
-  fs.mkdirSync(root, { recursive: true });
-  const target = indexPath(workspaceDir);
-  const temporary = `${target}.tmp-${process.pid}`;
-  fs.writeFileSync(temporary, JSON.stringify(checkpoints, null, 2), "utf-8");
-  fs.renameSync(temporary, target);
-}
-
-function walkWorkspace(workspaceDir: string): Array<{ relative: string; absolute: string; size: number }> {
-  const files: Array<{ relative: string; absolute: string; size: number }> = [];
-  const visit = (directory: string, prefix = "") => {
-    if (files.length >= MAX_FILES) throw new Error(`Checkpoint exceeds ${MAX_FILES} files`);
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (EXCLUDED_NAMES.has(entry.name)) continue;
-      const absolute = path.join(directory, entry.name);
-      const relative = normalizeRelative(prefix ? path.join(prefix, entry.name) : entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) {
-        visit(absolute, relative);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const size = fs.statSync(absolute).size;
-      if (size > MAX_FILE_BYTES) continue;
-      files.push({ relative, absolute, size });
-      if (files.length > MAX_FILES) throw new Error(`Checkpoint exceeds ${MAX_FILES} files`);
-    }
-  };
-  visit(workspaceDir);
-  return files;
-}
-
-function pruneRetention(
-  workspaceDir: string,
-  checkpoints: WorkspaceCheckpoint[],
-  protectedIds: Set<string> = new Set()
-): WorkspaceCheckpoint[] {
-  const effectiveProtectedIds = new Set(protectedIds);
-  const protectedRunIds = new Set<string>();
-  for (const checkpoint of checkpoints) {
-    if (
-      checkpoint.kind === "run" &&
-      checkpoint.runId &&
-      protectedRunIds.size < 4 &&
-      !protectedRunIds.has(checkpoint.runId)
-    ) {
-      protectedRunIds.add(checkpoint.runId);
-      effectiveProtectedIds.add(checkpoint.id);
-    }
-  }
-  const retained: WorkspaceCheckpoint[] = [];
-  const stale: WorkspaceCheckpoint[] = [];
-  for (const checkpoint of checkpoints) {
-    if (retained.length < MAX_CHECKPOINTS || effectiveProtectedIds.has(checkpoint.id)) {
-      retained.push(checkpoint);
-    } else {
-      stale.push(checkpoint);
-    }
-  }
-  while (retained.length > MAX_CHECKPOINTS) {
-    let removableIndex = -1;
-    for (let index = retained.length - 1; index > 0; index -= 1) {
-      if (!effectiveProtectedIds.has(retained[index].id)) {
-        removableIndex = index;
-        break;
-      }
-    }
-    if (removableIndex < 0) break;
-    stale.push(...retained.splice(removableIndex, 1));
-  }
-  for (const checkpoint of stale) {
-    const staleDir = path.join(checkpointRoot(workspaceDir), checkpoint.id);
-    fs.rmSync(staleDir, { recursive: true, force: true });
-  }
-  return retained;
-}
-
-export function listCheckpoints(workspaceDir: string): PublicWorkspaceCheckpoint[] {
-  return readIndex(workspaceDir)
-    .sort((left, right) => right.createdAt - left.createdAt)
-    .map(publicCheckpoint);
-}
-
-export function createCheckpoint(
-  workspaceDir: string,
-  input: {
-    label?: string;
-    conversationId?: string;
-    runId?: string;
-    kind?: WorkspaceCheckpoint["kind"];
-    toolCallId?: string;
-    retainId?: string;
-  } = {}
-): PublicWorkspaceCheckpoint {
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const files = walkWorkspace(workspaceDir);
-  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-  if (totalBytes > MAX_TOTAL_BYTES) {
-    throw new Error(`Checkpoint exceeds ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)} MB`);
-  }
-
-  const createdAt = Date.now();
-  const id = `${createdAt}-${crypto.randomBytes(4).toString("hex")}`;
-  const snapshotRoot = path.join(checkpointRoot(workspaceDir), id, "files");
-  fs.mkdirSync(snapshotRoot, { recursive: true });
-
-  try {
-    for (const file of files) {
-      const target = path.join(snapshotRoot, ...file.relative.split("/"));
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(file.absolute, target);
-    }
-  } catch (error) {
-    fs.rmSync(path.join(checkpointRoot(workspaceDir), id), { recursive: true, force: true });
-    throw error;
-  }
-
-  const checkpoint: WorkspaceCheckpoint = {
-    id,
-    label: input.label?.trim().slice(0, 160) || "Workspace checkpoint",
-    createdAt,
-    ...(input.conversationId?.trim() ? { conversationId: input.conversationId.trim() } : {}),
-    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
-    ...(input.kind ? { kind: input.kind } : {}),
-    ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}),
-    fileCount: files.length,
-    totalBytes,
-    files: files.map((file) => file.relative),
-  };
-  const protectedIds = input.retainId ? new Set([input.retainId]) : undefined;
-  const next = pruneRetention(
-    workspaceDir,
-    [checkpoint, ...readIndex(workspaceDir)],
-    protectedIds
-  );
-  writeIndex(workspaceDir, next);
-  return publicCheckpoint(checkpoint);
-}
-
-export function restoreCheckpoint(
-  workspaceDir: string,
-  checkpointId: string
-): PublicWorkspaceCheckpoint {
-  if (!/^\d+-[a-f0-9]{8}$/.test(checkpointId)) throw new Error("Invalid checkpoint id");
-  let checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId);
-  if (!checkpoint) throw new Error("Checkpoint not found");
-  createCheckpoint(workspaceDir, {
-    label: `Before restore · ${checkpoint.label}`,
-    conversationId: checkpoint.conversationId,
-    runId: checkpoint.runId,
-    kind: "revert",
-    retainId: checkpointId,
-  });
-  checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId);
-  if (!checkpoint) throw new Error("Checkpoint not found");
-  const snapshotRoot = path.join(checkpointRoot(workspaceDir), checkpoint.id, "files");
-  if (!fs.existsSync(snapshotRoot)) throw new Error("Checkpoint files are missing");
-
-  const captured = new Set(checkpoint.files);
-  for (const current of walkWorkspace(workspaceDir)) {
-    if (!captured.has(current.relative)) fs.unlinkSync(current.absolute);
-  }
-  for (const relative of checkpoint.files) {
-    const source = path.join(snapshotRoot, ...relative.split("/"));
-    if (!fs.existsSync(source)) throw new Error(`Checkpoint file is missing: ${relative}`);
-    const target = path.join(workspaceDir, ...relative.split("/"));
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const temporary = `${target}.checkpoint-${process.pid}`;
-    fs.copyFileSync(source, temporary);
-    fs.renameSync(temporary, target);
-  }
-  return publicCheckpoint(checkpoint);
-}
-
-export function findCheckpointForRun(
-  workspaceDir: string,
-  runId: string
-): PublicWorkspaceCheckpoint | undefined {
-  const normalized = runId.trim();
-  if (!normalized) return undefined;
-  const matching = readIndex(workspaceDir).filter((entry) => entry.runId === normalized);
-  const checkpoint = matching
-    .filter((entry) => entry.kind === "run")
-    .sort((left, right) => right.createdAt - left.createdAt)[0];
-  const legacy = matching
-    .filter((entry) => !entry.kind && entry.label.startsWith("Before agent task"))
-    .sort((left, right) => right.createdAt - left.createdAt)[0];
-  return checkpoint || legacy ? publicCheckpoint(checkpoint || legacy) : undefined;
-}
+export function listCheckpoints(workspaceDir: string): PublicWorkspaceCheckpoint[] { return readIndex(workspaceDir).sort((a, b) => b.createdAt - a.createdAt).map(publicCheckpoint); }
+export function createCheckpoint(workspaceDir: string, input: { label?: string; conversationId?: string; runId?: string; kind?: WorkspaceCheckpoint["kind"]; toolCallId?: string; retainId?: string; } = {}): PublicWorkspaceCheckpoint { fs.mkdirSync(workspaceDir, { recursive: true }); const files = walkWorkspace(workspaceDir); const totalBytes = files.reduce((sum, file) => sum + file.size, 0); if (totalBytes > MAX_TOTAL_BYTES) throw new Error(`Checkpoint exceeds ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)} MB`); const existing = readIndex(workspaceDir); const parent = existing[0]?.storageVersion ? existing[0] : undefined; const parentSnapshot = parent ? resolveSnapshot(workspaceDir, parent.id, existing) : new Map<string, SnapshotEntry>(); const current = new Map<string, SnapshotEntry>(); for (const file of files) { const content = fs.readFileSync(file.absolute); const sha256 = hashBuffer(content); const destination = blobPath(workspaceDir, sha256); if (!fs.existsSync(destination)) atomicWrite(destination, content); current.set(file.relative, { path: file.relative, sha256, size: file.size }); } const createdAt = Date.now(); const id = `${createdAt}-${crypto.randomBytes(4).toString("hex")}`; const changes: IncrementalCheckpointManifest["changes"] = []; for (const entry of current.values()) { const previous = parentSnapshot.get(entry.path); if (!previous || previous.sha256 !== entry.sha256 || previous.size !== entry.size) changes.push({ operation: "upsert", ...entry }); } for (const previous of parentSnapshot.values()) if (!current.has(previous.path)) changes.push({ operation: "delete", path: previous.path }); const manifest: IncrementalCheckpointManifest = { version: 3, checkpointId: id, ...(parent ? { parentId: parent.id } : {}), changes: changes.sort((a, b) => a.path.localeCompare(b.path)) }; atomicWrite(manifestPath(workspaceDir, id), JSON.stringify(manifest)); const checkpoint: WorkspaceCheckpoint = { id, label: input.label?.trim().slice(0, 160) || "Workspace checkpoint", createdAt, ...(input.conversationId?.trim() ? { conversationId: input.conversationId.trim() } : {}), ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}), ...(input.kind ? { kind: input.kind } : {}), ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}), fileCount: files.length, totalBytes, files: files.map((file) => file.relative), storageVersion: 3, manifest: manifestPath(workspaceDir, id) }; const next = pruneRetention(workspaceDir, [checkpoint, ...existing], input.retainId ? new Set([input.retainId]) : new Set()); writeIndex(workspaceDir, next); pruneBlobs(workspaceDir, next); return publicCheckpoint(checkpoint); }
+export function verifyCheckpointBlobs(workspaceDir: string, checkpointId?: string): { valid: boolean; checked: number; missing: string[]; corrupt: string[] } { const checkpoints = checkpointId ? readIndex(workspaceDir).filter((entry) => entry.id === checkpointId) : readIndex(workspaceDir); const result = { valid: true, checked: 0, missing: [] as string[], corrupt: [] as string[] }; for (const checkpoint of checkpoints) { if (!checkpoint.storageVersion) continue; try { const snapshot = resolveSnapshot(workspaceDir, checkpoint.id, readIndex(workspaceDir)); verifySnapshotBlobs(workspaceDir, snapshot); result.checked += snapshot.size; } catch (error) { result.valid = false; const message = error instanceof Error ? error.message : `manifest:${checkpoint.id}`; if (/missing/i.test(message)) result.missing.push(message); else result.corrupt.push(message); } } return result; }
+export function pruneCheckpointBlobs(workspaceDir: string, options: { dryRun?: boolean } = {}): string[] { return pruneBlobs(workspaceDir, readIndex(workspaceDir), options.dryRun !== false); }
+export const repairCheckpointBlobs = pruneCheckpointBlobs;
+export function getCheckpointStorageStats(workspaceDir: string): CheckpointStorageStats { const checkpoints = readIndex(workspaceDir); const sumDirectory = (directory: string) => { let bytes = 0; let count = 0; if (fs.existsSync(directory)) for (const entry of fs.readdirSync(directory, { withFileTypes: true })) if (entry.isFile() && !entry.isSymbolicLink()) { bytes += fs.statSync(path.join(directory, entry.name)).size; count += 1; } return { bytes, count }; }; const blobs = sumDirectory(path.join(checkpointRoot(workspaceDir), BLOBS_DIR)); const manifests = sumDirectory(path.join(checkpointRoot(workspaceDir), MANIFESTS_DIR)); let journalBytes = 0; for (const name of ["mutations.json"]) { const target = path.join(checkpointRoot(workspaceDir), name); if (fs.existsSync(target) && fs.lstatSync(target).isFile() && !fs.lstatSync(target).isSymbolicLink()) journalBytes += fs.statSync(target).size; } return { logicalBytes: checkpoints.reduce((sum, checkpoint) => sum + checkpoint.totalBytes, 0), blobBytes: blobs.bytes, manifestBytes: manifests.bytes, journalBytes, checkpointCount: checkpoints.length, blobCount: blobs.count, retention: readCheckpointSettings(workspaceDir) }; }
+function previewRetention(checkpoints: WorkspaceCheckpoint[], maxCheckpoints: number): { retainedIds: Set<string>; removedCheckpointIds: string[] } { const protectedRunIds = new Set<string>(); const protectedIds = new Set<string>(); for (const checkpoint of checkpoints) if (checkpoint.kind === "run" && checkpoint.runId && protectedRunIds.size < 4 && !protectedRunIds.has(checkpoint.runId)) { protectedRunIds.add(checkpoint.runId); protectedIds.add(checkpoint.id); } const retained: WorkspaceCheckpoint[] = []; const stale: WorkspaceCheckpoint[] = []; for (const checkpoint of checkpoints) (retained.length < maxCheckpoints || protectedIds.has(checkpoint.id) ? retained : stale).push(checkpoint); while (retained.length > maxCheckpoints) { let target = -1; for (let index = retained.length - 1; index > 0; index -= 1) if (!protectedIds.has(retained[index].id)) { target = index; break; } if (target < 0) break; stale.push(...retained.splice(target, 1)); } return { retainedIds: new Set(retained.map((entry) => entry.id)), removedCheckpointIds: stale.map((entry) => entry.id) }; }
+export function updateCheckpointRetention(workspaceDir: string, input: { maxCheckpoints: number; dryRun?: boolean }): { dryRun: boolean; settings: CheckpointSettings; removedCheckpointIds: string[]; stats: CheckpointStorageStats } { if (!Number.isInteger(input.maxCheckpoints) || input.maxCheckpoints < MIN_CHECKPOINTS || input.maxCheckpoints > MAX_CONFIGURED_CHECKPOINTS) throw new RangeError(`maxCheckpoints must be between ${MIN_CHECKPOINTS} and ${MAX_CONFIGURED_CHECKPOINTS}`); const settings: CheckpointSettings = { schemaVersion: 1, maxCheckpoints: input.maxCheckpoints }; const checkpoints = readIndex(workspaceDir); const { removedCheckpointIds } = previewRetention(checkpoints, input.maxCheckpoints); if (input.dryRun) return { dryRun: true, settings, removedCheckpointIds, stats: { ...getCheckpointStorageStats(workspaceDir), retention: settings } }; atomicWrite(settingsPath(workspaceDir), JSON.stringify(settings, null, 2)); const retained = pruneRetention(workspaceDir, checkpoints); writeIndex(workspaceDir, retained); pruneBlobs(workspaceDir, retained); return { dryRun: false, settings, removedCheckpointIds, stats: getCheckpointStorageStats(workspaceDir) }; }
+export function restoreCheckpoint(workspaceDir: string, checkpointId: string): PublicWorkspaceCheckpoint { if (!/^\d+-[a-f0-9]{8}$/.test(checkpointId)) throw new Error("Invalid checkpoint id"); const index = readIndex(workspaceDir); let checkpoint = index.find((entry) => entry.id === checkpointId); if (!checkpoint) throw new Error("Checkpoint not found"); const snapshot = checkpoint.storageVersion ? resolveSnapshot(workspaceDir, checkpoint.id, index) : legacySnapshot(workspaceDir, checkpoint); if (checkpoint.storageVersion) verifySnapshotBlobs(workspaceDir, snapshot); for (const entry of snapshot.values()) safeWorkspaceTarget(workspaceDir, entry.path); createCheckpoint(workspaceDir, { label: `Before restore · ${checkpoint.label}`, conversationId: checkpoint.conversationId, runId: checkpoint.runId, kind: "revert", retainId: checkpointId }); checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId); if (!checkpoint) throw new Error("Checkpoint not found"); const captured = new Set(snapshot.keys()); for (const current of walkWorkspace(workspaceDir)) if (!captured.has(current.relative)) fs.unlinkSync(current.absolute); for (const entry of snapshot.values()) { const target = safeWorkspaceTarget(workspaceDir, entry.path); const source = checkpoint.storageVersion ? blobPath(workspaceDir, entry.sha256) : path.join(checkpointRoot(workspaceDir), checkpoint.id, "files", ...entry.path.split("/")); fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, fs.readFileSync(source)); } return publicCheckpoint(checkpoint); }
+export function findCheckpointForRun(workspaceDir: string, runId: string): PublicWorkspaceCheckpoint | undefined { const normalized = runId.trim(); if (!normalized) return undefined; const matching = readIndex(workspaceDir).filter((entry) => entry.runId === normalized); const checkpoint = matching.filter((entry) => entry.kind === "run").sort((a, b) => b.createdAt - a.createdAt)[0]; const legacy = matching.filter((entry) => !entry.kind && entry.label.startsWith("Before agent task")).sort((a, b) => b.createdAt - a.createdAt)[0]; return checkpoint || legacy ? publicCheckpoint(checkpoint || legacy) : undefined; }

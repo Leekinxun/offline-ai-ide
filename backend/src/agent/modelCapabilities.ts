@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 export type ModelCapabilitySource = "model_metadata" | "context_window" | "fallback";
+export type ModelFeature = "streaming" | "tool_calling" | "structured_output" | "reasoning_controls" | "cancellation" | "usage_reporting";
+export type CapabilitySupport = Record<ModelFeature, boolean>;
 
 export interface ModelCapabilities {
   modelName: string;
@@ -9,6 +11,7 @@ export interface ModelCapabilities {
   source: ModelCapabilitySource;
   fetchedAt: number;
   warning?: string;
+  supports: CapabilitySupport;
 }
 
 export interface ProbeSettings {
@@ -17,6 +20,7 @@ export interface ProbeSettings {
   modelName: string;
   fallbackMaxOutputTokens?: number;
   signal?: AbortSignal;
+  declaredSupports?: Partial<CapabilitySupport>;
 }
 
 const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -24,11 +28,15 @@ const PROBE_TIMEOUT_MS = 4_000;
 const FALLBACK_MAX_OUTPUT_TOKENS = 8_192;
 const cache = new Map<string, { expiresAt: number; value: ModelCapabilities }>();
 
+export function capabilitiesFromDeclaration(modelName: string, maxOutputTokens: number, declaredSupports: Partial<CapabilitySupport> = {}): ModelCapabilities {
+  return { modelName, maxOutputTokens: clampTokenLimit(maxOutputTokens), source: "fallback", fetchedAt: Date.now(), supports: discoverSupports(null, declaredSupports), warning: "Capabilities use the registered provider adapter declaration." };
+}
+
 export async function getModelCapabilities(
   settings: ProbeSettings,
   force = false
 ): Promise<ModelCapabilities> {
-  const key = `${settings.apiUrl}|${settings.modelName}|${settings.apiKey ? createHash("sha1").update(settings.apiKey).digest("hex").slice(0, 8) : "none"}`;
+  const key = `${settings.apiUrl}|${settings.modelName}|${settings.apiKey ? createHash("sha1").update(settings.apiKey).digest("hex").slice(0, 8) : "none"}|${JSON.stringify(settings.declaredSupports || {})}`;
   const cached = cache.get(key);
   if (!force && cached && cached.expiresAt > Date.now()) return cached.value;
 
@@ -76,6 +84,7 @@ export async function getModelCapabilities(
     "max_tokens",
   ]) : undefined;
 
+  const supports = discoverSupports(metadata, settings.declaredSupports);
   let capabilities: ModelCapabilities;
   if (explicitMaxOutput) {
     capabilities = {
@@ -84,6 +93,7 @@ export async function getModelCapabilities(
       maxOutputTokens: clampTokenLimit(explicitMaxOutput),
       source: "model_metadata",
       fetchedAt: Date.now(),
+      supports,
     };
   } else if (contextWindow) {
     capabilities = {
@@ -93,6 +103,7 @@ export async function getModelCapabilities(
       source: "context_window",
       fetchedAt: Date.now(),
       warning: "The model exposed a context window, so the output limit was derived automatically.",
+      supports,
     };
   } else {
     capabilities = {
@@ -101,6 +112,7 @@ export async function getModelCapabilities(
       source: "fallback",
       fetchedAt: Date.now(),
       warning,
+      supports,
     };
   }
 
@@ -109,6 +121,44 @@ export async function getModelCapabilities(
     expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
   });
   return capabilities;
+}
+
+function discoverSupports(metadata: Record<string, unknown> | null, declared: Partial<CapabilitySupport> = {}): CapabilitySupport {
+  const aliases: Record<ModelFeature, string[]> = {
+    streaming: ["streaming", "supports_streaming", "stream"],
+    tool_calling: ["tool_calling", "supports_tools", "function_calling", "tools"],
+    structured_output: ["structured_output", "supports_structured_output", "json_schema", "response_format"],
+    reasoning_controls: ["reasoning_controls", "supports_reasoning", "reasoning_effort", "thinking"],
+    cancellation: ["cancellation", "supports_cancellation", "abort"],
+    usage_reporting: ["usage_reporting", "supports_usage", "usage"],
+  };
+  const capabilityNames = new Set<string>();
+  const collect = (value: unknown, depth = 0): void => {
+    if (depth > 4 || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) { for (const item of value) if (typeof item === "string") capabilityNames.add(normalizeKey(item)); else collect(item, depth + 1); return; }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (["capabilities", "supported_features", "features"].includes(key.toLowerCase())) collect(child, depth + 1);
+    }
+  };
+  collect(metadata);
+  const value = (feature: ModelFeature): boolean => {
+    if (typeof declared[feature] === "boolean") return declared[feature]!;
+    if (!metadata) return false;
+    for (const alias of aliases[feature]) {
+      const found = findBoolean(metadata, alias);
+      if (found !== undefined) return found;
+      if (capabilityNames.has(normalizeKey(alias))) return true;
+    }
+    return false;
+  };
+  return { streaming: value("streaming"), tool_calling: value("tool_calling"), structured_output: value("structured_output"), reasoning_controls: value("reasoning_controls"), cancellation: value("cancellation"), usage_reporting: value("usage_reporting") };
+}
+
+function findBoolean(value: Record<string, unknown>, target: string, depth = 0): boolean | undefined {
+  if (depth > 4) return undefined; const normalized = normalizeKey(target);
+  for (const [key, child] of Object.entries(value)) if (normalizeKey(key) === normalized && typeof child === "boolean") return child;
+  for (const child of Object.values(value)) if (child && typeof child === "object" && !Array.isArray(child)) { const nested = findBoolean(child as Record<string, unknown>, target, depth + 1); if (nested !== undefined) return nested; }
+  return undefined;
 }
 
 export function clearModelCapabilityCache(): void {

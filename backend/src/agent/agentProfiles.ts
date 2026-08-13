@@ -1,6 +1,9 @@
 import type { AgentMode } from "./types.js";
+import { explainPermission, intersectPermissionLayers, intersectSandboxGrants } from "../extensions/policy/evaluator.js";
+import type { PermissionLayer, SandboxGrant } from "../extensions/policy/types.js";
 
-export type AgentProfileId = AgentMode | "explore" | "subagent" | "teammate";
+/** Internal review profiles are intentionally not selectable client modes. */
+export type AgentProfileId = AgentMode | "change_set_reviewer" | "change_set_verifier" | "explore" | "subagent" | "teammate";
 
 export interface AgentBudget {
   maxSteps: number;
@@ -18,6 +21,7 @@ export interface AgentPermissionProfile {
 export interface AgentProfile {
   id: AgentProfileId;
   modelName?: string;
+  model?: string;
   providerId: string;
   budget: AgentBudget;
   permissions: AgentPermissionProfile;
@@ -26,21 +30,41 @@ export interface AgentProfile {
     outputPerMillionUsd: number;
   };
   stepSnapshots: boolean;
+  skills: string[];
+  tools: string[];
+  deniedTools: string[];
+  mcpServers: string[];
+  mcp: string[];
+  hooks: string[];
+  memory: { read: boolean; write: boolean; scopes: string[] };
+  isolation: { mode: "workspace" | "worktree" | "sandbox"; network: boolean; secretEnv: string[] };
 }
 
 export type AgentProfileOverrides = Partial<Record<AgentProfileId, Partial<{
   modelName: string;
+  model: string;
   providerId: string;
   budget: Partial<AgentBudget>;
   permissions: Partial<AgentPermissionProfile>;
   pricing: Partial<AgentProfile["pricing"]>;
   stepSnapshots: boolean;
+  skills: string[];
+  tools: string[];
+  deniedTools: string[];
+  mcpServers: string[];
+  mcp: string[];
+  hooks: string[];
+  memory: Partial<AgentProfile["memory"]>;
+  isolation: Partial<AgentProfile["isolation"]>;
 }>>>;
 
 const ALL_TOOLS = ["*"];
 const DEFAULTS: Record<AgentProfileId, AgentProfile> = {
   ask: profile("ask", 8, 8, 5 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "TodoWrite", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
-  review: profile("review", 20, 30, 15 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite"]),
+  review: profile("review", 20, 30, 15 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "report_review_finding"]),
+  // These are server-owned identities used only for immutable change-set review runs.
+  change_set_reviewer: profile("change_set_reviewer", 12, 20, 10 * 60_000, false, ["read_file", "bash", "report_review_finding"]),
+  change_set_verifier: profile("change_set_verifier", 10, 16, 10 * 60_000, false, ["read_file", "bash", "report_review_finding"]),
   plan: profile("plan", 16, 20, 10 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "submit_plan"]),
   code: profile("code", 30, 80, 30 * 60_000, true, ALL_TOOLS),
   explore: profile("explore", 20, 40, 15 * 60_000, false, ["bash", "read_file"]),
@@ -69,6 +93,14 @@ function profile(
     permissions: { allow, deny: [] },
     pricing: { inputPerMillionUsd: 0, outputPerMillionUsd: 0 },
     stepSnapshots,
+    skills: [],
+    tools: [...allow],
+    deniedTools: [],
+    mcpServers: [],
+    mcp: [],
+    hooks: [],
+    memory: { read: allow.includes("memory_read") || allow.includes("*"), write: allow.includes("memory_write") || allow.includes("*"), scopes: [] },
+    isolation: { mode: id === "code" ? "worktree" : "sandbox", network: false, secretEnv: [] },
   };
 }
 
@@ -92,6 +124,9 @@ export function normalizeAgentProfileOverrides(raw: unknown): AgentProfileOverri
       ...(typeof candidate.modelName === "string" && candidate.modelName.trim()
         ? { modelName: candidate.modelName.trim().slice(0, 200) }
         : {}),
+      ...(typeof candidate.model === "string" && candidate.model.trim()
+        ? { model: candidate.model.trim().slice(0, 200), modelName: candidate.model.trim().slice(0, 200) }
+        : {}),
       ...(typeof candidate.providerId === "string" && candidate.providerId.trim()
         ? { providerId: candidate.providerId.trim().slice(0, 100) }
         : {}),
@@ -108,6 +143,17 @@ export function normalizeAgentProfileOverrides(raw: unknown): AgentProfileOverri
       ...(typeof candidate.stepSnapshots === "boolean"
         ? { stepSnapshots: candidate.stepSnapshots }
         : {}),
+      ...(Array.isArray(candidate.skills) ? { skills: normalizePatterns(candidate.skills) } : {}),
+      ...(Array.isArray(candidate.tools) ? { tools: normalizePatterns(candidate.tools), permissions: { ...((Array.isArray(permissions.allow) || Array.isArray(permissions.deny)) ? {
+        ...(Array.isArray(permissions.allow) ? { allow: normalizePatterns(permissions.allow) } : {}),
+        ...(Array.isArray(permissions.deny) ? { deny: normalizePatterns(permissions.deny) } : {}),
+      } : {}), allow: normalizePatterns(candidate.tools) } } : {}),
+      ...(Array.isArray(candidate.deniedTools) ? { deniedTools: normalizePatterns(candidate.deniedTools) } : {}),
+      ...(Array.isArray(candidate.mcpServers) ? { mcpServers: normalizePatterns(candidate.mcpServers) } : {}),
+      ...(Array.isArray(candidate.mcp) ? { mcp: normalizePatterns(candidate.mcp), mcpServers: normalizePatterns(candidate.mcp) } : {}),
+      ...(Array.isArray(candidate.hooks) ? { hooks: normalizePatterns(candidate.hooks) } : {}),
+      ...(candidate.memory && typeof candidate.memory === "object" ? { memory: normalizeMemory(candidate.memory) } : {}),
+      ...(candidate.isolation && typeof candidate.isolation === "object" ? { isolation: normalizeIsolation(candidate.isolation) } : {}),
     };
   }
   return result;
@@ -124,7 +170,8 @@ export function resolveAgentProfile(
     ...base,
     ...override,
     id,
-    modelName: override.modelName || globalDefaults?.modelName,
+    modelName: override.modelName || override.model || globalDefaults?.modelName,
+    model: override.model || override.modelName || globalDefaults?.modelName,
     budget: {
       ...base.budget,
       ...(globalDefaults?.maxOutputTokens ? { maxOutputTokens: globalDefaults.maxOutputTokens } : {}),
@@ -136,11 +183,47 @@ export function resolveAgentProfile(
     permissions: {
       ...base.permissions,
       ...(override.permissions || {}),
+      ...(override.tools ? { allow: override.tools } : {}),
+      ...(override.deniedTools ? { deny: override.deniedTools } : {}),
     },
     pricing: {
       ...base.pricing,
       ...(override.pricing || {}),
     },
+    skills: override.skills || base.skills,
+    tools: override.tools || override.permissions?.allow || base.tools,
+    deniedTools: override.deniedTools || override.permissions?.deny || base.deniedTools,
+    mcpServers: override.mcpServers || base.mcpServers,
+    mcp: override.mcp || override.mcpServers || base.mcp,
+    hooks: override.hooks || base.hooks,
+    memory: { ...base.memory, ...(override.memory || {}) },
+    isolation: { ...base.isolation, ...(override.isolation || {}) },
+  };
+}
+
+export interface EffectiveAgentPolicy {
+  permissions: string[];
+  sandbox: SandboxGrant;
+  explain(permission: string): ReturnType<typeof explainPermission>;
+}
+
+/** Every policy layer is an upper bound; no profile, extension, or workspace layer can expand authority. */
+export function resolveEffectiveAgentPolicy(input: {
+  admin: PermissionLayer;
+  signedPlugin?: PermissionLayer;
+  signedSkill?: PermissionLayer;
+  profile: AgentProfile;
+  workspace: PermissionLayer;
+  sandboxLayers?: SandboxGrant[];
+  candidates?: string[];
+}): EffectiveAgentPolicy {
+  const profileLayer: PermissionLayer = { id: `profile:${input.profile.id}`, allow: input.profile.permissions.allow, deny: input.profile.permissions.deny };
+  const layers = [input.admin, ...(input.signedPlugin ? [input.signedPlugin] : []), ...(input.signedSkill ? [input.signedSkill] : []), profileLayer, input.workspace];
+  const sandboxLayers = input.sandboxLayers || [];
+  return {
+    permissions: intersectPermissionLayers(layers, input.candidates),
+    sandbox: intersectSandboxGrants(sandboxLayers),
+    explain: (permission) => explainPermission(permission, layers, sandboxLayers),
   };
 }
 
@@ -207,6 +290,25 @@ function normalizePatterns(value: unknown[]): string[] {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .slice(0, 200)));
+}
+
+function normalizeMemory(value: unknown): Partial<AgentProfile["memory"]> {
+  const raw = value as Record<string, unknown>;
+  return {
+    ...(typeof raw.read === "boolean" ? { read: raw.read } : {}),
+    ...(typeof raw.write === "boolean" ? { write: raw.write } : {}),
+    ...(Array.isArray(raw.scopes) ? { scopes: normalizePatterns(raw.scopes) } : {}),
+  };
+}
+
+function normalizeIsolation(value: unknown): Partial<AgentProfile["isolation"]> {
+  const raw = value as Record<string, unknown>;
+  const mode = ["workspace", "worktree", "sandbox"].includes(String(raw.mode)) ? raw.mode as AgentProfile["isolation"]["mode"] : undefined;
+  return {
+    ...(mode ? { mode } : {}),
+    ...(typeof raw.network === "boolean" ? { network: raw.network } : {}),
+    ...(Array.isArray(raw.secretEnv) ? { secretEnv: normalizePatterns(raw.secretEnv) } : {}),
+  };
 }
 
 function normalizeNumericObject(

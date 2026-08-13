@@ -15,8 +15,12 @@ import {
   AgentRunSummary,
   ToolApprovalRequest,
   ToolApprovalDecision,
+  ExecutionContract,
+  ExecutionPlan,
+  CompletionEvidence,
 } from "../types";
 import { useI18n } from "../i18n";
+import { useContextManifest } from "./useContextManifest";
 
 interface ConversationsResponse {
   conversations?: ConversationSummary[];
@@ -28,10 +32,18 @@ interface ConversationDetailResponse {
   mode?: AgentMode;
   status?: string;
   summary?: ConversationRunSummary;
+  lastRunId?: string;
 }
 
 interface RunListResponse {
   runs?: AgentRunSummary[];
+}
+interface RunPayloadFields {
+  executionContract?: ExecutionContract;
+  executionContractKind?: ExecutionContract["kind"];
+  completionEvidence?: CompletionEvidence;
+  qualityGate?: AgentRunSummary["qualityGate"];
+  executionPlan?: ExecutionPlan;
 }
 
 export interface ChatRuntimeOptions {
@@ -105,6 +117,13 @@ export function useChat(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
+  const conversationLoadTokenRef = useRef(0);
+  const contextManifest = useContextManifest(
+    token,
+    workspaceDir,
+    currentConversationId,
+    runState?.runId,
+  );
 
   useEffect(() => {
     onFileUpdateRef.current = onFileUpdate;
@@ -170,6 +189,16 @@ export function useChat(
     }
   }, [token]);
 
+  const fetchExecutionPlan = useCallback(async (planId?: string): Promise<ExecutionPlan | undefined> => {
+    if (!planId) return undefined;
+    const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) return undefined;
+    const payload = await response.json() as { executionPlan?: ExecutionPlan; plan?: ExecutionPlan };
+    return payload.executionPlan || payload.plan;
+  }, [token]);
+
   const refreshRunHistory = useCallback(
     async (conversationId?: string | null) => {
       setRunHistoryLoading(true);
@@ -186,7 +215,11 @@ export function useChat(
           throw new Error(payload.error || "Failed to load agent runs");
         }
         const payload = (await response.json()) as RunListResponse;
-        setRunHistory(Array.isArray(payload.runs) ? payload.runs : []);
+        const runs = Array.isArray(payload.runs) ? payload.runs : [];
+        const hydrated = await Promise.all(runs.map(async (run) =>
+          run.executionPlan || !run.executionPlanId ? run : { ...run, executionPlan: await fetchExecutionPlan(run.executionPlanId) }
+        ));
+        setRunHistory(hydrated);
       } catch (error) {
         setRunHistoryError(
           error instanceof Error ? error.message : "Failed to load agent runs"
@@ -195,7 +228,7 @@ export function useChat(
         setRunHistoryLoading(false);
       }
     },
-    [token]
+    [fetchExecutionPlan, token]
   );
 
   const updateAssistantByRequestId = useCallback(
@@ -316,6 +349,7 @@ export function useChat(
             if (event && !events.some((entry) => entry.id === event.id)) {
               events.push(event);
             }
+            const fields = data as RunPayloadFields;
             return {
               runId: data.runId,
               conversationId: data.conversationId,
@@ -328,6 +362,11 @@ export function useChat(
               eventCount: events.length,
               events,
               ...(event ? { event } : {}),
+              ...(fields.executionContract ? { executionContract: fields.executionContract } : {}),
+              ...(fields.executionContractKind ? { executionContractKind: fields.executionContractKind } : {}),
+              ...(fields.completionEvidence ? { completionEvidence: fields.completionEvidence } : {}),
+              ...(fields.qualityGate ? { qualityGate: fields.qualityGate } : {}),
+              ...(fields.executionPlan ? { executionPlan: fields.executionPlan } : {}),
             };
           });
           if (data.status !== "running" && data.status !== "queued") {
@@ -338,7 +377,7 @@ export function useChat(
 
         case "summary":
           if (data.conversationId === currentConversationId || !currentConversationId) {
-            setCurrentRunSummary(data);
+            setCurrentRunSummary(data as ConversationRunSummary);
           }
           break;
 
@@ -354,6 +393,15 @@ export function useChat(
             preview: data.preview,
             message: data.message,
           });
+          break;
+
+        case "context_manifest":
+        case "context_manifest_state":
+          contextManifest.acceptManifestEvent(data);
+          break;
+
+        case "context_index_state":
+          contextManifest.acceptIndexEvent(data);
           break;
 
         case "mcp_state":
@@ -476,7 +524,7 @@ export function useChat(
     };
 
     wsRef.current = ws;
-  }, [finishRequest, refreshConversations, updateAssistantByRequestId, token]);
+  }, [contextManifest.acceptIndexEvent, contextManifest.acceptManifestEvent, finishRequest, refreshConversations, updateAssistantByRequestId, token]);
 
   useEffect(() => {
     connect();
@@ -487,6 +535,7 @@ export function useChat(
   }, [connect]);
 
   useEffect(() => {
+    conversationLoadTokenRef.current += 1;
     setMessages([]);
     setCurrentConversationId(null);
     setHistoryError(null);
@@ -620,6 +669,7 @@ export function useChat(
   }, [activeRequestIds, t, updateAssistantByRequestId]);
 
   const clearMessages = useCallback(() => {
+    conversationLoadTokenRef.current += 1;
     setMessages([]);
     setCurrentConversationId(null);
     setCurrentRunSummary(null);
@@ -653,6 +703,25 @@ export function useChat(
     []
   );
 
+  const decidePlanAmendment = useCallback(async (planId: string, amendmentId: string, decision: "approved" | "rejected") => {
+    const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/amendments/${encodeURIComponent(amendmentId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ decision }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Failed to update plan amendment");
+    }
+    const payload = await response.json() as { executionPlan?: ExecutionPlan; plan?: ExecutionPlan };
+    const executionPlan = payload.executionPlan || payload.plan;
+    if (executionPlan) {
+      setRunState((current) => current ? { ...current, executionPlan } : current);
+      setCurrentRunSummary((current) => current ? { ...current, executionPlan } : current);
+    }
+    await refreshRunHistory(currentConversationId);
+  }, [currentConversationId, refreshRunHistory, token]);
+
   const approveConversationTools = useCallback((conversationId: string) => {
     if (!conversationId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({
@@ -670,10 +739,28 @@ export function useChat(
     sendMessage(lastUserMessage.content);
   }, [messages, sendMessage]);
 
+  const fetchHydratedRun = useCallback(async (runId: string): Promise<AgentRunState> => {
+    const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Failed to load agent run");
+    }
+    const run = await response.json() as AgentRunState;
+    const executionPlan = run.executionPlan || await fetchExecutionPlan(run.executionPlanId);
+    return executionPlan ? { ...run, executionPlan } : run;
+  }, [fetchExecutionPlan, token]);
+
   const loadConversation = useCallback(
     async (conversationId: string) => {
+      const loadToken = ++conversationLoadTokenRef.current;
+      const isCurrentLoad = () => conversationLoadTokenRef.current === loadToken;
       setHistoryLoadingId(conversationId);
       setHistoryError(null);
+      // Clear synchronously so a previous conversation's contract cannot be rendered.
+      setRunState(null);
+      setCurrentRunSummary(null);
 
       try {
         const response = await fetch(
@@ -691,21 +778,33 @@ export function useChat(
         }
 
         const payload = (await response.json()) as ConversationDetailResponse;
+        if (!isCurrentLoad()) return;
         setMessages(Array.isArray(payload.messages) ? payload.messages : []);
         setCurrentConversationId(payload.id || conversationId);
         setAgentMode(payload.mode || "code");
         setCurrentRunSummary(payload.summary || null);
+        if (payload.lastRunId) {
+          const run = await fetchHydratedRun(payload.lastRunId);
+          if (!isCurrentLoad()) return;
+          if (run.conversationId === (payload.id || conversationId)) {
+            setRunState(run);
+            if (run.summary) {
+              setCurrentRunSummary(run.executionPlan ? { ...run.summary, executionPlan: run.executionPlan } : run.summary);
+            }
+          }
+        }
       } catch (error) {
+        if (!isCurrentLoad()) return;
         setHistoryError(
           error instanceof Error
             ? error.message
             : t("chat.failedToLoadConversation")
         );
       } finally {
-        setHistoryLoadingId(null);
+        if (isCurrentLoad()) setHistoryLoadingId(null);
       }
     },
-    [t, token]
+    [fetchHydratedRun, t, token]
   );
 
   const forkConversation = useCallback(
@@ -776,29 +875,23 @@ export function useChat(
   const loadRun = useCallback(
     async (runId: string) => {
       try {
-        const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.error || "Failed to load agent run");
+        const hydrated = await fetchHydratedRun(runId);
+        if (hydrated.conversationId !== currentConversationId) {
+          await loadConversation(hydrated.conversationId);
         }
-        const payload = (await response.json()) as AgentRunState;
-        setRunState(payload);
-        if (payload.conversationId !== currentConversationId) {
-          await loadConversation(payload.conversationId);
-        }
+        setRunState(hydrated);
+        if (hydrated.summary) setCurrentRunSummary(hydrated.executionPlan ? { ...hydrated.summary, executionPlan: hydrated.executionPlan } : hydrated.summary);
       } catch (error) {
         setRunHistoryError(
           error instanceof Error ? error.message : "Failed to load agent run"
         );
       }
     },
-    [currentConversationId, loadConversation, token]
+    [currentConversationId, fetchHydratedRun, loadConversation]
   );
 
   const revertRun = useCallback(
-    async (runId: string) => {
+    async (runId: string, options: { legacyFullRestore?: boolean } = {}) => {
       setRunHistoryError(null);
       const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/revert`, {
         method: "POST",
@@ -806,11 +899,14 @@ export function useChat(
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: "{}",
+        body: JSON.stringify(options),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        const error = new Error(payload.error || "Failed to revert agent run");
+        const error = Object.assign(new Error(payload.error || "Failed to revert agent run"), {
+          legacyFullRestoreRequired: payload.legacyFullRestoreRequired === true,
+          rollback: payload.rollback,
+        });
         setRunHistoryError(error.message);
         throw error;
       }
@@ -876,6 +972,7 @@ export function useChat(
     setSelectedModelName,
     currentRunSummary,
     contextState,
+    contextManifest,
     mcpState,
     knowledgeState,
     runState,
@@ -889,6 +986,7 @@ export function useChat(
     pendingApprovals,
     respondToToolApproval,
     approveConversationTools,
+    decidePlanAmendment,
   };
 }
 

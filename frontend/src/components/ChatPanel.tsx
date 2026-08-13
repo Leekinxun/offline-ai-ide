@@ -20,6 +20,7 @@ import {
   AgentRunSummary,
   ToolApprovalRequest,
   ToolApprovalDecision,
+  CollaborationState,
 } from "../types";
 import {
   Send,
@@ -38,12 +39,20 @@ import {
   Trash2,
 } from "lucide-react";
 import { ContextStrip } from "./ContextStrip";
+import { ContextInspector } from "./ContextInspector";
 import { TaskHeader } from "./TaskHeader";
 import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
 import { ChangeSummary } from "./ChangeSummary";
+import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
+import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import type { ContextManifestController } from "../hooks/useContextManifest";
+
+type ChatConfirmAction =
+  | { kind: "delete"; conversation: ConversationSummary }
+  | { kind: "revert"; runId: string; legacyFullRestore?: boolean };
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
@@ -90,11 +99,16 @@ interface ChatPanelProps {
   onAgentModeChange: (mode: AgentMode) => void;
   currentRunSummary: ConversationRunSummary | null;
   contextState: ContextState;
+  contextManifest: ContextManifestController;
+  contextReadOnly: boolean;
   mcpState: McpState;
   knowledgeState: KnowledgeState;
   historyRequest?: number;
   newConversationRequest?: number;
   onOpenSettings: () => void;
+  collaboration?: CollaborationState | null;
+  activeFilePath?: string | null;
+  onOpenCollaboration?: () => void;
   onOpenFile: (path: string) => void;
   onOpenDiff: (path: string) => void;
   onOpenReviewFinding: (finding: ReviewFinding) => void;
@@ -118,12 +132,13 @@ interface ChatPanelProps {
   runHistoryError: string | null;
   onLoadRun: (runId: string) => Promise<void> | void;
   onResumeRun: (conversationId: string, runId?: string) => Promise<void> | void;
-  onRevertRun: (runId: string) => Promise<void>;
+  onRevertRun: (runId: string, options?: { legacyFullRestore?: boolean }) => Promise<unknown>;
   onApplyCode: (code: string) => void;
   onNavigateToFileUpdate: (update: FileUpdate) => void;
   pendingApprovals: ToolApprovalRequest[];
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversationTools: (conversationId: string) => void;
+  onPlanAmendmentDecision: (planId: string, amendmentId: string, decision: "approved" | "rejected") => Promise<void> | void;
   style?: React.CSSProperties;
 }
 
@@ -143,11 +158,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onAgentModeChange,
   currentRunSummary,
   contextState,
+  contextManifest,
+  contextReadOnly,
   mcpState,
   knowledgeState,
   historyRequest,
   newConversationRequest,
   onOpenSettings,
+  collaboration,
+  activeFilePath,
+  onOpenCollaboration,
   onOpenFile,
   onOpenDiff,
   onOpenReviewFinding,
@@ -177,6 +197,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   pendingApprovals,
   onToolApproval,
   onApproveConversationTools,
+  onPlanAmendmentDecision,
   style,
 }) => {
   const { locale, t } = useI18n();
@@ -184,12 +205,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
+  const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
   const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const [creatingIsolatedWindow, setCreatingIsolatedWindow] = useState(false);
   const [isolatedWindowError, setIsolatedWindowError] = useState<string | null>(null);
+  const [confirmIntent, setConfirmIntent] = useState<ActionConfirmIntent | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ChatConfirmAction | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const approvalStackRef = useRef<HTMLElement>(null);
+  const contextInspectorTriggerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const handledNewConversationRef = useRef(0);
   const previousMessageCountRef = useRef(messages.length);
@@ -243,6 +270,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       textareaRef.current?.focus();
     }
   }, [focusRequest, visible]);
+
+  useEffect(() => {
+    if (!contextInspectorOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setContextInspectorOpen(false);
+      window.requestAnimationFrame(() => {
+        contextInspectorTriggerRef.current
+          ?.querySelector<HTMLElement>("button[aria-expanded]")
+          ?.focus();
+      });
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [contextInspectorOpen]);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
@@ -328,37 +373,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   );
 
   const handleDeleteConversation = useCallback(
-    async (conversation: ConversationSummary) => {
+    (conversation: ConversationSummary) => {
       if (busyHistoryAction || isStreaming) return;
       const title = conversation.title || t("chat.untitledConversation");
-      if (!window.confirm(t("chat.deleteConversationConfirm", { title }))) return;
-      setBusyHistoryAction(`delete:${conversation.id}`);
-      try {
-        await onDeleteConversation(conversation.id);
-      } catch {
-        // The hook keeps the localized history error visible.
-      } finally {
-        setBusyHistoryAction(null);
-      }
+      setConfirmError(null);
+      setConfirmAction({ kind: "delete", conversation });
+      setConfirmIntent({ id: `delete:${conversation.id}`, title: t("chat.deleteConversation"), description: t("chat.deleteConversationConfirm", { title }), confirmLabel: t("chat.deleteConversation"), tone: "danger" });
     },
-    [busyHistoryAction, isStreaming, onDeleteConversation, t]
+    [busyHistoryAction, isStreaming, t]
   );
 
   const handleRevertRun = useCallback(
-    async (runId: string) => {
+    (runId: string) => {
       if (busyHistoryAction || isStreaming) return;
-      if (!window.confirm(t("chat.revertRunConfirm"))) return;
-      setBusyHistoryAction(`revert:${runId}`);
-      try {
-        await onRevertRun(runId);
-      } catch {
-        // The hook keeps the run error visible.
-      } finally {
-        setBusyHistoryAction(null);
-      }
+      setConfirmError(null);
+      setConfirmAction({ kind: "revert", runId });
+      setConfirmIntent({ id: `revert:${runId}`, title: t("chat.revertRun"), description: t("chat.revertRunConfirm"), confirmLabel: t("chat.revertRun"), tone: "danger" });
     },
-    [busyHistoryAction, isStreaming, onRevertRun, t]
+    [busyHistoryAction, isStreaming, t]
   );
+
+  const executeConfirmedAction = useCallback(async () => {
+    const action = confirmAction;
+    if (!action) return;
+    setBusyHistoryAction(action.kind === "delete" ? `delete:${action.conversation.id}` : `revert:${action.runId}`);
+    setConfirmError(null);
+    try {
+      if (action.kind === "delete") await onDeleteConversation(action.conversation.id);
+      else await onRevertRun(action.runId, action.legacyFullRestore ? { legacyFullRestore: true } : undefined);
+      setConfirmIntent(null);
+      setConfirmAction(null);
+    } catch (error) {
+      if (action.kind === "revert" && !action.legacyFullRestore && (error as { legacyFullRestoreRequired?: boolean }).legacyFullRestoreRequired) {
+        setConfirmAction({ ...action, legacyFullRestore: true });
+        setConfirmIntent((current) => current ? { ...current, description: t("chat.revertRunLegacyConfirm") } : current);
+      } else {
+        setConfirmError(error instanceof Error ? error.message : t(action.kind === "delete" ? "chat.deleteConversationFailed" : "chat.revertRunFailed"));
+      }
+    } finally {
+      setBusyHistoryAction(null);
+    }
+  }, [confirmAction, onDeleteConversation, onRevertRun, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -428,6 +483,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [activeRequestIds, messages]
   );
   const activeTool = activeAssistantMessage?.toolCalls?.find((step) => step.result === undefined);
+  const runStatus = isStreaming ? "running" : runState?.status || "queued";
+  const runTone: TaskStateTone = runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
+  const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
+  const hasRecoveryAction = runState?.status === "failed" || runState?.status === "stopped";
+  const taskAction = isStreaming ? t("chat.stop") : hasRecoveryAction ? t("workbench.resumeRun") : pendingApprovals.length ? t("chat.approval.title") : currentRunSummary?.changedFiles.length ? t("chat.changes") : t("chat.focusComposer");
+  const handleTaskAction = () => {
+    if (isStreaming) { onStop(); return; }
+    if (hasRecoveryAction && runState) { void onResumeRun(runState.conversationId, runState.runId); return; }
+    if (pendingApprovals.length) {
+      const stack = approvalStackRef.current;
+      stack?.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.requestAnimationFrame(() => (stack?.querySelector<HTMLElement>('button:not(:disabled)') || stack)?.focus());
+      return;
+    }
+    if (currentRunSummary?.changedFiles.length) { setChangesOpen(true); return; }
+    textareaRef.current?.focus();
+  };
 
   if (!visible) return null;
 
@@ -450,7 +522,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         onOpenIsolatedWindow={() => void handleOpenIsolatedWindow()}
         creatingIsolatedWindow={creatingIsolatedWindow}
         isolatedWindow={isolatedWindow}
+        executionContract={runState?.executionContract || (runState?.executionContractKind ? { kind: runState.executionContractKind, planId: runState.executionPlan?.id || runState.executionPlanId } : currentRunSummary?.executionContract || (currentRunSummary?.executionContractKind ? { kind: currentRunSummary.executionContractKind, planId: currentRunSummary.executionPlan?.id } : undefined))}
+        completionEvidence={runState?.completionEvidence || currentRunSummary?.completionEvidence}
       />
+      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 
@@ -476,12 +551,57 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         ))}
       </div>
 
+      <div ref={contextInspectorTriggerRef} className="chat-context-strip-host">
       <ContextStrip
         contextState={contextState}
+        contextManifest={contextManifest.draftManifest}
+        contextIndexState={contextManifest.indexState}
+        inspectorOpen={contextInspectorOpen}
+        onToggleInspector={() => {
+          setContextInspectorOpen((open) => {
+            if (open) window.requestAnimationFrame(() => {
+              const trigger = contextInspectorTriggerRef.current?.querySelector<HTMLElement>("button[aria-expanded]");
+              trigger?.focus();
+            });
+            return !open;
+          });
+        }}
         mcpState={mcpState}
         knowledgeState={knowledgeState}
         onOpenSettings={onOpenSettings}
+        collaboration={collaboration}
+        activeFilePath={activeFilePath}
+        onOpenCollaboration={onOpenCollaboration}
       />
+      </div>
+
+      {contextInspectorOpen && (
+        <div className="chat-context-inspector">
+          <ContextInspector
+            manifests={contextManifest.draftManifests}
+            selectedManifestId={contextManifest.draftManifest?.id}
+            indexState={contextManifest.indexState}
+            mode="draft"
+            loading={contextManifest.loading}
+            readOnly={contextReadOnly}
+            preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
+            error={contextManifest.error}
+            emptyHint={t("context.noPreviewSources")}
+            mutationBySource={contextManifest.mutationBySource}
+            onPin={(key) => void contextManifest.pinSource(key)}
+            onUnpin={(key) => void contextManifest.unpinSource(key)}
+            onExclude={(key) => void contextManifest.excludeSource(key)}
+            onRestore={(key) => void contextManifest.restoreSource(key)}
+            onRefreshSource={(key) => void contextManifest.refreshSources([key])}
+            onRefreshAll={() => void (
+              contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
+                ? contextManifest.rebuildIndex()
+                : contextManifest.refreshSources()
+            )}
+            onRetry={() => void contextManifest.retryPreview()}
+          />
+        </div>
+      )}
 
       {contextState.preview && (
         <div className="chat-context-preview">
@@ -729,6 +849,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {!isStreaming && currentRunSummary && (
         <ChangeSummary
+          token={token}
+          runId={runState?.runId}
           summary={currentRunSummary}
           expanded={changesOpen}
           onToggle={() => setChangesOpen((open) => !open)}
@@ -736,6 +858,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           onOpenDiff={onOpenDiff}
           onOpenLocation={onOpenReviewFinding}
           onRetry={onRetry}
+          onPlanAmendmentDecision={onPlanAmendmentDecision}
         />
       )}
 
@@ -769,6 +892,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       <ToolApprovalStack
+        ref={approvalStackRef}
         requests={pendingApprovals}
         onRespond={onToolApproval}
         onApproveConversation={onApproveConversationTools}
@@ -841,6 +965,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </button>
         </div>
       </div>
+      <ActionConfirmDialog
+        intent={confirmIntent}
+        busy={busyHistoryAction !== null}
+        error={confirmError}
+        onClose={() => { setConfirmIntent(null); setConfirmAction(null); setConfirmError(null); }}
+        onConfirm={() => executeConfirmedAction()}
+      />
     </div>
   );
 };

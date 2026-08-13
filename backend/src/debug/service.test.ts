@@ -13,6 +13,7 @@ import {
   getDebugVariables,
   startDebugSession,
   stopDebugSession,
+  debugEnvironment,
 } from "./service.js";
 
 const debugpyAvailable = spawnSync(
@@ -20,6 +21,54 @@ const debugpyAvailable = spawnSync(
   ["-c", "import debugpy"],
   { stdio: "ignore", timeout: 5_000 }
 ).status === 0;
+
+test("debug launcher environment excludes ambient secrets and runtime injection variables", () => {
+  const keys = ["CREWFORGE_DEBUG_SECRET", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "BASH_ENV"];
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = "must-not-leak";
+    const env = debugEnvironment({ NO_COLOR: "1" });
+    for (const key of keys) assert.equal(env[key], undefined);
+    assert.equal(env.NO_COLOR, "1");
+    assert.ok(env.PATH);
+    assert.throws(() => debugEnvironment({ NODE_OPTIONS: "--require injected" }), /Blocked debugger environment variable/);
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("debug target rejects a symlink that resolves outside the workspace", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-debug-link-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-debug-outside-"));
+  t.after(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(outside, "outside.js"), "process.exit(0)");
+  fs.symlinkSync(path.join(outside, "outside.js"), path.join(workspace, "linked.js"));
+  assert.throws(() => startDebugSession(workspace, "linked.js", []), /escapes the workspace/);
+});
+
+test("stopping a Node debug session terminates ordinary descendants", { skip: process.platform === "win32" }, async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-debug-tree-"));
+  const marker = path.join(workspace, "descendant-survived");
+  fs.writeFileSync(path.join(workspace, "target.js"), [
+    "const { spawn } = require('node:child_process');",
+    `spawn(process.execPath, ['-e', ${JSON.stringify(`setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'alive'), 500)`)}], { stdio: 'ignore' });`,
+    "setInterval(() => {}, 10_000);",
+  ].join("\n"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  startDebugSession(workspace, "target.js", []);
+  await waitForStatus(workspace, "running");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await stopDebugSession(workspace);
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.equal(fs.existsSync(marker), false);
+});
 
 async function waitForStatus(workspace: string, status: string, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;

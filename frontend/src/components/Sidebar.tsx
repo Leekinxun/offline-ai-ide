@@ -26,6 +26,8 @@ import type {
   WorkspaceSearchResponse,
 } from "../hooks/useFileSystem";
 import { useI18n } from "../i18n";
+import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface SidebarProps {
   tree: FileNode[];
@@ -59,6 +61,11 @@ interface UploadedFileInput {
   path: string;
   file: File;
 }
+
+type SidebarConfirmAction =
+  | { kind: "delete"; node: FileNode }
+  | { kind: "batch-delete"; paths: string[] }
+  | { kind: "upload-overwrite"; files: UploadedFileInput[]; targetPath: string };
 
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
@@ -215,12 +222,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [contentSearchState, setContentSearchState] = useState<"idle" | "loading" | "error">("idle");
   const [rootDropActive, setRootDropActive] = useState(false);
   const [clipboardItem, setClipboardItem] = useState<FileNode | null>(null);
+  const [notice, setNotice] = useState<{ tone: "status" | "error"; message: string } | null>(null);
+  const [confirmIntent, setConfirmIntent] = useState<ActionConfirmIntent | null>(null);
+  const [confirmAction, setConfirmAction] = useState<SidebarConfirmAction | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const dialogInputRef = useRef<HTMLInputElement>(null);
+  const folderPathInputRef = useRef<HTMLInputElement>(null);
   const treeSearchInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetPathRef = useRef("");
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const createDialogRef = useModalDialogFocus<HTMLDivElement>({ open: Boolean(dialog), onClose: () => setDialog(null), initialFocusRef: dialogInputRef });
+  const folderDialogRef = useModalDialogFocus<HTMLDivElement>({ open: Boolean(folderBrowser), onClose: () => setFolderBrowser(null), initialFocusRef: folderPathInputRef });
 
   useEffect(() => {
     if (dialog && dialogInputRef.current) {
@@ -334,19 +349,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setContextMenu(null);
   }, [canEditWorkspace]);
 
+  const requestConfirmation = useCallback((action: SidebarConfirmAction, intent: Omit<ActionConfirmIntent, "id">) => {
+    setConfirmAction(action);
+    setConfirmError(null);
+    const id = action.kind === "delete" ? action.node.path : action.kind === "batch-delete" ? action.paths.join("|") : `${action.targetPath}:${action.files.map((file) => file.path).join("|")}`;
+    setConfirmIntent({ ...intent, id: `${action.kind}:${id}` });
+  }, []);
+
+  const executeConfirmedAction = useCallback(async () => {
+    const action = confirmAction;
+    if (!action) return;
+    setConfirmBusy(true);
+    setConfirmError(null);
+    try {
+      if (action.kind === "delete") {
+        await onDeleteEntry(action.node.path);
+        setSelectedPaths((current) => current.filter((path) => !isPathEqualOrDescendant(path, action.node.path)));
+      } else if (action.kind === "batch-delete") {
+        await onDeleteEntries(action.paths);
+        setSelectedPaths([]);
+      } else {
+        await onUploadEntries(action.files, { overwrite: true, targetPath: action.targetPath });
+      }
+      onRefreshTree();
+      setConfirmAction(null);
+      setConfirmIntent(null);
+    } catch (error) {
+      const fallback = action.kind === "delete" ? t("sidebar.operationFailed") : action.kind === "batch-delete" ? t("sidebar.batchDeleteFailed") : t("sidebar.uploadFailed");
+      setConfirmError(error instanceof Error ? error.message : fallback);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [confirmAction, onDeleteEntries, onDeleteEntry, onRefreshTree, onUploadEntries, t]);
+
   const handleDelete = useCallback(
-    async (node: FileNode) => {
+    (node: FileNode) => {
       if (!canEditWorkspace) return;
       setContextMenu(null);
-      if (confirm(t("sidebar.confirmDelete", { name: node.name }))) {
-        await onDeleteEntry(node.path);
-        setSelectedPaths((prev) =>
-          prev.filter((path) => !isPathEqualOrDescendant(path, node.path))
-        );
-        onRefreshTree();
-      }
+      requestConfirmation({ kind: "delete", node }, { title: t("common.delete"), description: t("sidebar.confirmDelete", { name: node.name }), confirmLabel: t("common.delete"), tone: "danger" });
     },
-    [canEditWorkspace, onDeleteEntry, onRefreshTree, t]
+    [canEditWorkspace, requestConfirmation, t]
   );
 
   const handleToggleSelection = useCallback((path: string, selected: boolean) => {
@@ -368,30 +410,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
   }, []);
 
-  const handleBatchDelete = useCallback(async () => {
+  const handleBatchDelete = useCallback(() => {
     if (!canEditWorkspace) return;
     if (selectedPaths.length === 0) return;
 
     setContextMenu(null);
-    if (
-      !confirm(
-        t("sidebar.confirmBatchDelete", {
-          count: selectedPaths.length,
-          suffix: selectedPaths.length > 1 ? "s" : "",
-        })
-      )
-    ) {
-      return;
-    }
-
-    try {
-      await onDeleteEntries(selectedPaths);
-      setSelectedPaths([]);
-      onRefreshTree();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : t("sidebar.batchDeleteFailed"));
-    }
-  }, [canEditWorkspace, onDeleteEntries, onRefreshTree, selectedPaths, t]);
+    requestConfirmation({ kind: "batch-delete", paths: [...selectedPaths] }, { title: t("sidebar.deleteSelected"), description: t("sidebar.confirmBatchDelete", { count: selectedPaths.length, suffix: selectedPaths.length > 1 ? "s" : "" }), confirmLabel: t("common.delete"), tone: "danger" });
+  }, [canEditWorkspace, requestConfirmation, selectedPaths, t]);
 
   const handleDownload = useCallback(
     async (path: string, type: FileNode["type"]) => {
@@ -399,7 +424,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       try {
         await onDownloadEntry(path, type);
       } catch (e) {
-        alert(e instanceof Error ? e.message : t("sidebar.downloadFailed"));
+        setNotice({ tone: "error", message: e instanceof Error ? e.message : t("sidebar.downloadFailed") });
       }
     },
     [onDownloadEntry, t]
@@ -421,7 +446,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         resolveAbsoluteWorkspacePath(workspaceDir, node.path)
       );
       if (!copied) {
-        alert(t("sidebar.copyPathFailed"));
+        setNotice({ tone: "error", message: t("sidebar.copyPathFailed") });
+      } else {
+        setNotice({ tone: "status", message: t("sidebar.copyPathSuccess") });
       }
     },
     [t, workspaceDir]
@@ -437,34 +464,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
       } catch (error) {
         const copyError = error as Error & { code?: string };
         if (copyError.code === "COPY_CONFLICT") {
-          alert(
-            t("sidebar.copyConflict", {
+          setNotice({ tone: "error", message: t("sidebar.copyConflict", {
               name: clipboardItem.name,
               target: targetDirectory || t("sidebar.workspaceRoot"),
-            })
-          );
+            }) });
           return;
         }
         if (copyError.code === "COPY_INTO_SELF") {
-          alert(t("sidebar.copyIntoSelf"));
+          setNotice({ tone: "error", message: t("sidebar.copyIntoSelf") });
           return;
         }
         if (copyError.code === "COPY_SOURCE_NOT_FOUND") {
-          alert(t("sidebar.copySourceMissing"));
+          setNotice({ tone: "error", message: t("sidebar.copySourceMissing") });
           return;
         }
         if (
           copyError.code === "COPY_TARGET_NOT_FOUND" ||
           copyError.code === "COPY_TARGET_NOT_DIRECTORY"
         ) {
-          alert(t("sidebar.copyTargetMissing"));
+          setNotice({ tone: "error", message: t("sidebar.copyTargetMissing") });
           return;
         }
         if (copyError.code === "COPY_UNSUPPORTED_ENTRY") {
-          alert(t("sidebar.copyUnsupported"));
+          setNotice({ tone: "error", message: t("sidebar.copyUnsupported") });
           return;
         }
-        alert(copyError.message || t("sidebar.copyFailed"));
+        setNotice({ tone: "error", message: copyError.message || t("sidebar.copyFailed") });
       }
     },
     [canEditWorkspace, clipboardItem, onCopyEntry, onRefreshTree, t]
@@ -497,19 +522,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }
 
           const conflicts = uploadError.conflicts || [];
-          const confirmed = confirm(
-            t("sidebar.confirmUploadOverwrite", {
+          requestConfirmation(
+            { kind: "upload-overwrite", files, targetPath },
+            { title: t("sidebar.uploadOverwriteTitle"), description: t("sidebar.confirmUploadOverwrite", {
               count: conflicts.length,
               sample: conflicts.slice(0, 3).join(", "),
-            })
+            }), confirmLabel: t("sidebar.overwrite"), tone: "danger" }
           );
-          if (!confirmed) return;
-
-          await onUploadEntries(files, { overwrite: true, targetPath });
-          onRefreshTree();
+          return;
         }
       } catch (e) {
-        alert(e instanceof Error ? e.message : t("sidebar.uploadFailed"));
+        setNotice({ tone: "error", message: e instanceof Error ? e.message : t("sidebar.uploadFailed") });
       } finally {
         if (fileUploadInputRef.current) {
           fileUploadInputRef.current.value = "";
@@ -519,7 +542,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
       }
     },
-    [canEditWorkspace, onRefreshTree, onUploadEntries, t]
+    [canEditWorkspace, onRefreshTree, onUploadEntries, requestConfirmation, t]
   );
 
   const openUploadPicker = useCallback(
@@ -556,11 +579,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       } catch (error) {
         const moveError = error as Error & { code?: string };
         if (moveError.code === "MOVE_CONFLICT") {
-          alert(t("sidebar.moveConflict"));
+          setNotice({ tone: "error", message: t("sidebar.moveConflict") });
           return;
         }
         if (moveError.code === "MOVE_INTO_SELF") {
-          alert(t("sidebar.moveIntoSelf"));
+          setNotice({ tone: "error", message: t("sidebar.moveIntoSelf") });
           return;
         }
         if (
@@ -568,10 +591,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           moveError.code === "MOVE_TARGET_NOT_FOUND" ||
           moveError.code === "MOVE_TARGET_NOT_DIRECTORY"
         ) {
-          alert(t("sidebar.moveTargetMissing"));
+          setNotice({ tone: "error", message: t("sidebar.moveTargetMissing") });
           return;
         }
-        alert(moveError.message || t("sidebar.moveFailed"));
+        setNotice({ tone: "error", message: moveError.message || t("sidebar.moveFailed") });
       }
     },
     [onMoveEntry, onRefreshTree, t]
@@ -592,7 +615,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
       onRefreshTree();
     } catch (e) {
-      alert(e instanceof Error ? e.message : t("sidebar.operationFailed"));
+      setNotice({ tone: "error", message: e instanceof Error ? e.message : t("sidebar.operationFailed") });
     }
     setDialog(null);
   }, [canEditWorkspace, dialog, dialogValue, onCreateEntry, onRenameEntry, onRefreshTree, t]);
@@ -905,6 +928,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
       </div>
+      {notice && (
+        <div className={notice.tone === "error" ? "delivery-inline-error" : "checkpoint-notice"} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"}>
+          <span>{notice.message}</span>
+          <button type="button" className="sidebar-action-btn" onClick={() => setNotice(null)} aria-label={t("common.close")}><X size={13} /></button>
+        </div>
+      )}
       {clipboardItem && (
         <div className="sidebar-clipboard-bar" role="status">
           <Copy size={14} aria-hidden="true" />
@@ -945,8 +974,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
       <div
         className={`file-tree${rootDropActive ? " drop-target" : ""}`}
-        role="tree"
-        aria-label={t("sidebar.explorer")}
         onContextMenu={handleRootContextMenu}
         onDragOver={(event) => {
           if (!canEditWorkspace) return;
@@ -1209,8 +1236,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Create/Rename Dialog */}
       {dialog && (
         <div className="dialog-overlay" onClick={() => setDialog(null)}>
-          <div className="dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="dialog-title">
+          <div ref={createDialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sidebar-entry-dialog-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-title" id="sidebar-entry-dialog-title">
               {dialog.type === "file"
                 ? t("sidebar.dialogNewFile")
                 : dialog.type === "folder"
@@ -1251,10 +1278,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {folderBrowser && (
         <div className="dialog-overlay" onClick={() => setFolderBrowser(null)}>
           <div
+            ref={folderDialogRef}
             className="dialog folder-browser"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sidebar-folder-dialog-title"
+            tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="dialog-title">{t("sidebar.openFolder")}</div>
+            <div className="dialog-title" id="sidebar-folder-dialog-title">{t("sidebar.openFolder")}</div>
             <div className="folder-browser-breadcrumb">
               <button
                 className="folder-browser-up"
@@ -1265,6 +1297,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ..
               </button>
               <input
+                ref={folderPathInputRef}
                 className="folder-browser-path"
                 value={folderPathInput}
                 aria-label={t("sidebar.workspacePath")}
@@ -1294,7 +1327,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="folder-browser-empty">{t("sidebar.noSubdirectories")}</div>
               ) : (
                 folderBrowser.entries.map((entry) => (
-                  <div
+                  <button
+                    type="button"
                     key={entry.path}
                     className="folder-browser-item"
                     onClick={() => handleFolderNavigate(entry.path)}
@@ -1302,7 +1336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <Folder size={14} />
                     <span>{entry.name}</span>
                     <ChevronRight size={12} className="folder-browser-chevron" />
-                  </div>
+                  </button>
                 ))
               )}
             </div>
@@ -1324,6 +1358,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+      <ActionConfirmDialog
+        intent={confirmIntent}
+        busy={confirmBusy}
+        error={confirmError}
+        onClose={() => { setConfirmIntent(null); setConfirmAction(null); setConfirmError(null); }}
+        onConfirm={() => executeConfirmedAction()}
+      />
     </div>
   );
 };

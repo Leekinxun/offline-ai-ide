@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "valid": [
+    {
+      "id": "https-github-proposal",
+      "input": "https://github.com/acme/repo/pull/1",
+      "allowLoopbackHttp": false,
+      "expected": "https://github.com/acme/repo/pull/1"
+    },
+    {
+      "id": "https-canonicalized-host-port",
+      "input": "HTTPS://EXAMPLE.com:443/Checks/1",
+      "allowLoopbackHttp": false,
+      "expected": "https://example.com/Checks/1"
+    },
+    {
+      "id": "loopback-ipv4-fixture",
+      "input": "http://127.0.0.1:4312/fixture",
+      "allowLoopbackHttp": true,
+      "expected": "http://127.0.0.1:4312/fixture"
+    },
+    {
+      "id": "loopback-localhost-fixture",
+      "input": "http://localhost:4312/fixture",
+      "allowLoopbackHttp": true,
+      "expected": "http://localhost:4312/fixture"
+    },
+    {
+      "id": "loopback-ipv6-fixture",
+      "input": "http://[::1]:4312/fixture",
+      "allowLoopbackHttp": true,
+      "expected": "http://[::1]:4312/fixture"
+    }
+  ],
+  "invalid": [
+    { "id": "javascript-scheme", "input": "javascript:alert(1)", "allowLoopbackHttp": true },
+    { "id": "data-scheme", "input": "data:text/html,unsafe", "allowLoopbackHttp": true },
+    { "id": "file-scheme", "input": "file:///etc/passwd", "allowLoopbackHttp": true },
+    { "id": "non-loopback-http", "input": "http://example.com/plaintext", "allowLoopbackHttp": true },
+    { "id": "loopback-http-not-enabled", "input": "http://127.0.0.1:4312/fixture", "allowLoopbackHttp": false },
+    { "id": "near-loopback-ip", "input": "http://127.0.0.2/fixture", "allowLoopbackHttp": true },
+    { "id": "userinfo", "input": "https://user:secret@example.com/path", "allowLoopbackHttp": true },
+    { "id": "encoded-userinfo", "input": "https://%75ser@example.com/path", "allowLoopbackHttp": true },
+    { "id": "newline-control", "input": "https://example.com/\nheader", "allowLoopbackHttp": true },
+    { "id": "nul-control", "input": "https://example.com/\u0000tail", "allowLoopbackHttp": true },
+    { "id": "encoded-control", "input": "https://example.com/%0aheader", "allowLoopbackHttp": true },
+    { "id": "encoded-c1-control", "input": "https://example.com/%c2%80tail", "allowLoopbackHttp": true },
+    { "id": "double-encoded-control", "input": "https://example.com/%250d%250aheader", "allowLoopbackHttp": true },
+    { "id": "triple-encoded-control", "input": "https://example.com/%25250aheader", "allowLoopbackHttp": true },
+    { "id": "backslash-parser-trick", "input": "https:\\example.com\\path", "allowLoopbackHttp": true },
+    { "id": "encoded-scheme", "input": "https%3A%2F%2Fexample.com", "allowLoopbackHttp": true },
+    { "id": "scheme-relative", "input": "//example.com/path", "allowLoopbackHttp": true },
+    { "id": "missing-host", "input": "https://", "allowLoopbackHttp": true },
+    { "id": "plain-text", "input": "not a url", "allowLoopbackHttp": true },
+    { "id": "malformed-percent", "input": "https://example.com/%zz", "allowLoopbackHttp": true },
+    { "id": "surrounding-whitespace", "input": " https://example.com/path", "allowLoopbackHttp": true }
+  ]
+}

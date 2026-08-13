@@ -1,63 +1,67 @@
-import { spawn } from "node:child_process";
 import { evaluateShellCommand } from "./toolPolicy.js";
+import { ProcessResourceLimits, WorkspaceFilesystemGrant, runWorkspaceProcess } from "./processSandbox.js";
 
-const MAX_OUTPUT = 50_000;
+export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
+  cpuTimeMs: 60_000,
+  memoryBytes: process.platform === "linux" ? 4 * 1024 * 1024 * 1024 : undefined,
+  maxOpenFiles: 256,
+});
 
+export interface WorkspaceCommandOptions {
+  /** Required before the legacy shell parser is allowed to accept shell syntax. */
+  compatibilityShellAuthorized?: boolean;
+  resourceLimits?: ProcessResourceLimits;
+  /** Effective admin/profile/workspace sandbox grant for this agent run. */
+  filesystem?: WorkspaceFilesystemGrant;
+}
+
+/**
+ * Legacy shell-string compatibility wrapper. New execution paths must use
+ * runWorkspaceProcess(executable, args) so untrusted text is never parsed by a shell.
+ */
 export async function runWorkspaceCommand(
   command: string,
   cwd: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: WorkspaceCommandOptions = {}
 ): Promise<string> {
-  const policy = evaluateShellCommand(command);
+  const policy = evaluateShellCommand(command, {
+    compatibilityShellAuthorized: options.compatibilityShellAuthorized === true,
+  });
   if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
   if (signal?.aborted) return "Error: Stopped before shell execution";
 
-  return new Promise((resolve) => {
-    const child = spawn(command, {
+  const limits: ProcessResourceLimits = {
+    wallTimeMs: options.resourceLimits?.wallTimeMs,
+    cpuTimeMs: options.resourceLimits?.cpuTimeMs ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.cpuTimeMs,
+    memoryBytes: options.resourceLimits?.memoryBytes ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.memoryBytes,
+    maxOpenFiles: options.resourceLimits?.maxOpenFiles ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.maxOpenFiles,
+  };
+
+  if (process.platform === "win32") {
+    return runWorkspaceProcess({
+      executable: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", command],
       cwd,
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      signal,
+      limits,
+      resourceLimitMode: "posix-shell",
+      networkMode: "deny",
+      filesystem: options.filesystem || { workspaceDir: cwd, readPaths: ["."], writePaths: ["."] },
     });
-    let output = "";
-    let settled = false;
-    let timeout: NodeJS.Timeout;
-
-    const append = (chunk: Buffer) => {
-      if (output.length < MAX_OUTPUT) output += chunk.toString("utf8");
-    };
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-
-    const finish = (result: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      resolve(result.slice(0, MAX_OUTPUT));
-    };
-    const abort = () => {
-      child.kill("SIGTERM");
-      const forceKill = setTimeout(() => child.kill("SIGKILL"), 1000);
-      forceKill.unref?.();
-      finish("Error: Stopped during shell execution");
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-
-    timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      const forceKill = setTimeout(() => child.kill("SIGKILL"), 1000);
-      forceKill.unref?.();
-      finish("Error: Timeout (120s)");
-    }, 120_000);
-    timeout.unref?.();
-
-    child.on("error", (error) => finish(`Error: ${error.message}`));
-    child.on("close", (code) => {
-      const trimmed = output.trim();
-      if (code === 0) finish(trimmed || "(no output)");
-      else finish(
-        `Error: Command exited with code ${code ?? "unknown"}${trimmed ? `\n${trimmed}` : ""}`
-      );
-    });
+  }
+  return runWorkspaceProcess({
+    executable: "/bin/sh",
+    // The command is a positional argument to the resource wrapper; it is never
+    // interpolated into the trusted wrapper source.
+    args: ["-c", command],
+    cwd,
+    signal,
+    limits,
+    resourceLimitMode: "posix-shell",
+    networkMode: "deny",
+    filesystem: options.filesystem || { workspaceDir: cwd, readPaths: ["."], writePaths: ["."] },
   });
 }
+
+export { runWorkspaceProcess } from "./processSandbox.js";

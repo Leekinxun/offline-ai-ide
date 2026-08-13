@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { TeamDetails, TeamRole, TeamSummary } from "../types";
+import React, { useMemo, useState } from "react";
+import { CollaborationMergeChoice, CollaborationMergePreview, CollaborationState, CollaborationSubject, TeamDetails, TeamRole, TeamSummary } from "../types";
 import { useI18n } from "../i18n";
 import { Copy, Plus, Users } from "lucide-react";
 import { PanelHeader, PanelState } from "./PanelChrome";
+import { TaskStateStrip } from "./TaskStateStrip";
+import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface TeamPanelProps {
   teams: TeamSummary[];
@@ -24,6 +27,11 @@ interface TeamPanelProps {
   onRemoveMember: (username: string) => Promise<void>;
   onLeaveTeam: () => Promise<void>;
   onToggleClaim: (path: string, claimed: boolean) => Promise<void>;
+  collaboration: CollaborationState | null;
+  onAddComment: (input: { body: string; path: string; startLine?: number; endLine?: number; evidenceLinks?: string[] }) => Promise<unknown>;
+  onCreateReview: (input: { assignees: CollaborationSubject[]; path: string; startLine?: number; endLine?: number; message?: string }) => Promise<unknown>;
+  onCreateMergePreview: (changeSetId: string, path: string) => Promise<CollaborationMergePreview>;
+  onDecideMerge: (preview: CollaborationMergePreview, choice: CollaborationMergeChoice, reason?: string, resolvedDigest?: string, supersedesDecisionId?: string) => Promise<unknown>;
 }
 
 export const TeamPanel: React.FC<TeamPanelProps> = ({
@@ -46,6 +54,11 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   onRemoveMember,
   onLeaveTeam,
   onToggleClaim,
+  collaboration,
+  onAddComment,
+  onCreateReview,
+  onCreateMergePreview,
+  onDecideMerge,
 }) => {
   const { t } = useI18n();
   const [teamName, setTeamName] = useState("");
@@ -55,7 +68,10 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const [joining, setJoining] = useState(false);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [lastInvite, setLastInvite] = useState<string | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<null | { kind: "leave" } | { kind: "remove" | "transfer"; username: string }>(null);
+  const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const panelRef = useModalDialogFocus<HTMLDivElement>({ open: drawerMode, onClose: onClose || (() => undefined), suspended: Boolean(confirmation) });
 
   const activeClaim = useMemo(
     () => activeTeam?.claims.find((claim) => claim.path === activeFilePath) || null,
@@ -67,12 +83,6 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const visibleError = !activeTeam && error?.trim().toLowerCase() === "no active team" ? null : error;
   const inviteRoleOptions: TeamRole[] =
     currentRole === "owner" ? ["member", "viewer", "admin"] : ["member", "viewer"];
-
-  useEffect(() => {
-    if (drawerMode) {
-      requestAnimationFrame(() => panelRef.current?.focus());
-    }
-  }, [drawerMode]);
 
   const canManageMember = (memberUsername: string, memberRole: TeamRole) => {
     if (!activeTeam) return false;
@@ -97,11 +107,12 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const handleCreate = async () => {
     if (!teamName.trim() || creating) return;
     setCreating(true);
+    setActionError(null);
     try {
       await onCreateTeam(teamName.trim());
       setTeamName("");
-    } catch {
-      // toast handled by caller
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : t("team.operationFailed"));
     } finally {
       setCreating(false);
     }
@@ -110,11 +121,12 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const handleJoin = async () => {
     if (!inviteCode.trim() || joining) return;
     setJoining(true);
+    setActionError(null);
     try {
       await onJoinTeam(inviteCode.trim());
       setInviteCode("");
-    } catch {
-      // toast handled by caller
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : t("team.operationFailed"));
     } finally {
       setJoining(false);
     }
@@ -123,18 +135,53 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
   const handleInvite = async () => {
     if (!activeTeam || inviteBusy) return;
     setInviteBusy(true);
+    setActionError(null);
     try {
       const code = await onCreateInvite(activeTeam.id, inviteRole);
       setLastInvite(code);
       if (navigator.clipboard?.writeText) {
-        void navigator.clipboard.writeText(code);
+        await navigator.clipboard.writeText(code);
       }
-    } catch {
-      // toast handled by caller
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : t("team.operationFailed"));
     } finally {
       setInviteBusy(false);
     }
   };
+
+  const confirmationIntent: ActionConfirmIntent | null = confirmation ? {
+    id: confirmation.kind === "leave" ? "team:leave" : `team:${confirmation.kind}:${confirmation.username}`,
+    title: t("team.confirmAction"),
+    description: confirmation.kind === "leave"
+      ? t("team.leaveTeamConfirm", { name: activeTeam?.name || "" })
+      : confirmation.kind === "remove"
+        ? t("team.removeMemberConfirm", { username: confirmation.username })
+        : t("team.transferOwnerConfirm", { username: confirmation.username }),
+    confirmLabel: t("common.confirm"),
+    tone: confirmation.kind === "transfer" ? "primary" : "danger",
+  } : null;
+
+  const executeConfirmation = async () => {
+    const action = confirmation;
+    if (!action) return;
+    setConfirmationBusy(true);
+    setActionError(null);
+    try {
+      if (action.kind === "leave") await onLeaveTeam();
+      else if (action.kind === "remove") await onRemoveMember(action.username);
+      else await onTransferOwnership(action.username);
+      setConfirmation(null);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : t("team.operationFailed"));
+    } finally {
+      setConfirmationBusy(false);
+    }
+  };
+
+  const teamEvidenceCount = (activeTeam?.activity.length || 0)
+    + (collaboration?.comments.length || 0)
+    + (collaboration?.reviewRequests.length || 0)
+    + (collaboration?.mergeDecisions.length || 0);
 
   return (
     <div
@@ -142,6 +189,8 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
       className="team-panel panel-shell workspace-drawer"
       role={drawerMode ? "dialog" : "complementary"}
       aria-modal={drawerMode || undefined}
+      inert={confirmation ? true : undefined}
+      aria-hidden={Boolean(confirmation) || undefined}
       aria-labelledby="team-panel-title"
       tabIndex={-1}
       data-workspace-drawer="team"
@@ -167,7 +216,21 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
         </span>
       </div>
 
+      <TaskStateStrip
+        requested={activeTeam?.name || t("team.noActiveTeam")}
+        running={connected ? t("team.connected") : t("team.disconnected")}
+        runningTone={connected ? "success" : "warning"}
+        evidence={teamEvidenceCount ? t("taskState.evidenceCount", { count: teamEvidenceCount }) : t("taskState.noEvidence")}
+        evidenceTone={teamEvidenceCount ? "success" : "neutral"}
+        action={t("team.refresh")}
+        onAction={onRefresh}
+        actionDisabled={loading}
+        actionDisabledReason={loading ? t("common.loading") : undefined}
+        compact
+      />
+
       {visibleError && <PanelState tone="error" title={t("team.loadFailed")} detail={visibleError} actionLabel={t("team.refresh")} onAction={onRefresh} />}
+      {actionError && <div className="delivery-inline-error" role="alert">{actionError}</div>}
       {loading && teams.length === 0 && !activeTeam && !visibleError && <PanelState tone="loading" title={t("team.loadingTitle")} detail={t("team.loadingHint")} />}
 
       <div className="team-panel-section">
@@ -191,7 +254,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
         </select>
       </div>
 
-      <div className="team-panel-section">
+      {currentRole !== "viewer" && <div className="team-panel-section">
         <label className="team-panel-label" htmlFor="team-create-name">{t("team.create")}</label>
         <div className="team-panel-inline">
           <input
@@ -199,6 +262,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             className="dialog-input team-panel-input"
             value={teamName}
             onChange={(e) => setTeamName(e.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void handleCreate(); }}
             placeholder={t("team.teamNamePlaceholder")}
           />
           <button
@@ -212,9 +276,9 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             <Plus size={14} aria-hidden="true" />
           </button>
         </div>
-      </div>
+      </div>}
 
-      <div className="team-panel-section">
+      {currentRole !== "viewer" && <div className="team-panel-section">
         <label className="team-panel-label" htmlFor="team-invite-code">{t("team.joinByInvite")}</label>
         <div className="team-panel-inline">
           <input
@@ -222,6 +286,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             className="dialog-input team-panel-input"
             value={inviteCode}
             onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+            onKeyDown={(event) => { if (event.key === "Enter") void handleJoin(); }}
             placeholder={t("team.inviteCodePlaceholder")}
           />
           <button
@@ -233,7 +298,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             {t("team.join")}
           </button>
         </div>
-      </div>
+      </div>}
 
       {!loading && !visibleError && !activeTeam && (
         <PanelState title={t("team.emptyTitle")} detail={t("team.emptyHint")} />
@@ -250,9 +315,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
               </div>
               <div className="team-panel-meta mono">{activeTeam.workspaceDir}</div>
               <div className="team-panel-inline team-panel-actions">
-                <button type="button" className="team-panel-btn danger" onClick={() => void onLeaveTeam()}>
-                  {t("team.leaveTeam")}
-                </button>
+                {currentRole !== "viewer" && <button type="button" className="team-panel-btn danger" onClick={() => setConfirmation({ kind: "leave" })}>{t("team.leaveTeam")}</button>}
               </div>
             </div>
           </div>
@@ -337,7 +400,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                             <button
                               type="button"
                               className="team-panel-btn danger"
-                              onClick={() => void onRemoveMember(member.username)}
+                              onClick={() => setConfirmation({ kind: "remove", username: member.username })}
                             >
                               {t("team.removeMember")}
                             </button>
@@ -345,7 +408,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                               <button
                                 type="button"
                                 className="team-panel-btn"
-                                onClick={() => void onTransferOwnership(member.username)}
+                                onClick={() => setConfirmation({ kind: "transfer", username: member.username })}
                               >
                                 {t("team.transferOwner")}
                               </button>
@@ -369,17 +432,15 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             <div className="team-panel-section">
               <div className="team-panel-section-head">
                 <div className="team-panel-label">{t("team.fileClaim")}</div>
-                <button
+                {canClaimFile && <button
                   type="button"
                   className="team-panel-btn"
                   onClick={() =>
                     void onToggleClaim(activeFilePath, activeClaim?.username ? false : true)
                   }
-                  disabled={!canClaimFile}
-                  title={!canClaimFile ? t("team.claimRestricted") : undefined}
                 >
                   {activeClaim?.username ? t("team.releaseClaim") : t("team.claimFile")}
-                </button>
+                </button>}
               </div>
               <div className="team-panel-hint">
                 {activeClaim
@@ -411,12 +472,103 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
               )}
             </div>
           </div>
+
+          <CollaborationSection
+            state={collaboration}
+            activeFilePath={activeFilePath}
+            readOnly={currentRole === "viewer"}
+            members={activeTeam.members}
+            onAddComment={onAddComment}
+            onCreateReview={onCreateReview}
+            onCreateMergePreview={onCreateMergePreview}
+            onDecideMerge={onDecideMerge}
+            onRefresh={onRefresh}
+            onError={setActionError}
+          />
         </>
       )}
 
       {loading && (teams.length > 0 || activeTeam) && <div className="team-panel-loading" role="status" aria-live="polite">{t("common.loading")}</div>}
+      <ActionConfirmDialog
+        intent={confirmationIntent}
+        busy={confirmationBusy}
+        error={actionError}
+        onClose={() => setConfirmation(null)}
+        onConfirm={() => executeConfirmation()}
+      />
     </div>
   );
+};
+
+interface CollaborationSectionProps {
+  state: CollaborationState | null;
+  activeFilePath: string | null;
+  readOnly: boolean;
+  members: TeamDetails["members"];
+  onAddComment: TeamPanelProps["onAddComment"];
+  onCreateReview: TeamPanelProps["onCreateReview"];
+  onCreateMergePreview: TeamPanelProps["onCreateMergePreview"];
+  onDecideMerge: TeamPanelProps["onDecideMerge"];
+  onRefresh: () => void;
+  onError: (message: string | null) => void;
+}
+
+const CollaborationSection: React.FC<CollaborationSectionProps> = ({ state, activeFilePath, readOnly, members, onAddComment, onCreateReview, onCreateMergePreview, onDecideMerge, onRefresh, onError }) => {
+  const { t } = useI18n();
+  const [comment, setComment] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [reviewer, setReviewer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const comments = state?.comments.filter((item) => !activeFilePath || item.anchor.path === activeFilePath).slice().reverse().slice(0, 12) || [];
+  const reviews = state?.reviewRequests.filter((item) => !activeFilePath || item.anchor.path === activeFilePath).slice().reverse().slice(0, 8) || [];
+  const buffers = state?.buffers.filter((item) => item.dirty && (!activeFilePath || item.path === activeFilePath)) || [];
+  const ownership = state?.ownership?.claims.filter((item) => !activeFilePath || item.path === activeFilePath) || [];
+  const changeSets = state?.ownership?.changeSets.filter((item) => !activeFilePath || item.paths.includes(activeFilePath)) || [];
+  const previews = state?.mergePreviews.filter((item) => !activeFilePath || item.path === activeFilePath).slice().reverse() || [];
+  const invoke = async (operation: () => Promise<unknown>, done?: () => void) => { setBusy(true); onError(null); try { await operation(); done?.(); } catch (reason) { onError(reason instanceof Error ? reason.message : t("team.operationFailed")); } finally { setBusy(false); } };
+  return <div className="team-panel-section collaboration-section" aria-labelledby="collaboration-section-title">
+    <div className="team-panel-label" id="collaboration-section-title">{t("collaboration.title")}</div>
+    {!state && <div className="team-panel-hint">{t("collaboration.unavailable")}</div>}
+    {state && <>
+      <div className="collaboration-badge-list" aria-label={t("collaboration.ownership")}>
+        {ownership.map((item, index) => <span className={`collaboration-owner-badge ${item.subject.kind}`} key={`${item.source}:${item.path}:${item.subject.id}:${index}`}>{item.subject.kind === "agent" ? t("collaboration.agent") : t("collaboration.human")} · {item.subject.id}{item.range ? ` · L${item.range.startLine}–${item.range.endLine}` : ""}</span>)}
+        {changeSets.map((item) => <span className="collaboration-owner-badge agent" key={item.changeSetId}>{t("collaboration.changeSet")} · {item.subject.id} · {item.status}</span>)}
+        {!ownership.length && !changeSets.length && <span className="team-panel-hint">{t("collaboration.unowned")}</span>}
+      </div>
+      {buffers.length > 0 && <div className="collaboration-buffer-warning" role="status"><strong>{t("collaboration.unsavedBuffers")}</strong>{buffers.map((buffer) => <span key={buffer.id}>{buffer.username} · {buffer.path} · v{buffer.version}</span>)}</div>}
+      {!readOnly && activeFilePath && <div className="collaboration-compose">
+        <label>{t("collaboration.comment")}<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder={t("collaboration.commentPlaceholder")} /></label>
+        <label>{t("collaboration.evidence")}<input value={evidence} onChange={(event) => setEvidence(event.target.value)} placeholder="run:… / https://…" /></label>
+        <button type="button" disabled={busy || !comment.trim()} onClick={() => void invoke(() => onAddComment({ body: comment.trim(), path: activeFilePath, evidenceLinks: evidence.split(/\s+/).filter(Boolean) }), () => { setComment(""); setEvidence(""); })}>{t("collaboration.addComment")}</button>
+        <div className="collaboration-review-compose"><select value={reviewer} onChange={(event) => setReviewer(event.target.value)}><option value="">{t("collaboration.selectReviewer")}</option>{members.map((member) => <option key={member.username} value={member.username}>{member.username}</option>)}</select><button type="button" disabled={busy || !reviewer} onClick={() => void invoke(() => onCreateReview({ assignees: [{ kind: "human", id: reviewer }], path: activeFilePath, message: comment.trim() || undefined }), () => setReviewer(""))}>{t("collaboration.requestReview")}</button></div>
+      </div>}
+      <div className="collaboration-thread-list">{comments.map((item) => <article key={item.id} className="collaboration-thread"><header><strong>{item.author.id}</strong><span>L{item.anchor.startLine} · {item.anchor.status}</span></header><p>{item.body}</p>{item.mentions.length > 0 && <small>{t("collaboration.mentions")}: {item.mentions.map((mention) => `@${mention.id}`).join(", ")}</small>}{item.evidenceLinks.length > 0 && <div className="collaboration-evidence-list">{item.evidenceLinks.map((link) => <code key={link}>{link}</code>)}</div>}</article>)}</div>
+      {reviews.length > 0 && <div className="collaboration-review-list">{reviews.map((request) => <div key={request.id} className="collaboration-review-row"><strong>{t("collaboration.reviewRequest")}</strong><span>{request.assignees.map((item) => item.id).join(", ")} · {request.status}</span></div>)}</div>}
+      {!readOnly && activeFilePath && changeSets.map((changeSet) => <button type="button" className="team-panel-btn collaboration-preview-btn" key={changeSet.changeSetId} disabled={busy} onClick={() => void invoke(() => onCreateMergePreview(changeSet.changeSetId, activeFilePath))}>{t("collaboration.previewConflict")} · {changeSet.changeSetId.slice(0, 10)}</button>)}
+      {previews.slice(0, 2).map((preview) => {
+        const actions = Array.isArray(preview.allowedActions) ? preview.allowedActions : [];
+        const latestDecision = state.mergeDecisions.filter((decision) => decision.previewId === preview.id).sort((left, right) => right.createdAt - left.createdAt)[0];
+        const pendingDecision = latestDecision && latestDecision.status !== "resolved" && latestDecision.choice !== "apply-agent" ? latestDecision : null;
+        const pendingAction = pendingDecision ? actions.find((action) => action.choice === pendingDecision.choice) : undefined;
+        return <article className="collaboration-merge-preview" key={preview.id}>
+          <header><strong>{t("collaboration.threeWayPreview")}</strong><span>v{preview.version} · {preview.revision.slice(0, 10)}</span></header>
+          <p>{t("collaboration.mergeSafetyWarning")}</p>
+          {preview.hunks.map((hunk) => <div className="collaboration-merge-hunk" key={hunk.id}><span>{hunk.conflict ? t("collaboration.conflict") : t("collaboration.clean")}</span><pre>{hunk.upstream.slice(0, 1200)}</pre><pre>{hunk.agent.slice(0, 1200)}</pre></div>)}
+          {latestDecision && <div className={`collaboration-decision-status ${latestDecision.status}`} role="status"><strong>{t(`collaboration.decisionStatus.${latestDecision.status}`)}</strong><span>{t(`collaboration.choice.${latestDecision.choice}`)}</span>{latestDecision.status === "resolved" && latestDecision.choice === "apply-agent" ? <small>{t("collaboration.agentDecisionResolved")}</small> : latestDecision.status === "resolved" && latestDecision.supersedesDecisionId ? <small>{t("collaboration.newRevisionResolved")}</small> : <small>{t("collaboration.originalRevisionBlocked")}</small>}</div>}
+          {pendingDecision && <div className="collaboration-pending-requirements"><strong>{t("collaboration.pendingRequirements")}</strong>{pendingAction?.requiresSave && <span>{t("collaboration.requiresSave")}</span>}{pendingAction?.requiresNewRevision && <span>{t("collaboration.requiresNewRevision")}</span>}<button type="button" className="team-panel-btn" onClick={onRefresh}>{t("collaboration.refreshAfterRevision")}</button></div>}
+          {!readOnly && <div className="collaboration-merge-actions">{actions.map((action) => {
+            const prior = state.mergeDecisions.filter((decision) => decision.path === preview.path && decision.choice === action.choice && decision.revision !== preview.revision && decision.status !== "resolved").sort((left, right) => right.createdAt - left.createdAt)[0];
+            return <div className="collaboration-merge-action" key={action.choice}>
+              <button type="button" disabled={busy || !action.enabled} onClick={() => void invoke(() => onDecideMerge(preview, action.choice, undefined, action.choice === "manual" ? preview.humanDigest : undefined, prior?.id))}>{prior ? t("collaboration.finalizeNewRevision", { choice: t(`collaboration.choice.${action.choice}`) }) : t(`collaboration.choice.${action.choice}`)}</button>
+              <small>{[action.requiresSave ? t("collaboration.requiresSave") : "", action.requiresNewRevision ? t("collaboration.requiresNewRevision") : "", action.reason || ""].filter(Boolean).join(" · ") || t("collaboration.exactDecision")}</small>
+            </div>;
+          })}</div>}
+          {!actions.length && <div className="team-panel-hint">{t("collaboration.actionsUnavailable")}</div>}
+        </article>;
+      })}
+      <div className="collaboration-activity-list">{state.activity.slice(0, 12).map((item) => <div key={item.id}><strong>{item.actorId}</strong><span>{item.type}{item.path ? ` · ${item.path}` : ""}{item.detail ? ` · ${item.detail}` : ""}</span>{item.evidenceLinks?.map((link) => <code key={link}>{link}</code>)}</div>)}</div>
+    </>}
+  </div>;
 };
 
 function describeActivity(
