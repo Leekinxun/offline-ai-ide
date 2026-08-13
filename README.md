@@ -261,7 +261,14 @@ Or use Docker Compose:
 ```bash
 # Edit docker-compose.yml with your LLM endpoint
 docker compose up -d
+# Legacy Compose v1 uses: docker-compose up -d --build
 ```
+
+The checked-in Compose file intentionally avoids v2-only `build.pull` and
+`pull_policy` keys, so it can be parsed by both `docker-compose` v1 and
+`docker compose` v2. Builds reuse locally available base images by default;
+run `docker compose build --pull` (or `docker-compose build --pull`) only when
+you explicitly want to refresh them.
 
 Then open http://localhost:3000 and log in.
 Sign in as an admin user and use the top-right **Settings** button to manage users and configure the LLM endpoint.

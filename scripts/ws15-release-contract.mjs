@@ -48,6 +48,9 @@ if (evidenceDoc.includes("Invalid state can fall back empty")) failures.push("re
 if (migrationsDoc.includes("Missing/invalid state falls back to an empty state")) failures.push("migration docs retain stale collaboration corruption fallback claim");
 const gitignore = read(".gitignore");
 for (const runtime of [".history/", ".checkpoints/"]) if (!gitignore.split("\n").includes(runtime)) failures.push(`.gitignore must ignore runtime directory ${runtime}`);
+const composeSource = read("docker-compose.yml");
+if (/^\s+pull:\s/m.test(composeSource) || /^\s+pull_policy:\s/m.test(composeSource)) failures.push("docker-compose.yml must remain compatible with docker-compose v1 and must not use build.pull or pull_policy");
+for (const readme of [read("README.md"), read("README_zh.md")]) if (!readme.includes("docker-compose up -d --build")) failures.push("README Compose instructions must include the docker-compose v1 command");
 if (/rm\s+-rf/.test(releaseSources)) failures.push("release scripts must not use broad destructive cleanup");
 
 if (failures.length) {

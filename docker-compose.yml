@@ -4,8 +4,8 @@ services:
     container_name: crownforge        # 容器名
     build:
       context: .
-      pull: false                 # 明确构建时不去拉取基础镜像的更新（按需保留，通常建议加上）
-    pull_policy: never            # 核心配置：明确声明永远不拉取远程镜像
+      # Keep the build mapping compatible with both docker-compose v1 and
+      # docker compose v2. Refresh base images explicitly with `build --pull`.
     ports:
       - "9798:3000"
     volumes:

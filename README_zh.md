@@ -201,7 +201,13 @@ docker run -d --name ai-ide \
 ```bash
 # 编辑 docker-compose.yml，配置你的 LLM 端点
 docker compose up -d
+# 旧版 Compose v1 使用：docker-compose up -d --build
 ```
+
+仓库中的 Compose 文件刻意不使用仅由 v2 支持的 `build.pull` 和
+`pull_policy` 字段，因此 `docker-compose` v1 与 `docker compose` v2
+都可以解析。构建默认复用本地已有的基础镜像；只有明确需要更新时，
+才运行 `docker compose build --pull`（或 `docker-compose build --pull`）。
 
 然后打开 http://localhost:3000 并登录。
 使用管理员账号登录后，可以通过右上角 **Settings** 按钮管理用户并配置 LLM。
