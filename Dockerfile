@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 WORKDIR /build/backend
 COPY backend/package.json backend/package-lock.json* ./
 RUN npm install
-RUN node --input-type=module -e "import { execFileSync } from 'node:child_process'; import { rgPath } from '@vscode/ripgrep'; execFileSync(rgPath, ['--version'], { stdio: 'inherit' });"
 COPY backend/ .
 RUN npx tsc
 
@@ -27,7 +26,6 @@ RUN npx tsc
 # ============================================================
 FROM node:20-slim
 
-ARG TARGETARCH
 ARG PIP_INDEX_URL
 ARG PIP_EXTRA_INDEX_URL
 ARG PIP_TRUSTED_HOST
@@ -76,7 +74,7 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 # terminal. Ruff is downloaded directly from the official PyPI file host so a
 # partial internal package index cannot hide its platform wheels.
 COPY requirements.txt ./requirements.txt
-RUN set -eu; \
+RUN export TARGETARCH=${TARGETARCH:-$(uname -m)}; \
     /opt/conda/bin/python -m pip install --no-cache-dir -r requirements.txt; \
     if [ "$TARGETARCH" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then \
       RUFF_WHEEL="ruff-${RUFF_VERSION}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"; \
