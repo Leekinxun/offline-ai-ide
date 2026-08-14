@@ -202,11 +202,14 @@ docker build -t ai-ide .
 
 docker run -d --name ai-ide \
   -p 3000:3000 \
-  --user 10001:10001 \
+  --user 0:0 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
+  --cap-add CHOWN \
+  --cap-add SETGID \
+  --cap-add SETUID \
   -v ./workspace:/workspace \
   -v ./plugins:/app/plugins \
   -v ai-ide-config:/app/config \
@@ -277,6 +280,26 @@ Sign in as an admin user and use the top-right **Settings** button to manage use
 
 ```yaml
 services:
+  crownforge-permissions:
+    image: ai-ide:latest
+    command: ["init-mounts"]
+    user: "0:0"
+    volumes:
+      - ./workspace:/workspace
+      - ./plugins:/app/plugins
+      - crewforge-config:/app/config
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    environment:
+      - CROWNFORGE_UID=10001
+      - CROWNFORGE_GID=10001
+    restart: "no"
+
   ai-ide:
     build: .
     ports:
@@ -286,6 +309,8 @@ services:
       - ./plugins:/app/plugins
       - crewforge-config:/app/config  # persist users and admin settings
     user: "10001:10001"
+    depends_on:
+      - crownforge-permissions
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
@@ -298,6 +323,8 @@ services:
       - VLLM_API_KEY=
       - MODEL_NAME=default
       - WORKSPACE_DIR=/workspace
+      - CROWNFORGE_UID=10001
+      - CROWNFORGE_GID=10001
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
       - AGENT_CONTEXT_COMPACT_THRESHOLD=60000
@@ -314,15 +341,14 @@ volumes:
   crewforge-config:
 ```
 
-The container service account is UID/GID `10001`. The Compose configuration
-uses a named volume for mutable users/admin settings and bind mounts only the
-workspace and optional external plugins. On Linux, grant the service account
-access to any writable bind mount before starting (for example,
-`sudo chown -R 10001:10001 workspace plugins`). To retain a host-managed
-configuration instead, bind a directory at `/app/config` and make it writable
-by UID/GID 10001. Local `npm run dev` is unchanged; for a temporary debugging
-container that must run as root or use a writable root filesystem, override the
-Compose security fields explicitly rather than changing the production defaults.
+The container service account defaults to UID/GID `10001`. Compose first runs a
+short-lived `crownforge-permissions` service with only `CHOWN`, then starts the
+main service as the configured non-root account with all capabilities dropped.
+Fresh deployments therefore do not need manual `mkdir`, `chmod`, or `chown`
+commands. The direct `docker run` example performs the same initialization in
+its entrypoint and drops to the configured account before Node starts. Set
+`CROWNFORGE_UID` and `CROWNFORGE_GID` when bind mounts should match a specific
+host account. Local `npm run dev` is unchanged.
 
 Linux images include `bubblewrap`. Approved agent shell processes are launched
 with `bwrap --die-with-parent --unshare-net`, so they can execute local tools but

@@ -5,31 +5,36 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="${CROWNFORGE_SMOKE_IMAGE:-crownforge:smoke}"
 CONTAINER_NAME="${CROWNFORGE_SMOKE_CONTAINER:-crownforge-smoke}"
 PORT="${CROWNFORGE_SMOKE_PORT:-3900}"
-CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/crownforge-smoke-config.XXXXXX")"
-WORKSPACE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/crownforge-smoke-workspace.XXXXXX")"
+MOUNT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/crownforge-smoke-mounts.XXXXXX")"
+CONFIG_DIR="$MOUNT_ROOT/config"
+WORKSPACE_DIR="$MOUNT_ROOT/workspace"
+PLUGINS_DIR="$MOUNT_ROOT/plugins"
 
-# Bind mounts retain host ownership. These disposable test directories model the
-# documented deployment requirement that the service account owns writable mounts.
+mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$PLUGINS_DIR"
 cp "$ROOT_DIR/users.json" "$CONFIG_DIR/users.json"
 cp "$ROOT_DIR/app-settings.json" "$CONFIG_DIR/app-settings.json"
-chmod 0777 "$CONFIG_DIR" "$WORKSPACE_DIR"
-chmod 0666 "$CONFIG_DIR/users.json" "$CONFIG_DIR/app-settings.json"
+cp -R "$ROOT_DIR/plugins/." "$PLUGINS_DIR/"
+chmod 0755 "$CONFIG_DIR" "$WORKSPACE_DIR" "$PLUGINS_DIR"
+chmod 0644 "$CONFIG_DIR/users.json" "$CONFIG_DIR/app-settings.json"
 
 cleanup() {
+  docker exec --user 10001:10001 "$CONTAINER_NAME" chmod -R ugo+rwX /workspace /app/plugins /app/config >/dev/null 2>&1 || true
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -rf "$CONFIG_DIR"
-  rm -rf "$WORKSPACE_DIR"
+  rm -rf "$MOUNT_ROOT"
 }
 trap cleanup EXIT
 
 docker build --pull=false -t "$IMAGE_NAME" "$ROOT_DIR"
 docker run -d --name "$CONTAINER_NAME" \
-  --init \
+  --user 0:0 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --tmpfs /run:rw,nosuid,size=16m,mode=0755 \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
+  --cap-add CHOWN \
+  --cap-add SETGID \
+  --cap-add SETUID \
   --pids-limit 256 \
   --memory 2g \
   --cpus 2 \
@@ -38,8 +43,9 @@ docker run -d --name "$CONTAINER_NAME" \
   --health-timeout 5s \
   --health-retries 3 \
   --health-start-period 20s \
-  --mount "type=bind,src=$WORKSPACE_DIR,dst=/workspace,rw" \
-  --mount "type=bind,src=$CONFIG_DIR,dst=/app/config,rw" \
+  --mount "type=bind,src=$WORKSPACE_DIR,dst=/workspace" \
+  --mount "type=bind,src=$PLUGINS_DIR,dst=/app/plugins" \
+  --mount "type=bind,src=$CONFIG_DIR,dst=/app/config" \
   -p "$PORT:3000" "$IMAGE_NAME" >/dev/null
 
 for attempt in $(seq 1 30); do
@@ -56,12 +62,21 @@ done
 
 curl --fail --silent "http://127.0.0.1:${PORT}/" | grep -q "CrownForge"
 docker exec "$CONTAINER_NAME" sh -ceu '
+  node_pid="$(pgrep -o -x node)"
+  test "$(awk '\''$1 == "Uid:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 10001
+  test "$(awk '\''$1 == "Gid:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 10001
+  test "$(awk '\''$1 == "CapEff:" { print $2 }'\'' "/proc/$node_pid/status")" = 0000000000000000
+  test "$(awk '\''$1 == "NoNewPrivs:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 1
+'
+docker exec --user 10001:10001 "$CONTAINER_NAME" sh -ceu '
   test "$(id -u)" -ne 0
   command -v curl >/dev/null
   command -v grep >/dev/null
   test "$(command -v bwrap)" = /usr/bin/bwrap
   test -w /workspace
   touch /workspace/.crownforge-smoke-write && rm /workspace/.crownforge-smoke-write
+  test -w /app/plugins
+  touch /app/plugins/.crownforge-smoke-write && rm /app/plugins/.crownforge-smoke-write
   test -w /app/config
   touch /app/config/.crownforge-smoke-write && rm /app/config/.crownforge-smoke-write
   ! touch /root/.crownforge-smoke-forbidden

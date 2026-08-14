@@ -1,4 +1,24 @@
 services:
+  crownforge-permissions:
+    image: ai-ide:latest
+    command: ["init-mounts"]
+    user: "0:0"
+    volumes:
+      - ./workspace:/workspace:rw
+      - ./plugins:/app/plugins:rw
+      - crewforge-config:/app/config:rw
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    environment:
+      - CROWNFORGE_UID=${CROWNFORGE_UID:-10001}
+      - CROWNFORGE_GID=${CROWNFORGE_GID:-10001}
+    restart: "no"
+
   ai-ide:
     image: ai-ide:latest          # 构建出来的镜像名和标签
     container_name: crownforge        # 容器名
@@ -9,12 +29,14 @@ services:
     ports:
       - "9798:3000"
     volumes:
-      # These are the only persistent writable paths. On Linux, make a bind
-      # mounted workspace/plugins directory writable by UID/GID 10001.
+      # The entrypoint initializes bind-mount ownership before dropping to the
+      # configured non-root UID/GID.
       - ./workspace:/workspace:rw
       - ./plugins:/app/plugins:rw
       - crewforge-config:/app/config:rw
     user: "${CROWNFORGE_UID:-10001}:${CROWNFORGE_GID:-10001}"
+    depends_on:
+      - crownforge-permissions
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
@@ -34,6 +56,8 @@ services:
       - MODEL_NAME=default
       # Workspace
       - WORKSPACE_DIR=/workspace
+      - CROWNFORGE_UID=${CROWNFORGE_UID:-10001}
+      - CROWNFORGE_GID=${CROWNFORGE_GID:-10001}
       # Agent tuning (optional)
       - MAX_AGENT_ITERATIONS=30
       - AGENT_CONTEXT_COMPACT_THRESHOLD=60000

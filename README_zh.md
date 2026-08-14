@@ -182,11 +182,14 @@ docker build -t ai-ide .
 
 docker run -d --name ai-ide \
   -p 3000:3000 \
-  --user 10001:10001 \
+  --user 0:0 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
+  --cap-add CHOWN \
+  --cap-add SETGID \
+  --cap-add SETUID \
   -v ./workspace:/workspace \
   -v ./plugins:/app/plugins \
   -v ai-ide-config:/app/config \
@@ -216,6 +219,26 @@ docker compose up -d
 
 ```yaml
 services:
+  crownforge-permissions:
+    image: ai-ide:latest
+    command: ["init-mounts"]
+    user: "0:0"
+    volumes:
+      - ./workspace:/workspace
+      - ./plugins:/app/plugins
+      - crewforge-config:/app/config
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    environment:
+      - CROWNFORGE_UID=10001
+      - CROWNFORGE_GID=10001
+    restart: "no"
+
   ai-ide:
     build: .
     ports:
@@ -225,6 +248,8 @@ services:
       - ./plugins:/app/plugins
       - crewforge-config:/app/config  # 容器重建后仍保留用户和管理员设置
     user: "10001:10001"
+    depends_on:
+      - crownforge-permissions
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
@@ -237,6 +262,8 @@ services:
       - VLLM_API_KEY=
       - MODEL_NAME=default
       - WORKSPACE_DIR=/workspace
+      - CROWNFORGE_UID=10001
+      - CROWNFORGE_GID=10001
       - MAX_AGENT_ITERATIONS=30
       - AGENT_MAX_TOKENS=8192
       - UPLOAD_MAX_FILE_SIZE_MB=250
@@ -247,7 +274,7 @@ volumes:
   crewforge-config:
 ```
 
-容器服务账户的 UID/GID 为 `10001`。Compose 使用命名卷保存可变的用户/管理员设置，只将工作区和可选的外部插件作为可写 bind mount。在 Linux 上，启动前应让 UID/GID 10001 可以写入这些挂载目录（例如：`sudo chown -R 10001:10001 workspace plugins`）。如需由宿主机管理配置，可将一个对 UID/GID 10001 可写的目录挂载到 `/app/config`。本地 `npm run dev` 流程不受影响；临时调试容器如确实需要 root 或可写根文件系统，请显式覆盖 Compose 的安全字段，不要修改生产默认值。
+容器服务账户默认使用 UID/GID `10001`。Compose 会先运行一个仅保留 `CHOWN` 的短生命周期 `crownforge-permissions` 服务，再以丢弃全部 capability 的非 root 账户启动主服务。因此全新部署无需再手动执行 `mkdir`、`chmod` 或 `chown`。直接使用 `docker run` 时，入口脚本会完成相同初始化并在启动 Node 前降权。如需让 bind mount 与宿主机指定账户一致，可设置 `CROWNFORGE_UID` 和 `CROWNFORGE_GID`；本地 `npm run dev` 流程不受影响。
 
 Linux 镜像内置 `bubblewrap`。已批准的 Agent shell 进程通过 `bwrap --die-with-parent --unshare-net` 启动，因此可以执行本地工具，但不能使用父服务的网络命名空间；CrownForge 服务本身仍可访问模型与 MCP 网络。该能力要求 UID 10001 可以创建非特权用户命名空间，可用 `docker compose exec ai-ide bwrap --unshare-net -- /bin/true` 验证宿主机/运行时组合。如果 Docker seccomp、用户命名空间策略或宿主机内核拒绝该探测，CrownForge 会以 fail-closed 方式拒绝 Agent shell。不要为通过探测而添加 `SYS_ADMIN`、全局关闭 seccomp 或改用 root；应在该部署中保持 Agent shell 禁用，或通过宿主机的窄范围容器策略启用非特权用户命名空间。
 

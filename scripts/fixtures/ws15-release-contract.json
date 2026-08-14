@@ -101,6 +101,8 @@
     "scripts/verify-clean-snapshot.mjs",
     "scripts/offline-network-guard.mjs",
     "scripts/offline-network-guard-self-test.mjs",
+    "scripts/docker-entrypoint.sh",
+    "scripts/docker-entrypoint.test.sh",
     "scripts/release-methodology.mjs",
     "scripts/release-methodology.test.mjs",
     "scripts/strict-static-quality.mjs",

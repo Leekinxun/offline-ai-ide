@@ -105,6 +105,8 @@ COPY --from=frontend-builder /build/frontend/dist ./static
 COPY --chown=10001:10001 plugins ./plugins
 COPY --chown=10001:10001 users.json ./config/users.json
 COPY --chown=10001:10001 app-settings.json ./config/app-settings.json
+COPY scripts/docker-entrypoint.sh /usr/local/bin/crownforge-entrypoint
+RUN chmod 0755 /usr/local/bin/crownforge-entrypoint
 
 # The service and the terminal/agent subprocesses run as this dedicated account.
 # /workspace and /app/config are the only persistent writable locations; /tmp is
@@ -136,4 +138,5 @@ ENV AGENT_MAX_TOKENS=8192
 
 USER 10001:10001
 
+ENTRYPOINT ["/usr/local/bin/crownforge-entrypoint"]
 CMD ["node", "dist/index.js"]
