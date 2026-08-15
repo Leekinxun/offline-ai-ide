@@ -350,6 +350,11 @@ its entrypoint and drops to the configured account before Node starts. Set
 `CROWNFORGE_UID` and `CROWNFORGE_GID` when bind mounts should match a specific
 host account. Local `npm run dev` is unchanged.
 
+Docker backend dependencies are installed through `https://registry.npmmirror.com`
+by default so mixed registry URLs in the lockfile do not require access to
+`registry.npmjs.org`. Set `NPM_REGISTRY` to an internal or alternative npm
+registry before running Compose when your deployment uses a different mirror.
+
 Linux images include `bubblewrap`. Approved agent shell processes are launched
 with `bwrap --die-with-parent --unshare-net`, so they can execute local tools but
 cannot use the parent server's network namespace; the CrownForge server itself

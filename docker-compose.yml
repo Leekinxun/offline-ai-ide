@@ -24,6 +24,8 @@ services:
     container_name: crownforge        # 容器名
     build:
       context: .
+      args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
       # Keep the build mapping compatible with both docker-compose v1 and
       # docker compose v2. Refresh base images explicitly with `build --pull`.
     ports:

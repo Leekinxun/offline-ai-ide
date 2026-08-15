@@ -14,10 +14,27 @@ RUN npm run build
 # ============================================================
 FROM node:20-slim AS backend-builder
 
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build/backend
 COPY backend/package.json backend/package-lock.json* ./
-RUN npm install --include=dev
+RUN set -eu; \
+    attempt=1; \
+    while [ "$attempt" -le 3 ]; do \
+      if npm ci --include=dev --no-audit --no-fund --foreground-scripts \
+          --registry="$NPM_REGISTRY" --replace-registry-host=always \
+          && test -x node_modules/.bin/tsc \
+          && test -f node_modules/express/package.json; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        echo "Backend dependency installation failed after $attempt attempts" >&2; \
+        exit 1; \
+      fi; \
+      attempt=$((attempt + 1)); \
+      echo "Retrying backend dependency installation ($attempt/3)" >&2; \
+    done
 COPY backend/ .
 RUN npm run build
 

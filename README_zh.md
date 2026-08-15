@@ -276,6 +276,8 @@ volumes:
 
 容器服务账户默认使用 UID/GID `10001`。Compose 会先运行一个仅保留 `CHOWN` 的短生命周期 `crownforge-permissions` 服务，再以丢弃全部 capability 的非 root 账户启动主服务。因此全新部署无需再手动执行 `mkdir`、`chmod` 或 `chown`。直接使用 `docker run` 时，入口脚本会完成相同初始化并在启动 Node 前降权。如需让 bind mount 与宿主机指定账户一致，可设置 `CROWNFORGE_UID` 和 `CROWNFORGE_GID`；本地 `npm run dev` 流程不受影响。
 
+Docker 后端依赖默认通过 `https://registry.npmmirror.com` 安装，因此锁文件中混合的 registry 地址不会要求部署环境访问 `registry.npmjs.org`。如果部署使用其他镜像，请在运行 Compose 前通过 `NPM_REGISTRY` 指定内部或备用 npm registry。
+
 Linux 镜像内置 `bubblewrap`。已批准的 Agent shell 进程通过 `bwrap --die-with-parent --unshare-net` 启动，因此可以执行本地工具，但不能使用父服务的网络命名空间；CrownForge 服务本身仍可访问模型与 MCP 网络。该能力要求 UID 10001 可以创建非特权用户命名空间，可用 `docker compose exec ai-ide bwrap --unshare-net -- /bin/true` 验证宿主机/运行时组合。如果 Docker seccomp、用户命名空间策略或宿主机内核拒绝该探测，CrownForge 会以 fail-closed 方式拒绝 Agent shell。不要为通过探测而添加 `SYS_ADMIN`、全局关闭 seccomp 或改用 root；应在该部署中保持 Agent shell 禁用，或通过宿主机的窄范围容器策略启用非特权用户命名空间。
 
 ### 本地开发
