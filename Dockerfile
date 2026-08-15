@@ -17,9 +17,9 @@ FROM node:20-slim AS backend-builder
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build/backend
 COPY backend/package.json backend/package-lock.json* ./
-RUN npm install
+RUN npm install --include=dev
 COPY backend/ .
-RUN npx tsc
+RUN npm run build
 
 # ============================================================
 # Stage 3: Runtime — Node.js + Conda + tools

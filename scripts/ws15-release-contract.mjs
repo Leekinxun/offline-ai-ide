@@ -51,7 +51,10 @@ for (const runtime of [".history/", ".checkpoints/"]) if (!gitignore.split("\n")
 const composeSource = read("docker-compose.yml");
 if (/^\s+pull:\s/m.test(composeSource) || /^\s+pull_policy:\s/m.test(composeSource)) failures.push("docker-compose.yml must remain compatible with docker-compose v1 and must not use build.pull or pull_policy");
 for (const token of ["crownforge-permissions:", "command: [\"init-mounts\"]", "cap_add:", "- CHOWN", "depends_on:", "- crownforge-permissions", "user: \"${CROWNFORGE_UID:-10001}:${CROWNFORGE_GID:-10001}\"", "CROWNFORGE_UID=${CROWNFORGE_UID:-10001}", "CROWNFORGE_GID=${CROWNFORGE_GID:-10001}", "TEAM_STORE_ROOT=/app/config"]) if (!composeSource.includes(token)) failures.push(`docker-compose.yml is missing automatic mount initialization token ${JSON.stringify(token)}`);
-if (!read("Dockerfile").includes("ENV TEAM_STORE_ROOT=/app/config")) failures.push("Dockerfile must store the process-global team index under the writable config volume");
+const dockerfileSource = read("Dockerfile");
+if (!dockerfileSource.includes("ENV TEAM_STORE_ROOT=/app/config")) failures.push("Dockerfile must store the process-global team index under the writable config volume");
+for (const token of ["RUN npm install --include=dev", "RUN npm run build"]) if (!dockerfileSource.includes(token)) failures.push(`Dockerfile must use the installed backend compiler via ${JSON.stringify(token)}`);
+if (dockerfileSource.includes("RUN npx tsc")) failures.push("Dockerfile must not let npx download a compiler during the backend build");
 const dockerEntrypoint = read("scripts/docker-entrypoint.sh");
 for (const token of ["chown \"$runtime_uid:$runtime_gid\" /workspace /app/plugins", "init-mounts", "setpriv", "--no-new-privs"]) if (!dockerEntrypoint.includes(token)) failures.push(`Docker entrypoint is missing mount initialization boundary ${JSON.stringify(token)}`);
 for (const readme of [read("README.md"), read("README_zh.md")]) if (!readme.includes("docker-compose up -d --build")) failures.push("README Compose instructions must include the docker-compose v1 command");
