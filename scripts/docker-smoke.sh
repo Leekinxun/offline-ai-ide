@@ -70,6 +70,7 @@ docker exec "$CONTAINER_NAME" sh -ceu '
 '
 docker exec --user 10001:10001 "$CONTAINER_NAME" sh -ceu '
   test "$(id -u)" -ne 0
+  test "$TEAM_STORE_ROOT" = /app/config
   command -v curl >/dev/null
   command -v grep >/dev/null
   test "$(command -v bwrap)" = /usr/bin/bwrap
@@ -79,6 +80,8 @@ docker exec --user 10001:10001 "$CONTAINER_NAME" sh -ceu '
   touch /app/plugins/.crownforge-smoke-write && rm /app/plugins/.crownforge-smoke-write
   test -w /app/config
   touch /app/config/.crownforge-smoke-write && rm /app/config/.crownforge-smoke-write
+  mkdir -p "$TEAM_STORE_ROOT/.team"
+  touch "$TEAM_STORE_ROOT/.team/teams.json"
   ! touch /root/.crownforge-smoke-forbidden
   ! touch /etc/.crownforge-smoke-forbidden
   node -e "require(\"node-pty\"); console.log(\"node-pty ok\")"

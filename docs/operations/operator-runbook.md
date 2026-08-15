@@ -35,9 +35,9 @@ Evidence IDs resolve in
 2. Stop the service. Files are written atomically in many stores, but there is
    no cross-store snapshot transaction; a live filesystem copy can be
    internally inconsistent.
-3. Copy the complete workspace tree and the directory containing
-   `USERS_CONFIG`, `APP_SETTINGS_CONFIG`, and `CREWFORGE_ADMIN_POLICY` when that
-   policy lives outside the workspace.
+3. Copy the complete workspace tree, `TEAM_STORE_ROOT/.team/teams.json`, and the
+   directory containing `USERS_CONFIG`, `APP_SETTINGS_CONFIG`, and
+   `CREWFORGE_ADMIN_POLICY` when that policy lives outside the workspace.
 4. Preserve ownership, permissions, timestamps, symlinks and Git metadata.
 5. Encrypt the backup, restrict access, and record a checksum and release ID.
 6. Restore the copy into a disposable location and run the verification steps
@@ -60,8 +60,8 @@ and restore it separately from each workspace-local `.team` snapshot.
    并记录所有已进入 `manual_recovery` 的操作。
 2. 停止服务。虽然多个存储采用原子写入，但不存在跨存储快照事务；在线复制可能
    得到内部不一致的状态。
-3. 复制完整工作区，以及外部的 `USERS_CONFIG`、`APP_SETTINGS_CONFIG` 和
-   `CREWFORGE_ADMIN_POLICY` 所在目录。
+3. 复制完整工作区、`TEAM_STORE_ROOT/.team/teams.json`，以及外部的
+   `USERS_CONFIG`、`APP_SETTINGS_CONFIG` 和 `CREWFORGE_ADMIN_POLICY` 所在目录。
 4. 保留所有权、权限、时间戳、符号链接和 Git 元数据。
 5. 加密备份、限制访问，并记录校验和与版本号。
 6. 在一次性目录中恢复并执行下文验证。没有实际恢复过的备份不视为已验证。

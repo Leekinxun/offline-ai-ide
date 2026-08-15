@@ -459,6 +459,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `UPLOAD_MAX_FILE_SIZE_MB` | `250` | Per-file upload limit in MB; can be overridden from admin Settings |
 | `USERS_CONFIG` | `/app/config/users.json` in Docker | Path to `users.json` |
 | `APP_SETTINGS_CONFIG` | `/app/config/app-settings.json` in Docker | Path to `app-settings.json` for admin-managed LLM settings |
+| `TEAM_STORE_ROOT` | `/app/config` in Docker | Root directory containing the process-global `.team/teams.json` index |
 
 ### Runtime Settings Files
 
@@ -472,7 +473,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `<workspace>/.codex/skills/*/SKILL.md` | Stores reusable workspace workflows discovered by the Agent |
 | `TEAM_STORE_ROOT/.team/teams.json` | Stores the process-global team index: membership, roles, invites, presence, claims, and collaboration activity; this is distinct from workspace-local runtime team state |
 
-If you run with Docker and want admin changes to survive container recreation, persist these files with bind mounts or a volume-backed path.
+If you run with Docker, the Compose config volume persists `users.json`, `app-settings.json`, and `.team/teams.json` across container recreation.
 For local development, the default `users.json` and `app-settings.json` locations are the project root.
 
 ### User Management

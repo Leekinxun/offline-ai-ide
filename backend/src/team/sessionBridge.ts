@@ -4,9 +4,16 @@ import { TeamManager, TeamDetails, TeamRole } from "./teamManager.js";
 
 const ACTIVE_TEAM_BY_TOKEN = new Map<string, string>();
 let teamManagerInstance: TeamManager | null = null;
-const TEAM_STORE_ROOT = process.cwd().endsWith(`${path.sep}backend`)
-  ? path.resolve(process.cwd(), "..")
-  : path.resolve(process.cwd());
+
+export function resolveTeamStoreRoot(cwd: string, configuredRoot?: string): string {
+  const explicitRoot = configuredRoot?.trim();
+  if (explicitRoot) return path.resolve(explicitRoot);
+  return cwd.endsWith(`${path.sep}backend`)
+    ? path.resolve(cwd, "..")
+    : path.resolve(cwd);
+}
+
+const TEAM_STORE_ROOT = resolveTeamStoreRoot(process.cwd(), process.env.TEAM_STORE_ROOT);
 
 function getManager(): TeamManager {
   if (!teamManagerInstance) {

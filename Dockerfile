@@ -125,6 +125,7 @@ EXPOSE 3000
 ENV WORKSPACE_DIR=/workspace
 ENV USERS_CONFIG=/app/config/users.json
 ENV APP_SETTINGS_CONFIG=/app/config/app-settings.json
+ENV TEAM_STORE_ROOT=/app/config
 ENV HOME=/home/crewforge
 ENV TMPDIR=/tmp
 ENV DEBUGPY_PYTHON_EXECUTABLE=/opt/conda/bin/python

@@ -96,6 +96,7 @@
     "backend/src/chat/changeSetReleaseRecovery.test.ts",
     "backend/src/chat/changeSetReleaseTestSupport.ts",
     "backend/src/chat/checkpointRoutes.test.ts",
+    "backend/src/team/sessionBridge.test.ts",
     "scripts/verify-release.sh",
     "scripts/verify-release.mjs",
     "scripts/verify-clean-snapshot.mjs",

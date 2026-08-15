@@ -368,6 +368,7 @@ npm run dev
 | `UPLOAD_MAX_FILE_SIZE_MB` | `250` | 单个上传文件大小上限，单位 MB；可由管理员设置页覆盖 |
 | `USERS_CONFIG` | Docker 中为 `/app/config/users.json` | `users.json` 文件路径 |
 | `APP_SETTINGS_CONFIG` | Docker 中为 `/app/config/app-settings.json` | 管理员设置页写入的 `app-settings.json` 路径 |
+| `TEAM_STORE_ROOT` | Docker 中为 `/app/config` | 包含进程全局 `.team/teams.json` 索引的根目录 |
 
 ### 运行时配置文件
 
@@ -378,7 +379,7 @@ npm run dev
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
 | `TEAM_STORE_ROOT/.team/teams.json` | 存储进程全局团队索引中的成员、角色、邀请码、在线状态、文件认领和协作活动；它不同于工作区本地的运行时团队状态 |
 
-如果你使用 Docker 并希望这些设置在重建容器后仍然保留，建议通过挂载文件或卷的方式持久化这两个配置文件。
+使用 Docker 时，Compose 配置卷会在容器重建后继续保留 `users.json`、`app-settings.json` 和 `.team/teams.json`。
 本地开发时，`users.json` 和 `app-settings.json` 的默认位置都是项目根目录。
 
 ### 用户管理

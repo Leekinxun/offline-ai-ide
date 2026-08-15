@@ -49,6 +49,10 @@ docker run --rm \
     test "$(id -g)" -eq 10001
     grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
     for runtime_dir in /workspace /app/plugins /app/config; do test -w "$runtime_dir"; done
+    mkdir /app/config/.team
+    touch /app/config/.team/teams.json
+    unlink /app/config/.team/teams.json
+    rmdir /app/config/.team
   '
 
 docker run --rm \
