@@ -345,7 +345,9 @@ The container service account defaults to UID/GID `10001`. Compose first runs a
 short-lived `crownforge-permissions` service with only `CHOWN`, then starts the
 main service as the configured non-root account with all capabilities dropped.
 Fresh deployments therefore do not need manual `mkdir`, `chmod`, or `chown`
-commands. The direct `docker run` example performs the same initialization in
+commands. The initializer also repairs ownership recursively for files left by
+older root-running releases, so Code mode can update existing workspace files.
+The direct `docker run` example performs the same initialization in
 its entrypoint and drops to the configured account before Node starts. Set
 `CROWNFORGE_UID` and `CROWNFORGE_GID` when bind mounts should match a specific
 host account. Local `npm run dev` is unchanged.

@@ -9,12 +9,16 @@ CONFIG_DIR="$MOUNT_ROOT/config"
 HOME_DIR="$MOUNT_ROOT/home"
 
 cleanup() {
-  rmdir "$WORKSPACE_DIR" "$PLUGINS_DIR" "$CONFIG_DIR" "$HOME_DIR" "$MOUNT_ROOT" 2>/dev/null || true
+  rm -rf "$MOUNT_ROOT"
 }
 trap cleanup EXIT
 
-mkdir -p "$WORKSPACE_DIR" "$PLUGINS_DIR" "$CONFIG_DIR" "$HOME_DIR"
+mkdir -p "$WORKSPACE_DIR/existing/nested" "$PLUGINS_DIR/existing" "$CONFIG_DIR" "$HOME_DIR"
+printf 'root-owned workspace file\n' > "$WORKSPACE_DIR/existing/nested/file.txt"
+printf 'root-owned plugin file\n' > "$PLUGINS_DIR/existing/plugin.json"
 chmod 0755 "$WORKSPACE_DIR" "$PLUGINS_DIR" "$CONFIG_DIR" "$HOME_DIR"
+chmod 0755 "$WORKSPACE_DIR/existing" "$WORKSPACE_DIR/existing/nested" "$PLUGINS_DIR/existing"
+chmod 0644 "$WORKSPACE_DIR/existing/nested/file.txt" "$PLUGINS_DIR/existing/plugin.json"
 
 docker run --rm \
   --user 0:0 \
@@ -49,6 +53,10 @@ docker run --rm \
     test "$(id -g)" -eq 10001
     grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
     for runtime_dir in /workspace /app/plugins /app/config; do test -w "$runtime_dir"; done
+    test -w /workspace/existing/nested/file.txt
+    test -w /app/plugins/existing/plugin.json
+    printf "updated by code mode\n" > /workspace/existing/nested/file.txt
+    printf "updated plugin\n" > /app/plugins/existing/plugin.json
     mkdir /app/config/.team
     touch /app/config/.team/teams.json
     unlink /app/config/.team/teams.json

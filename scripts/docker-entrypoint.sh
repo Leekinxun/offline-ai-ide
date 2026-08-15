@@ -24,7 +24,10 @@ prepare_runtime_mounts() {
     fi
   done
 
-  if ! chown "$runtime_uid:$runtime_gid" /workspace /app/plugins; then
+  # Existing bind mounts may contain files created by an older root-running
+  # release. Fix the complete trees so Code mode can update those files, not
+  # only create new files at the mount root.
+  if ! chown -R "$runtime_uid:$runtime_gid" /workspace /app/plugins; then
     echo "Unable to initialize workspace/plugin ownership. The entrypoint requires CHOWN during container startup." >&2
     exit 73
   fi

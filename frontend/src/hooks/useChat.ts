@@ -70,6 +70,8 @@ const EMPTY_RUN_METRICS: AgentRunMetrics = {
   compactionCount: 0,
 };
 
+const DEFAULT_AGENT_MODE: AgentMode = "code";
+
 export function useChat(
   token: string,
   workspaceDir: string,
@@ -86,7 +88,7 @@ export function useChat(
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [agentMode, setAgentMode] = useState<AgentMode>("plan");
+  const [agentMode, setAgentMode] = useState<AgentMode>(DEFAULT_AGENT_MODE);
   const [runtimeOptions, setRuntimeOptions] = useState<ChatRuntimeOptions>({
     defaultModelName: "",
     models: [],
@@ -540,7 +542,7 @@ export function useChat(
     setCurrentConversationId(null);
     setHistoryError(null);
     setActiveRequestIds([]);
-    setAgentMode("plan");
+    setAgentMode(DEFAULT_AGENT_MODE);
     setCurrentRunSummary(null);
     setContextState({
       estimatedTokens: 0,
@@ -672,6 +674,7 @@ export function useChat(
     conversationLoadTokenRef.current += 1;
     setMessages([]);
     setCurrentConversationId(null);
+    setAgentMode(DEFAULT_AGENT_MODE);
     setCurrentRunSummary(null);
     setActiveRequestIds([]);
     setContextState({

@@ -274,7 +274,7 @@ volumes:
   crewforge-config:
 ```
 
-容器服务账户默认使用 UID/GID `10001`。Compose 会先运行一个仅保留 `CHOWN` 的短生命周期 `crownforge-permissions` 服务，再以丢弃全部 capability 的非 root 账户启动主服务。因此全新部署无需再手动执行 `mkdir`、`chmod` 或 `chown`。直接使用 `docker run` 时，入口脚本会完成相同初始化并在启动 Node 前降权。如需让 bind mount 与宿主机指定账户一致，可设置 `CROWNFORGE_UID` 和 `CROWNFORGE_GID`；本地 `npm run dev` 流程不受影响。
+容器服务账户默认使用 UID/GID `10001`。Compose 会先运行一个仅保留 `CHOWN` 的短生命周期 `crownforge-permissions` 服务，再以丢弃全部 capability 的非 root 账户启动主服务。初始化会递归修复旧版本以 root 身份留下的工作区和插件文件，因此全新部署以及从旧版本升级都无需再手动执行 `mkdir`、`chmod` 或 `chown`，编码模式也可以直接更新已有文件。直接使用 `docker run` 时，入口脚本会完成相同初始化并在启动 Node 前降权。如需让 bind mount 与宿主机指定账户一致，可设置 `CROWNFORGE_UID` 和 `CROWNFORGE_GID`；本地 `npm run dev` 流程不受影响。
 
 Docker 后端依赖默认通过 `https://registry.npmmirror.com` 安装，因此锁文件中混合的 registry 地址不会要求部署环境访问 `registry.npmjs.org`。如果部署使用其他镜像，请在运行 Compose 前通过 `NPM_REGISTRY` 指定内部或备用 npm registry。
 
