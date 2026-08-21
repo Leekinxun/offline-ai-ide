@@ -25,6 +25,58 @@ test("trace store redacts, strips reasoning, validates parents and retains bound
   await fs.rm(workspace, { recursive: true, force: true });
 });
 
+test("collaboration lifecycle events keep typed lineage references and reject payload-shaped metadata", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-collaboration-trace-"));
+  const store = new TraceStore(workspace);
+  const event = store.appendCollaboration({
+    action: "change_set_capture_succeeded",
+    outcome: "succeeded",
+    runId: "child-run",
+    agentId: "teammate:writer",
+    taskId: 12,
+    parentRunId: "parent-run",
+    parentTaskId: 7,
+    requestId: "request-1",
+    toolCallId: "tool-call-1",
+    worktreeId: "worktree-1",
+    changeSetId: "change-set-1",
+    status: "ready_for_review",
+    ...({ prompt: "password=never-store", raw_output: "sk-test_NEVER_STORE_123456", worktreePath: "/private/worktree" } as object),
+  });
+  assert.equal(event.action, "collaboration.change_set_capture_succeeded");
+  assert.deepEqual(event.metadata, {
+    lifecycleAction: "change_set_capture_succeeded",
+    critical: true,
+    runId: "child-run",
+    agentId: "teammate:writer",
+    taskId: 12,
+    parentRunId: "parent-run",
+    parentTaskId: 7,
+    requestId: "request-1",
+    toolCallId: "tool-call-1",
+    worktreeId: "worktree-1",
+    changeSetId: "change-set-1",
+    status: "ready_for_review",
+    outcome: "succeeded",
+  });
+  const serialized = JSON.stringify(store.export());
+  assert.doesNotMatch(serialized, /never-store|NEVER_STORE|private\/worktree|prompt|raw_output|worktreePath/);
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test("critical collaboration append failures surface to the caller", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-collaboration-trace-fail-"));
+  await fs.mkdir(path.join(workspace, ".history"), { recursive: true });
+  await fs.writeFile(path.join(workspace, ".history", "traces"), "not-a-directory");
+  assert.throws(() => new TraceStore(workspace).appendCollaboration({
+    action: "spawn_requested",
+    outcome: "requested",
+    agentId: "subagent:Explore",
+    requestId: "request-1",
+  }));
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
 test("workspace retention policy persists and previews age/count pruning", async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-trace-policy-"));
   assert.equal(setTraceRetention(workspace, { maxEvents: 2, maxArchiveEvents: 1, maxAgeMs: 1_000, maxArchiveAgeMs: 2_000 }).maxEvents, 2);

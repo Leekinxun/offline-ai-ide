@@ -34,6 +34,22 @@ test("air-gapped bundle is deterministic, unsigned but integrity verified, bound
   const text = first.toString("utf8"); assert(!text.includes(fixture.secret)); assert(!text.includes(fixture.workspace)); assert(!text.includes("ownerToken")); assert(!text.includes("raw_output"));
 });
 
+test("optional graph references contain only sanitized identifiers and remain generically verifiable", async (t) => {
+  const fixture = await createArtifactFixture(t);
+  const bytes = createEvidenceBundle(fixture.workspace, fixture.changeSet.id, undefined, { includeGraphReferences: true });
+  const bundle = parse(bytes);
+  const graphEntry = bundle.entries.find((item) => item.role === "graph_references");
+  assert(graphEntry);
+  const references = JSON.parse(Buffer.from(graphEntry.content, "base64").toString("utf8"));
+
+  assert.deepEqual(Object.keys(references).sort(), ["boundChangeSetIds", "boundRunIds", "criticalEventIds", "edgeIds", "graphRevision", "nodeIds", "schemaVersion"].sort());
+  assert.deepEqual(references.boundChangeSetIds, [fixture.changeSet.id]);
+  assert.equal(references.nodeIds.includes(`change_set:${fixture.changeSet.id}`), true);
+  assert.equal(typeof references.graphRevision, "string");
+  assert.doesNotMatch(JSON.stringify(references), /path|prompt|output|reasoning|secret/i);
+  assert.equal(verifyEvidenceBundle(fixture.workspace, bytes).integrity, "verified");
+});
+
 test("bundle verification fails closed for tampering, unsafe paths, collisions, links, compression, and oversized payloads", async (t) => {
   const fixture = await createArtifactFixture(t); const original = createEvidenceBundle(fixture.workspace, fixture.changeSet.id);
   const tampered = parse(original); const patch = tampered.entries.find((entry) => entry.path === "payload/change.patch")!; patch.content = Buffer.from("tamper").toString("base64"); assert.equal(verifyEvidenceBundle(fixture.workspace, encode(tampered)).integrity, "failed");

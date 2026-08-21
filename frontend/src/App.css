@@ -740,6 +740,8 @@ body {
   color: var(--status-info-fg);
 }
 
+.agent-summary-item.blockers { margin-left: auto; color: var(--status-danger-fg); }
+
 .agent-summary-item i {
   width: 6px;
   height: 6px;
@@ -753,6 +755,24 @@ body {
   overflow-y: auto;
   padding: 10px;
 }
+
+.agent-tree, .agent-tree ul { margin: 0; padding: 0; list-style: none; }
+.agent-tree ul { margin-left: 13px; padding-left: 10px; border-left: 1px solid var(--border-light); }
+.agent-tree-item { position: relative; }
+.agent-tree-item > ul > .agent-tree-item::before { content: ""; position: absolute; top: 18px; left: -10px; width: 8px; border-top: 1px solid var(--border-light); }
+.agent-artifact-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-safe-badge { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 2px 5px; border: 1px solid var(--border-light); border-radius: 999px; background: var(--bg-tertiary); color: var(--text-tertiary); font-size: 9px; overflow-wrap: anywhere; }
+.agent-safe-badge.status-applied, .agent-safe-badge.status-approved, .agent-safe-badge.status-completed { color: var(--status-success-fg); background: var(--status-success-bg); }
+.agent-safe-badge.status-failed, .agent-safe-badge.status-rejected, .agent-safe-badge.status-conflicted { color: var(--status-danger-fg); background: var(--status-danger-bg); }
+.agent-parent-nav { display: inline-flex; align-items: center; gap: 4px; justify-self: start; padding: 3px 6px; border: 0; border-radius: 5px; background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; font: 9px var(--font-sans); }
+.agent-blocker-summary, .agent-timeline { margin-bottom: 10px; padding: 8px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--surface-panel-strong); }
+.agent-blocker-summary h3, .agent-timeline h3 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--text-secondary); font-size: 10px; }
+.agent-blocker-summary ul, .agent-timeline ol { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--text-tertiary); font-size: 10px; }
+.agent-blocker-summary { color: var(--status-danger-fg); }
+.agent-timeline { margin-top: 10px; margin-bottom: 0; }
+.agent-timeline li { display: grid; grid-template-columns: 48px 1fr; gap: 6px; }
+.agent-timeline time { color: var(--text-tertiary); font-family: var(--font-mono); }
+.agent-timeline span { color: var(--text-secondary); text-transform: capitalize; }
 
 .agent-card {
   display: flex;

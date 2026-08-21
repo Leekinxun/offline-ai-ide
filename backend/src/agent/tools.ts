@@ -20,6 +20,7 @@ import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import { runWorkspaceCommand } from "./shell.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
+import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
 
 // ---- Tool handler type ----
 
@@ -50,6 +51,18 @@ function idempotentCommand(ctx: ToolContext, key: unknown, run: () => string): s
   const result = run(); COMMAND_RESULTS.set(cacheKey, result);
   if (COMMAND_RESULTS.size > 10_000) COMMAND_RESULTS.delete(COMMAND_RESULTS.keys().next().value!);
   return result;
+}
+
+function collaborationReferences(ctx: ToolContext, extra: Partial<CollaborationEventReferences> = {}): CollaborationEventReferences {
+  return {
+    runId: ctx.runId,
+    agentId: ctx.agentProfileId || "primary",
+    parentRunId: ctx.lineage?.parentRunId,
+    parentTaskId: ctx.lineage?.parentTaskId,
+    requestId: ctx.requestId || ctx.lineage?.parentRequestId,
+    toolCallId: ctx.toolCallId || ctx.lineage?.parentToolCallId,
+    ...extra,
+  };
 }
 
 // ---- Core tool implementations ----
@@ -397,9 +410,22 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     const action = args.action;
     const agent = String(args.agent || ctx.actorName || "lead");
     if (action === "send") return ctx.messageBus.send(agent, String(args.to || ""), String(args.content || ""), String(args.msg_type || "message"), { idempotencyKey: args.idempotency_key });
-    if (action === "lease") return JSON.stringify(ctx.messageBus.leaseInbox(agent, String(args.consumer || agent), Number(args.limit) || 50, Number(args.lease_ms) || 30_000));
-    if (action === "ack") return JSON.stringify({ acked: ctx.messageBus.ack(agent, String(args.message_id || ""), String(args.lease_token || "")) });
-    if (action === "reclaim_expired") return JSON.stringify({ reclaimed: ctx.messageBus.reclaimExpired() });
+    if (action === "lease") {
+      const leased = ctx.messageBus.leaseInbox(agent, String(args.consumer || agent), Number(args.limit) || 50, Number(args.lease_ms) || 30_000);
+      for (const { message } of leased) if (message.id) new TraceStore(ctx.workspaceDir).appendCollaboration({ action: "message_leased", outcome: "succeeded", messageId: message.id, targetAgentId: agent, ...collaborationReferences(ctx) });
+      return JSON.stringify(leased);
+    }
+    if (action === "ack") {
+      const messageId = String(args.message_id || "");
+      const acked = ctx.messageBus.ack(agent, messageId, String(args.lease_token || ""));
+      new TraceStore(ctx.workspaceDir).appendCollaboration({ action: "message_acked", outcome: acked ? "succeeded" : "rejected", messageId, targetAgentId: agent, ...collaborationReferences(ctx) });
+      return JSON.stringify({ acked });
+    }
+    if (action === "reclaim_expired") {
+      const reclaimed = ctx.messageBus.reclaimExpired();
+      if (reclaimed) new TraceStore(ctx.workspaceDir).appendCollaboration({ action: "message_lease_expired", outcome: "expired", reasonCode: "lease_expired", count: reclaimed, targetAgentId: agent, ...collaborationReferences(ctx) });
+      return JSON.stringify({ reclaimed });
+    }
     if (action === "list") return JSON.stringify(ctx.messageBus.list(typeof args.agent === "string" ? args.agent : undefined));
     return JSON.stringify({ error: "unknown message command" });
   }),

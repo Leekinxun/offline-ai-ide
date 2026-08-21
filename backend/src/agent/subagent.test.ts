@@ -11,6 +11,7 @@ import { listChangeSets } from "../chat/changeSets.js";
 import { listManagedWorktrees } from "../chat/worktrees.js";
 import { listFileMutations } from "../files/mutationRegistry.js";
 import { registerAgentHooks } from "./agentHooks.js";
+import { TraceStore } from "../chat/traceStore.js";
 
 function initializeGitWorkspace(workspaceDir: string): void {
   execFileSync("git", ["init", "-q", workspaceDir]);
@@ -47,7 +48,7 @@ test("records a queryable child run for a delegated subagent", async (t) => {
   });
 
   const output = await runSubagent(
-    "inspect",
+    "inspect password=subagent-prompt-secret",
     "Explore",
     workspaceDir,
     "http://provider.test/v1",
@@ -71,6 +72,33 @@ test("records a queryable child run for a delegated subagent", async (t) => {
   assert.equal(children[0].agentName, "subagent:Explore");
   assert.equal(children[0].parentTaskId, 23);
   assert.equal(children[0].metrics.totalTokens, 7);
+  const lifecycle = new TraceStore(workspaceDir).list().filter((event) => event.action.startsWith("collaboration."));
+  const started = lifecycle.find((event) => event.action === "collaboration.spawn_started");
+  const captured = lifecycle.find((event) => event.action === "collaboration.change_set_capture_succeeded");
+  const completed = lifecycle.find((event) => event.action === "collaboration.agent_state_transition" && event.metadata?.status === "completed");
+  assert.ok(started && captured && completed);
+  for (const event of [started, captured]) {
+    assert.equal(event.metadata?.runId, children[0].runId);
+    assert.equal(event.metadata?.agentId, "subagent:Explore");
+    assert.equal(event.metadata?.parentRunId, "parent-run");
+    assert.equal(event.metadata?.parentTaskId, 23);
+    assert.equal(event.metadata?.requestId, "request-1");
+    assert.equal(event.metadata?.toolCallId, "tool-call-1");
+    assert.ok(event.metadata?.worktreeId);
+  }
+  assert.ok(captured.metadata?.changeSetId);
+  assert.doesNotMatch(JSON.stringify(lifecycle), /subagent-prompt-secret|delegated result/);
+});
+
+test("subagent spawn stops and surfaces a critical audit append failure", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-trace-fail-"));
+  initializeGitWorkspace(workspaceDir);
+  await fs.mkdir(path.join(workspaceDir, ".history"), { recursive: true });
+  await fs.writeFile(path.join(workspaceDir, ".history", "traces"), "not-a-directory");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("model must not run"); };
+  t.after(async () => { globalThis.fetch = originalFetch; await fs.rm(workspaceDir, { recursive: true, force: true }); });
+  await assert.rejects(runSubagent("secret prompt", "Explore", workspaceDir, "http://provider.test/v1", "test-model"));
 });
 
 test("write-capable child writes only its managed worktree and emits a ChangeSet", async (t) => {

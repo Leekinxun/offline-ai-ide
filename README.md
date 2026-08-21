@@ -159,6 +159,19 @@ The live frontend uses the approved `workbench.html` visual reference for the de
 
 The implementation keeps real workspace data and existing interaction flows behind this shell; the reference file supplies layout, hierarchy, spacing, and visual density rather than mock content.
 
+## AI Collaboration Control Plane
+
+CrownForge projects durable collaboration records into a browser-safe execution graph so operators can understand how a run, its agents, tasks, worktrees, ChangeSets, and verification evidence relate without exposing prompts, reasoning traces, secrets, command payloads, or absolute filesystem paths.
+
+- **Agent Board** — presents runs, agents, tasks, worktrees, and ChangeSets as an accessible hierarchy with parent navigation, localized aggregate status, explicit blocker reasons, artifact links, recent lifecycle events, and the existing pause/resume/stop/retry/steer/reassign/replace controls
+- **Deterministic graph projection** — derives stable node, edge, event, and revision identifiers from persisted collaboration state; missing or cyclic ancestry is routed to explicit unresolved-parent nodes instead of producing a broken tree
+- **Parent-aware completion** — distinguishes an agent's own status from aggregate states such as waiting on children, child failure, or pending ChangeSet review, so a parent cannot appear complete while descendant work remains unresolved
+- **Auditable lifecycle** — records critical spawn, control, task ownership, lease, acknowledgement, approval, worktree, ChangeSet, verification, and messaging transitions; critical audit-write failures propagate instead of silently losing evidence
+- **Snapshot and replay transport** — `GET /api/team/agents?view=graph` returns the scoped graph snapshot, while `/ws/team` emits `agent_graph_snapshot` and ordered `agent_graph_event` messages with monotonic cursors, reconnect replay, history-gap snapshot fallback, and team/workspace isolation. The legacy flat agent response remains available for compatibility
+- **Evidence binding** — Evidence Bundles can opt into `graph_references`, binding the graph revision and selected node, edge, critical event, run, and ChangeSet identifiers to the verification artifact without copying raw collaboration content
+
+All browser projections apply secret redaction, absolute-path replacement, sensitive-metadata filtering, deterministic ordering, and workspace/team scoping before data leaves the backend.
+
 ## Features
 
 - **Offline-Capable & Self-Hosted** — Can operate without public internet when the model, MCP services and dependencies are local and external provider delivery is disabled; hosted endpoints and Git providers still require approved network access
@@ -185,8 +198,8 @@ The implementation keeps real workspace data and existing interaction flows behi
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
-- **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose live progress summaries
-- **Durable Multi-Agent Control Plane** — Agent runs, tasks, leases, lineage, messages, traces, findings, budgets, and recovery state survive restarts; parent completion recursively waits for terminal descendants and independent review evidence
+- **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose their hierarchy, blockers, artifacts, and lifecycle through the Agent Board
+- **Durable Multi-Agent Control Plane** — Agent runs, tasks, leases, lineage, messages, traces, findings, budgets, graph cursors, and recovery state survive restarts; parent completion recursively waits for terminal descendants, ChangeSet decisions, and independent review evidence
 - **Repository Intelligence** — Incremental offline indexing, symbol/reference relationships, permission-aware retrieval, context manifests, and provenance help agents assemble reproducible context without leaking forbidden paths
 - **Git & Review Delivery** — Local branch/commit workflows, provider-neutral GitHub/GitLab/Gitea delivery, CI status, webhook feedback, structured findings, SARIF, and offline evidence bundles preserve the exact reviewed revision
 - **Governed Extensions & Models** — Hooks, policies, skills, plugins, provider conformance, model budgets, and classified fallbacks share explicit permissions, audit trails, and operator-visible failure states

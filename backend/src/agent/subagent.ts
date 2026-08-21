@@ -24,6 +24,7 @@ import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 import { createManagedWorktree, updateManagedWorktreeMetadata } from "../chat/worktrees.js";
 import { captureChangeSet } from "../chat/changeSets.js";
+import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
 import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps, recordKnownFileMutation } from "../files/mutationRegistry.js";
 
 const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
@@ -196,6 +197,18 @@ export async function runSubagent(
   // read-only before execution, so every subagent receives an isolated checkout.
   let worktree;
   const childRunId = createRunId();
+  const traceStore = new TraceStore(workspaceDir);
+  const references = (extra: Partial<CollaborationEventReferences> = {}): CollaborationEventReferences => ({
+    runId: childRunId,
+    agentId: agentName,
+    parentRunId: lineage?.parentRunId,
+    parentTaskId: lineage?.parentTaskId,
+    requestId: lineage?.parentRequestId,
+    toolCallId: lineage?.parentToolCallId,
+    ...extra,
+  });
+  traceStore.appendCollaboration({ action: "spawn_requested", outcome: "requested", ...references() });
+  traceStore.appendCollaboration({ action: "worktree_capture_requested", outcome: "requested", ...references() });
   try {
     worktree = createManagedWorktree(workspaceDir, {
       name: agentName,
@@ -205,9 +218,13 @@ export async function runSubagent(
       toolCallId: lineage?.parentToolCallId,
     });
   } catch (error) {
+    traceStore.appendCollaboration({ action: "worktree_capture_failed", outcome: "failed", reasonCode: "allocation_failed", ...references() });
+    traceStore.appendCollaboration({ action: "spawn_failed", outcome: "failed", reasonCode: "worktree_unavailable", ...references() });
     return `(subagent: isolated worktree allocation failed; refusing to run: ${error instanceof Error ? error.message : String(error)})`;
   }
   const childWorkspaceDir = worktree.path;
+  traceStore.appendCollaboration({ action: "worktree_capture_succeeded", outcome: "succeeded", ...references({ worktreeId: worktree.id }) });
+  traceStore.appendCollaboration({ action: "spawn_started", outcome: "started", status: "working", ...references({ worktreeId: worktree.id }) });
   const recorder = lineage
     ? new AgentRunRecorder(
         workspaceDir,
@@ -254,12 +271,15 @@ export async function runSubagent(
     output: string
   ): Promise<string> => {
     let changeSetSuffix = "";
+    const finalReferences = references({ worktreeId: worktree.id });
+    traceStore.appendCollaboration({ action: "change_set_capture_requested", outcome: "requested", ...finalReferences });
+    let changeSet: ReturnType<typeof captureChangeSet> | undefined;
     try {
       const mutationEvidenceGaps = listMutationEvidenceGaps(childWorkspaceDir, { runId: childRunId });
       if (mutationEvidenceGaps.length && !mutationEvidenceBlocker) {
         mutationEvidenceBlocker = `Mutation evidence incomplete: ${mutationEvidenceGaps.map((gap) => `${gap.path}:${gap.reason}`).join(", ")}`;
       }
-      const changeSet = captureChangeSet(workspaceDir, worktree.id, { status, agentName, parentRunId: lineage?.parentRunId, parentTaskId: lineage?.parentTaskId, childRunId, toolCallId: lineage?.parentToolCallId, mutationEvidenceGaps });
+      changeSet = captureChangeSet(workspaceDir, worktree.id, { status, agentName, parentRunId: lineage?.parentRunId, parentTaskId: lineage?.parentTaskId, childRunId, toolCallId: lineage?.parentToolCallId, mutationEvidenceGaps });
       changeSetSuffix = `\nChangeSet ${changeSet.id} (${changeSet.status})`;
       await recorder?.event({ kind: "tool_result", label: "Subagent ChangeSet captured", detail: `${changeSet.id} (${changeSet.status})` });
     } catch (error) {
@@ -267,11 +287,34 @@ export async function runSubagent(
       changeSetSuffix = `\nChangeSet capture failed: ${error instanceof Error ? error.message : String(error)}`;
       mutationEvidenceBlocker ||= `Mutation evidence capture failed: ${error instanceof Error ? error.message : String(error)}`;
       await recorder?.event({ kind: "error", label: "Subagent ChangeSet capture failed", isError: true, detail: changeSetSuffix });
+      traceStore.appendCollaboration({ action: "change_set_capture_failed", outcome: "failed", status: "needs_attention", reasonCode: "capture_failed", ...finalReferences });
+      traceStore.appendCollaboration({ action: "verification_failed", outcome: "failed", status: "failed", reasonCode: "change_set_unavailable", ...finalReferences });
+    }
+    if (changeSet) {
+      const capturedReferences = { ...finalReferences, changeSetId: changeSet.id };
+      traceStore.appendCollaboration({ action: "change_set_capture_succeeded", outcome: "succeeded", status: changeSet.status, ...capturedReferences });
+      traceStore.appendCollaboration({ action: "change_set_result", outcome: changeSet.status === "needs_attention" ? "failed" : "succeeded", status: changeSet.status, ...capturedReferences });
+      traceStore.appendCollaboration({
+        action: mutationEvidenceBlocker || changeSet.status === "needs_attention" ? "verification_failed" : "verification_passed",
+        outcome: mutationEvidenceBlocker || changeSet.status === "needs_attention" ? "failed" : "succeeded",
+        status: mutationEvidenceBlocker || changeSet.status === "needs_attention" ? "failed" : "passed",
+        ...(mutationEvidenceBlocker ? { reasonCode: "mutation_evidence_incomplete" } : {}),
+        ...capturedReferences,
+      });
     }
     if (recorder && !recorderFinished) {
       recorderFinished = true;
       await recorder.finish(status === "stopped" ? "stopped" : mutationEvidenceBlocker ? "failed" : status);
     }
+    const finalStatus = status === "stopped" ? "stopped" : mutationEvidenceBlocker ? "failed" : status;
+    traceStore.appendCollaboration({
+      action: finalStatus === "stopped" ? "agent_stopped" : "agent_state_transition",
+      previousStatus: "working",
+      status: finalStatus,
+      outcome: finalStatus === "failed" ? "failed" : "succeeded",
+      ...(finalStatus === "failed" ? { reasonCode: mutationEvidenceBlocker ? "verification_failed" : "execution_failed" } : {}),
+      ...finalReferences,
+    });
     const effectiveOutput = mutationEvidenceBlocker && !output.startsWith("Error:")
       ? `Error: ${mutationEvidenceBlocker}${output ? `\n${output}` : ""}`
       : output;

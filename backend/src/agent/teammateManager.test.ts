@@ -12,6 +12,7 @@ import { listManagedWorktrees, removeManagedWorktree, updateManagedWorktreeMetad
 import { registerAgentHooks } from "./agentHooks.js";
 import { TEAMMATE_CAPABILITY } from "./types.js";
 import { AgentRunRecorder, readRunRecord } from "../chat/runHistory.js";
+import { TraceStore } from "../chat/traceStore.js";
 
 function initializeGitWorkspace(workspaceDir: string): void {
   execFileSync("git", ["init", "-q", workspaceDir]);
@@ -30,6 +31,9 @@ test("teammate allocation fails closed outside a Git workspace", async (t) => {
 
   assert.match(result, /isolated worktree allocation failed; refusing to spawn/);
   assert.equal(manager.listDetails().length, 0);
+  const failed = new TraceStore(workspaceDir).list().find((event) => event.action === "collaboration.spawn_failed");
+  assert.equal(failed?.metadata?.agentId, "teammate:writer");
+  assert.equal(failed?.metadata?.reasonCode, "worktree_unavailable");
 });
 
 test("restart reconciliation persists interrupted agents", async (t) => {
@@ -42,6 +46,49 @@ test("restart reconciliation persists interrupted agents", async (t) => {
   assert.equal(manager.listDetails()[0].status, "interrupted");
   const persisted = JSON.parse(await fs.readFile(path.join(workspaceDir, ".team", "config.json"), "utf8")) as { members: Array<{ status: string }> };
   assert.equal(persisted.members[0].status, "interrupted");
+  const recovery = new TraceStore(workspaceDir).list().find((event) => event.action === "collaboration.agent_state_transition");
+  assert.equal(recovery?.metadata?.previousStatus, "working");
+  assert.equal(recovery?.metadata?.status, "interrupted");
+  assert.equal(recovery?.metadata?.reasonCode, "restart_recovery");
+});
+
+test("teammate controls append lineage without recording steering content", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-controls-trace-"));
+  t.after(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(workspaceDir, ".team"), { recursive: true });
+  await fs.writeFile(path.join(workspaceDir, ".team", "config.json"), JSON.stringify({ team_name: "t", members: [{
+    name: "controlled", role: "work", status: "idle", version: 1, id: "teammate:controlled",
+    childRunId: "child-run", parentRunId: "parent-run", parentTaskId: 9,
+    parentRequestId: "request-1", parentToolCallId: "tool-1", worktreeId: "worktree-1",
+  }] }));
+  const manager = new TeammateManager(workspaceDir, new MessageBus(workspaceDir), new TaskManager(workspaceDir));
+  (manager as unknown as { activeLoops: Map<string, { abort: boolean; paused: boolean; steering: string[]; generation: string }> }).activeLoops.set("controlled", { abort: false, paused: false, steering: [], generation: "generation-1" });
+  assert.equal(manager.pause("controlled"), true);
+  assert.equal(manager.resume("controlled"), true);
+  assert.equal(manager.steer("controlled", "password=steering-secret"), true);
+  assert.equal(manager.stop("controlled"), true);
+  const events = new TraceStore(workspaceDir).list().filter((event) => event.action.startsWith("collaboration.agent_"));
+  for (const action of ["collaboration.agent_paused", "collaboration.agent_resumed", "collaboration.agent_steered", "collaboration.agent_stopped"]) assert.ok(events.some((event) => event.action === action));
+  const steered = events.find((event) => event.action === "collaboration.agent_steered");
+  assert.equal(steered?.metadata?.runId, "child-run");
+  assert.equal(steered?.metadata?.parentRunId, "parent-run");
+  assert.equal(steered?.metadata?.parentTaskId, 9);
+  assert.equal(steered?.metadata?.requestId, "request-1");
+  assert.equal(steered?.metadata?.toolCallId, "tool-1");
+  assert.equal(steered?.metadata?.worktreeId, "worktree-1");
+  assert.doesNotMatch(JSON.stringify(events), /steering-secret|password/);
+});
+
+test("teammate control surfaces critical audit append failures", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-control-trace-fail-"));
+  t.after(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(workspaceDir, ".team"), { recursive: true });
+  await fs.writeFile(path.join(workspaceDir, ".team", "config.json"), JSON.stringify({ team_name: "t", members: [{ name: "controlled", role: "work", status: "idle", version: 1 }] }));
+  const manager = new TeammateManager(workspaceDir, new MessageBus(workspaceDir), new TaskManager(workspaceDir));
+  (manager as unknown as { activeLoops: Map<string, { abort: boolean; paused: boolean; steering: string[]; generation: string }> }).activeLoops.set("controlled", { abort: false, paused: false, steering: [], generation: "generation-1" });
+  await fs.mkdir(path.join(workspaceDir, ".history"), { recursive: true });
+  await fs.writeFile(path.join(workspaceDir, ".history", "traces"), "not-a-directory");
+  assert.throws(() => manager.pause("controlled"));
 });
 
 test("budget updates are versioned, bounded, and persisted in member snapshots", async (t) => {
@@ -147,6 +194,13 @@ test("teammate idle capture stops before queued work can mutate the reviewed wor
   assert.equal(spawnedMember.parentRunId, "parent-run");
   assert.equal(spawnedMember.parentTaskId, 17);
   assert.equal(readRunRecord(workspaceDir, spawnedMember.childRunId!).parentTaskId, 17);
+  const spawnStarted = new TraceStore(workspaceDir).list().find((event) => event.action === "collaboration.spawn_started");
+  assert.equal(spawnStarted?.metadata?.runId, spawnedMember.childRunId);
+  assert.equal(spawnStarted?.metadata?.parentRunId, "parent-run");
+  assert.equal(spawnStarted?.metadata?.parentTaskId, 17);
+  assert.equal(spawnStarted?.metadata?.requestId, "request");
+  assert.equal(spawnStarted?.metadata?.toolCallId, "spawn-call");
+  assert.equal(spawnStarted?.metadata?.worktreeId, spawnedMember.worktreeId);
   const blockedParent = await parentRecorder.finish("completed", {}, undefined, { schemaVersion: 1, outcome: "completed", ledger: { changedFiles: [], verification: [], criteria: [], blockers: [] } });
   assert.equal(blockedParent.status, "failed");
   assert.deepEqual(blockedParent.completionEvidence?.ledger.blockers, ["childRun"]);

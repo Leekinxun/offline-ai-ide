@@ -6,7 +6,12 @@ import {
   setActiveTeamId,
 } from "../team/sessionBridge.js";
 import type { TeamDetails } from "../team/teamManager.js";
-import { agentSnapshot, canSessionManageAgentBudget } from "../team/agentSnapshot.js";
+import {
+  agentExecutionGraphSnapshot,
+  agentSnapshot,
+  canSessionManageAgentBudget,
+} from "../team/agentSnapshot.js";
+import type { AgentExecutionGraphSnapshot } from "../agent/executionGraph.js";
 import { CollaborationStore } from "../collaboration/collaborationStore.js";
 import { buildCollaborationSnapshot } from "../collaboration/snapshot.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
@@ -15,14 +20,31 @@ type TeamWsMessage =
   | { type: "team_snapshot"; team: TeamDetails | null }
   | { type: "agent_snapshot"; sequence: number; agents: unknown[] }
   | { type: "agent_update"; sequence: number; agents: unknown[] }
+  | AgentGraphWsMessage
   | { type: "collaboration_snapshot" | "collaboration_update"; collaboration: unknown }
   | { type: "team_error"; content: string };
 type AgentWsMessage = Extract<TeamWsMessage, { type: "agent_snapshot" | "agent_update" }>;
+export type AgentGraphWsMessage = {
+  type: "agent_graph_snapshot" | "agent_graph_event";
+  sequence: number;
+  cursor: number;
+  revision: string;
+  graph: AgentExecutionGraphSnapshot;
+};
+
+interface AgentGraphEventState {
+  sequence: number;
+  history: AgentGraphWsMessage[];
+}
 
 const TEAM_CONNECTIONS = new Map<string, Set<WebSocket>>();
+const SESSION_CONNECTIONS = new Map<string, Set<WebSocket>>();
 const SOCKET_OWNERS = new WeakMap<WebSocket, UserSession>();
+const SOCKET_GRAPH_CURSORS = new WeakMap<WebSocket, Map<string, number>>();
 const PRESENCE_SOCKETS = new Map<string, Map<string, number>>();
 const AGENT_EVENTS = new Map<string, { sequence: number; history: TeamWsMessage[] }>();
+const AGENT_GRAPH_EVENTS = new Map<string, AgentGraphEventState>();
+const GRAPH_HISTORY_LIMIT = 100;
 
 function agentWorkspace(session: UserSession): string { return session.workspaceDir; }
 function normalizeAgent(member: any) {
@@ -49,10 +71,95 @@ export function sendAgentEventForRecipient(ws: WebSocket, payload: AgentWsMessag
 
 function agentState(workspace: string) { let state = AGENT_EVENTS.get(workspace); if (!state) { state = { sequence: 0, history: [] }; AGENT_EVENTS.set(workspace, state); } return state; }
 
-function sendTeam(ws: WebSocket, data: TeamWsMessage): void {
+function graphScope(session: UserSession, teamId: string | null): string {
+  return teamId
+    ? `team\0${session.workspaceDir}\0${teamId}`
+    : `session\0${session.workspaceDir}\0${session.token}`;
+}
+
+function graphState(scope: string): AgentGraphEventState {
+  let state = AGENT_GRAPH_EVENTS.get(scope);
+  if (!state) {
+    state = { sequence: 0, history: [] };
+    AGENT_GRAPH_EVENTS.set(scope, state);
+  }
+  return state;
+}
+
+function graphMessage(
+  type: AgentGraphWsMessage["type"],
+  sequence: number,
+  graph: AgentExecutionGraphSnapshot,
+): AgentGraphWsMessage {
+  return { type, sequence, cursor: sequence, revision: graph.revision, graph };
+}
+
+function markGraphScopeDelivered(ws: WebSocket, scope: string, cursor: number): void {
+  const cursors = SOCKET_GRAPH_CURSORS.get(ws) || new Map<string, number>();
+  cursors.set(scope, Math.max(cursors.get(scope) ?? -1, cursor));
+  SOCKET_GRAPH_CURSORS.set(ws, cursors);
+}
+
+function sendGraphMessage(ws: WebSocket, scope: string, payload: AgentGraphWsMessage): void {
+  if (sendTeam(ws, payload)) markGraphScopeDelivered(ws, scope, payload.cursor);
+}
+
+function sendGraphSnapshot(ws: WebSocket, session: UserSession, teamId: string | null): void {
+  const scope = graphScope(session, teamId);
+  let graph: AgentExecutionGraphSnapshot;
+  try {
+    graph = agentExecutionGraphSnapshot(session);
+  } catch {
+    // The graph projection is additive. A malformed/unavailable durable graph
+    // source must not prevent legacy team and agent snapshots from connecting.
+    return;
+  }
+  sendGraphMessage(ws, scope, graphMessage("agent_graph_snapshot", graphState(scope).sequence, graph));
+}
+
+function graphCursor(data: { afterGraphSequence?: number; afterGraphCursor?: number; graphCursor?: number }): number | null {
+  for (const candidate of [data.afterGraphSequence, data.afterGraphCursor, data.graphCursor]) {
+    if (Number.isSafeInteger(candidate) && candidate! >= 0) return candidate!;
+  }
+  return null;
+}
+
+function sendGraphReplayOrSnapshot(
+  ws: WebSocket,
+  session: UserSession,
+  teamId: string,
+  after: number | null,
+): void {
+  const scope = graphScope(session, teamId);
+  const state = graphState(scope);
+  const delivered = SOCKET_GRAPH_CURSORS.get(ws)?.get(scope);
+  // Never resend entries this socket has already received, but do replay any
+  // events produced while it was subscribed to another team.
+  if (delivered === state.sequence) return;
+  const resumeAfter = after === null ? null : Math.max(after, delivered ?? -1);
+  const oldest = state.history[0]?.sequence;
+  const hasGap = resumeAfter === null
+    || resumeAfter > state.sequence
+    || (state.history.length === 0 ? resumeAfter !== state.sequence : resumeAfter < oldest! - 1);
+  if (hasGap) {
+    sendGraphSnapshot(ws, session, teamId);
+    return;
+  }
+
+  const replay = state.history.filter((event) => event.sequence > resumeAfter!);
+  if (replay.length === 0) {
+    sendGraphSnapshot(ws, session, teamId);
+    return;
+  }
+  for (const event of replay) sendGraphMessage(ws, scope, event);
+}
+
+function sendTeam(ws: WebSocket, data: TeamWsMessage): boolean {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
+    return true;
   }
+  return false;
 }
 
 export function pushTeamSnapshot(session: UserSession, teamId: string): void {
@@ -89,6 +196,38 @@ export function pushAgentUpdate(session: UserSession, agents = session.teammateM
     const owner = SOCKET_OWNERS.get(socket);
     if (owner && agentWorkspace(owner) === workspace) sendAgentEvent(socket, payload, owner);
   }
+
+  const activeTeam = resolveActiveTeam(session);
+  const teamId = activeTeam?.id || null;
+  const scope = graphScope(session, teamId);
+  const graphEvents = graphState(scope);
+  let graph: AgentExecutionGraphSnapshot;
+  try {
+    graph = agentExecutionGraphSnapshot(session);
+  } catch {
+    return;
+  }
+  const graphEvent = graphMessage("agent_graph_event", ++graphEvents.sequence, graph);
+  graphEvents.history.push(graphEvent);
+  graphEvents.history = graphEvents.history.slice(-GRAPH_HISTORY_LIMIT);
+
+  const recipients = teamId ? TEAM_CONNECTIONS.get(teamId) : SESSION_CONNECTIONS.get(session.token);
+  if (!recipients) return;
+  for (const socket of recipients) {
+    const owner = SOCKET_OWNERS.get(socket);
+    if (!owner || agentWorkspace(owner) !== workspace) continue;
+    if (teamId) {
+      try {
+        const recipientTeam = getTeamManager(owner).getTeamDetails(teamId, owner.username);
+        if (recipientTeam.workspaceDir !== workspace) continue;
+      } catch {
+        continue;
+      }
+    } else if (owner.token !== session.token) {
+      continue;
+    }
+    sendGraphMessage(socket, scope, graphEvent);
+  }
 }
 
 function addPresence(teamId: string, username: string): boolean {
@@ -104,6 +243,9 @@ function removePresence(teamId: string, username: string): boolean {
 
 export function handleTeamWs(ws: WebSocket, session: UserSession): void {
   SOCKET_OWNERS.set(ws, session);
+  const sessionSockets = SESSION_CONNECTIONS.get(session.token) || new Set<WebSocket>();
+  sessionSockets.add(ws);
+  SESSION_CONNECTIONS.set(session.token, sessionSockets);
   const initialTeam = resolveActiveTeam(session);
   let currentTeamId = initialTeam?.id || null;
 
@@ -117,6 +259,7 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
   sendTeam(ws, { type: "collaboration_snapshot", collaboration: buildCollaborationSnapshot(session, initialTeam) });
   const eventState = agentState(agentWorkspace(session));
   sendAgentEvent(ws, { type: "agent_snapshot", sequence: eventState.sequence, agents: session.teammateManager.listDetails().map(normalizeAgent) }, session);
+  sendGraphSnapshot(ws, session, currentTeamId);
   // The manager is file-backed and may be updated by a restarted/background
   // process without emitting in-process events. Polling is deliberately only a
   // fallback; normal route controls call pushAgentUpdate immediately.
@@ -152,6 +295,9 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
         cursorColumn?: number;
         activity?: string;
         afterSequence?: number;
+        afterGraphSequence?: number;
+        afterGraphCursor?: number;
+        graphCursor?: number;
         path?: string;
         version?: number;
         digest?: string;
@@ -172,6 +318,7 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
           const events = agentState(agentWorkspace(session));
           const after = typeof data.afterSequence === "number" ? data.afterSequence : -1;
           for (const event of events.history) if ((event as any).sequence > after) event.type === "agent_update" || event.type === "agent_snapshot" ? sendAgentEvent(ws, event, session) : sendTeam(ws, event);
+          sendGraphReplayOrSnapshot(ws, session, requestedTeamId, graphCursor(data));
           return;
         }
         if (currentTeamId && TEAM_CONNECTIONS.has(currentTeamId)) {
@@ -194,6 +341,7 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
         const events = agentState(agentWorkspace(session));
         const after = typeof data.afterSequence === "number" ? data.afterSequence : -1;
         for (const event of events.history) if ((event as any).sequence > after) event.type === "agent_update" || event.type === "agent_snapshot" ? sendAgentEvent(ws, event, session) : sendTeam(ws, event);
+        sendGraphReplayOrSnapshot(ws, session, requestedTeamId, graphCursor(data));
         return;
       }
 
@@ -240,6 +388,8 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
 
   ws.on("close", () => {
     clearInterval(pollAgents);
+    SESSION_CONNECTIONS.get(session.token)?.delete(ws);
+    if (SESSION_CONNECTIONS.get(session.token)?.size === 0) SESSION_CONNECTIONS.delete(session.token);
     if (currentTeamId && TEAM_CONNECTIONS.has(currentTeamId)) {
       TEAM_CONNECTIONS.get(currentTeamId)?.delete(ws);
       if (TEAM_CONNECTIONS.get(currentTeamId)?.size === 0) {

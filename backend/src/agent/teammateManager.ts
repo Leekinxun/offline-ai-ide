@@ -34,6 +34,7 @@ import {
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
 import { OrchestrationStore } from "./orchestrationStore.js";
+import { TraceStore, type CollaborationEventReferences, type CollaborationLifecycleEventInput } from "../chat/traceStore.js";
 
 const TEAMMATE_TOOLS: OpenAIToolDef[] = [
   { type: "function", function: { name: "bash", description: "Run command.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
@@ -127,6 +128,24 @@ export class TeammateManager {
   private workspaceDir: string;
   private activeLoops: Map<string, { abort: boolean; paused: boolean; steering: string[]; generation: string }> = new Map();
 
+  private audit(input: CollaborationLifecycleEventInput): void {
+    new TraceStore(this.workspaceDir).appendCollaboration(input);
+  }
+
+  private auditReferences(name: string, extra: Partial<CollaborationEventReferences> = {}): CollaborationEventReferences {
+    const member = this.findMember(name);
+    return {
+      runId: member?.childRunId,
+      agentId: member?.id || `teammate:${name}`,
+      parentRunId: member?.parentRunId,
+      parentTaskId: member?.parentTaskId,
+      requestId: member?.parentRequestId,
+      toolCallId: member?.parentToolCallId,
+      worktreeId: member?.worktreeId,
+      ...extra,
+    };
+  }
+
   private managedWorktree(name: string, lineage?: ToolContext["lineage"]): ManagedChildWorktree {
     const ownerId = `teammate:${name}`;
     const owned = listManagedWorktrees(this.workspaceDir).filter((entry) => entry.ownerId === ownerId);
@@ -153,11 +172,14 @@ export class TeammateManager {
       (entry.status === "needs_revision" && entry.reviewState === "revision_requested")
     ));
     if (!worktree) return undefined;
+    const references = this.auditReferences(name, { runId: worktree.runId, worktreeId: worktree.id });
+    this.audit({ action: "change_set_capture_requested", outcome: "requested", ...references });
+    let changeSet: ReturnType<typeof captureChangeSet>;
     try {
       const mutationEvidenceGaps = worktree.runId
         ? listMutationEvidenceGaps(worktree.path, { runId: worktree.runId })
         : [];
-      const changeSet = captureChangeSet(this.workspaceDir, worktree.id, {
+      changeSet = captureChangeSet(this.workspaceDir, worktree.id, {
         agentName: `teammate:${name}`,
         memberName: name,
         parentTaskId: member?.parentTaskId,
@@ -165,18 +187,30 @@ export class TeammateManager {
         reason,
         mutationEvidenceGaps,
       });
-      this.bus.send(name, "lead", changeSet.status === "no_changes"
-        ? `ChangeSet ${changeSet.id} (no_changes) completed without workspace changes.`
-        : changeSet.status === "needs_attention"
-          ? `ChangeSet ${changeSet.id} (needs_attention) has incomplete mutation evidence; request revision or reject before integration.`
-          : `ChangeSet ${changeSet.id} (${changeSet.status}) is ready for review.`);
-      return { id: changeSet.id, status: changeSet.status };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       updateManagedWorktreeMetadata(this.workspaceDir, worktree.id, "needs_attention", "pending");
       this.bus.send(name, "lead", `ChangeSet capture failed (needs_attention): ${message}`);
+      this.audit({ action: "change_set_capture_failed", outcome: "failed", status: "needs_attention", reasonCode: "capture_failed", ...references });
+      this.audit({ action: "verification_failed", outcome: "failed", status: "failed", reasonCode: "change_set_unavailable", ...references });
       return { status: "needs_attention", error: message };
     }
+    const capturedReferences = { ...references, changeSetId: changeSet.id };
+    this.audit({ action: "change_set_capture_succeeded", outcome: "succeeded", status: changeSet.status, ...capturedReferences });
+    this.audit({ action: "change_set_result", outcome: changeSet.status === "needs_attention" ? "failed" : "succeeded", status: changeSet.status, ...capturedReferences });
+    this.audit({
+      action: changeSet.status === "needs_attention" ? "verification_failed" : "verification_passed",
+      outcome: changeSet.status === "needs_attention" ? "failed" : "succeeded",
+      status: changeSet.status === "needs_attention" ? "failed" : "passed",
+      ...(changeSet.status === "needs_attention" ? { reasonCode: "mutation_evidence_incomplete" } : {}),
+      ...capturedReferences,
+    });
+    this.bus.send(name, "lead", changeSet.status === "no_changes"
+      ? `ChangeSet ${changeSet.id} (no_changes) completed without workspace changes.`
+      : changeSet.status === "needs_attention"
+        ? `ChangeSet ${changeSet.id} (needs_attention) has incomplete mutation evidence; request revision or reject before integration.`
+        : `ChangeSet ${changeSet.id} (${changeSet.status}) is ready for review.`);
+    return { id: changeSet.id, status: changeSet.status };
   }
 
   constructor(workspaceDir: string, bus: MessageBus, taskMgr: TaskManager) {
@@ -230,8 +264,11 @@ export class TeammateManager {
   }
 
   private setStatus(name: string, status: TeamMember["status"], currentTask?: string, expectedExecutionId?: string): void {
-    this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member || expectedExecutionId && member.executionId !== expectedExecutionId) return structuredClone(state); member.status = status; member.updatedAt = Date.now(); if (currentTask !== undefined) member.currentTask = currentTask; if (status === "shutdown") member.currentTask = undefined; member.heartbeatAt = Date.now(); member.version = (member.version || 0) + 1; return structuredClone(state); });
+    let previousStatus: TeamMember["status"] | undefined;
+    let changed = false;
+    this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member || expectedExecutionId && member.executionId !== expectedExecutionId) return structuredClone(state); previousStatus = member.status; changed = member.status !== status; member.status = status; member.updatedAt = Date.now(); if (currentTask !== undefined) member.currentTask = currentTask; if (status === "shutdown") member.currentTask = undefined; member.heartbeatAt = Date.now(); member.version = (member.version || 0) + 1; return structuredClone(state); });
     this.saveConfig();
+    if (changed) this.audit({ action: "agent_state_transition", status, previousStatus, outcome: status === "failed" ? "failed" : "succeeded", ...this.auditReferences(name) });
   }
 
   async spawn(
@@ -242,7 +279,6 @@ export class TeammateManager {
     signal?: AbortSignal,
     lineage?: ToolContext["lineage"]
   ): Promise<string> {
-    if (this.activeLoops.has(name)) return `Error: '${name}' already has an active execution`;
     this.config = this.configStore.snapshot();
     const existingMember = this.findMember(name);
     const effectiveLineage = lineage || (existingMember?.parentRunId && existingMember.parentConversationId && existingMember.parentRequestId && existingMember.parentToolCallId ? {
@@ -252,20 +288,37 @@ export class TeammateManager {
       parentRequestId: existingMember.parentRequestId,
       parentToolCallId: existingMember.parentToolCallId,
     } : undefined);
+    const requestedReferences: CollaborationEventReferences = {
+      agentId: existingMember?.id || `teammate:${name}`,
+      parentRunId: effectiveLineage?.parentRunId,
+      parentTaskId: effectiveLineage?.parentTaskId,
+      requestId: effectiveLineage?.parentRequestId,
+      toolCallId: effectiveLineage?.parentToolCallId,
+    };
+    this.audit({ action: "spawn_requested", outcome: "requested", ...requestedReferences });
+    const failSpawn = (reasonCode: string, result: string): string => {
+      this.audit({ action: "spawn_failed", outcome: "failed", reasonCode, ...requestedReferences });
+      return result;
+    };
+    if (this.activeLoops.has(name)) return failSpawn("active_execution", `Error: '${name}' already has an active execution`);
     this.reconcile();
-    if (existingMember?.status === "working" || existingMember?.status === "paused") return `Error: '${name}' is currently working`;
+    if (existingMember?.status === "working" || existingMember?.status === "paused") return failSpawn("agent_busy", `Error: '${name}' is currently working`);
     const budget = this.config.budget;
     const active = this.config.members.filter((candidate) => candidate.status === "working" || candidate.status === "paused").length;
-    if (budget?.maxConcurrentAgents && active >= budget.maxConcurrentAgents) return `Error: team concurrency budget exceeded (${budget.maxConcurrentAgents})`;
-    if (this.config.workspaceBudget?.maxConcurrentAgents && active >= this.config.workspaceBudget.maxConcurrentAgents) return `Error: workspace concurrency budget exceeded (${this.config.workspaceBudget.maxConcurrentAgents})`;
+    if (budget?.maxConcurrentAgents && active >= budget.maxConcurrentAgents) return failSpawn("team_concurrency_budget", `Error: team concurrency budget exceeded (${budget.maxConcurrentAgents})`);
+    if (this.config.workspaceBudget?.maxConcurrentAgents && active >= this.config.workspaceBudget.maxConcurrentAgents) return failSpawn("workspace_concurrency_budget", `Error: workspace concurrency budget exceeded (${this.config.workspaceBudget.maxConcurrentAgents})`);
     let childWorkspace: ManagedChildWorktree;
+    this.audit({ action: "worktree_capture_requested", outcome: "requested", ...requestedReferences });
     try {
       childWorkspace = this.managedWorktree(name, effectiveLineage);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("awaiting review") || message.includes("active managed worktree")) return `Error: ${message}`;
-      return `Error: isolated worktree allocation failed; refusing to spawn '${name}': ${message}`;
+      this.audit({ action: "worktree_capture_failed", outcome: "failed", reasonCode: message.includes("awaiting review") ? "review_pending" : message.includes("active managed worktree") ? "worktree_active" : "allocation_failed", ...requestedReferences });
+      if (message.includes("awaiting review") || message.includes("active managed worktree")) return failSpawn("worktree_gate", `Error: ${message}`);
+      return failSpawn("worktree_unavailable", `Error: isolated worktree allocation failed; refusing to spawn '${name}': ${message}`);
     }
+    const childReferences: CollaborationEventReferences = { ...requestedReferences, runId: childWorkspace.runId, worktreeId: childWorkspace.id };
+    this.audit({ action: "worktree_capture_succeeded", outcome: "succeeded", ...childReferences });
     const generation = crypto.randomUUID();
     let member = existingMember;
     if (member) {
@@ -342,10 +395,20 @@ export class TeammateManager {
       parentRequestId: effectiveLineage.parentRequestId,
       agentName: `teammate:${name}`,
     }) : undefined;
-    await recorder?.start();
+    try {
+      await recorder?.start();
+      this.audit({ action: "spawn_started", outcome: "started", status: "working", ...childReferences });
+    } catch (error) {
+      this.activeLoops.delete(name);
+      updateManagedWorktreeMetadata(this.workspaceDir, childWorkspace.id, "needs_attention", "pending");
+      this.setStatus(name, "failed", "Execution failed", generation);
+      this.audit({ action: "spawn_failed", outcome: "failed", reasonCode: "run_start_failed", ...childReferences });
+      throw error;
+    }
     this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal).catch(() => {
-      this.finalizeManagedWorktree(name, "failure");
-      this.setStatus(name, "failed", "Execution failed", control.generation);
+      try { this.finalizeManagedWorktree(name, "failure"); } catch { /* report once below */ }
+      try { this.setStatus(name, "failed", "Execution failed", control.generation); } catch { /* report once below */ }
+      console.error(`[teammate:${name}] Critical collaboration lifecycle handling failed`);
     }).finally(async () => {
       if (!recorder) return;
       const memberStatus = this.listDetails().find((candidate) => candidate.name === name)?.status;
@@ -395,14 +458,21 @@ export class TeammateManager {
       if (!this.consumeUsage(name, control.generation, 0, 0)) { control.abort = true; this.setStatus(name, "failed", "Budget exhausted", control.generation); break; }
       if (control.paused) { await new Promise((resolve) => setTimeout(resolve, 50)); continue; }
       // Check inbox
+      const leaseObservedAt = Date.now();
+      for (const message of this.bus.list(name)) {
+        if (message.id && message.delivery === "leased" && message.lease && message.lease.expiresAt <= leaseObservedAt) {
+          this.audit({ action: "message_lease_expired", outcome: "expired", reasonCode: "lease_expired", messageId: message.id, ...this.auditReferences(name) });
+        }
+      }
       const inbox = this.bus.leaseInbox(name, `${name}:${control.generation}`, 50, 300_000);
+      for (const { message } of inbox) if (message.id) this.audit({ action: "message_leased", outcome: "succeeded", messageId: message.id, ...this.auditReferences(name) });
       const handledIds = this.handledMessageIds(name);
       const pendingInbox: typeof inbox = [];
       for (const { message: msg, token } of inbox) {
-        if (msg.id && handledIds.has(msg.id)) { this.bus.ack(name, msg.id, token); continue; }
+        if (msg.id && handledIds.has(msg.id)) { const acked = this.bus.ack(name, msg.id, token); this.audit({ action: "message_acked", outcome: acked ? "succeeded" : "rejected", messageId: msg.id, ...this.auditReferences(name) }); continue; }
         if (msg.type === "shutdown_request") {
           this.setStatus(name, "shutdown", undefined, control.generation);
-          if (msg.id && this.commitHandledMessages(name, control.generation, [msg.id])) this.bus.ack(name, msg.id, token);
+          if (msg.id && this.commitHandledMessages(name, control.generation, [msg.id])) { const acked = this.bus.ack(name, msg.id, token); this.audit({ action: "message_acked", outcome: acked ? "succeeded" : "rejected", messageId: msg.id, ...this.auditReferences(name) }); }
           this.finalizeManagedWorktree(name, "shutdown");
           this.activeLoops.delete(name);
           return;
@@ -491,7 +561,7 @@ export class TeammateManager {
       const commitPendingInbox = (): boolean => {
         if (!pendingIds.length) return true;
         if (!this.commitHandledMessages(name, control.generation, pendingIds)) return false;
-        for (const { message, token } of pendingInbox) if (message.id) this.bus.ack(name, message.id, token);
+        for (const { message, token } of pendingInbox) if (message.id) { const acked = this.bus.ack(name, message.id, token); this.audit({ action: "message_acked", outcome: acked ? "succeeded" : "rejected", messageId: message.id, ...this.auditReferences(name) }); }
         return true;
       };
 
@@ -641,8 +711,11 @@ export class TeammateManager {
       if ((member.status === "working" || member.status === "paused") && !this.activeLoops.has(member.name)) {
         const liveProcess = member.processId ? isProcessAlive(member.processId) : false;
         if (liveProcess && member.leaseExpiresAt && member.leaseExpiresAt > now) continue;
+        const previousStatus = member.status;
+        const leaseExpired = Boolean(member.leaseExpiresAt && member.leaseExpiresAt <= now);
         member.status = member.heartbeatAt && now - member.heartbeatAt > 60_000 ? "orphaned" : "interrupted";
         member.updatedAt = now; member.version = (member.version || 0) + 1; changed++;
+        this.audit({ action: "agent_state_transition", previousStatus, status: member.status, outcome: "failed", reasonCode: leaseExpired ? "lease_expired" : "restart_recovery", ...this.auditReferences(member.name) });
       }
     }
     if (changed) this.saveConfig();
@@ -650,10 +723,10 @@ export class TeammateManager {
   }
 
   heartbeat(name: string, expectedExecutionId?: string): boolean { let found = false; this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member || expectedExecutionId && member.executionId !== expectedExecutionId || expectedExecutionId && member.status !== "working" && member.status !== "paused") return structuredClone(state); found = true; member.heartbeatAt = Date.now(); member.leaseExpiresAt = Date.now() + 45_000; member.updatedAt = Date.now(); member.version = (member.version || 0) + 1; return structuredClone(state); }); this.saveConfig(); return found; }
-  stop(name: string): boolean { const control = this.activeLoops.get(name); const member = this.findMember(name); if (!member) return false; if (control) control.abort = true; else { this.finalizeManagedWorktree(name, "stopped-after-restart"); if (member.childRunId) terminalizeInterruptedRun(this.workspaceDir, member.childRunId, "stopped"); } this.setStatus(name, "stopped"); return true; }
-  steer(name: string, content: string): boolean { const control = this.activeLoops.get(name); const member = this.findMember(name); if (!member || !content.trim()) return false; if (control) control.steering.push(content.slice(0, 8000)); member.steering = [...(member.steering || []), content.slice(0, 8000)].slice(-20); this.saveConfig(); return true; }
-  pause(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = true; this.setStatus(name, "paused"); return true; }
-  resume(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = false; this.setStatus(name, "working"); return true; }
+  stop(name: string): boolean { const control = this.activeLoops.get(name); const member = this.findMember(name); if (!member) return false; if (control) control.abort = true; else { this.finalizeManagedWorktree(name, "stopped-after-restart"); if (member.childRunId) terminalizeInterruptedRun(this.workspaceDir, member.childRunId, "stopped"); } this.setStatus(name, "stopped"); this.audit({ action: "agent_stopped", outcome: "succeeded", status: "stopped", ...this.auditReferences(name) }); return true; }
+  steer(name: string, content: string): boolean { const control = this.activeLoops.get(name); const member = this.findMember(name); if (!member || !content.trim()) return false; if (control) control.steering.push(content.slice(0, 8000)); member.steering = [...(member.steering || []), content.slice(0, 8000)].slice(-20); this.saveConfig(); this.audit({ action: "agent_steered", outcome: "accepted", targetAgentId: member.id || `teammate:${name}`, ...this.auditReferences(name) }); return true; }
+  pause(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = true; this.setStatus(name, "paused"); this.audit({ action: "agent_paused", outcome: "succeeded", status: "paused", ...this.auditReferences(name) }); return true; }
+  resume(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = false; this.setStatus(name, "working"); this.audit({ action: "agent_resumed", outcome: "succeeded", status: "working", ...this.auditReferences(name) }); return true; }
   retry(name: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const member = this.findMember(name); if (!member) return Promise.resolve(`Error: '${name}' not found`); return this.spawn(name, member.role, member.currentTask || "Continue previous task", authorizeTool, signal); }
   reassign(name: string, prompt: string): boolean { const member = this.findMember(name); if (!member) return false; member.currentTask = prompt.slice(0, 180); return this.steer(name, prompt); }
   async replace(name: string, role: string, prompt: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const active = this.activeLoops.get(name); if (active) { active.abort = true; for (let attempt = 0; attempt < 100 && this.activeLoops.get(name) === active; attempt++) await new Promise((resolve) => setTimeout(resolve, 10)); if (this.activeLoops.get(name) === active) return `Error: '${name}' previous execution did not stop`; } return this.spawn(name, role, prompt, authorizeTool, signal); }
@@ -668,29 +741,32 @@ export class TeammateManager {
   }
 
   approvePlan(name: string, expectedVersion: number): TeamMember {
-    let updated!: TeamMember; this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member) throw new Error(`'${name}' not found`); if (member.version !== expectedVersion) throw new Error("Agent version conflict"); member.planApproved = true; member.version = (member.version || 0) + 1; member.updatedAt = Date.now(); updated = structuredClone(member); return structuredClone(state); }); this.saveConfig(); return updated;
+    let updated!: TeamMember; this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member) throw new Error(`'${name}' not found`); if (member.version !== expectedVersion) throw new Error("Agent version conflict"); member.planApproved = true; member.version = (member.version || 0) + 1; member.updatedAt = Date.now(); updated = structuredClone(member); return structuredClone(state); }); this.saveConfig(); this.audit({ action: "approval_granted", outcome: "accepted", decision: "approved", ...this.auditReferences(name) }); return updated;
   }
 
   recordCompletionEvidence(name: string, evidence: string[], quality: number, expectedVersion: number): TeamMember {
     if (!Number.isFinite(quality) || quality < 0 || quality > 1) throw new Error("Completion quality must be between 0 and 1");
     const clean = evidence.filter((item) => typeof item === "string" && item.trim()).map((item) => item.slice(0, 2000)).slice(0, 50); if (!clean.length) throw new Error("Completion evidence is required");
-    let updated!: TeamMember; this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member) throw new Error(`'${name}' not found`); if (member.version !== expectedVersion) throw new Error("Agent version conflict"); member.evidence = clean; member.completionQuality = quality; member.version = (member.version || 0) + 1; member.updatedAt = Date.now(); updated = structuredClone(member); return structuredClone(state); }); this.saveConfig(); return updated;
+    let updated!: TeamMember; this.config = this.configStore.transact((state) => { const member = state.members.find((candidate) => candidate.name === name); if (!member) throw new Error(`'${name}' not found`); if (member.version !== expectedVersion) throw new Error("Agent version conflict"); member.evidence = clean; member.completionQuality = quality; member.version = (member.version || 0) + 1; member.updatedAt = Date.now(); updated = structuredClone(member); return structuredClone(state); }); this.saveConfig(); this.audit({ action: "verification_passed", outcome: "accepted", status: "evidence_recorded", count: clean.length, ...this.auditReferences(name) }); return updated;
   }
 
   private consumeUsage(name: string, executionId: string, tokens: number, costUsd: number): boolean {
     if (!Number.isSafeInteger(tokens) || tokens < 0 || !Number.isFinite(costUsd) || costUsd < 0) return false;
     let accepted = false;
+    let exhausted = false;
+    let exhaustedFrom: TeamMember["status"] | undefined;
     this.config = this.configStore.transact((state) => {
       const member = state.members.find((candidate) => candidate.name === name);
       if (!member || member.executionId !== executionId || (member.status !== "working" && member.status !== "paused")) return structuredClone(state);
       const now = Date.now();
       const budgets = [member.budget, state.budget, state.workspaceBudget].filter((item): item is NonNullable<typeof item> => Boolean(item));
       const exceeds = budgets.some((budget) => (budget.maxTokens !== undefined && (budget.usedTokens || 0) + tokens > budget.maxTokens) || (budget.maxCostUsd !== undefined && (budget.usedCostUsd || 0) + costUsd > budget.maxCostUsd) || (budget.maxDurationMs !== undefined && now - (budget.startedAt || member.startedAt || now) > budget.maxDurationMs));
-      if (exceeds) { member.status = "failed"; member.currentTask = "Budget exhausted"; member.version = (member.version || 0) + 1; return structuredClone(state); }
+      if (exceeds) { exhaustedFrom = member.status; member.status = "failed"; member.currentTask = "Budget exhausted"; member.version = (member.version || 0) + 1; member.updatedAt = now; exhausted = true; return structuredClone(state); }
       for (const budget of budgets) { budget.usedTokens = (budget.usedTokens || 0) + tokens; budget.usedCostUsd = (budget.usedCostUsd || 0) + costUsd; budget.startedAt ||= member.startedAt || now; }
       member.version = (member.version || 0) + 1; member.updatedAt = now; accepted = true; return structuredClone(state);
     });
     this.saveConfig();
+    if (exhausted) this.audit({ action: "agent_state_transition", previousStatus: exhaustedFrom, status: "failed", outcome: "failed", reasonCode: "budget_exhausted", ...this.auditReferences(name) });
     return accepted;
   }
 

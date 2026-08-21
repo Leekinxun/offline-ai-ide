@@ -12,7 +12,7 @@ import type { TeamRole } from "../team/teamManager.js";
 import { pushTeamSnapshot } from "../ws/team.js";
 import { pushAgentUpdate } from "../ws/team.js";
 import { TEAMMATE_CAPABILITY } from "../agent/types.js";
-import { agentSnapshot, canSessionManageAgentBudget } from "../team/agentSnapshot.js";
+import { agentExecutionGraphSnapshot, agentSnapshot, canSessionManageAgentBudget } from "../team/agentSnapshot.js";
 import { CollaborationStore, CollaborationVersionConflictError, type CollaborationMergeChoice, type CollaborationSubject } from "../collaboration/collaborationStore.js";
 import { buildCollaborationSnapshot } from "../collaboration/snapshot.js";
 import { createChangeSetMergePreview } from "../collaboration/changeSetCollaboration.js";
@@ -76,6 +76,9 @@ teamRouter.post("/collaboration/merge-decisions", (req, res) => {
 teamRouter.get("/agents", (req, res) => {
   const session = getSession(req);
   session.teammateManager.reconcile();
+  if (req.query.view === "graph") {
+    return res.json(agentExecutionGraphSnapshot(session));
+  }
   const canManageBudget = canManageAgentBudget(session);
   res.json({
     agents: session.teammateManager.listDetails().map((member: Record<string, any>) => agentSnapshot(member, canManageBudget)),

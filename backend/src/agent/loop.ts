@@ -207,9 +207,11 @@ export async function runAgentLoop(
     runId: control?.runRecorder?.runId,
     executionPlan: control?.executionPlan,
   };
-  const trace = (input: Parameters<TraceStore["append"]>[0]) => {
+  const displayTrace = (input: Parameters<TraceStore["append"]>[0]) => {
     try { new TraceStore(session.workspaceDir).append(input); } catch { /* trace persistence is best effort */ }
   };
+  const collaborationTrace = (input: Parameters<TraceStore["appendCollaboration"]>[0]) =>
+    new TraceStore(session.workspaceDir).appendCollaboration(input);
   const gateCompletion = async () => {
     const runId = control?.runRecorder?.runId || currentRequestId;
     const scopeId = `run:${runId}`;
@@ -232,7 +234,7 @@ export async function runAgentLoop(
       detail: evidence.warnings.map((warning) => `${warning.name}: ${warning.error}`).join(" | ") || undefined,
     });
   };
-  trace({
+  displayTrace({
     kind: "agent",
     action: "Agent loop started",
     correlationId: control?.runRecorder?.runId || requestId,
@@ -290,7 +292,7 @@ export async function runAgentLoop(
     if (!linkedContextManifests.has(state.manifestId)) {
       linkedContextManifests.add(state.manifestId);
       await control?.runRecorder?.attachContextManifest(state.manifestId);
-      trace({
+      displayTrace({
         kind: "model",
         action: "Context manifest prepared",
         correlationId: control?.runRecorder?.runId || currentRequestId,
@@ -998,7 +1000,7 @@ export async function runAgentLoop(
               name: toolCall.function.name,
               status: "awaiting_permission",
             });
-            trace({ kind: "approval", action: "Tool approval requested", correlationId: control?.runRecorder?.runId || currentRequestId, runId: control?.runRecorder?.runId, conversationId: control?.conversationId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, metadata: { toolName: toolCall.function.name, risk: approval.risk } });
+            collaborationTrace({ action: "approval_requested", outcome: "requested", runId: control?.runRecorder?.runId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, taskId: Number.isSafeInteger(args.task_id) && Number(args.task_id) > 0 ? Number(args.task_id) : undefined, worktreeId: typeof args.worktree_id === "string" ? args.worktree_id : undefined, changeSetId: typeof args.change_set_id === "string" ? args.change_set_id : undefined, toolName: toolCall.function.name, risk: approval.risk });
           }
           if (shouldExecute) {
             const permission = await authorizeTool({
@@ -1014,7 +1016,7 @@ export async function runAgentLoop(
               shouldExecute = false;
               deniedByPolicyOrUser = true;
             }
-            trace({ kind: "approval", action: permission.allowed ? "Tool approval granted" : "Tool approval denied", correlationId: control?.runRecorder?.runId || currentRequestId, runId: control?.runRecorder?.runId, conversationId: control?.conversationId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, decision: permission.allowed ? "allowed" : "denied", metadata: { toolName: toolCall.function.name } });
+            if (approval.kind === "approval") collaborationTrace({ action: permission.allowed ? "approval_granted" : "approval_denied", outcome: permission.allowed ? "accepted" : "rejected", decision: permission.allowed ? "allowed" : "denied", runId: control?.runRecorder?.runId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, taskId: Number.isSafeInteger(args.task_id) && Number(args.task_id) > 0 ? Number(args.task_id) : undefined, worktreeId: typeof args.worktree_id === "string" ? args.worktree_id : undefined, changeSetId: typeof args.change_set_id === "string" ? args.change_set_id : undefined, toolName: toolCall.function.name });
           }
 
           if (shouldExecute) {
@@ -1028,7 +1030,7 @@ export async function runAgentLoop(
                   toolCallId: toolCall.id,
                 });
                 snapshotId = checkpoint.id;
-                trace({ kind: "checkpoint", action: "Step checkpoint created", correlationId: control?.runRecorder?.runId || currentRequestId, runId: control?.runRecorder?.runId, conversationId: control?.conversationId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, toolName: toolCall.function.name } });
+                displayTrace({ kind: "checkpoint", action: "Step checkpoint created", correlationId: control?.runRecorder?.runId || currentRequestId, runId: control?.runRecorder?.runId, conversationId: control?.conversationId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, toolName: toolCall.function.name } });
                 await control?.runRecorder?.toolState({
                   toolCallId: toolCall.id,
                   requestId: currentRequestId,
@@ -1237,7 +1239,7 @@ export async function runAgentLoop(
               toolErrors: (afterToolMetrics?.toolErrors || 0) + (isError ? 1 : 0),
             }
           );
-          trace({
+          displayTrace({
             kind: toolCall.function.name === "bash" ? "validation" : "tool",
             action: isError ? "Tool failed" : "Tool completed",
             correlationId: control?.runRecorder?.runId || currentRequestId,
@@ -1246,8 +1248,7 @@ export async function runAgentLoop(
             agentId: agentProfile.id,
             requestId: currentRequestId,
             toolCallId: toolCall.id,
-            ...(isError ? { evidence: result.slice(0, 500) } : {}),
-            metadata: { toolName: toolCall.function.name, status: isError ? "failed" : "completed", durationMs: Date.now() - toolStartedAt, ...(fileUpdate ? { filePath: fileUpdate.path } : {}) },
+            metadata: { toolName: toolCall.function.name, status: isError ? "failed" : "completed", durationMs: Date.now() - toolStartedAt },
           });
 
           currentAssistantMessage.toolCalls = [

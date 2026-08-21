@@ -1006,6 +1006,16 @@ export interface AgentSnapshot {
   blockers?: string[];
 }
 
+export type AgentGraphNodeKind = "run" | "agent" | "task" | "worktree" | "change_set" | "unresolved_parent";
+export type AgentGraphEdgeKind = "spawned_by" | "owns_task" | "uses_worktree" | "produced_change_set" | "verified_by";
+export type AgentGraphBlockingReason = "waiting_on_children" | "child_failed" | "awaiting_change_set_review";
+export interface AgentGraphNode { id: string; kind: AgentGraphNodeKind; ref: string; status?: string; aggregateStatus?: string; blockingReasons?: AgentGraphBlockingReason[]; summary: string; metadata: Record<string, unknown>; }
+export interface AgentGraphEdge { id: string; kind: AgentGraphEdgeKind; source: string; target: string; metadata?: Record<string, unknown>; }
+export interface AgentGraphEvent { id: string; timestamp: number; kind: string; nodeId?: string; summary: string; parentEventId?: string; metadata?: Record<string, unknown>; }
+export interface AgentGraphSnapshot { schemaVersion: 1; revision: string; asOf: number; nodes: AgentGraphNode[]; edges: AgentGraphEdge[]; events: AgentGraphEvent[]; }
+export interface AgentGraphWsMessage { type: "agent_graph_snapshot" | "agent_graph_event"; sequence: number; cursor: number; revision: string; graph: AgentGraphSnapshot; }
+export interface LegacyAgentWsMessage { type: "agent_snapshot" | "agent_update"; sequence: number; agents: AgentSnapshot[]; }
+
 export interface OrchestrationBudget {
   maxConcurrentAgents?: number;
   maxTokens?: number;

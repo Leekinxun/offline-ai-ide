@@ -3,11 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { redactSecrets } from "../agent/secretRedaction.js";
+import { buildExecutionGraphSnapshot } from "../agent/executionGraph.js";
+import { TaskManager } from "../agent/taskManager.js";
 import { readContextManifest } from "../agent/contextManifestStore.js";
-import { changeSetReviewRevision, getChangeSet, readChangeSetPatch, type ChangeSet } from "../chat/changeSets.js";
+import { changeSetReviewRevision, getChangeSet, listChangeSets, readChangeSetPatch, type ChangeSet } from "../chat/changeSets.js";
 import { readExecutionPlan } from "../chat/executionPlans.js";
-import { readRunRecord, type AgentRunRecord } from "../chat/runHistory.js";
+import { listRunRecords, readRunRecord, type AgentRunRecord } from "../chat/runHistory.js";
 import { TraceStore } from "../chat/traceStore.js";
+import { listManagedWorktrees } from "../chat/worktrees.js";
 import { buildReviewArtifact, canonicalJson, sha256, type ReviewArtifactScopeV1, type ReviewArtifactV1 } from "./reviewArtifact.js";
 
 export const EVIDENCE_BUNDLE_MEDIA_TYPE = "application/vnd.crewforge.evidence-bundle.v1+json";
@@ -16,7 +19,7 @@ const MAX_TOTAL_PAYLOAD_BYTES = 24 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
 const MAX_ENTRIES = 256;
 
-export type EvidenceBundleRole = "patch" | "change_set" | "plan" | "run" | "worktree" | "completion_evidence" | "review" | "trace" | "context_manifest" | "test_output";
+export type EvidenceBundleRole = "patch" | "change_set" | "plan" | "run" | "worktree" | "completion_evidence" | "review" | "trace" | "context_manifest" | "test_output" | "graph_references";
 export interface EvidenceBundleEntryDescriptorV1 { path: string; mediaType: string; role: EvidenceBundleRole; bytes: number; sha256: string; }
 export interface EvidenceBundleManifestV1 {
   schemaVersion: 1;
@@ -75,7 +78,7 @@ function contextProjection(workspaceDir: string, id: string): Record<string, unk
   return safeUnknown(workspaceDir, { schemaVersion: value.schemaVersion, manifestId: value.manifestId, logicalRequestId: value.logicalRequestId, createdAt: value.createdAt, updatedAt: value.updatedAt, status: value.status, purpose: value.purpose, runId: value.runId, conversationId: value.conversationId, requestId: value.requestId, agentId: value.agentId, providerId: value.providerId, modelName: value.modelName, scope: { kind: value.scope.kind, worktreeId: value.scope.worktreeId, baseSha: value.scope.baseSha, headSha: value.scope.headSha, indexGeneration: value.scope.indexGeneration }, policyVersion: value.policyVersion, controlsVersion: value.controlsVersion, payloadDigest: value.payloadDigest, items: value.items, estimatedPromptTokens: value.estimatedPromptTokens, actualPromptTokens: value.actualPromptTokens, excludedCount: value.excludedCount, redactedCount: value.redactedCount, truncatedCount: value.truncatedCount, attempts: value.attempts, errorCode: value.errorCode }) as Record<string, unknown>;
 }
 
-export function createEvidenceBundle(workspaceDir: string, changeSetId: string, expectedRevision?: string, options: { includeTrace?: boolean; includeTestOutput?: boolean; requireSignature?: boolean } = {}): Buffer {
+export function createEvidenceBundle(workspaceDir: string, changeSetId: string, expectedRevision?: string, options: { includeTrace?: boolean; includeTestOutput?: boolean; includeGraphReferences?: boolean; requireSignature?: boolean } = {}): Buffer {
   const repository = repositoryRoot(workspaceDir); const changeSet = getChangeSet(repository, changeSetId);
   const revision = changeSetReviewRevision(changeSet); if (expectedRevision && expectedRevision !== revision) throw new Error("Change set revision is stale");
   const artifact = buildReviewArtifact(repository, changeSet.id, revision);
@@ -97,6 +100,35 @@ export function createEvidenceBundle(workspaceDir: string, changeSetId: string, 
     entries.push(entry("payload/trace.ndjson", "application/x-ndjson", "trace", Buffer.from(trace ? `${trace}\n` : "", "utf8")));
   }
   if (options.includeTestOutput !== false) for (const verification of run.completionEvidence?.ledger.verification || []) if (verification.outputDigest) entries.push(entry(`payload/test-results/${verification.toolCallId || sha256(verification.command)}.json`, "application/json", "test_output", jsonBuffer(safeUnknown(repository, verification))));
+  if (options.includeGraphReferences === true) {
+    const traceEvents = new TraceStore(repository).list();
+    const graph = buildExecutionGraphSnapshot({
+      runRecords: listRunRecords(repository),
+      tasks: new TaskManager(repository).listTasks(),
+      traceEvents,
+      managedWorktrees: listManagedWorktrees(repository),
+      changeSets: listChangeSets(repository),
+    });
+    const boundNodeIds = new Set([`run:${run.runId}`, `change_set:${changeSet.id}`]);
+    const edgeIds = graph.edges.filter((edge) => boundNodeIds.has(edge.source) || boundNodeIds.has(edge.target)).map((edge) => edge.id).sort();
+    const nodeIds = [...new Set([
+      ...boundNodeIds,
+      ...graph.edges.filter((edge) => edgeIds.includes(edge.id)).flatMap((edge) => [edge.source, edge.target]),
+    ])].filter((id) => graph.nodes.some((node) => node.id === id)).sort();
+    const criticalEventIds = graph.events.filter((event) =>
+      (event.nodeId !== undefined && boundNodeIds.has(event.nodeId))
+      && (/failed|needs_attention|awaiting_review|applied|rejected|review|validation|verification/.test(event.kind)),
+    ).map((event) => event.id).sort();
+    entries.push(entry("payload/graph-references.json", "application/json", "graph_references", jsonBuffer({
+      schemaVersion: 1,
+      graphRevision: graph.revision,
+      nodeIds,
+      edgeIds,
+      criticalEventIds,
+      boundRunIds: [run.runId],
+      boundChangeSetIds: [changeSet.id],
+    })));
+  }
   entries.sort((left, right) => left.path.localeCompare(right.path));
   const descriptors = entries.map(descriptor);
   const manifestBody = { bindings: artifact.scope, entries: descriptors };

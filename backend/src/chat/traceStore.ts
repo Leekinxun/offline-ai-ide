@@ -25,6 +25,60 @@ export interface CausalTraceEvent {
   decision?: string;
   metadata?: Record<string, unknown>;
 }
+
+export type CollaborationLifecycleAction =
+  | "spawn_requested"
+  | "spawn_started"
+  | "spawn_failed"
+  | "agent_paused"
+  | "agent_resumed"
+  | "agent_steered"
+  | "agent_stopped"
+  | "agent_state_transition"
+  | "message_leased"
+  | "message_acked"
+  | "message_lease_expired"
+  | "approval_requested"
+  | "approval_granted"
+  | "approval_denied"
+  | "worktree_capture_requested"
+  | "worktree_capture_succeeded"
+  | "worktree_capture_failed"
+  | "change_set_capture_requested"
+  | "change_set_capture_succeeded"
+  | "change_set_capture_failed"
+  | "change_set_result"
+  | "verification_started"
+  | "verification_passed"
+  | "verification_failed";
+
+/** Identifier-only references permitted on collaboration audit events. Paths,
+ * prompts, payloads, outputs, and exception text have no representation here. */
+export interface CollaborationEventReferences {
+  runId?: string;
+  agentId?: string;
+  taskId?: number;
+  parentRunId?: string;
+  parentTaskId?: number;
+  requestId?: string;
+  toolCallId?: string;
+  worktreeId?: string;
+  changeSetId?: string;
+  messageId?: string;
+}
+
+export interface CollaborationLifecycleEventInput extends CollaborationEventReferences {
+  action: CollaborationLifecycleAction;
+  status?: string;
+  previousStatus?: string;
+  outcome?: "requested" | "started" | "succeeded" | "failed" | "accepted" | "rejected" | "expired";
+  reasonCode?: string;
+  decision?: "allowed" | "denied" | "approved" | "rejected";
+  targetAgentId?: string;
+  toolName?: string;
+  risk?: string;
+  count?: number;
+}
 export interface TraceRetentionOptions { maxEvents?: number; maxArchiveEvents?: number; maxAgeMs?: number; maxArchiveAgeMs?: number; archive?: boolean; }
 export interface TraceRetentionPolicy { maxEvents: number; maxArchiveEvents: number; maxAgeMs: number; maxArchiveAgeMs: number; archive: boolean; }
 export interface TraceMetrics { eventCount: number; archivedEventCount: number; bytes: number; archiveBytes: number; totalBytes: number; oldestAt?: number; newestAt?: number; }
@@ -41,6 +95,51 @@ function policyPath(workspace: string) { return path.join(path.resolve(workspace
 const DEFAULT_POLICY: TraceRetentionPolicy = { maxEvents: DEFAULT_MAX, maxArchiveEvents: DEFAULT_MAX * 10, maxAgeMs: 0, maxArchiveAgeMs: 0, archive: true };
 function cut(value: unknown, max: number): string | undefined {
   return typeof value === "string" && value.trim() ? redactSecrets(value).trim().slice(0, max) : undefined;
+}
+const COLLABORATION_ACTION_KIND: Record<CollaborationLifecycleAction, TraceEventKind> = {
+  spawn_requested: "agent", spawn_started: "agent", spawn_failed: "error",
+  agent_paused: "agent", agent_resumed: "agent", agent_steered: "agent", agent_stopped: "agent", agent_state_transition: "agent",
+  message_leased: "agent", message_acked: "agent", message_lease_expired: "error",
+  approval_requested: "approval", approval_granted: "approval", approval_denied: "approval",
+  worktree_capture_requested: "git", worktree_capture_succeeded: "git", worktree_capture_failed: "error",
+  change_set_capture_requested: "git", change_set_capture_succeeded: "git", change_set_capture_failed: "error", change_set_result: "git",
+  verification_started: "validation", verification_passed: "validation", verification_failed: "error",
+};
+const SAFE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,159}$/;
+function collaborationReference(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = redactSecrets(value).trim();
+  return SAFE_REFERENCE.test(clean) ? clean : undefined;
+}
+function collaborationTaskId(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+function collaborationCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+function collaborationMetadata(input: CollaborationLifecycleEventInput): Record<string, unknown> {
+  const metadata: Record<string, unknown> = { lifecycleAction: input.action, critical: true };
+  const references: Array<[keyof CollaborationEventReferences, unknown]> = [
+    ["runId", input.runId], ["agentId", input.agentId], ["taskId", collaborationTaskId(input.taskId)],
+    ["parentRunId", input.parentRunId], ["parentTaskId", collaborationTaskId(input.parentTaskId)],
+    ["requestId", input.requestId], ["toolCallId", input.toolCallId], ["worktreeId", input.worktreeId],
+    ["changeSetId", input.changeSetId], ["messageId", input.messageId],
+  ];
+  for (const [key, value] of references) {
+    const clean = key === "taskId" || key === "parentTaskId" ? value : collaborationReference(value);
+    if (clean !== undefined) metadata[key] = clean;
+  }
+  for (const [key, value] of [
+    ["status", input.status], ["previousStatus", input.previousStatus], ["outcome", input.outcome],
+    ["reasonCode", input.reasonCode], ["targetAgentId", input.targetAgentId], ["toolName", input.toolName], ["risk", input.risk],
+  ] as const) {
+    const clean = collaborationReference(value);
+    if (clean) metadata[key] = clean;
+  }
+  const count = collaborationCount(input.count);
+  if (count !== undefined) metadata.count = count;
+  if (input.decision) metadata.decision = input.decision;
+  return metadata;
 }
 function normalize(raw: unknown): CausalTraceEvent | null {
   if (!raw || typeof raw !== "object") return null;
@@ -81,6 +180,28 @@ export class TraceStore {
       writeCount(this.workspace, count); return event;
     });
   }
+  /** Append a critical, transport-safe collaboration lifecycle event. This is
+   * intentionally not best-effort: storage failures propagate to the caller. */
+  appendCollaboration(input: CollaborationLifecycleEventInput): CausalTraceEvent {
+    const metadata = collaborationMetadata(input);
+    const correlationId = collaborationReference(input.runId)
+      || collaborationReference(input.parentRunId)
+      || collaborationReference(input.requestId)
+      || collaborationReference(input.toolCallId)
+      || collaborationReference(input.agentId);
+    if (!correlationId) throw new Error("Collaboration event requires a safe causal reference");
+    return this.append({
+      kind: COLLABORATION_ACTION_KIND[input.action],
+      action: `collaboration.${input.action}`,
+      correlationId,
+      ...(collaborationReference(input.runId) ? { runId: collaborationReference(input.runId) } : {}),
+      ...(collaborationReference(input.agentId) ? { agentId: collaborationReference(input.agentId) } : {}),
+      ...(collaborationReference(input.requestId) ? { requestId: collaborationReference(input.requestId) } : {}),
+      ...(collaborationReference(input.toolCallId) ? { toolCallId: collaborationReference(input.toolCallId) } : {}),
+      ...(input.decision ? { decision: input.decision } : {}),
+      metadata,
+    });
+  }
   list(filter: Partial<Pick<CausalTraceEvent, "runId" | "correlationId" | "kind">> = {}): CausalTraceEvent[] { return read(tracePath(this.workspace)).filter(e => (!filter.runId || e.runId === filter.runId) && (!filter.correlationId || e.correlationId === filter.correlationId) && (!filter.kind || e.kind === filter.kind)); }
   export(filter: Parameters<TraceStore["list"]>[0] = {}): { schemaVersion: 1; events: CausalTraceEvent[] } { return { schemaVersion: 1, events: this.list(filter) }; }
   delete(filter: Parameters<TraceStore["list"]>[0] = {}): number { return withTraceLock(this.workspace, () => { const all = read(tracePath(this.workspace)); const keep = all.filter(e => !((!filter.runId || e.runId === filter.runId) && (!filter.correlationId || e.correlationId === filter.correlationId) && (!filter.kind || e.kind === filter.kind))); write(tracePath(this.workspace), keep); writeCount(this.workspace, keep.length); return all.length - keep.length; }); }
@@ -93,3 +214,4 @@ export class TraceStore {
   private enforce(events: CausalTraceEvent[], policy: TraceRetentionPolicy): number { const archive = read(archivePath(this.workspace)); this.applyRetention(events, archive, policy, Date.now()); write(archivePath(this.workspace), archive); write(tracePath(this.workspace), events); return events.length; }
 }
 export function traceEvent(workspace: string, input: ConstructorParameters<typeof TraceStore>[1] extends never ? never : Parameters<TraceStore["append"]>[0]): CausalTraceEvent { return new TraceStore(workspace).append(input); }
+export function collaborationTraceEvent(workspace: string, input: CollaborationLifecycleEventInput): CausalTraceEvent { return new TraceStore(workspace).appendCollaboration(input); }
