@@ -5,6 +5,8 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { safePath as safePathUtil } from "../utils/safePath.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
+import { findTypeScriptReferences, getTypeScriptLanguageServiceMetrics } from "../utils/typescriptLanguageService.js";
+import { findPythonDefinition, findPythonReferences } from "../utils/pythonLanguageService.js";
 import { createDirectoryZipStream } from "../utils/zipStream.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import {
@@ -591,7 +593,7 @@ filesRouter.get("/read", (req, res) => {
 });
 
 // GET /definition?symbol=xxx&currentPath=yyy
-filesRouter.get("/definition", (req, res) => {
+filesRouter.get("/definition", async (req, res) => {
   const symbol = typeof req.query.symbol === "string" ? req.query.symbol.trim() : "";
   const currentPath =
     typeof req.query.currentPath === "string" ? req.query.currentPath.trim() : undefined;
@@ -599,11 +601,36 @@ filesRouter.get("/definition", (req, res) => {
   if (!symbol) return res.status(400).json({ detail: "symbol required" });
 
   try {
+    const pythonLocation = await findPythonDefinition(getWorkspace(req), currentPath, symbol);
+    if (pythonLocation) return res.json(pythonLocation);
     const location = findDefinitionInWorkspace(getWorkspace(req), symbol, currentPath);
     if (!location) {
       return res.status(404).json({ detail: "Definition not found" });
     }
     return res.json(location);
+  } catch (e: any) {
+    return res.status(500).json({ detail: e.message });
+  }
+});
+
+// GET /references?symbol=xxx&currentPath=yyy
+filesRouter.get("/references", async (req, res) => {
+  const symbol = typeof req.query.symbol === "string" ? req.query.symbol.trim() : "";
+  const currentPath = typeof req.query.currentPath === "string" ? req.query.currentPath.trim() : undefined;
+  if (!symbol) return res.status(400).json({ detail: "symbol required" });
+  try {
+    const pythonReferences = await findPythonReferences(getWorkspace(req), currentPath, symbol);
+    if (pythonReferences.length) return res.json({ references: pythonReferences });
+    return res.json({ references: findTypeScriptReferences(getWorkspace(req), currentPath, symbol) });
+  } catch (e: any) {
+    return res.status(500).json({ detail: e.message });
+  }
+});
+
+// GET /semantic-status
+filesRouter.get("/semantic-status", (req, res) => {
+  try {
+    return res.json(getTypeScriptLanguageServiceMetrics(getWorkspace(req)));
   } catch (e: any) {
     return res.status(500).json({ detail: e.message });
   }

@@ -24,6 +24,7 @@ import { CheckpointPanel } from "./components/CheckpointPanel";
 import { ProblemsPanel } from "./components/ProblemsPanel";
 import { RunCenterPanel } from "./components/RunCenterPanel";
 import { DebugPanel } from "./components/DebugPanel";
+import { ReferencePanel } from "./components/ReferencePanel";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
@@ -37,6 +38,7 @@ import {
   FileSelectionRange,
   FileUpdate,
   OpenFile,
+  ReferenceLocation,
   SelectionInfo,
   TeamRole,
   getLanguage,
@@ -399,6 +401,7 @@ function AuthenticatedApp({
     useState<EditorNavigationTarget | null>(null);
   const [editorHighlightTarget, setEditorHighlightTarget] =
     useState<EditorHighlightTarget | null>(null);
+  const [referenceResult, setReferenceResult] = useState<{ symbol: string; references: ReferenceLocation[] } | null>(null);
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
   const lastWorkspaceMtimeRef = useRef(0);
   const savedBufferContentRef = useRef<Record<string, string>>({});
@@ -436,6 +439,10 @@ function AuthenticatedApp({
     setBreakpointsByPath({});
     setDebugStartRequest(null);
   }, [workspaceDir]);
+
+  useEffect(() => {
+    setReferenceResult(null);
+  }, [activeFilePath]);
 
   // --- Toast ---
   const showToast = useCallback((msg: string) => {
@@ -1441,6 +1448,16 @@ function AuthenticatedApp({
     },
     [fs]
   );
+
+  const handleFindReferences = useCallback(
+    async (symbol: string, currentPath: string): Promise<ReferenceLocation[]> =>
+      fs.findReferences(symbol, currentPath),
+    [fs]
+  );
+
+  const handleReferencesFound = useCallback((symbol: string, references: ReferenceLocation[]) => {
+    setReferenceResult({ symbol, references });
+  }, []);
 
   const closeTab = useCallback(
     (path: string) => {
@@ -3101,6 +3118,8 @@ function AuthenticatedApp({
                   onSelectionChange={handleSelectionChange}
                   onNavigateToLocation={handleNavigateToLocation}
                   onFindDefinition={handleFindDefinition}
+                  onFindReferences={handleFindReferences}
+                  onReferencesFound={handleReferencesFound}
                   editorRef={editorRef}
                   navigationTarget={
                     editorNavigationTarget?.path === activeFile.path
@@ -3128,6 +3147,14 @@ function AuthenticatedApp({
               />
             )}
             </Suspense>
+            {referenceResult && (
+              <ReferencePanel
+                symbol={referenceResult.symbol}
+                references={referenceResult.references}
+                onNavigate={(path, selection) => void handleNavigateToLocation(path, selection)}
+                onClose={() => setReferenceResult(null)}
+              />
+            )}
           </div>
           {terminalVisible && !compactWorkspace && (
             <div

@@ -7,6 +7,7 @@ import { TeammateManager } from "../agent/teammateManager.js";
 import { config } from "../config.js";
 import { setActiveTeamId } from "../team/sessionBridge.js";
 import { reconcileChangeSetReviewRuns } from "../chat/changeSetReviewRun.js";
+import { warmTypeScriptLanguageService } from "../utils/typescriptLanguageService.js";
 
 interface UserConfig {
   username: string;
@@ -72,6 +73,8 @@ function createSessionSingletons(workspaceDir: string) {
   // orphaned attempt as soon as the workspace becomes active, without waiting
   // for a review-runs UI/API read.
   void Promise.resolve().then(() => reconcileChangeSetReviewRuns(workspaceDir)).catch(() => { /* best-effort startup recovery */ });
+  const warmup = setTimeout(() => warmTypeScriptLanguageService(workspaceDir), 0);
+  warmup.unref?.();
   return { taskManager, messageBus, teammateManager };
 }
 

@@ -6,6 +6,7 @@ import {
   DefinitionLocation,
   FileSelectionRange,
   OpenFile,
+  ReferenceLocation,
   SelectionInfo,
   CollaborationState,
 } from "../types";
@@ -54,6 +55,8 @@ interface EditorProps {
     symbol: string,
     currentPath: string
   ) => Promise<DefinitionLocation | null>;
+  onFindReferences?: (symbol: string, currentPath: string) => Promise<ReferenceLocation[]>;
+  onReferencesFound?: (symbol: string, references: ReferenceLocation[]) => void;
   editorRef: React.MutableRefObject<monaco.editor.IStandaloneCodeEditor | null>;
   onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor | null) => void;
   navigationTarget: NavigationTarget | null;
@@ -244,6 +247,8 @@ export const Editor: React.FC<EditorProps> = ({
   onSelectionChange,
   onNavigateToLocation,
   onFindDefinition,
+  onFindReferences,
+  onReferencesFound,
   editorRef,
   onEditorReady,
   navigationTarget,
@@ -256,6 +261,8 @@ export const Editor: React.FC<EditorProps> = ({
   const onFormatRef = useRef(onFormat);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onToggleBreakpointRef = useRef(onToggleBreakpoint);
+  const onFindReferencesRef = useRef(onFindReferences);
+  const onReferencesFoundRef = useRef(onReferencesFound);
   const validationGenerationRef = useRef(0);
   const breakpointDecorationIdsRef = useRef<string[]>([]);
   const debugExecutionDecorationIdsRef = useRef<string[]>([]);
@@ -271,6 +278,8 @@ export const Editor: React.FC<EditorProps> = ({
   onFormatRef.current = onFormat;
   onSelectionChangeRef.current = onSelectionChange;
   onToggleBreakpointRef.current = onToggleBreakpoint;
+  onFindReferencesRef.current = onFindReferences;
+  onReferencesFoundRef.current = onReferencesFound;
 
   const saveCurrentViewState = useCallback(
     (editor: monaco.editor.IStandaloneCodeEditor) => {
@@ -539,6 +548,28 @@ export const Editor: React.FC<EditorProps> = ({
               activeEditor.pushUndoStop();
             } catch (error) {
               console.warn("Failed to format Python document:", error);
+            }
+          },
+        });
+      }
+
+      if (onFindReferences) {
+        editor.addAction({
+          id: "find-references",
+          label: t("editor.findReferences"),
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyR],
+          contextMenuGroupId: "navigation",
+          contextMenuOrder: 1,
+          run: async (activeEditor) => {
+            const model = activeEditor.getModel();
+            const position = activeEditor.getPosition();
+            const word = position && model?.getWordAtPosition(position);
+            if (!word?.word || !onFindReferencesRef.current) return;
+            try {
+              const references = await onFindReferencesRef.current(word.word, path);
+              onReferencesFoundRef.current?.(word.word, references);
+            } catch (error) {
+              console.warn("Failed to resolve references:", error);
             }
           },
         });

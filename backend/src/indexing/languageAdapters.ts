@@ -1,4 +1,5 @@
 import path from "node:path";
+import ts from "typescript";
 import type { IndexedImport, IndexedReference, IndexedSymbol, RepositoryRange } from "./types.js";
 
 export interface LanguageIndexResult {
@@ -14,7 +15,7 @@ interface LanguageAdapter {
   id: string;
   version: number;
   extensions: Set<string>;
-  index(content: string): Omit<LanguageIndexResult, "language" | "adapterId" | "adapterVersion">;
+  index(filePath: string, content: string): Omit<LanguageIndexResult, "language" | "adapterId" | "adapterVersion">;
 }
 
 const IDENTIFIER = /[A-Za-z_$][\w$]*/g;
@@ -93,29 +94,252 @@ function references(content: string, definitions: Set<string>, python = false): 
   return result;
 }
 
-function jsIndex(content: string) {
+function scriptKind(filePath: string): ts.ScriptKind {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".tsx": return ts.ScriptKind.TSX;
+    case ".jsx": return ts.ScriptKind.JSX;
+    case ".js": case ".mjs": case ".cjs": return ts.ScriptKind.JS;
+    case ".vue": case ".svelte": return ts.ScriptKind.TSX;
+    default: return ts.ScriptKind.TS;
+  }
+}
+
+function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+  return Boolean(ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((modifier) => modifier.kind === kind));
+}
+
+function astRange(sourceFile: ts.SourceFile, node: ts.Node): RepositoryRange {
+  const start = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+  const end = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
+  return {
+    startLine: start.line + 1,
+    startColumn: start.character + 1,
+    endLine: end.line + 1,
+    endColumn: end.character + 1,
+  };
+}
+
+function identifierName(node: ts.Node | undefined): ts.Identifier | null {
+  return node && ts.isIdentifier(node) ? node : null;
+}
+
+function bindingIdentifiers(node: ts.Node | undefined): ts.Identifier[] {
+  if (!node) return [];
+  if (ts.isIdentifier(node)) return [node];
+  if (ts.isBindingElement(node)) return bindingIdentifiers(node.name);
+  if (ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) {
+    return node.elements.flatMap((element) => bindingIdentifiers(element));
+  }
+  return [];
+}
+
+function addAstImport(
+  imports: IndexedImport[],
+  sourceFile: ts.SourceFile,
+  source: string,
+  names: string[],
+  position: number
+): void {
+  imports.push({
+    source,
+    names: [...new Set(names.filter(Boolean))],
+    line: sourceFile.getLineAndCharacterOfPosition(position).line + 1,
+    confidence: "exact",
+  });
+}
+
+interface LocalExportAlias {
+  local: string;
+  exported: string;
+}
+
+function astIndex(filePath: string, content: string) {
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(filePath)
+  );
   const symbols: IndexedSymbol[] = [];
   const imports: IndexedImport[] = [];
-  const lines = content.split(/\r?\n/);
-  for (const [index, line] of lines.entries()) {
-    const declaration = line.match(/^\s*(export\s+)?(?:default\s+)?(?:async\s+)?(function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)/);
-    if (declaration) {
-      const name = declaration[3];
-      const rawKind = declaration[2];
-      const kind: IndexedSymbol["kind"] = rawKind === "function" ? "function" : rawKind === "class" ? "class" : ["interface", "type", "enum"].includes(rawKind) ? "type" : "variable";
-      symbols.push({ name, kind, range: range(index + 1, line.indexOf(name) + 1, name.length), exported: Boolean(declaration[1]), confidence: "exact" });
+  const localExportAliases: LocalExportAlias[] = [];
+  const declarationPositions = new Set<number>();
+  const ignoredReferenceRanges: Array<{ start: number; end: number }> = [];
+
+  const addSymbol = (nameNode: ts.Node, kind: IndexedSymbol["kind"], owner: ts.Node): void => {
+    const name = identifierName(nameNode);
+    if (!name) return;
+    declarationPositions.add(name.getStart(sourceFile));
+    const exportOwner = ts.isVariableDeclaration(owner) && ts.isVariableStatement(owner.parent.parent)
+      ? owner.parent.parent
+      : owner;
+    symbols.push({
+      name: name.text,
+      kind,
+      range: astRange(sourceFile, name),
+      exported: hasModifier(exportOwner, ts.SyntaxKind.ExportKeyword),
+      confidence: "exact",
+    });
+  };
+
+  const markBindings = (node: ts.Node | undefined): void => {
+    for (const identifier of bindingIdentifiers(node)) {
+      declarationPositions.add(identifier.getStart(sourceFile));
     }
-    const imported = line.match(/^\s*import\s+(.+?)\s+from\s+["']([^"']+)["']/) || line.match(/^\s*import\s+["']([^"']+)["']/);
-    if (imported) {
-      const source = imported.length > 2 ? imported[2] : imported[1];
-      const clause = imported.length > 2 ? imported[1] : "";
-      const names = [...clause.matchAll(/[A-Za-z_$][\w$]*/g)].map((entry) => entry[0]).filter((name) => !["as", "type"].includes(name));
-      imports.push({ source, names, line: index + 1, confidence: "exact" });
+  };
+
+  const hasParameters = (node: ts.Node): node is ts.FunctionLikeDeclaration =>
+    ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node);
+
+  const visitDeclarations = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      ignoredReferenceRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+      const clause = node.importClause;
+      const names: string[] = [];
+      if (clause?.name) {
+        names.push(clause.name.text);
+        declarationPositions.add(clause.name.getStart(sourceFile));
+      }
+      if (clause?.namedBindings) {
+        if (ts.isNamespaceImport(clause.namedBindings)) {
+          names.push(clause.namedBindings.name.text);
+          declarationPositions.add(clause.namedBindings.name.getStart(sourceFile));
+        } else {
+          for (const element of clause.namedBindings.elements) {
+            names.push(element.name.text);
+            if (element.propertyName) names.push(element.propertyName.text);
+            declarationPositions.add(element.name.getStart(sourceFile));
+            if (element.propertyName) declarationPositions.add(element.propertyName.getStart(sourceFile));
+          }
+        }
+      }
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        addAstImport(imports, sourceFile, node.moduleSpecifier.text, names, node.getStart(sourceFile));
+      }
+      return;
     }
-    const required = line.match(/require\(\s*["']([^"']+)["']\s*\)/);
-    if (required) imports.push({ source: required[1], names: [], line: index + 1, confidence: "exact" });
+    if (ts.isExportDeclaration(node)) {
+      ignoredReferenceRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+      const names: string[] = [];
+      if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+        for (const element of node.exportClause.elements) {
+          names.push(element.name.text);
+          if (element.propertyName) names.push(element.propertyName.text);
+          if (!node.moduleSpecifier) {
+            localExportAliases.push({
+              local: element.propertyName?.text || element.name.text,
+              exported: element.name.text,
+            });
+          }
+        }
+      }
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        addAstImport(imports, sourceFile, node.moduleSpecifier.text, names, node.getStart(sourceFile));
+      }
+      return;
+    }
+    if (ts.isImportEqualsDeclaration(node)) {
+      ignoredReferenceRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+      declarationPositions.add(node.name.getStart(sourceFile));
+      const reference = node.moduleReference;
+      if (ts.isExternalModuleReference(reference) && reference.expression && ts.isStringLiteral(reference.expression)) {
+        addAstImport(imports, sourceFile, reference.expression.text, [node.name.text], node.getStart(sourceFile));
+      }
+      return;
+    }
+
+    if (hasParameters(node)) for (const parameter of node.parameters) markBindings(parameter.name);
+    if (ts.isFunctionDeclaration(node) && node.name) addSymbol(node.name, "function", node);
+    else if (ts.isClassDeclaration(node) && node.name) addSymbol(node.name, "class", node);
+    else if ((ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node)) && node.name) addSymbol(node.name, "type", node);
+    else if ((ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) && node.name) addSymbol(node.name, "function", node);
+    else if (ts.isVariableDeclaration(node)) {
+      markBindings(node.name);
+      for (const identifier of bindingIdentifiers(node.name)) addSymbol(identifier, "variable", node);
+    }
+    if (ts.isCatchClause(node)) markBindings(node.variableDeclaration?.name);
+    if (ts.isTypeParameterDeclaration(node)) declarationPositions.add(node.name.getStart(sourceFile));
+    if (ts.isEnumMember(node) && ts.isIdentifier(node.name)) declarationPositions.add(node.name.getStart(sourceFile));
+
+    const initializer = ts.isVariableDeclaration(node) ? node.initializer : undefined;
+    if (initializer && ts.isCallExpression(initializer)) {
+      const [requiredArgument] = initializer.arguments;
+      if (ts.isIdentifier(initializer.expression) && initializer.expression.text === "require" &&
+          requiredArgument && ts.isStringLiteral(requiredArgument)) {
+        const localName = ts.isVariableDeclaration(node) ? identifierName(node.name)?.text || "" : "";
+        addAstImport(imports, sourceFile, requiredArgument.text, [localName], node.getStart(sourceFile));
+      }
+    }
+    ts.forEachChild(node, visitDeclarations);
+  };
+  visitDeclarations(sourceFile);
+
+  // Materialize local re-export aliases as additional ranges pointing at the
+  // original declaration. This lets exact symbol lookup resolve `export {
+  // localName as publicName }` without weakening the lexical fallback.
+  for (const alias of localExportAliases) {
+    if (alias.exported === "default") continue;
+    const original = symbols.find((symbol) => symbol.name === alias.local);
+    if (!original || symbols.some((symbol) => symbol.name === alias.exported &&
+        symbol.range.startLine === original.range.startLine &&
+        symbol.range.startColumn === original.range.startColumn)) continue;
+    symbols.push({ ...original, name: alias.exported, exported: true });
   }
-  return { symbols, imports, references: references(content, new Set(symbols.map((symbol) => symbol.name))) };
+
+  const isIgnored = (node: ts.Node): boolean => ignoredReferenceRanges.some((range) => {
+    const start = node.getStart(sourceFile);
+    return start >= range.start && node.getEnd() <= range.end;
+  });
+  const referenceEntries: IndexedReference[] = [];
+  const seenReferences = new Set<string>();
+  const visitReferences = (node: ts.Node): void => {
+    if (isIgnored(node)) return;
+    if (ts.isIdentifier(node) && !declarationPositions.has(node.getStart(sourceFile))) {
+      const parent = node.parent;
+      const propertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isQualifiedName(parent) && parent.right === node);
+      if (!propertyName && !seenReferences.has(node.text)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        referenceEntries.push({ symbol: node.text, line: position.line + 1, column: position.character + 1, confidence: "lexical" });
+        seenReferences.add(node.text);
+      }
+    }
+    if (referenceEntries.length < MAX_REFERENCES_PER_FILE) ts.forEachChild(node, visitReferences);
+  };
+  visitReferences(sourceFile);
+
+  return { symbols, imports, references: referenceEntries };
+}
+
+function jsIndex(filePath: string, content: string) {
+  try {
+    return astIndex(filePath, content);
+  } catch {
+    // Keep indexing resilient for embedded or partially edited documents.
+    const symbols: IndexedSymbol[] = [];
+    const imports: IndexedImport[] = [];
+    const lines = content.split(/\r?\n/);
+    for (const [index, line] of lines.entries()) {
+      const declaration = line.match(/^\s*(export\s+)?(?:default\s+)?(?:async\s+)?(function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)/);
+      if (declaration) {
+        const name = declaration[3];
+        const rawKind = declaration[2];
+        const kind: IndexedSymbol["kind"] = rawKind === "function" ? "function" : rawKind === "class" ? "class" : ["interface", "type", "enum"].includes(rawKind) ? "type" : "variable";
+        symbols.push({ name, kind, range: range(index + 1, line.indexOf(name) + 1, name.length), exported: Boolean(declaration[1]), confidence: "heuristic" });
+      }
+      const imported = line.match(/^\s*import\s+(.+?)\s+from\s+["']([^"']+)["']/) || line.match(/^\s*import\s+["']([^"']+)["']/);
+      if (imported) {
+        const source = imported.length > 2 ? imported[2] : imported[1];
+        const clause = imported.length > 2 ? imported[1] : "";
+        const names = [...clause.matchAll(/[A-Za-z_$][\w$]*/g)].map((entry) => entry[0]).filter((name) => !["as", "type"].includes(name));
+        imports.push({ source, names, line: index + 1, confidence: "heuristic" });
+      }
+    }
+    return { symbols, imports, references: references(content, new Set(symbols.map((symbol) => symbol.name))) };
+  }
 }
 
 function pythonIndex(content: string) {
@@ -150,8 +374,8 @@ function genericIndex(content: string) {
 }
 
 const ADAPTERS: LanguageAdapter[] = [
-  { id: "javascript-typescript", version: 2, extensions: new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte"]), index: jsIndex },
-  { id: "python", version: 2, extensions: new Set([".py", ".pyi", ".pyw"]), index: pythonIndex },
+  { id: "javascript-typescript", version: 4, extensions: new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte"]), index: jsIndex },
+  { id: "python", version: 2, extensions: new Set([".py", ".pyi", ".pyw"]), index: (_filePath, content) => pythonIndex(content) },
 ];
 
 export const LANGUAGE_ADAPTER_VERSIONS = Object.fromEntries([...ADAPTERS, { id: "generic", version: 2 }].map((adapter) => [adapter.id, adapter.version]));
@@ -159,7 +383,7 @@ export const LANGUAGE_ADAPTER_VERSIONS = Object.fromEntries([...ADAPTERS, { id: 
 export function indexLanguageFile(filePath: string, content: string): LanguageIndexResult {
   const extension = path.extname(filePath).toLowerCase();
   const adapter = ADAPTERS.find((candidate) => candidate.extensions.has(extension));
-  const indexed = adapter ? adapter.index(content) : genericIndex(content);
+  const indexed = adapter ? adapter.index(filePath, content) : genericIndex(content);
   return {
     language: adapter?.id || extension.replace(/^\./, "") || "plaintext",
     adapterId: adapter?.id || "generic",

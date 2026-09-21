@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { evaluateContextPath, readAuthorizedWorkspaceFile } from "../agent/contextPolicy.js";
 import { findRepositoryDefinition } from "../indexing/repositoryIndex.js";
+import { findTypeScriptDefinition } from "./typescriptLanguageService.js";
 
 export interface FileSelectionRange {
   startLine: number;
@@ -211,7 +212,7 @@ function findDefinitionInContent(
   return null;
 }
 
-function findDefaultExportInContent(content: string): FileSelectionRange | null {
+function findDefaultExportInContent(content: string, language = "javascript"): FileSelectionRange | null {
   const lines = content.split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -228,6 +229,19 @@ function findDefaultExportInContent(content: string): FileSelectionRange | null 
         startColumn,
         endLine: index + 1,
         endColumn: startColumn + namedMatch[1].length,
+      };
+    }
+
+    const identifierMatch = line.match(/^\s*export\s+default\s+([A-Za-z_$][\w$]*)\b/);
+    if (identifierMatch) {
+      const localDefinition = findDefinitionInContent(content, language, identifierMatch[1]);
+      if (localDefinition) return localDefinition;
+      const startColumn = line.indexOf(identifierMatch[1]) + 1;
+      return {
+        startLine: index + 1,
+        startColumn,
+        endLine: index + 1,
+        endColumn: startColumn + identifierMatch[1].length,
       };
     }
 
@@ -278,7 +292,7 @@ function pickSelectionForImportTarget(
     if (selection) return selection;
   }
 
-  const defaultSelection = findDefaultExportInContent(content);
+  const defaultSelection = findDefaultExportInContent(content, language);
   if (defaultSelection) return defaultSelection;
 
   return firstMeaningfulSelection(content);
@@ -409,6 +423,56 @@ function findJavaScriptImportTarget(
   return null;
 }
 
+function findJavaScriptReExportTarget(
+  workspaceDir: string,
+  currentPath: string,
+  content: string,
+  symbol: string
+): ImportTarget | null {
+  const namedExportRegex = /export\s+(?:type\s+)?\{([\s\S]*?)\}\s+from\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(namedExportRegex)) {
+    const source = match[2]?.trim();
+    if (!source) continue;
+    for (const rawEntry of (match[1] || "").split(",")) {
+      const entry = rawEntry.trim().replace(/^type\s+/, "");
+      if (!entry) continue;
+      const [imported, exported] = entry.split(/\s+as\s+/).map((value) => value.trim());
+      if (exported !== symbol && imported !== symbol) continue;
+      const targetPath = resolveModulePath(workspaceDir, currentPath, source);
+      if (!targetPath) continue;
+      return {
+        path: targetPath,
+        exportedSymbol: imported === "default" ? undefined : imported,
+        isDefault: imported === "default",
+      };
+    }
+  }
+
+  // Resolve the common two-step barrel form:
+  // `import { local } from "./module"; export { local as publicName };`
+  const localExportRegex = /export\s*\{([\s\S]*?)\}\s*(?!from\b)(?:;|$)/g;
+  for (const match of content.matchAll(localExportRegex)) {
+    for (const rawEntry of (match[1] || "").split(",")) {
+      const entry = rawEntry.trim().replace(/^type\s+/, "");
+      if (!entry) continue;
+      const [local, exported = local] = entry.split(/\s+as\s+/).map((value) => value.trim());
+      if (exported !== symbol) continue;
+      const importedTarget = findJavaScriptImportTarget(workspaceDir, currentPath, content, local);
+      if (importedTarget) return importedTarget;
+    }
+  }
+
+  const starExportRegex = /export\s+\*\s+from\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(starExportRegex)) {
+    const source = match[1]?.trim();
+    if (!source) continue;
+    const targetPath = resolveModulePath(workspaceDir, currentPath, source);
+    if (targetPath) return { path: targetPath, exportedSymbol: symbol };
+  }
+
+  return null;
+}
+
 function resolvePythonModulePath(
   workspaceDir: string,
   currentPath: string,
@@ -500,6 +564,56 @@ function findPythonImportTarget(
   return null;
 }
 
+function resolveImportedDefinition(
+  workspaceDir: string,
+  targetPath: string,
+  exportedSymbol: string | undefined,
+  fallbackSymbol: string,
+  visited: Set<string>
+): DefinitionLocation | null {
+  if (visited.has(targetPath)) return null;
+  visited.add(targetPath);
+
+  let targetContent: string;
+  try {
+    targetContent = readAuthorizedWorkspaceFile(workspaceDir, targetPath).content;
+  } catch {
+    return null;
+  }
+
+  const language = getLanguageFromPath(targetPath);
+  if (exportedSymbol && exportedSymbol !== "default") {
+    const direct = findDefinitionInContent(targetContent, language, exportedSymbol);
+    if (direct) return { path: targetPath, selection: direct };
+  }
+  if (exportedSymbol === "default") {
+    const defaultSelection = findDefaultExportInContent(targetContent, language);
+    if (defaultSelection) return { path: targetPath, selection: defaultSelection };
+  }
+
+  const reExport = language === "python"
+    ? findPythonImportTarget(workspaceDir, targetPath, targetContent, exportedSymbol || fallbackSymbol)
+    : findJavaScriptReExportTarget(workspaceDir, targetPath, targetContent, exportedSymbol || fallbackSymbol);
+  if (reExport) {
+    const nested = resolveImportedDefinition(
+      workspaceDir,
+      reExport.path,
+      reExport.exportedSymbol,
+      exportedSymbol || fallbackSymbol,
+      visited
+    );
+    if (nested) return nested;
+  }
+
+  const selection = pickSelectionForImportTarget(
+    targetContent,
+    targetPath,
+    { path: targetPath, exportedSymbol, isDefault: exportedSymbol === "default" },
+    exportedSymbol || fallbackSymbol
+  );
+  return { path: targetPath, selection };
+}
+
 function findImportedDefinition(
   workspaceDir: string,
   currentPath: string,
@@ -519,23 +633,13 @@ function findImportedDefinition(
       : findJavaScriptImportTarget(workspaceDir, currentPath, currentContent, symbol);
 
   if (!importTarget) return null;
-
-  let targetContent: string;
-  try {
-    targetContent = readAuthorizedWorkspaceFile(workspaceDir, importTarget.path).content;
-  } catch {
-    return null;
-  }
-
-  return {
-    path: importTarget.path,
-    selection: pickSelectionForImportTarget(
-      targetContent,
-      importTarget.path,
-      importTarget,
-      symbol
-    ),
-  };
+  return resolveImportedDefinition(
+    workspaceDir,
+    importTarget.path,
+    importTarget.exportedSymbol,
+    symbol,
+    new Set([currentPath])
+  );
 }
 
 function scoreDefinitionMatch(
@@ -615,7 +719,7 @@ function findFileNameFallback(
     const location = {
       path: relPath,
       selection:
-        findDefaultExportInContent(content) ||
+        findDefaultExportInContent(content, getLanguageFromPath(relPath)) ||
         findDefinitionInContent(content, getLanguageFromPath(relPath), symbol) ||
         firstMeaningfulSelection(content),
     };
@@ -641,6 +745,11 @@ export function findDefinitionInWorkspace(
 ): DefinitionLocation | null {
   const normalizedSymbol = symbol.trim();
   if (!normalizedSymbol) return null;
+
+  if (currentPath) {
+    const semantic = findTypeScriptDefinition(workspaceDir, normalizeWorkspacePath(currentPath), normalizedSymbol);
+    if (semantic) return semantic;
+  }
 
   const indexed = findRepositoryDefinition(workspaceDir, normalizedSymbol, currentPath);
   if (indexed) return indexed;

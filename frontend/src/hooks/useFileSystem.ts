@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from "react";
-import { DefinitionLocation, FileNode, GitStatus } from "../types";
+import { DefinitionLocation, FileNode, GitStatus, ReferenceLocation } from "../types";
 
 const API = "/api/files";
 
@@ -277,6 +277,19 @@ export function useFileSystem(token: string) {
     [authHeaders]
   );
 
+  const findReferences = useCallback(
+    async (symbol: string, currentPath: string): Promise<ReferenceLocation[]> => {
+      const params = new URLSearchParams({ symbol, currentPath });
+      const res = await fetch(`${API}/references?${params.toString()}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to resolve references");
+      const data = await res.json() as { references?: ReferenceLocation[] };
+      return Array.isArray(data.references) ? data.references : [];
+    },
+    [authHeaders]
+  );
+
 
   const createEntry = useCallback(async (path: string, isDirectory: boolean) => {
     const res = await fetch(`${API}/create`, {
@@ -456,6 +469,7 @@ export function useFileSystem(token: string) {
       readFileWithMeta,
       readFile,
       findDefinition,
+      findReferences,
       writeFile,
       formatPythonDocument,
       checkPythonDocument,
@@ -476,6 +490,7 @@ export function useFileSystem(token: string) {
       readFileWithMeta,
       readFile,
       findDefinition,
+      findReferences,
       writeFile,
       formatPythonDocument,
       checkPythonDocument,

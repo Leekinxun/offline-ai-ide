@@ -2039,6 +2039,107 @@ select:focus-visible,
   background: var(--surface-panel);
 }
 
+.editor-reference-panel {
+  flex: 0 0 auto;
+  max-height: 220px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+
+.editor-reference-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.editor-reference-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.editor-reference-heading strong {
+  font-size: 12px;
+}
+
+.editor-reference-heading span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-reference-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.editor-reference-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.editor-reference-list {
+  overflow: auto;
+  padding: 4px 6px 8px;
+}
+
+.editor-reference-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-reference-item:hover,
+.editor-reference-item:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.editor-reference-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.editor-reference-location {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.editor-reference-empty {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .editor-conflict-banner {
   display: flex;
   align-items: center;

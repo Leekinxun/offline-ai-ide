@@ -34,6 +34,8 @@ export interface DefinitionLocation {
   selection: FileSelectionRange;
 }
 
+export type ReferenceLocation = DefinitionLocation;
+
 export interface FileUpdate {
   path: string;
   content: string;

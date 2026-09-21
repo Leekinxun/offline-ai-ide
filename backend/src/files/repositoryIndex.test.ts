@@ -30,6 +30,12 @@ test("builds an offline symbol/import/reference/test/Git index and retrieves fre
   fs.mkdirSync(path.join(workspace, "src")); fs.mkdirSync(path.join(workspace, "tests"));
   fs.writeFileSync(path.join(workspace, "src", "service.ts"), "export function calculateTotal(value: number) { return value + 1; }\n");
   fs.writeFileSync(path.join(workspace, "src", "consumer.ts"), "import { calculateTotal } from './service';\nexport const result = calculateTotal(2);\n");
+  fs.writeFileSync(path.join(workspace, "src", "barrel.ts"), "export { calculateTotal as publicTotal } from './service';\n");
+  fs.writeFileSync(path.join(workspace, "src", "reexport-consumer.ts"), "import { publicTotal } from './barrel';\nexport const reexported = publicTotal(3);\n");
+  fs.writeFileSync(path.join(workspace, "src", "local-barrel.ts"), "import { calculateTotal as localTotal } from './service';\nexport { localTotal as publicLocalTotal };\n");
+  fs.writeFileSync(path.join(workspace, "src", "local-reexport-consumer.ts"), "import { publicLocalTotal } from './local-barrel';\nexport const localReexported = publicLocalTotal(4);\n");
+  fs.writeFileSync(path.join(workspace, "src", "default-alias.ts"), "const defaultValue = (value: number) => value + 2;\nexport default defaultValue;\n");
+  fs.writeFileSync(path.join(workspace, "src", "default-consumer.ts"), "import defaultValue from './default-alias';\nexport const defaultResult = defaultValue(5);\n");
   fs.writeFileSync(path.join(workspace, "tests", "service.test.ts"), "import { calculateTotal } from '../src/service';\ncalculateTotal(1);\n");
   fs.writeFileSync(path.join(workspace, "worker.py"), "from helpers import run\n\ndef python_worker():\n    return run()\n");
   git(workspace, ["add", "."]); git(workspace, ["commit", "-qm", "fixture"]);
@@ -42,6 +48,9 @@ test("builds an offline symbol/import/reference/test/Git index and retrieves fre
   assert.equal(found.some((entry) => entry.kind === "test" && entry.path === "tests/service.test.ts"), true);
   assert.equal(found.every((entry) => Boolean(entry.contentDigest && entry.freshness.verifiedAt)), true);
   assert.equal(findDefinitionInWorkspace(workspace, "calculateTotal", "src/consumer.ts")?.path, "src/service.ts");
+  assert.equal(findDefinitionInWorkspace(workspace, "publicTotal", "src/reexport-consumer.ts")?.path, "src/service.ts");
+  assert.equal(findDefinitionInWorkspace(workspace, "publicLocalTotal", "src/local-reexport-consumer.ts")?.path, "src/service.ts");
+  assert.equal(findDefinitionInWorkspace(workspace, "defaultValue", "src/default-consumer.ts")?.path, "src/default-alias.ts");
 });
 
 test("incremental create, modify, delete, and rename update only affected records and mutation events trigger refresh", async (t) => {
