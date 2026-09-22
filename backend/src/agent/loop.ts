@@ -780,7 +780,7 @@ export async function runAgentLoop(
           fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, agentProfile.budget.maxOutputTokens),
           fallbackMaxOutputTokens: agentProfile.budget.maxOutputTokens,
           maxOutputTokens: agentProfile.budget.maxOutputTokens,
-          temperature: 0.3,
+          temperature: typeof config.temperature === "number" ? config.temperature : 0.3,
           signal: runSignal,
           hookContext: {
             agentId: agentProfile.id,

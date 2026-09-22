@@ -361,7 +361,7 @@ export async function runSubagent(
         fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens),
         fallbackMaxOutputTokens: profile.budget.maxOutputTokens,
         maxOutputTokens: profile.budget.maxOutputTokens,
-        temperature: 0.3,
+        temperature: typeof config.temperature === "number" ? config.temperature : 0.3,
         signal,
         hookContext: {
           agentId: profile.id,

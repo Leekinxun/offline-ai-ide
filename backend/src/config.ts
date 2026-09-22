@@ -17,6 +17,7 @@ interface LlmRuntimeSettings {
   maxTokens: number;
   maxAgentIterations: number;
   systemPrompt?: string;
+  temperature?: number;
   fallbacks?: ModelFallbackSettings[];
 }
 
@@ -392,9 +393,24 @@ export const config = {
   vllmApiUrl:
     persistedLlmSettings.vllmApiUrl ||
     process.env.VLLM_API_URL ||
+    process.env.AGENT_BASE_URL ||
     "http://host.docker.internal:8000/v1",
-  vllmApiKey: persistedLlmSettings.vllmApiKey || process.env.VLLM_API_KEY || "",
-  modelName: persistedLlmSettings.modelName || process.env.MODEL_NAME || "default",
+  vllmApiKey:
+    persistedLlmSettings.vllmApiKey ||
+    process.env.VLLM_API_KEY ||
+    process.env.AGENT_API_KEY ||
+    "",
+  modelName:
+    persistedLlmSettings.modelName ||
+    process.env.MODEL_NAME ||
+    process.env.AGENT_MODEL_ID ||
+    "default",
+  temperature:
+    typeof persistedLlmSettings.temperature === "number"
+      ? persistedLlmSettings.temperature
+      : process.env.AGENT_TEMPERATURE
+      ? Number.parseFloat(process.env.AGENT_TEMPERATURE)
+      : undefined,
   systemPrompt: persistedLlmSettings.systemPrompt || process.env.SYSTEM_PROMPT || "",
   staticDir: process.env.STATIC_DIR || "static",
   pythonExecutable:
@@ -531,6 +547,7 @@ export function getLlmSettings(): LlmRuntimeSettings {
     maxTokens: config.agentMaxTokens,
     maxAgentIterations: config.maxAgentIterations,
     systemPrompt: config.systemPrompt,
+    ...(typeof config.temperature === "number" ? { temperature: config.temperature } : {}),
   };
 }
 
@@ -614,6 +631,9 @@ export function updateLlmSettings(next: LlmRuntimeSettings): LlmRuntimeSettings 
   config.agentMaxTokens = next.maxTokens;
   config.maxAgentIterations = next.maxAgentIterations;
   config.systemPrompt = next.systemPrompt || "";
+  if (typeof next.temperature === "number") {
+    config.temperature = next.temperature;
+  }
 
   persistedAppSettings = {
     ...persistedAppSettings,
