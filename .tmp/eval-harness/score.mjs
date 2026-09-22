@@ -5,7 +5,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const RESULTS = path.join(HERE, "results");
+const RESULTS = process.env.RESULTS_DIR || path.join(HERE, "results");
 const REPO_ROOT = path.resolve(HERE, "../..");
 const EVAL_ROOT = path.join(REPO_ROOT, "workspace", "eval");
 const PYTHON_ENV = (cwd) => {
@@ -614,31 +614,34 @@ for (const id of ids) {
     checks: cs,
   };
 }
-fs.writeFileSync(path.join(HERE, "scoring-facts.json"), JSON.stringify(out, null, 2));
-console.log("wrote scoring-facts.json for", Object.keys(out).join(", "));
-for (const [id, data] of Object.entries(out)) {
-  const failed = data.checks.filter((c) => !c.pass).map((c) => c.name);
-  console.log(`${id}: ${data.checks.length - failed.length}/${data.checks.length} auto-checks pass${failed.length ? " | FAIL: " + failed.join(", ") : ""}`);
-}
 
+let baseline = null;
 if (comparePath) {
-  let baseline;
   try { baseline = JSON.parse(fs.readFileSync(path.resolve(comparePath), "utf8")); }
   catch (error) {
     console.error(`unable to read --compare baseline ${comparePath}: ${error.message}`);
     process.exitCode = 2;
   }
-  if (baseline) {
-    const docsDir = path.resolve(HERE, "../../docs/testing");
-    fs.mkdirSync(docsDir, { recursive: true });
-    const currentSummary = factSummary(out);
-    const baselineSummary = factSummary(baseline);
-    const reportPath = path.join(docsDir, "eval-score-compare.md");
-    const radarPath = path.join(docsDir, "eval-score-radar.json");
-    fs.writeFileSync(reportPath, renderComparison(currentSummary, baselineSummary, path.resolve(comparePath)));
-    const labels = [...new Set([...Object.keys(baselineSummary), ...Object.keys(currentSummary)])].sort();
-    fs.writeFileSync(radarPath, JSON.stringify({ labels, current: labels.map((id) => Number((currentSummary[id]?.ratio || 0).toFixed(4))), baseline: labels.map((id) => Number((baselineSummary[id]?.ratio || 0).toFixed(4))) }, null, 2) + "\n");
-    console.log(`wrote comparison report ${reportPath}`);
-    console.log(`wrote radar data ${radarPath}`);
-  }
+}
+
+const factsFile = process.env.FACTS_FILE || path.join(HERE, "scoring-facts.json");
+fs.writeFileSync(factsFile, JSON.stringify(out, null, 2));
+console.log("wrote " + path.basename(factsFile) + " for", Object.keys(out).join(", "));
+for (const [id, data] of Object.entries(out)) {
+  const failed = data.checks.filter((c) => !c.pass).map((c) => c.name);
+  console.log(`${id}: ${data.checks.length - failed.length}/${data.checks.length} auto-checks pass${failed.length ? " | FAIL: " + failed.join(", ") : ""}`);
+}
+
+if (baseline) {
+  const docsDir = path.resolve(HERE, "../../docs/testing");
+  fs.mkdirSync(docsDir, { recursive: true });
+  const currentSummary = factSummary(out);
+  const baselineSummary = factSummary(baseline);
+  const reportPath = path.join(docsDir, "eval-score-compare.md");
+  const radarPath = path.join(docsDir, "eval-score-radar.json");
+  fs.writeFileSync(reportPath, renderComparison(currentSummary, baselineSummary, path.resolve(comparePath)));
+  const labels = [...new Set([...Object.keys(baselineSummary), ...Object.keys(currentSummary)])].sort();
+  fs.writeFileSync(radarPath, JSON.stringify({ labels, current: labels.map((id) => Number((currentSummary[id]?.ratio || 0).toFixed(4))), baseline: labels.map((id) => Number((baselineSummary[id]?.ratio || 0).toFixed(4))) }, null, 2) + "\n");
+  console.log(`wrote comparison report ${reportPath}`);
+  console.log(`wrote radar data ${radarPath}`);
 }

@@ -16,7 +16,8 @@ FROM node:20-slim AS backend-builder
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's|http://deb.debian.org|http://mirror.sg.gs|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build/backend
 COPY backend/package.json backend/package-lock.json* ./
 RUN set -eu; \
@@ -51,7 +52,8 @@ ARG RUFF_VERSION=0.15.22
 WORKDIR /app
 
 # System tools for terminal usage
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://deb.debian.org|http://mirror.sg.gs|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
     bash \
     bubblewrap \
     git \

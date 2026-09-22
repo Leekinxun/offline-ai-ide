@@ -28,3 +28,9 @@ workspace/
 .history/
 .checkpoints/
 .artifacts/
+
+# Evaluation harness run artifacts
+.tmp/eval-harness/results*/
+.tmp/eval-harness/progress.json
+.tmp/eval-harness/scoring-facts-prefix.json
+.reasonix/
