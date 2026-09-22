@@ -44,7 +44,7 @@ import {
 } from "../chat/planHandoff.js";
 import { changeSetsContainEvidenceGaps, collectAuthoritativeChangeEvidence, deriveCompletionEvidence, type CompletionEvidence } from "../chat/completionEvidence.js";
 import { CollaborationStore } from "../collaboration/collaborationStore.js";
-import { listChangeSets } from "../chat/changeSets.js";
+import { isProtectedChangedPath, listChangeSets } from "../chat/changeSets.js";
 import { getContextIndexAdapter } from "../agent/contextManifestIndex.js";
 import { CompletionQualityGateError } from "../extensions/policy/completionGate.js";
 import { MutationJournalEvidenceError } from "../files/mutationRegistry.js";
@@ -77,9 +77,13 @@ function runtimeCompletionState(session: UserSession, approvals: ToolApprovalSes
   const collaboration = new CollaborationStore(session.workspaceDir);
   const pendingConflict = collaboration.snapshot().mergeDecisions.some((decision) =>
     relevantChangeSets.has(decision.changeSetId) && decision.status !== "resolved"
-  ) || changeSets.filter((changeSet) => relevantChangeSets.has(changeSet.id) && changeSet.changedFiles.length > 0).some((changeSet) =>
-    collaboration.integrationConflicts(changeSet).length > 0
-  );
+  ) || changeSets.filter((changeSet) => relevantChangeSets.has(changeSet.id)).some((changeSet) => {
+    // ChangeSet manifests may include control metadata from older captures. These
+    // paths are outside collaboration conflict tracking and must not make the
+    // completion state calculation fail during run finalization.
+    const collaborationFiles = changeSet.changedFiles.filter((relative) => !isProtectedChangedPath(relative));
+    return collaborationFiles.length > 0 && collaboration.integrationConflicts({ ...changeSet, changedFiles: collaborationFiles }).length > 0;
+  });
   let changedFiles: string[] = [];
   let changeEvidence = false;
   try {
@@ -756,7 +760,12 @@ async function processConversationQueue(
     messages: assistantMessages,
     changedFiles: runtimeState.changedFiles,
     stopped: controlState.stopped,
-    baseError: summary.errorCount > 0 || ws.readyState !== WebSocket.OPEN,
+    // Individual tool failures are part of normal agent exploration. They are
+    // represented in verification evidence (and required commands become
+    // validation_failed) rather than poisoning an otherwise successful run.
+    // Reserve the base error signal for an interrupted transport; explicit
+    // fatal agent errors take the outer catch path above.
+    baseError: ws.readyState !== WebSocket.OPEN,
     blockers: { childRun: runtimeState.childRun, approval: runtimeState.approval, amendment: amendmentBlocked, conflict: runtimeState.conflict, check: runtimeState.check, changeEvidence: runtimeState.changeEvidence },
   });
   let finalStatus = finalStatusFromCompletionEvidence(completionEvidence);

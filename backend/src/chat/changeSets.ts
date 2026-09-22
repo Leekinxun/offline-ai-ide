@@ -232,6 +232,12 @@ function writeTransaction<T extends { changeSetId: string; schemaVersion?: numbe
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(persisted, null, 2)}\n`, { flag: "wx" }); fs.renameSync(temporary, file);
 }
 const PROTECTED = new Set([".git", ".history", ".checkpoints", ".team", ".codex", ".omx", ".crewforge", ".crownforge-worktrees"]);
+/** Returns whether a ChangeSet path belongs to internal control metadata. */
+export function isProtectedChangedPath(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  return PROTECTED.has(normalized.split("/")[0] || "");
+}
 function validateChangedPath(value: string): string {
   if (!value || value.includes("\0") || value.includes("\n") || value.includes("\r") || path.isAbsolute(value) || value.includes("\\")) throw new Error("Ambiguous or absolute changed path");
   const normalized = path.posix.normalize(value);

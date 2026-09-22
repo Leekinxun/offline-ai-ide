@@ -84,6 +84,14 @@ test("classifies cancellation, blockers, base errors, and direct completion dete
   assert.equal(deriveCompletionEvidence({ messages: [] }).outcome, "completed");
 });
 
+test("an exploratory tool error does not become a base run failure", () => {
+  const result = deriveCompletionEvidence({
+    messages: [message([bash("explore", "python3 -c 'print(1)'", "Error: command not allowed", true)])],
+  });
+  assert.equal(result.outcome, "completed");
+  assert.deepEqual(result.ledger.verification, []);
+});
+
 test("only successful required bash references can satisfy a criterion", () => {
   const result = deriveCompletionEvidence({ plan: { verificationCommands: ["npm test"], acceptanceCriteria: ["Ready"] }, messages: [message([bash("bad", "npm test", "Error: Command exited with code 1", true)])], criterionEvidence: { Ready: ["bad", "unknown"] } });
   assert.deepEqual(result.ledger.criteria[0], { criterion: "Ready", state: "failed", evidenceRefs: [] });

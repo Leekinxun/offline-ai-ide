@@ -95,3 +95,16 @@ test("unreadable collaboration state blocks integration assessment and remains u
   assert.throws(() => new CollaborationStore(workspace).integrationAssessment({ id: "change", patchSha256: "a".repeat(64), baseSha: git(workspace, ["rev-parse", "HEAD"]), changedFiles: ["src/a.ts"] }), CollaborationStoreCorruptionError);
   assert.equal(fs.lstatSync(target).isDirectory(), true);
 });
+
+test("integration assessment ignores protected and malformed ChangeSet paths", (t) => {
+  const workspace = fixture(t);
+  fs.writeFileSync(path.join(workspace, "src/a.ts"), "human edit\n");
+  const result = new CollaborationStore(workspace).integrationAssessment({
+    id: "metadata-bearing-change",
+    patchSha256: "a".repeat(64),
+    baseSha: git(workspace, ["rev-parse", "HEAD"]),
+    changedFiles: [".codex/audit/run.json", ".team/collaboration-v1.json", ".crewforge/trace.json", "../outside.txt", "src/a.ts"],
+  });
+  assert.deepEqual(result.conflicts.map((conflict) => conflict.path), ["src/a.ts"]);
+  assert.deepEqual(result.resolved, []);
+});
