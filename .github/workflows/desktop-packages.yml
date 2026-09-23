@@ -1,0 +1,101 @@
+name: Desktop packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional draft preview tag, e.g. v1.1.0-desktop-preview.1 (leave blank to only build)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            runner: macos-15
+          - target: mac-x64
+            runner: macos-15-intel
+          - target: win-x64
+            runner: windows-2022
+          - target: win7-x64
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            desktop/package-lock.json
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Install desktop build tools
+        run: npm ci
+        working-directory: desktop
+      - name: Build desktop package
+        run: npm run package:${{ matrix.target }}
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crownforge-${{ matrix.target }}
+          path: |
+            desktop-dist/${{ matrix.target }}/*.dmg
+            desktop-dist/${{ matrix.target }}/*.zip
+            desktop-dist/${{ matrix.target }}/*.exe
+            desktop-dist/${{ matrix.target }}/*.sha256
+          if-no-files-found: error
+
+  draft_release:
+    if: ${{ inputs.release_tag != '' }}
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crownforge-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=(release-assets/*.dmg release-assets/*.exe)
+          checksums=(release-assets/*.sha256)
+          [[ ${#installers[@]} -eq 4 ]] || { echo "Expected four platform installers" >&2; exit 1; }
+          [[ ${#checksums[@]} -eq 8 ]] || { echo "Expected checksums for four installers and four ZIP archives" >&2; exit 1; }
+          for checksum in "${checksums[@]}"; do
+            (cd release-assets && sha256sum --check "$(basename "$checksum")")
+          done
+      - name: Create a draft preview Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-desktop-preview\.[0-9]+$ ]] || {
+            echo "Use a tag such as v1.1.0-desktop-preview.1" >&2
+            exit 1
+          }
+          gh release create "$RELEASE_TAG" \
+            release-assets/*.dmg release-assets/*.exe release-assets/*.zip release-assets/*.sha256 \
+            --draft --prerelease --target "$GITHUB_SHA" \
+            --title "CrownForge Desktop $RELEASE_TAG" \
+            --notes-file docs/desktop-release-notes.md
