@@ -51,8 +51,8 @@ cd ../desktop && npm ci
 npm run package:mac-arm64   # or another target from the table
 ```
 
-The public preview's Windows installers were cross-built on macOS. For a stable
-release, rebuild them on Windows and run installation checks on each target OS.
+Preview 1's Windows installers were cross-built on macOS. Preview 2 builds them
+on a Windows runner, but still needs installation checks on each target OS.
 The current installers are not signed or notarized; a stable release also needs
 platform signing and malware scanning.
 
