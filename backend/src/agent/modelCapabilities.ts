@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export type ModelCapabilitySource = "model_metadata" | "context_window" | "fallback";
-export type ModelFeature = "streaming" | "tool_calling" | "structured_output" | "reasoning_controls" | "cancellation" | "usage_reporting";
+export type ModelFeature = "streaming" | "tool_calling" | "structured_output" | "reasoning_controls" | "cancellation" | "usage_reporting" | "image_input" | "pdf_input";
 export type CapabilitySupport = Record<ModelFeature, boolean>;
 
 export interface ModelCapabilities {
@@ -131,6 +131,8 @@ function discoverSupports(metadata: Record<string, unknown> | null, declared: Pa
     reasoning_controls: ["reasoning_controls", "supports_reasoning", "reasoning_effort", "thinking"],
     cancellation: ["cancellation", "supports_cancellation", "abort"],
     usage_reporting: ["usage_reporting", "supports_usage", "usage"],
+    image_input: ["image_input", "supports_image_input", "vision", "image"],
+    pdf_input: ["pdf_input", "supports_pdf_input", "pdf"],
   };
   const capabilityNames = new Set<string>();
   const collect = (value: unknown, depth = 0): void => {
@@ -151,7 +153,7 @@ function discoverSupports(metadata: Record<string, unknown> | null, declared: Pa
     }
     return false;
   };
-  return { streaming: value("streaming"), tool_calling: value("tool_calling"), structured_output: value("structured_output"), reasoning_controls: value("reasoning_controls"), cancellation: value("cancellation"), usage_reporting: value("usage_reporting") };
+  return { streaming: value("streaming"), tool_calling: value("tool_calling"), structured_output: value("structured_output"), reasoning_controls: value("reasoning_controls"), cancellation: value("cancellation"), usage_reporting: value("usage_reporting"), image_input: value("image_input"), pdf_input: value("pdf_input") };
 }
 
 function findBoolean(value: Record<string, unknown>, target: string, depth = 0): boolean | undefined {

@@ -10,13 +10,26 @@ import type {
   DeliveryRuntimeSettings,
 } from "./integrations/delivery/types.js";
 
-export interface LlmModelSettings {
+export interface LlmSamplingSettings {
+  temperature?: number;
+  topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+}
+
+export interface LlmInputSettings {
+  supportsImageInput?: boolean;
+  supportsPdfInput?: boolean;
+}
+
+export interface LlmModelSettings extends LlmSamplingSettings, LlmInputSettings {
   modelName: string;
   apiUrl: string;
   apiKey: string;
+  maxTokens?: number;
 }
 
-interface LlmRuntimeSettings {
+interface LlmRuntimeSettings extends LlmSamplingSettings, LlmInputSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
@@ -24,9 +37,13 @@ interface LlmRuntimeSettings {
   maxTokens: number;
   maxAgentIterations: number;
   systemPrompt?: string;
-  temperature?: number;
   fallbacks?: ModelFallbackSettings[];
 }
+
+export interface ResolvedModelSampling extends LlmSamplingSettings { maxTokens: number; }
+
+type SamplingField = keyof LlmSamplingSettings;
+type PersistedLlmSettings = Omit<Partial<LlmRuntimeSettings>, SamplingField> & Partial<Record<SamplingField, number | null>>;
 
 export interface ModelFallbackSettings { apiUrl: string; apiKey?: string; model: string; providerId?: string; maxOutputTokens?: number; }
 
@@ -75,7 +92,7 @@ interface PersistedPluginSettings {
 
 export interface PersistedAppSettings {
   schemaVersion?: 1;
-  llm?: Partial<LlmRuntimeSettings>;
+  llm?: PersistedLlmSettings;
   plugins?: PersistedPluginSettings;
   app?: Partial<AppRuntimeSettings>;
   mcp?: Partial<McpRuntimeSettings>;
@@ -89,6 +106,13 @@ export function getAppSettingsMigrationStatus(): AppSettingsMigrationStatus { re
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_ADDITIONAL_LLM_MODELS = 32;
+const LLM_SAMPLING_RANGES = {
+  temperature: [0, 2],
+  topP: [0, 1],
+  frequencyPenalty: [-2, 2],
+  presencePenalty: [-2, 2],
+} as const;
+const LLM_SAMPLING_FIELDS = Object.keys(LLM_SAMPLING_RANGES) as SamplingField[];
 
 export class LlmSettingsValidationError extends Error {}
 
@@ -119,6 +143,44 @@ function validateLlmModelName(value: unknown): string {
   return modelName;
 }
 
+function validateLlmSamplingNumber(value: unknown, field: SamplingField): number {
+  const [minimum, maximum] = LLM_SAMPLING_RANGES[field];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new LlmSettingsValidationError(`${field} must be a number between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function validateLlmMaxTokens(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 1_000_000) {
+    throw new LlmSettingsValidationError("maxTokens must be an integer between 1 and 1000000");
+  }
+  return value;
+}
+
+function validateLlmSamplingFields(raw: Record<string, unknown>): LlmSamplingSettings {
+  const result: LlmSamplingSettings = {};
+  for (const field of LLM_SAMPLING_FIELDS) {
+    if (raw[field] !== undefined) result[field] = validateLlmSamplingNumber(raw[field], field);
+  }
+  return result;
+}
+
+function validateLlmInputSettings(raw: Record<string, unknown>): LlmInputSettings {
+  const result: LlmInputSettings = {};
+  for (const field of ["supportsImageInput", "supportsPdfInput"] as const) {
+    if (raw[field] === undefined) continue;
+    if (typeof raw[field] !== "boolean") throw new LlmSettingsValidationError(`${field} must be a boolean`);
+    result[field] = raw[field];
+  }
+  return result;
+}
+
+function loadLlmSamplingNumber(value: unknown, field: SamplingField): number | undefined {
+  try { return validateLlmSamplingNumber(value, field); }
+  catch { return undefined; }
+}
+
 function validateAdditionalLlmModels(value: unknown, defaultModelName: string): LlmModelSettings[] {
   if (!Array.isArray(value) || value.length > MAX_ADDITIONAL_LLM_MODELS) {
     throw new LlmSettingsValidationError(`LLM models must be an array with at most ${MAX_ADDITIONAL_LLM_MODELS} entries`);
@@ -137,7 +199,12 @@ function validateAdditionalLlmModels(value: unknown, defaultModelName: string): 
     if (typeof raw.apiKey !== "string") {
       throw new LlmSettingsValidationError(`LLM model ${index + 1} API key must be a string`);
     }
-    return { modelName, apiUrl: validateLlmApiUrl(raw.apiUrl), apiKey: raw.apiKey };
+    return {
+      modelName, apiUrl: validateLlmApiUrl(raw.apiUrl), apiKey: raw.apiKey,
+      ...validateLlmSamplingFields(raw),
+      ...validateLlmInputSettings(raw),
+      ...(raw.maxTokens !== undefined ? { maxTokens: validateLlmMaxTokens(raw.maxTokens) } : {}),
+    };
   });
 }
 
@@ -467,12 +534,18 @@ export const config = {
       : process.env.VLLM_API_KEY || process.env.AGENT_API_KEY || "",
   modelName: initialModelName,
   models: loadAdditionalLlmModels(persistedLlmSettings.models, initialModelName),
+  supportsImageInput: persistedLlmSettings.supportsImageInput === true,
+  supportsPdfInput: persistedLlmSettings.supportsPdfInput === true,
   temperature:
-    typeof persistedLlmSettings.temperature === "number"
-      ? persistedLlmSettings.temperature
-      : process.env.AGENT_TEMPERATURE
-      ? Number.parseFloat(process.env.AGENT_TEMPERATURE)
-      : undefined,
+    persistedLlmSettings.temperature === null
+      ? undefined
+      : loadLlmSamplingNumber(persistedLlmSettings.temperature, "temperature") ??
+        (process.env.AGENT_TEMPERATURE === undefined
+          ? undefined
+          : loadLlmSamplingNumber(Number(process.env.AGENT_TEMPERATURE), "temperature")),
+  topP: loadLlmSamplingNumber(persistedLlmSettings.topP, "topP"),
+  frequencyPenalty: loadLlmSamplingNumber(persistedLlmSettings.frequencyPenalty, "frequencyPenalty"),
+  presencePenalty: loadLlmSamplingNumber(persistedLlmSettings.presencePenalty, "presencePenalty"),
   systemPrompt: persistedLlmSettings.systemPrompt || process.env.SYSTEM_PROMPT || "",
   staticDir: process.env.STATIC_DIR || "static",
   pythonExecutable:
@@ -607,10 +680,15 @@ export function getLlmSettings(): LlmRuntimeSettings {
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
     models: config.models.map((model) => ({ ...model })),
+    supportsImageInput: config.supportsImageInput,
+    supportsPdfInput: config.supportsPdfInput,
     maxTokens: config.agentMaxTokens,
     maxAgentIterations: config.maxAgentIterations,
     systemPrompt: config.systemPrompt,
     ...(typeof config.temperature === "number" ? { temperature: config.temperature } : {}),
+    ...(typeof config.topP === "number" ? { topP: config.topP } : {}),
+    ...(typeof config.frequencyPenalty === "number" ? { frequencyPenalty: config.frequencyPenalty } : {}),
+    ...(typeof config.presencePenalty === "number" ? { presencePenalty: config.presencePenalty } : {}),
   };
 }
 
@@ -621,6 +699,25 @@ export function resolveModelEndpoint(modelName: string): LlmModelSettings {
     apiUrl: config.vllmApiUrl,
     apiKey: config.vllmApiKey,
   };
+}
+
+export function resolveModelSampling(modelName: string): ResolvedModelSampling {
+  const model = config.models.find((candidate) => candidate.modelName === modelName);
+  const resolved: ResolvedModelSampling = { maxTokens: model?.maxTokens ?? config.agentMaxTokens };
+  for (const field of LLM_SAMPLING_FIELDS) {
+    const value = model?.[field] ?? config[field];
+    if (typeof value === "number") resolved[field] = value;
+  }
+  return resolved;
+}
+
+export function resolveModelInputCapabilities(modelName: string): { image_input: boolean; pdf_input: boolean } {
+  const model = config.models.find((candidate) => candidate.modelName === modelName);
+  if (model) return { image_input: model.supportsImageInput === true, pdf_input: model.supportsPdfInput === true };
+  if (modelName === config.modelName) {
+    return { image_input: config.supportsImageInput, pdf_input: config.supportsPdfInput };
+  }
+  return { image_input: false, pdf_input: false };
 }
 
 export function getPluginOverrides(): Record<string, PluginOverrideSettings> {
@@ -696,24 +793,41 @@ export function clearPluginOverride(
   return nextOverrides;
 }
 
-export function updateLlmSettings(next: Omit<LlmRuntimeSettings, "models"> & { models?: unknown }): LlmRuntimeSettings {
+export function updateLlmSettings(next: Omit<LlmRuntimeSettings, "models" | SamplingField> & {
+  models?: unknown;
+} & Partial<Record<SamplingField, number | null>>): LlmRuntimeSettings {
   const modelName = validateLlmModelName(next.modelName);
   const vllmApiUrl = validateLlmApiUrl(next.vllmApiUrl);
   const models = validateAdditionalLlmModels(next.models === undefined ? config.models : next.models, modelName);
+  const maxTokens = validateLlmMaxTokens(next.maxTokens);
+  const inputSettings = validateLlmInputSettings(next as unknown as Record<string, unknown>);
+  const sampling: LlmSamplingSettings = {};
+  for (const field of LLM_SAMPLING_FIELDS) {
+    const incoming = next[field];
+    const value = incoming === undefined ? config[field] : incoming === null ? undefined : validateLlmSamplingNumber(incoming, field);
+    if (value !== undefined) sampling[field] = value;
+  }
   config.vllmApiUrl = vllmApiUrl;
   config.vllmApiKey = next.vllmApiKey;
   config.modelName = modelName;
   config.models = models;
-  config.agentMaxTokens = next.maxTokens;
+  config.supportsImageInput = inputSettings.supportsImageInput ?? config.supportsImageInput;
+  config.supportsPdfInput = inputSettings.supportsPdfInput ?? config.supportsPdfInput;
+  config.agentMaxTokens = maxTokens;
   config.maxAgentIterations = next.maxAgentIterations;
   config.systemPrompt = next.systemPrompt || "";
-  if (typeof next.temperature === "number") {
-    config.temperature = next.temperature;
-  }
+  config.temperature = sampling.temperature;
+  config.topP = sampling.topP;
+  config.frequencyPenalty = sampling.frequencyPenalty;
+  config.presencePenalty = sampling.presencePenalty;
 
+  const persistedLlm: PersistedLlmSettings = { ...persistedAppSettings.llm, ...getLlmSettings() };
+  for (const field of LLM_SAMPLING_FIELDS) {
+    if (next[field] === null) persistedLlm[field] = null;
+  }
   persistedAppSettings = {
     ...persistedAppSettings,
-    llm: { ...persistedAppSettings.llm, ...getLlmSettings() },
+    llm: persistedLlm,
   };
   savePersistedAppSettings();
 

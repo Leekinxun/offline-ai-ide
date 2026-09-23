@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { config, resolveModelEndpoint } from "../config.js";
+import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js";
 import { DEFAULT_TEAMMATE_CAPABILITIES, TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
@@ -321,11 +321,18 @@ export class TeammateManager {
     const childReferences: CollaborationEventReferences = { ...requestedReferences, runId: childWorkspace.runId, worktreeId: childWorkspace.id };
     this.audit({ action: "worktree_capture_succeeded", outcome: "succeeded", ...childReferences });
     const generation = crypto.randomUUID();
-    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
+    const modelName = resolveAgentProfile("teammate", config.agentProfiles, {
       modelName: parentModelName,
-      maxOutputTokens: config.agentMaxTokens,
+    }).modelName || parentModelName;
+    const modelSampling = resolveModelSampling(modelName);
+    const resolvedProfile = resolveAgentProfile("teammate", config.agentProfiles, {
+      modelName: parentModelName,
+      maxOutputTokens: modelSampling.maxTokens,
     });
-    const modelName = profile.modelName || parentModelName;
+    const profile = { ...resolvedProfile, budget: {
+      ...resolvedProfile.budget,
+      maxOutputTokens: Math.min(resolvedProfile.budget.maxOutputTokens, modelSampling.maxTokens),
+    } };
     let member = existingMember;
     if (member) {
       member.status = "working";
@@ -435,11 +442,18 @@ export class TeammateManager {
     this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work", control.generation);
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${childWorkspaceDir}. This is your isolated managed worktree; never access the parent workspace. Use idle when done with current work.`;
     const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
-    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
+    const model = resolveAgentProfile("teammate", config.agentProfiles, {
       modelName: parentModelName,
-      maxOutputTokens: config.agentMaxTokens,
+    }).modelName || parentModelName;
+    const modelSampling = resolveModelSampling(model);
+    const resolvedProfile = resolveAgentProfile("teammate", config.agentProfiles, {
+      modelName: parentModelName,
+      maxOutputTokens: modelSampling.maxTokens,
     });
-    const model = profile.modelName || parentModelName;
+    const profile = { ...resolvedProfile, budget: {
+      ...resolvedProfile.budget,
+      maxOutputTokens: Math.min(resolvedProfile.budget.maxOutputTokens, modelSampling.maxTokens),
+    } };
     const modelEndpoint = resolveModelEndpoint(model);
     const managedScope = listManagedWorktrees(this.workspaceDir).find((entry) => path.resolve(entry.path) === path.resolve(childWorkspaceDir));
     const startedAt = Date.now();
@@ -504,6 +518,10 @@ export class TeammateManager {
           fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens),
           fallbackMaxOutputTokens: profile.budget.maxOutputTokens,
           maxOutputTokens: profile.budget.maxOutputTokens,
+          temperature: modelSampling.temperature,
+          topP: modelSampling.topP,
+          frequencyPenalty: modelSampling.frequencyPenalty,
+          presencePenalty: modelSampling.presencePenalty,
           hookContext: { agentId: `teammate:${name}` },
           signal,
           contextAudit: {

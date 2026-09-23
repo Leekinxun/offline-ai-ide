@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { capabilitiesFromDeclaration, getModelCapabilities, type ModelCapabilities, type ModelFeature } from "./modelCapabilities.js";
+import { capabilitiesFromDeclaration, getModelCapabilities, type CapabilitySupport, type ModelCapabilities, type ModelFeature } from "./modelCapabilities.js";
 import { classifyProviderHttpError, parseRetryAfterMs, ProviderRequestError, type ProviderErrorCode } from "./providerErrors.js";
 import type { OpenAIMessage, OpenAIResponse, OpenAIToolDef } from "./types.js";
 import { getProviderAdapter } from "./providerAdapter.js";
@@ -10,13 +10,15 @@ import { redactSecrets } from "./secretRedaction.js";
 import { buildContextManifest, toContextManifestState, type ContextAuditOptions, type ContextManifestState, type ContextManifestV1 } from "./contextManifest.js";
 import { finishContextManifestAttempt, prepareContextManifest, startContextManifestAttempt, updateContextManifest } from "./contextManifestStore.js";
 import { TraceStore } from "../chat/traceStore.js";
+import { ChatAttachmentError } from "../chat/attachments.js";
 
-export interface ModelFallbackCandidate { apiUrl: string; apiKey?: string; model: string; providerId?: string; maxOutputTokens?: number; executionContract: ProviderExecutionContract; }
+export interface ModelSamplingOptions { temperature?: number; topP?: number; frequencyPenalty?: number; presencePenalty?: number; }
+export interface ModelFallbackCandidate { apiUrl: string; apiKey?: string; model: string; providerId?: string; maxOutputTokens?: number; sampling?: ModelSamplingOptions; inputCapabilities?: Partial<CapabilitySupport>; executionContract: ProviderExecutionContract; }
 export type ProviderState = "capability_checked" | "attempt_started" | "retrying" | "fallback_selected" | "overflow" | "budget_warning" | "completed" | "cancelled" | "failed" | "budget_exhausted";
 export interface ProviderStateEvent { state: ProviderState; providerId: string; modelName: string; attempt?: number; candidateIndex: number; code?: ProviderErrorCode; detail?: string; }
-export interface ModelProcessorOptions {
-  apiUrl: string; apiKey?: string; model: string; providerId?: string; systemPrompt?: string; messages: OpenAIMessage[]; tools?: OpenAIToolDef[];
-  fallbackMaxOutputTokens: number; maxOutputTokens?: number; temperature?: number; signal?: AbortSignal; maxAttempts?: number; retryBaseDelayMs?: number;
+export interface ModelProcessorOptions extends ModelSamplingOptions {
+  apiUrl: string; apiKey?: string; model: string; providerId?: string; systemPrompt?: string; messages: OpenAIMessage[]; tools?: OpenAIToolDef[]; inputCapabilities?: Partial<CapabilitySupport>;
+  fallbackMaxOutputTokens: number; maxOutputTokens?: number; signal?: AbortSignal; maxAttempts?: number; retryBaseDelayMs?: number;
   onContentDelta?: (delta: string) => void; onReasoningDelta?: (delta: string) => void; onRetry?: (event: ModelRetryEvent) => void; onProviderState?: (event: ProviderStateEvent) => Promise<void> | void;
   hookContext?: AgentHookContext; contextAudit: ContextAuditOptions; onContextManifest?: (state: ContextManifestState) => Promise<void> | void;
   role?: ModelRole; requiredCapabilities?: ModelFeature[]; structuredOutput?: boolean; reasoning?: { effort?: "low" | "medium" | "high"; budgetTokens?: number };
@@ -25,20 +27,34 @@ export interface ModelProcessorOptions {
 }
 export interface ModelRetryEvent { attempt: number; nextAttempt: number; delayMs: number; error: ProviderRequestError; }
 export interface ModelProcessorResult { response: OpenAIResponse; attempts: number; maxOutputTokens: number; contextManifest: ContextManifestV1; providerId: string; modelName: string; fallbackIndex: number; capabilities: ModelCapabilities; usage: { promptTokens: number; completionTokens: number; totalTokens: number; costUsd: number; provenance: BudgetUsageProvenance["source"] }; }
-interface Candidate { apiUrl: string; apiKey?: string; model: string; providerId: string; maxOutputTokens?: number; executionContract?: ProviderExecutionContract; }
+interface Candidate { apiUrl: string; apiKey?: string; model: string; providerId: string; maxOutputTokens?: number; sampling?: ModelSamplingOptions; inputCapabilities?: Partial<CapabilitySupport>; executionContract?: ProviderExecutionContract; }
+
+function requiredInputCapabilities(messages: OpenAIMessage[]): ModelFeature[] {
+  const required = new Set<ModelFeature>();
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "attachment_ref") continue;
+      if (part.attachment.kind === "image") required.add("image_input");
+      if (part.attachment.kind === "pdf") required.add("pdf_input");
+    }
+  }
+  return [...required];
+}
 
 export async function processModelTurn(options: ModelProcessorOptions): Promise<ModelProcessorResult> {
   const requestSignal = options.signal || new AbortController().signal;
   const maxAttempts = Math.max(1, Math.min(5, Math.floor(options.maxAttempts || 3))); const role = options.role || roleFromAgent(options.hookContext?.agentId); const primaryContract = options.executionContract;
-  const candidates: Candidate[] = [{ apiUrl: options.apiUrl, apiKey: options.apiKey, model: options.model, providerId: options.providerId || "openai-compatible", maxOutputTokens: options.maxOutputTokens, executionContract: primaryContract }, ...(options.fallbacks || []).slice(0, 3).map((item) => ({ ...item, providerId: item.providerId || "openai-compatible" }))];
+  const candidates: Candidate[] = [{ apiUrl: options.apiUrl, apiKey: options.apiKey, model: options.model, providerId: options.providerId || "openai-compatible", maxOutputTokens: options.maxOutputTokens, sampling: { temperature: options.temperature, topP: options.topP, frequencyPenalty: options.frequencyPenalty, presencePenalty: options.presencePenalty }, inputCapabilities: options.inputCapabilities, executionContract: primaryContract }, ...(options.fallbacks || []).slice(0, 3).map((item) => ({ ...item, providerId: item.providerId || "openai-compatible" }))];
   for (const candidate of candidates.slice(1)) assertFallbackContract(primaryContract, candidate.executionContract);
-  const safeRequest = redactSecrets({ systemPrompt: options.systemPrompt, messages: options.messages, tools: options.tools }); let governor: ModelBudgetGovernor | undefined; const scopes = options.budgetScopes || defaultBudgetScopes(options);
+  const safeRequest = redactSecrets({ systemPrompt: options.systemPrompt, messages: options.messages, tools: options.tools }); const inputRequirements = requiredInputCapabilities(safeRequest.messages); let governor: ModelBudgetGovernor | undefined; const scopes = options.budgetScopes || defaultBudgetScopes(options);
   let totalAttempts = 0; let lastError: ProviderRequestError | undefined;
   for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
     const candidate = candidates[candidateIndex]; const adapter = getProviderAdapter(candidate.providerId); let capabilities: ModelCapabilities;
     try {
-      capabilities = candidate.maxOutputTokens ? capabilitiesFromDeclaration(candidate.model, candidate.maxOutputTokens, adapter.declaredSupports) : await getModelCapabilities({ apiUrl: candidate.apiUrl, apiKey: candidate.apiKey, modelName: candidate.model, fallbackMaxOutputTokens: options.fallbackMaxOutputTokens, signal: options.signal, declaredSupports: adapter.declaredSupports });
-      assertModelSuitable({ role, capabilities, tools: safeRequest.tools, required: [...(options.requiredCapabilities || []), ...(options.reasoning ? ["reasoning_controls" as const] : [])], structuredOutput: options.structuredOutput });
+      const declaredSupports = { ...adapter.declaredSupports, ...candidate.inputCapabilities };
+      capabilities = candidate.maxOutputTokens ? capabilitiesFromDeclaration(candidate.model, candidate.maxOutputTokens, declaredSupports) : await getModelCapabilities({ apiUrl: candidate.apiUrl, apiKey: candidate.apiKey, modelName: candidate.model, fallbackMaxOutputTokens: options.fallbackMaxOutputTokens, signal: options.signal, declaredSupports });
+      assertModelSuitable({ role, capabilities, tools: safeRequest.tools, required: [...(options.requiredCapabilities || []), ...inputRequirements, ...(options.reasoning ? ["reasoning_controls" as const] : [])], structuredOutput: options.structuredOutput });
       await state(options, { state: "capability_checked", providerId: candidate.providerId, modelName: candidate.model, candidateIndex });
     } catch (error) {
       const normalized = normalizeError(error, 0); lastError = normalized;
@@ -58,7 +74,7 @@ export async function processModelTurn(options: ModelProcessorOptions): Promise<
       try {
         contextManifest = startContextManifestAttempt(options.contextAudit.storeWorkspaceDir, contextManifest.manifestId, totalAttempts); await notifyManifest(); await state(options, { state: "attempt_started", providerId: candidate.providerId, modelName: candidate.model, candidateIndex, attempt });
         await runAgentHooks("beforeModelRequest", { agentId: options.hookContext?.agentId || "agent", ...options.hookContext, providerId: candidate.providerId, modelName: candidate.model, metadata: { ...(options.hookContext?.metadata || {}), attempt, candidateIndex } });
-        const response = await adapter.createChatCompletion({ apiUrl: candidate.apiUrl, apiKey: candidate.apiKey, model: candidate.model, systemPrompt: safeRequest.systemPrompt, messages: safeRequest.messages, tools: safeRequest.tools, maxTokens: maxOutputTokens, temperature: options.temperature, stream: true, signal: requestSignal, structuredOutput: options.structuredOutput, reasoning: options.reasoning });
+        const response = await adapter.createChatCompletion({ apiUrl: candidate.apiUrl, apiKey: candidate.apiKey, model: candidate.model, systemPrompt: safeRequest.systemPrompt, messages: safeRequest.messages, attachmentWorkspaceDir: options.contextAudit.storeWorkspaceDir, tools: safeRequest.tools, maxTokens: maxOutputTokens, temperature: candidate.sampling?.temperature, topP: candidate.sampling?.topP, frequencyPenalty: candidate.sampling?.frequencyPenalty, presencePenalty: candidate.sampling?.presencePenalty, stream: true, signal: requestSignal, structuredOutput: options.structuredOutput, reasoning: options.reasoning });
         if (!response.ok) {
           const body = await response.text(); const classification = classifyProviderHttpError({ status: response.status, body }); const safeBody = redactSecrets(body); const error = new ProviderRequestError({ ...classification, status: response.status, body: safeBody, attempts: attempt, message: `Provider request failed (HTTP ${response.status}): ${safeBody.slice(0, 300)}`, recoverable: classification.code === "context_overflow", state: classification.code === "context_overflow" ? "overflow" : "failed" });
           if (classification.code === "context_overflow") await state(options, { state: "overflow", providerId: candidate.providerId, modelName: candidate.model, candidateIndex, attempt, code: error.code, detail: "Caller may compact once before submitting a new bounded request" });
@@ -90,7 +106,11 @@ function roleFromAgent(value?: string): ModelRole { const id = (value || "ask").
 function defaultBudgetScopes(options: ModelProcessorOptions): BudgetScope[] { const scopes: BudgetScope[] = [{ kind: "workspace", id: "workspace" }, { kind: "agent", id: options.hookContext?.agentId || "agent" }]; const metadata = options.hookContext?.metadata || {}; if (typeof metadata.teamId === "string") scopes.push({ kind: "team", id: metadata.teamId }); if (typeof metadata.taskId === "string" || typeof metadata.taskId === "number") scopes.push({ kind: "task", id: String(metadata.taskId) }); return scopes; }
 function validUsage(value: unknown): number | undefined { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined; }
 function canFallback(error: ProviderRequestError): boolean { return ["network", "timeout", "rate_limit", "server_error", "model_not_found", "capability_mismatch"].includes(error.code); }
-function normalizeError(error: unknown, attempts: number): ProviderRequestError { return error instanceof ProviderRequestError ? error : new ProviderRequestError({ code: "network", message: `Provider network request failed: ${safe(error)}`, attempts: Math.max(1, attempts), retryable: true, cause: new Error(safe(error)) }); }
+function normalizeError(error: unknown, attempts: number): ProviderRequestError {
+  if (error instanceof ProviderRequestError) return error;
+  if (error instanceof ChatAttachmentError) return new ProviderRequestError({ code: "invalid_request", message: `Attachment request failed: ${safe(error)}`, attempts: Math.max(1, attempts), retryable: false, recoverable: true, cause: error });
+  return new ProviderRequestError({ code: "network", message: `Provider network request failed: ${safe(error)}`, attempts: Math.max(1, attempts), retryable: true, cause: new Error(safe(error)) });
+}
 function safe(error: unknown): string { return redactSecrets(error instanceof Error ? error.message : String(error)); }
 async function state(options: ModelProcessorOptions, event: ProviderStateEvent): Promise<void> {
   const workspace = options.contextAudit.storeWorkspaceDir;

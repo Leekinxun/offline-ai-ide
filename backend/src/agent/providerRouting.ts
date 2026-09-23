@@ -1,7 +1,7 @@
 import type { ModelFeature } from "./modelCapabilities.js";
 import type { ModelFallbackCandidate } from "./modelProcessor.js";
 import type { ProviderExecutionContract } from "./providerConformance.js";
-import type { ModelFallbackSettings } from "../config.js";
+import { config, resolveModelInputCapabilities, resolveModelSampling, type ModelFallbackSettings } from "../config.js";
 
 export function buildProviderExecutionContract(input: {
   id: string;
@@ -25,9 +25,31 @@ export function bindConfiguredFallbacks(
   executionContract: ProviderExecutionContract,
   maxOutputTokens?: number
 ): ModelFallbackCandidate[] {
-  return candidates.slice(0, 3).map((candidate) => ({
-    ...candidate,
-    ...(maxOutputTokens ? { maxOutputTokens: Math.min(candidate.maxOutputTokens || maxOutputTokens, maxOutputTokens) } : {}),
-    executionContract,
-  }));
+  return candidates.slice(0, 3).map((candidate) => {
+    const matchesConfiguredModel = config.models.some((model) =>
+      model.modelName === candidate.model && model.apiUrl === candidate.apiUrl
+      && model.apiKey === (candidate.apiKey || "")
+    ) || (candidate.model === config.modelName && candidate.apiUrl === config.vllmApiUrl
+      && config.vllmApiKey === (candidate.apiKey || ""));
+    const sampling = matchesConfiguredModel ? resolveModelSampling(candidate.model) : undefined;
+    const limit = Math.min(
+      candidate.maxOutputTokens || Number.POSITIVE_INFINITY,
+      maxOutputTokens || Number.POSITIVE_INFINITY,
+      sampling?.maxTokens || Number.POSITIVE_INFINITY
+    );
+    return {
+      ...candidate,
+      ...(Number.isFinite(limit) ? { maxOutputTokens: limit } : {}),
+      sampling: sampling ? {
+        temperature: sampling.temperature,
+        topP: sampling.topP,
+        frequencyPenalty: sampling.frequencyPenalty,
+        presencePenalty: sampling.presencePenalty,
+      } : {},
+      inputCapabilities: matchesConfiguredModel
+        ? resolveModelInputCapabilities(candidate.model)
+        : { image_input: false, pdf_input: false },
+      executionContract,
+    };
+  });
 }

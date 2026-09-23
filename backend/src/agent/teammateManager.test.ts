@@ -44,13 +44,14 @@ test("teammate inherits the selected model endpoint", async (t) => {
   const previousProfiles = config.agentProfiles;
   const previousFallbacks = config.modelFallbacks;
   const previousFetch = globalThis.fetch;
-  config.models = [{ modelName: "selected-teammate-model", apiUrl: "https://selected-teammate.invalid/v1", apiKey: "selected-teammate-key" }];
+  config.models = [{ modelName: "selected-teammate-model", apiUrl: "https://selected-teammate.invalid/v1", apiKey: "selected-teammate-key", maxTokens: 256, temperature: 0.5, topP: 0.25 }];
   config.agentProfiles = {};
   config.modelFallbacks = [];
-  const calls: Array<{ url: string; authorization: string | null }> = [];
+  const calls: Array<{ url: string; authorization: string | null; body: Record<string, unknown> }> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    calls.push({ url, authorization: new Headers(init?.headers).get("Authorization") });
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+    calls.push({ url, authorization: new Headers(init?.headers).get("Authorization"), body });
     if (url.endsWith("/models")) return Response.json({ data: [{ id: "selected-teammate-model", max_output_tokens: 1024 }] });
     return Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "idle-call", type: "function", function: { name: "idle", arguments: "{}" } }] }, finish_reason: "tool_calls" }] });
   };
@@ -72,6 +73,7 @@ test("teammate inherits the selected model endpoint", async (t) => {
   assert.ok(completions.length > 0);
   assert.ok(completions.every((call) => call.url === "https://selected-teammate.invalid/v1/chat/completions"));
   assert.ok(completions.every((call) => call.authorization === "Bearer selected-teammate-key"));
+  assert.ok(completions.every((call) => call.body.max_tokens === 256 && call.body.temperature === 0.5 && call.body.top_p === 0.25));
 });
 
 test("restart reconciliation persists interrupted agents", async (t) => {

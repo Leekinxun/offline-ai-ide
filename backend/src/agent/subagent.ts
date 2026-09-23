@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { config, resolveModelEndpoint } from "../config.js";
+import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js";
 import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
@@ -173,11 +173,18 @@ export async function runSubagent(
   lineage?: ToolContext["lineage"]
 ): Promise<string> {
   const profileId = agentType === "Explore" ? "explore" : "subagent";
-  const profile = resolveAgentProfile(profileId, config.agentProfiles, {
+  const effectiveModel = resolveAgentProfile(profileId, config.agentProfiles, {
     modelName,
-    maxOutputTokens: config.agentMaxTokens,
+  }).modelName || modelName;
+  const modelSampling = resolveModelSampling(effectiveModel);
+  const resolvedProfile = resolveAgentProfile(profileId, config.agentProfiles, {
+    modelName,
+    maxOutputTokens: modelSampling.maxTokens,
   });
-  const effectiveModel = profile.modelName || modelName;
+  const profile = { ...resolvedProfile, budget: {
+    ...resolvedProfile.budget,
+    maxOutputTokens: Math.min(resolvedProfile.budget.maxOutputTokens, modelSampling.maxTokens),
+  } };
   const modelEndpoint = effectiveModel === modelName
     ? { apiUrl: vllmApiUrl, apiKey: vllmApiKey }
     : resolveModelEndpoint(effectiveModel);
@@ -364,7 +371,10 @@ export async function runSubagent(
         fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens),
         fallbackMaxOutputTokens: profile.budget.maxOutputTokens,
         maxOutputTokens: profile.budget.maxOutputTokens,
-        temperature: typeof config.temperature === "number" ? config.temperature : 0.3,
+        temperature: modelSampling.temperature,
+        topP: modelSampling.topP,
+        frequencyPenalty: modelSampling.frequencyPenalty,
+        presencePenalty: modelSampling.presencePenalty,
         signal,
         hookContext: {
           agentId: profile.id,
@@ -643,6 +653,8 @@ export async function runSubagent(
   }
   return finish(
     completedNaturally ? "completed" : "failed",
-    lastAssistant?.content || "(subagent produced no summary)"
+    typeof lastAssistant?.content === "string" && lastAssistant.content
+      ? lastAssistant.content
+      : "(subagent produced no summary)"
   );
 }

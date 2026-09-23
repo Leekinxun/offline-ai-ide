@@ -64,6 +64,11 @@ function normalizePositiveInteger(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizePositiveIntegerStrict(value: unknown): number | null {
+  const parsed = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizeMcpEndpointList(value: unknown): { urls: string[]; error?: string } {
   const values = Array.isArray(value)
     ? value
@@ -465,16 +470,17 @@ adminRouter.put("/llm", (req, res) => {
   const modelName =
     typeof req.body.modelName === "string" ? req.body.modelName.trim() : "";
   const requestedMaxTokens =
-    req.body.maxTokens === undefined ? getLlmSettings().maxTokens : normalizePositiveInteger(req.body.maxTokens);
-  const maxTokens = requestedMaxTokens || getLlmSettings().maxTokens;
+    req.body.maxTokens === undefined
+      ? getLlmSettings().maxTokens
+      : normalizePositiveIntegerStrict(req.body.maxTokens);
   const maxAgentIterations = normalizePositiveInteger(req.body.maxAgentIterations);
   const systemPrompt =
     typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : "";
 
-  if (!vllmApiUrl || !modelName || maxAgentIterations === null) {
+  if (!vllmApiUrl || !modelName || requestedMaxTokens === null || maxAgentIterations === null) {
     return res.status(400).json({
       error:
-        "vllmApiUrl, modelName and positive integer maxAgentIterations are required",
+        "vllmApiUrl, modelName, positive integer maxTokens and maxAgentIterations are required",
     });
   }
 
@@ -483,10 +489,16 @@ adminRouter.put("/llm", (req, res) => {
       vllmApiUrl,
       vllmApiKey,
       modelName,
-      maxTokens,
+      maxTokens: requestedMaxTokens,
       maxAgentIterations,
       systemPrompt,
       ...(req.body.models !== undefined ? { models: req.body.models } : {}),
+      ...(req.body.supportsImageInput !== undefined ? { supportsImageInput: req.body.supportsImageInput } : {}),
+      ...(req.body.supportsPdfInput !== undefined ? { supportsPdfInput: req.body.supportsPdfInput } : {}),
+      ...(req.body.temperature !== undefined ? { temperature: req.body.temperature } : {}),
+      ...(req.body.topP !== undefined ? { topP: req.body.topP } : {}),
+      ...(req.body.frequencyPenalty !== undefined ? { frequencyPenalty: req.body.frequencyPenalty } : {}),
+      ...(req.body.presencePenalty !== undefined ? { presencePenalty: req.body.presencePenalty } : {}),
     });
     res.json({ llm });
   } catch (error: any) {
