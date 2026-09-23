@@ -47,6 +47,7 @@ import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
 import { ChangeSummary } from "./ChangeSummary";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
+import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
@@ -98,6 +99,14 @@ interface ChatPanelProps {
   agentMode: AgentMode;
   runtimeOptions: ChatRuntimeOptions;
   selectedModelName: string;
+  draftText: string;
+  onDraftTextChange: (value: string) => void;
+  attachmentDraft: ChatAttachmentDraftController;
+  attachmentWarning: string | null;
+  attachmentDeliveryChecking: boolean;
+  onRecheckAttachmentDelivery: () => void;
+  attachmentSubmissionError: string | null;
+  attachmentSubmissionNotice: string | null;
   taskTitle: string;
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
@@ -121,8 +130,8 @@ interface ChatPanelProps {
   historyError: string | null;
   selectionInfo: SelectionInfo | null;
   activeFileName: string | null;
-  onSend: (message: string) => void;
-  onSteer: (message: string) => void;
+  onSend: (message: string) => boolean;
+  onSteer: (message: string) => boolean;
   onStop: () => void;
   onClear: () => void;
   onRetry: () => void;
@@ -160,6 +169,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   agentMode,
   runtimeOptions,
   selectedModelName,
+  draftText,
+  onDraftTextChange,
+  attachmentDraft,
+  attachmentWarning,
+  attachmentDeliveryChecking,
+  onRecheckAttachmentDelivery,
+  attachmentSubmissionError,
+  attachmentSubmissionNotice,
   taskTitle,
   onAgentModeChange,
   onModelNameChange,
@@ -211,7 +228,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const modeModelName = runtimeOptions.modeModels[agentMode]
     || runtimeOptions.defaultModelName
     || t("workbench.modelDefault");
-  const [input, setInput] = useState("");
+  const input = draftText;
+  const setInput = onDraftTextChange;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
@@ -301,12 +319,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
-    if (!trimmed || !connected) return;
+    if (!connected) return;
+    let sent = false;
     if (isStreaming) {
-      onSteer(trimmed);
+      if (!trimmed || attachmentDeliveryChecking) return;
+      sent = onSteer(trimmed);
     } else {
-      onSend(trimmed);
+      if ((!trimmed && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || attachmentWarning) return;
+      sent = onSend(trimmed);
     }
+    if (!sent) return;
     setDetailsCollapsed(true);
     setHistoryOpen(false);
     setChangesOpen(false);
@@ -314,7 +336,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (textareaRef.current) {
       textareaRef.current.style.height = "38px";
     }
-  }, [connected, input, isStreaming, onSend, onSteer]);
+  }, [attachmentDeliveryChecking, attachmentDraft.blocked, attachmentDraft.readyRefs.length, attachmentWarning, connected, input, isStreaming, onSend, onSteer, setInput]);
 
   const handleToggleDetails = useCallback(() => {
     setDetailsCollapsed((collapsed) => {
@@ -455,7 +477,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       el.style.height = "38px";
       el.style.height = Math.min(el.scrollHeight, 120) + "px";
     },
-    []
+    [setInput]
   );
 
   const handleCompositionStart = useCallback(() => {
@@ -883,6 +905,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         {messages.map((msg, idx) => (
           <MessageItem
             key={`${msg.requestId || "msg"}-${idx}`}
+            token={token}
             message={msg}
             isLast={idx === messages.length - 1}
             isStreaming={
@@ -952,6 +975,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </span>
           </div>
         )}
+        <ChatAttachmentPicker
+          attachments={attachmentDraft.attachments}
+          onAdd={attachmentDraft.add}
+          onRemove={attachmentDraft.remove}
+          onRetry={attachmentDraft.retry}
+          disabled={isStreaming || !connected}
+          warning={attachmentWarning || attachmentSubmissionError}
+          notice={attachmentSubmissionNotice}
+          checkingDelivery={attachmentDeliveryChecking}
+          onRecheckDelivery={onRecheckAttachmentDelivery}
+          recheckDisabled={!connected}
+        />
         <div className="chat-input-wrapper">
           <textarea
             ref={textareaRef}
@@ -973,7 +1008,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           <button
             className="chat-send-btn"
             onClick={handleSend}
-            disabled={!input.trim() || !connected}
+            disabled={!connected || (isStreaming
+              ? !input.trim() || attachmentDeliveryChecking
+              : ((!input.trim() && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || !!attachmentWarning))}
             title={isStreaming ? t("chat.correct") : t("chat.sendShortcut")}
           >
             <Send size={16} />
@@ -1002,6 +1039,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 // --- Message rendering with code block extraction ---
 
 interface MessageItemProps {
+  token: string;
   message: ChatMessage;
   isLast: boolean;
   isStreaming: boolean;
@@ -1012,6 +1050,7 @@ interface MessageItemProps {
 }
 
 const MessageItem: React.FC<MessageItemProps> = ({
+  token,
   message,
   isStreaming,
   onApplyCode,
@@ -1080,6 +1119,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </div>
       )}
+      <MessageAttachments attachments={message.attachments} token={token} />
     </div>
   );
 };

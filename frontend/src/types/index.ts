@@ -79,9 +79,18 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  attachments?: ChatAttachmentRef[];
   toolCalls?: ToolCallStep[];
   thinking?: string;
   parts?: ChatMessagePart[];
+}
+
+export interface ChatAttachmentRef {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "text" | "pdf";
 }
 
 export type AgentMode = "ask" | "code" | "review" | "plan";
@@ -311,7 +320,7 @@ export interface ContextSource {
   };
   trust: {
     level: ContextTrustLevel;
-    basis: "workspace_verified" | "user_buffer" | "derived" | "external" | "unknown";
+    basis: "workspace_verified" | "user_buffer" | "user_attachment_untrusted" | "derived" | "external" | "unknown";
   };
   integrity?: "verified_digest" | "observed" | "unknown";
   /** Server-authorized, redacted and bounded preview. Never derive this client-side. */
@@ -748,8 +757,25 @@ export interface LlmSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
-  models: Array<{ modelName: string; apiUrl: string; apiKey: string }>;
+  models: Array<{
+    modelName: string;
+    apiUrl: string;
+    apiKey: string;
+    temperature?: number;
+    topP?: number;
+    frequencyPenalty?: number;
+    presencePenalty?: number;
+    maxTokens?: number;
+    supportsImageInput?: boolean;
+    supportsPdfInput?: boolean;
+  }>;
+  temperature?: number | null;
+  topP?: number | null;
+  frequencyPenalty?: number | null;
+  presencePenalty?: number | null;
   maxTokens: number;
+  supportsImageInput?: boolean;
+  supportsPdfInput?: boolean;
   maxAgentIterations: number;
   systemPrompt?: string;
 }

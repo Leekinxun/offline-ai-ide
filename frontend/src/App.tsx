@@ -7,6 +7,7 @@ import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import type { DetailTab } from "./components/RunDetailsPanel";
 import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
+import { useChatAttachmentDraft } from "./components/ChatAttachmentPicker";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
@@ -29,7 +30,7 @@ import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
-import { useChat } from "./hooks/useChat";
+import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
 import { useAuth } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
 import {
@@ -1103,7 +1104,132 @@ function AuthenticatedApp({
     );
   }, []);
 
-  const chat = useChat(token, workspaceDir, handleAiFileUpdate);
+  const chatAttachmentDraft = useChatAttachmentDraft(token);
+  const [chatDraftText, setChatDraftText] = useState("");
+  const [attachmentSubmissionError, setAttachmentSubmissionError] = useState<string | null>(null);
+  const [attachmentSubmissionNotice, setAttachmentSubmissionNotice] = useState<string | null>(null);
+  const [pendingAttachmentVerificationIds, setPendingAttachmentVerificationIds] = useState<Set<string>>(() => new Set());
+  const [attachmentRetryRequests, setAttachmentRetryRequests] = useState<Array<{ requestId: string; content: string; attachmentIds: string[] }>>([]);
+  const handleAttachmentSendRejected = useCallback((rejected: RejectedAttachmentSend) => {
+    chatAttachmentDraft.restore(rejected.attachments);
+    setChatDraftText((current) => rejected.content
+      ? current ? `${rejected.content}\n\n${current}` : rejected.content
+      : current);
+    setAttachmentSubmissionError(rejected.error);
+    setAttachmentSubmissionNotice(null);
+    if (rejected.uncertain) {
+      setPendingAttachmentVerificationIds((current) => new Set(current).add(rejected.requestId));
+    } else {
+      setAttachmentRetryRequests((current) => [
+        ...current.filter((item) => item.requestId !== rejected.requestId),
+        { requestId: rejected.requestId, content: rejected.content, attachmentIds: rejected.attachments.map((attachment) => attachment.id) },
+      ]);
+    }
+  }, [chatAttachmentDraft.restore]);
+  const handleAttachmentSendReconciled = useCallback((result: AttachmentSendReconciliation) => {
+    if (result.status === "persisted" || result.status === "missing") {
+      setPendingAttachmentVerificationIds((current) => {
+        const next = new Set(current);
+        next.delete(result.requestId);
+        return next;
+      });
+    }
+    if (result.status === "persisted") {
+      setAttachmentRetryRequests((current) => current.filter((item) => item.requestId !== result.requestId));
+      chatAttachmentDraft.removeRefs(result.attachments.map((attachment) => attachment.id));
+      if (result.content) {
+        setChatDraftText((current) => {
+          if (current === result.content) return "";
+          if (current.startsWith(`${result.content}\n\n`)) return current.slice(result.content.length + 2);
+          if (current.endsWith(`\n\n${result.content}`)) return current.slice(0, -result.content.length - 2);
+          const middle = `\n\n${result.content}\n\n`;
+          return current.includes(middle) ? current.replace(middle, "\n\n") : current;
+        });
+      }
+      setAttachmentSubmissionError(null);
+      setAttachmentSubmissionNotice(t("chat.attachmentFoundInHistory"));
+    } else if (result.status === "missing") {
+      setAttachmentRetryRequests((current) => [
+        ...current.filter((item) => item.requestId !== result.requestId),
+        { requestId: result.requestId, content: result.content, attachmentIds: result.attachments.map((attachment) => attachment.id) },
+      ]);
+      setAttachmentSubmissionError(t("chat.attachmentUnknownSafeRetry"));
+      setAttachmentSubmissionNotice(null);
+    } else {
+      setAttachmentSubmissionError(t(result.status === "processing"
+        ? "chat.attachmentStillProcessing"
+        : "chat.attachmentStatusUnavailable"));
+      setAttachmentSubmissionNotice(null);
+    }
+  }, [chatAttachmentDraft.removeRefs, t]);
+  const chat = useChat(token, workspaceDir, handleAiFileUpdate, handleAttachmentSendRejected, handleAttachmentSendReconciled);
+  const selectedChatModelName = chat.selectedModelName
+    || chat.runtimeOptions.modeModels[chat.agentMode]
+    || chat.runtimeOptions.defaultModelName;
+  const selectedChatModelCapabilities = chat.runtimeOptions.modelInputCapabilities[selectedChatModelName];
+  const draftReadyAttachmentIds = new Set(chatAttachmentDraft.readyRefs.map((attachment) => attachment.id));
+  const matchingAttachmentRetries = attachmentRetryRequests.filter((entry) =>
+    entry.attachmentIds.some((id) => draftReadyAttachmentIds.has(id))
+  );
+  const draftAttachmentIdsInOrder = chatAttachmentDraft.readyRefs.map((attachment) => attachment.id);
+  const matchingRetryIsUnchanged = matchingAttachmentRetries.length === 1
+    && chatDraftText.trim() === matchingAttachmentRetries[0].content
+    && draftAttachmentIdsInOrder.length === matchingAttachmentRetries[0].attachmentIds.length
+    && draftAttachmentIdsInOrder.every((id, index) => id === matchingAttachmentRetries[0].attachmentIds[index]);
+  const editedRetryNotice = matchingAttachmentRetries.length === 1 && !matchingRetryIsUnchanged
+    ? t("chat.attachmentEditedNewRequest")
+    : null;
+  const attachmentWarning = pendingAttachmentVerificationIds.size > 0
+    ? attachmentSubmissionError || t("chat.attachmentCheckingHistory")
+    : matchingAttachmentRetries.length > 1
+      ? t("chat.attachmentMultipleRetries")
+      : chatAttachmentDraft.readyRefs.some((attachment) => attachment.kind === "image")
+    && selectedChatModelCapabilities?.supportsImageInput === false
+    ? t("chat.attachmentImageUnsupported")
+    : chatAttachmentDraft.readyRefs.some((attachment) => attachment.kind === "pdf")
+      && selectedChatModelCapabilities?.supportsPdfInput === false
+      ? t("chat.attachmentPdfUnsupported")
+      : null;
+
+  const clearChatConversation = useCallback(() => {
+    chatAttachmentDraft.clear();
+    setChatDraftText("");
+    setAttachmentSubmissionError(null);
+    setAttachmentSubmissionNotice(null);
+    setPendingAttachmentVerificationIds(new Set());
+    setAttachmentRetryRequests([]);
+    chat.clearMessages();
+  }, [chatAttachmentDraft.clear, chat.clearMessages]);
+  const loadChatConversation = useCallback((conversationId: string) => {
+    chatAttachmentDraft.clear();
+    setChatDraftText("");
+    setAttachmentSubmissionError(null);
+    setAttachmentSubmissionNotice(null);
+    setPendingAttachmentVerificationIds(new Set());
+    setAttachmentRetryRequests([]);
+    return chat.loadConversation(conversationId);
+  }, [chatAttachmentDraft.clear, chat.loadConversation]);
+  const previousChatConversationIdRef = useRef(chat.currentConversationId);
+  useEffect(() => {
+    const previousId = previousChatConversationIdRef.current;
+    if (previousId !== chat.currentConversationId && previousId !== null) {
+      chatAttachmentDraft.clear();
+      setChatDraftText("");
+      setAttachmentSubmissionError(null);
+      setAttachmentSubmissionNotice(null);
+      setPendingAttachmentVerificationIds(new Set());
+      setAttachmentRetryRequests([]);
+    }
+    previousChatConversationIdRef.current = chat.currentConversationId;
+  }, [chat.currentConversationId, chatAttachmentDraft.clear]);
+  useEffect(() => {
+    chatAttachmentDraft.clear();
+    setChatDraftText("");
+    setAttachmentSubmissionError(null);
+    setAttachmentSubmissionNotice(null);
+    setPendingAttachmentVerificationIds(new Set());
+    setAttachmentRetryRequests([]);
+  }, [workspaceDir, chatAttachmentDraft.clear]);
 
   useEffect(() => {
     if (workspaceView !== "files" || chat.pendingApprovals.length === 0) return;
@@ -1118,9 +1244,9 @@ function AuthenticatedApp({
       );
       const startIndex = currentIndex >= 0 ? currentIndex : 0;
       const nextIndex = (startIndex + direction + chat.conversations.length) % chat.conversations.length;
-      void chat.loadConversation(chat.conversations[nextIndex].id);
+      void loadChatConversation(chat.conversations[nextIndex].id);
     },
-    [chat]
+    [chat, loadChatConversation]
   );
   const team = useTeam(token, workspaceDir, (nextWorkspace) => {
     if (nextWorkspace !== workspaceDir) {
@@ -1930,6 +2056,7 @@ function AuthenticatedApp({
   // --- Chat: send with file + selection context ---
   const handleChatSend = useCallback(
     (message: string) => {
+      if (chatAttachmentDraft.blocked || attachmentWarning) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
         ? {
@@ -1943,13 +2070,31 @@ function AuthenticatedApp({
               : undefined,
           }
         : undefined;
-      chat.sendMessage(message, context);
+      const retryRequestId = matchingAttachmentRetries.length === 1
+        && message === matchingAttachmentRetries[0].content
+        && chatAttachmentDraft.readyRefs.length === matchingAttachmentRetries[0].attachmentIds.length
+        && chatAttachmentDraft.readyRefs.every((attachment, index) => attachment.id === matchingAttachmentRetries[0].attachmentIds[index])
+        ? matchingAttachmentRetries[0].requestId
+        : undefined;
+      const sent = chat.sendMessage(message, context, undefined, chatAttachmentDraft.readyRefs, retryRequestId);
+      if (sent) {
+        if (matchingAttachmentRetries.length) {
+          const consumedIds = new Set(matchingAttachmentRetries.map((item) => item.requestId));
+          setAttachmentRetryRequests((current) => current.filter((item) => !consumedIds.has(item.requestId)));
+        }
+        chatAttachmentDraft.clear();
+        setChatDraftText("");
+        setAttachmentSubmissionError(null);
+        setAttachmentSubmissionNotice(null);
+      }
+      return sent;
     },
-    [chat, openFiles, activeFilePath, selectionInfo]
+    [chat, chatAttachmentDraft.blocked, chatAttachmentDraft.readyRefs, chatAttachmentDraft.clear, attachmentWarning, matchingAttachmentRetries, openFiles, activeFilePath, selectionInfo]
   );
 
   const handleChatSteer = useCallback(
     (message: string) => {
+      if (pendingAttachmentVerificationIds.size > 0) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
         ? {
@@ -1963,9 +2108,9 @@ function AuthenticatedApp({
               : undefined,
           }
         : undefined;
-      chat.sendSteering(message, context);
+      return chat.sendSteering(message, context);
     },
-    [chat, openFiles, activeFilePath, selectionInfo]
+    [chat, pendingAttachmentVerificationIds.size, openFiles, activeFilePath, selectionInfo]
   );
 
   const handleGitReview = useCallback(() => {
@@ -2667,7 +2812,7 @@ function AuthenticatedApp({
               setNewConversationRequest((value) => value + 1);
               setChatFocusNonce((value) => value + 1);
             }}
-            onLoadConversation={chat.loadConversation}
+            onLoadConversation={loadChatConversation}
             onDeleteConversation={chat.deleteConversation}
             onRefresh={chat.refreshConversations}
           />
@@ -3408,6 +3553,14 @@ function AuthenticatedApp({
           agentMode={chat.agentMode}
           runtimeOptions={chat.runtimeOptions}
           selectedModelName={chat.selectedModelName}
+          draftText={chatDraftText}
+          onDraftTextChange={setChatDraftText}
+          attachmentDraft={chatAttachmentDraft}
+          attachmentWarning={attachmentWarning}
+          attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+          onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+          attachmentSubmissionError={attachmentSubmissionError}
+          attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
           taskTitle={workbenchTaskTitle}
           onAgentModeChange={chat.setAgentMode}
           onModelNameChange={chat.setSelectedModelName}
@@ -3439,9 +3592,9 @@ function AuthenticatedApp({
           onSend={handleChatSend}
           onSteer={handleChatSteer}
           onStop={chat.stopCurrentRun}
-          onClear={chat.clearMessages}
+          onClear={clearChatConversation}
           onRetry={chat.retryLast}
-          onLoadConversation={chat.loadConversation}
+          onLoadConversation={loadChatConversation}
           onDeleteConversation={chat.deleteConversation}
           onForkConversation={async (conversationId, upToTimestamp) => {
             try {
@@ -3498,6 +3651,7 @@ function AuthenticatedApp({
           }}
         />
         <EditorAssistantPanel
+          token={token}
           visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
           activeFilePath={activeFilePath}
           activeFileDirty={Boolean(activeFile?.modified)}
@@ -3508,6 +3662,14 @@ function AuthenticatedApp({
           agentMode={chat.agentMode}
           runtimeOptions={chat.runtimeOptions}
           selectedModelName={chat.selectedModelName}
+          draftText={chatDraftText}
+          onDraftTextChange={setChatDraftText}
+          attachmentDraft={chatAttachmentDraft}
+          attachmentWarning={attachmentWarning}
+          attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+          onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+          attachmentSubmissionError={attachmentSubmissionError}
+          attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
           runState={chat.runState}
           currentRunSummary={chat.currentRunSummary}
           contextManifest={chat.contextManifest}
@@ -3519,7 +3681,7 @@ function AuthenticatedApp({
           onSteer={handleChatSteer}
           onStop={chat.stopCurrentRun}
           onResume={chat.resumeConversation}
-          onNewConversation={chat.clearMessages}
+          onNewConversation={clearChatConversation}
           onToolApproval={chat.respondToToolApproval}
           onApproveConversationTools={chat.approveConversationTools}
           onPlanAmendmentDecision={chat.decidePlanAmendment}

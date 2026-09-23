@@ -61,13 +61,95 @@ interface CreateUserForm {
 }
 
 interface LlmFormState {
-  vllmApiUrl: string;
-  vllmApiKey: string;
-  modelName: string;
-  models: LlmSettings["models"];
-  maxTokens: string;
+  endpoints: LlmEndpointForm[];
   maxAgentIterations: string;
   systemPrompt: string;
+}
+
+type LlmSamplingField =
+  | "temperature"
+  | "topP"
+  | "frequencyPenalty"
+  | "presencePenalty"
+  | "maxTokens";
+
+const LLM_PARAMETER_INPUTS: Array<{ field: LlmSamplingField; min: number; max?: number; step: string }> = [
+  { field: "temperature", min: 0, max: 2, step: "any" },
+  { field: "topP", min: 0, max: 1, step: "any" },
+  { field: "frequencyPenalty", min: -2, max: 2, step: "any" },
+  { field: "presencePenalty", min: -2, max: 2, step: "any" },
+  { field: "maxTokens", min: 1, max: 1_000_000, step: "1" },
+];
+
+interface LlmModelForm extends Record<LlmSamplingField, string> {
+  id: number;
+  modelName: string;
+  supportsImageInput: boolean;
+  supportsPdfInput: boolean;
+}
+
+interface LlmEndpointForm {
+  id: number;
+  apiUrl: string;
+  apiKey: string;
+  models: LlmModelForm[];
+}
+
+let nextLlmFormId = 0;
+
+function createLlmModel(model?: {
+  modelName?: string;
+  temperature?: number | null;
+  topP?: number | null;
+  frequencyPenalty?: number | null;
+  presencePenalty?: number | null;
+  maxTokens?: number | null;
+  supportsImageInput?: boolean;
+  supportsPdfInput?: boolean;
+}): LlmModelForm {
+  return {
+    id: ++nextLlmFormId,
+    modelName: model?.modelName || "",
+    temperature: model?.temperature?.toString() || "",
+    topP: model?.topP?.toString() || "",
+    frequencyPenalty: model?.frequencyPenalty?.toString() || "",
+    presencePenalty: model?.presencePenalty?.toString() || "",
+    maxTokens: model?.maxTokens?.toString() || "",
+    supportsImageInput: model?.supportsImageInput === true,
+    supportsPdfInput: model?.supportsPdfInput === true,
+  };
+}
+
+function createLlmEndpoint(apiUrl = "", apiKey = "", model = createLlmModel()): LlmEndpointForm {
+  return { id: ++nextLlmFormId, apiUrl, apiKey, models: [model] };
+}
+
+function llmSettingsToForm(settings: LlmSettings): LlmFormState {
+  const endpoints = [createLlmEndpoint(settings.vllmApiUrl, settings.vllmApiKey, createLlmModel({
+    modelName: settings.modelName,
+    temperature: settings.temperature,
+    topP: settings.topP,
+    frequencyPenalty: settings.frequencyPenalty,
+    presencePenalty: settings.presencePenalty,
+    maxTokens: settings.maxTokens,
+    supportsImageInput: settings.supportsImageInput,
+    supportsPdfInput: settings.supportsPdfInput,
+  }))];
+  for (const model of Array.isArray(settings.models) ? settings.models : []) {
+    // Credentials, including an empty key, define one endpoint group.
+    let endpoint = endpoints.find((item) => item.apiUrl === model.apiUrl && item.apiKey === model.apiKey);
+    if (!endpoint) {
+      endpoint = createLlmEndpoint(model.apiUrl, model.apiKey, createLlmModel(model));
+      endpoints.push(endpoint);
+    } else {
+      endpoint.models.push(createLlmModel(model));
+    }
+  }
+  return {
+    endpoints,
+    maxAgentIterations: String(settings.maxAgentIterations),
+    systemPrompt: settings.systemPrompt || "",
+  };
 }
 
 interface AppFormState {
@@ -91,11 +173,7 @@ const EMPTY_CREATE_USER_FORM: CreateUserForm = {
 };
 
 const EMPTY_LLM_FORM: LlmFormState = {
-  vllmApiUrl: "",
-  vllmApiKey: "",
-  modelName: "",
-  models: [],
-  maxTokens: "8192",
+  endpoints: [createLlmEndpoint("", "", createLlmModel({ maxTokens: 8192 }))],
   maxAgentIterations: "30",
   systemPrompt: "",
 };
@@ -227,15 +305,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             : t("settings.failedToDetectModelCapabilities")
         );
       }
-      setLlmForm({
-        vllmApiUrl: data.llm.vllmApiUrl,
-        vllmApiKey: data.llm.vllmApiKey,
-        modelName: data.llm.modelName,
-        models: Array.isArray(data.llm.models) ? data.llm.models : [],
-        maxTokens: String(data.llm.maxTokens),
-        maxAgentIterations: String(data.llm.maxAgentIterations),
-        systemPrompt: data.llm.systemPrompt || "",
-      });
+      setLlmForm(llmSettingsToForm(data.llm));
       setAppForm({
         uploadMaxFileSizeMb: String(data.app?.uploadMaxFileSizeMb || 250),
       });
@@ -390,68 +460,137 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const updateAdditionalModel = (
-    index: number,
-    field: keyof LlmSettings["models"][number],
-    value: string
-  ) => {
+  const updateLlmEndpoint = (endpointId: number, field: "apiUrl" | "apiKey", value: string) => {
     setLlmForm((prev) => ({
       ...prev,
-      models: prev.models.map((model, modelIndex) =>
-        modelIndex === index ? { ...model, [field]: value } : model
+      endpoints: prev.endpoints.map((endpoint) =>
+        endpoint.id === endpointId ? { ...endpoint, [field]: value } : endpoint
       ),
     }));
+  };
+
+  const updateLlmModel = (endpointId: number, modelId: number, field: "modelName" | LlmSamplingField | "supportsImageInput" | "supportsPdfInput", value: string | boolean) => {
+    setLlmForm((prev) => ({
+      ...prev,
+      endpoints: prev.endpoints.map((endpoint) =>
+        endpoint.id === endpointId
+          ? { ...endpoint, models: endpoint.models.map((model) =>
+            model.id === modelId ? { ...model, [field]: value } : model
+          ) }
+          : endpoint
+      ),
+    }));
+  };
+
+  const setDefaultLlmModel = (endpointId: number, modelId: number) => {
+    setLlmForm((prev) => {
+      const selectedEndpoint = prev.endpoints.find((endpoint) => endpoint.id === endpointId);
+      const selectedModel = selectedEndpoint?.models.find((model) => model.id === modelId);
+      if (!selectedEndpoint || !selectedModel) return prev;
+      const previousDefault = prev.endpoints[0]?.models[0];
+      const promotedModel = { ...selectedModel };
+      for (const { field } of LLM_PARAMETER_INPUTS) {
+        if (!promotedModel[field].trim()) promotedModel[field] = previousDefault?.[field] || "";
+      }
+      return {
+        ...prev,
+        endpoints: [
+          { ...selectedEndpoint, models: [promotedModel, ...selectedEndpoint.models.filter((model) => model.id !== modelId)] },
+          ...prev.endpoints.filter((endpoint) => endpoint.id !== endpointId),
+        ],
+      };
+    });
   };
 
   const handleSaveLlm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingLlm) return;
 
-    const maxTokens = settings?.llm.maxTokens || Number.parseInt(llmForm.maxTokens, 10) || 8192;
-    const maxAgentIterations = Number.parseInt(
-      llmForm.maxAgentIterations,
-      10
-    );
-
-    const payload: LlmSettings = {
-      vllmApiUrl: llmForm.vllmApiUrl.trim(),
-      vllmApiKey: llmForm.vllmApiKey,
-      modelName: llmForm.modelName.trim(),
-      models: llmForm.models.map((model) => ({
-        modelName: model.modelName.trim(),
-        apiUrl: model.apiUrl.trim(),
-        apiKey: model.apiKey,
-      })),
-      maxTokens,
-      maxAgentIterations,
-      systemPrompt: llmForm.systemPrompt.trim(),
-    };
-
-    if (!payload.vllmApiUrl || !payload.modelName) {
-      setError(t("settings.llmApiUrlAndModelRequired"));
+    const endpoints = llmForm.endpoints;
+    const allModels = endpoints.flatMap((endpoint) => endpoint.models);
+    if (!endpoints[0]?.models[0] || endpoints.some((endpoint) => !endpoint.apiUrl.trim() || !endpoint.models.length || endpoint.models.some((model) => !model.modelName.trim()))) {
+      setError(t("settings.endpointModelsRequired"));
       return;
     }
-
-    if (payload.models.some((model) => !model.modelName || !model.apiUrl)) {
-      setError(t("settings.additionalModelRequired"));
+    if (allModels.length > 33) {
+      setError(t("settings.modelLimit"));
       return;
     }
-
-    const modelNames = [payload.modelName, ...payload.models.map((model) => model.modelName)];
+    const modelNames = allModels.map((model) => model.modelName.trim());
     if (new Set(modelNames).size !== modelNames.length) {
       setError(t("settings.duplicateModelName"));
       return;
     }
 
-    if (
-      !Number.isInteger(maxTokens) ||
-      maxTokens <= 0 ||
-      !Number.isInteger(maxAgentIterations) ||
-      maxAgentIterations <= 0
-    ) {
-      setError(t("settings.maxTokensPositiveInteger"));
+    const values = new Map<number, Partial<Record<LlmSamplingField, number>>>();
+    const ranges: Record<Exclude<LlmSamplingField, "maxTokens">, [number, number]> = {
+      temperature: [0, 2],
+      topP: [0, 1],
+      frequencyPenalty: [-2, 2],
+      presencePenalty: [-2, 2],
+    };
+    for (const model of allModels) {
+      const modelValues: Partial<Record<LlmSamplingField, number>> = {};
+      for (const field of ["temperature", "topP", "frequencyPenalty", "presencePenalty"] as const) {
+        if (!model[field].trim()) continue;
+        const value = Number(model[field]);
+        const [min, max] = ranges[field];
+        if (!Number.isFinite(value) || value < min || value > max) {
+          setError(t("settings.modelParameterRange", {
+            model: model.modelName.trim(), parameter: t(`settings.${field}`), min, max,
+          }));
+          return;
+        }
+        modelValues[field] = value;
+      }
+      if (model.maxTokens.trim()) {
+        const maxTokens = Number(model.maxTokens);
+        if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0 || maxTokens > 1_000_000) {
+          setError(t("settings.modelMaxTokensPositiveInteger", { model: model.modelName.trim() }));
+          return;
+        }
+        modelValues.maxTokens = maxTokens;
+      }
+      values.set(model.id, modelValues);
+    }
+    const defaultEndpoint = endpoints[0];
+    const defaultModel = defaultEndpoint.models[0];
+    const defaultValues = values.get(defaultModel.id)!;
+    if (defaultValues.maxTokens === undefined) {
+      setError(t("settings.modelMaxTokensPositiveInteger", { model: defaultModel.modelName.trim() }));
       return;
     }
+    const maxAgentIterations = Number(llmForm.maxAgentIterations);
+    if (!Number.isSafeInteger(maxAgentIterations) || maxAgentIterations <= 0) {
+      setError(t("settings.maxAgentIterationsPositiveInteger"));
+      return;
+    }
+
+    const payload: LlmSettings = {
+      vllmApiUrl: defaultEndpoint.apiUrl.trim(),
+      vllmApiKey: defaultEndpoint.apiKey,
+      modelName: defaultModel.modelName.trim(),
+      temperature: defaultValues.temperature ?? null,
+      topP: defaultValues.topP ?? null,
+      frequencyPenalty: defaultValues.frequencyPenalty ?? null,
+      presencePenalty: defaultValues.presencePenalty ?? null,
+      maxTokens: defaultValues.maxTokens,
+      supportsImageInput: defaultModel.supportsImageInput,
+      supportsPdfInput: defaultModel.supportsPdfInput,
+      models: endpoints.flatMap((endpoint, endpointIndex) => endpoint.models.flatMap((model, modelIndex) => {
+        if (endpointIndex === 0 && modelIndex === 0) return [];
+        return [{
+          modelName: model.modelName.trim(),
+          apiUrl: endpoint.apiUrl.trim(),
+          apiKey: endpoint.apiKey,
+          supportsImageInput: model.supportsImageInput,
+          supportsPdfInput: model.supportsPdfInput,
+          ...values.get(model.id),
+        }];
+      })),
+      maxAgentIterations,
+      systemPrompt: llmForm.systemPrompt.trim(),
+    };
 
     setSavingLlm(true);
     setError(null);
@@ -468,15 +607,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             : t("settings.failedToDetectModelCapabilities")
         );
       }
-      setLlmForm({
-        vllmApiUrl: saved.vllmApiUrl,
-        vllmApiKey: saved.vllmApiKey,
-        modelName: saved.modelName,
-        models: Array.isArray(saved.models) ? saved.models : [],
-        maxTokens: String(saved.maxTokens),
-        maxAgentIterations: String(saved.maxAgentIterations),
-        systemPrompt: saved.systemPrompt || "",
-      });
+      setLlmForm(llmSettingsToForm(saved));
       setSettings((prev) => (prev ? { ...prev, llm: saved } : prev));
       window.dispatchEvent(new Event("crewforge:llm-models-updated"));
       onShowToast(t("settings.llmSettingsSaved"));
@@ -686,6 +817,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const totalLlmModels = llmForm.endpoints.reduce((count, endpoint) => count + endpoint.models.length, 0);
+  const formDefaultEndpoint = llmForm.endpoints[0];
+  const capabilitiesMatchSavedDefault = Boolean(settings && formDefaultEndpoint
+    && formDefaultEndpoint.apiUrl.trim() === settings.llm.vllmApiUrl
+    && formDefaultEndpoint.apiKey === settings.llm.vllmApiKey
+    && formDefaultEndpoint.models[0]?.modelName.trim() === settings.llm.modelName);
+  const displayedModelCapabilities = capabilitiesMatchSavedDefault ? modelCapabilities : null;
+
   return (
     <>
       <div className="settings-modal-overlay" onClick={onClose}>
@@ -762,7 +901,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <ModelGovernancePanel
               token={token}
               visible={visible}
-              modelName={llmForm.modelName || settings?.llm.modelName || ""}
+              modelName={llmForm.endpoints[0]?.models[0]?.modelName || settings?.llm.modelName || ""}
               workspaceId={workspaceId}
               readOnly={readOnlyWorkspace}
               onShowToast={onShowToast}
@@ -1230,159 +1369,221 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <form className="settings-form" onSubmit={handleSaveLlm}>
                   <div className="settings-model-heading">
-                    <strong>{t("settings.defaultModel")}</strong>
-                    <span className="settings-help-text">{t("settings.defaultModelHelp")}</span>
+                    <div>
+                      <strong>{t("settings.endpoints")}</strong>
+                      <span className="settings-help-text">{t("settings.endpointsHelp")}</span>
+                    </div>
+                    <button
+                      className="settings-inline-btn"
+                      type="button"
+                      disabled={totalLlmModels >= 33}
+                      onClick={() => setLlmForm((prev) => ({
+                        ...prev,
+                        endpoints: [...prev.endpoints, createLlmEndpoint()],
+                      }))}
+                    >
+                      <Plus size={13} />
+                      {t("settings.addEndpoint")}
+                    </button>
                   </div>
-                  <label className="settings-field settings-field-wide">
-                    <span>{t("settings.apiUrl")}</span>
-                    <input
-                      className="settings-input"
-                      value={llmForm.vllmApiUrl}
-                      onChange={(e) =>
-                        setLlmForm((prev) => ({
-                          ...prev,
-                          vllmApiUrl: e.target.value,
-                        }))
-                      }
-                      placeholder="http://host.docker.internal:8000/v1"
-                    />
-                  </label>
-
-                  <label className="settings-field settings-field-wide">
-                    <span>{t("settings.apiKey")}</span>
-                    <input
-                      className="settings-input"
-                      type="password"
-                      value={llmForm.vllmApiKey}
-                      onChange={(e) =>
-                        setLlmForm((prev) => ({
-                          ...prev,
-                          vllmApiKey: e.target.value,
-                        }))
-                      }
-                      placeholder={t("settings.optionalBearerToken")}
-                    />
-                  </label>
-
-                  <label className="settings-field settings-field-wide">
-                    <span>{t("settings.modelName")}</span>
-                    <input
-                      className="settings-input"
-                      value={llmForm.modelName}
-                      onChange={(e) =>
-                        setLlmForm((prev) => ({
-                          ...prev,
-                          modelName: e.target.value,
-                        }))
-                      }
-                      placeholder="default"
-                    />
-                  </label>
 
                   <div className="settings-model-list">
-                    <div className="settings-model-heading">
-                      <div>
-                        <strong>{t("settings.additionalModels")}</strong>
-                        <span className="settings-help-text">{t("settings.additionalModelsHelp")}</span>
-                      </div>
-                      <button
-                        className="settings-inline-btn"
-                        type="button"
-                        disabled={llmForm.models.length >= 32}
-                        onClick={() => setLlmForm((prev) => ({
-                          ...prev,
-                          models: [...prev.models, { modelName: "", apiUrl: "", apiKey: "" }],
-                        }))}
-                      >
-                        <Plus size={13} />
-                        {t("settings.addModel")}
-                      </button>
-                    </div>
-                    {llmForm.models.length === 0 && (
-                      <span className="settings-help-text">{t("settings.noAdditionalModels")}</span>
-                    )}
-                    {llmForm.models.map((model, index) => (
-                      <div className="settings-model-item" key={index}>
+                    {llmForm.endpoints.map((endpoint, endpointIndex) => (
+                      <div className="settings-model-item" key={endpoint.id}>
                         <div className="settings-model-item-header">
-                          <strong>{model.modelName.trim() || t("settings.additionalModelNumber", { count: index + 1 })}</strong>
+                          <strong>
+                            {endpointIndex === 0
+                              ? t("settings.defaultEndpoint")
+                              : t("settings.endpointNumber", { count: endpointIndex + 1 })}
+                          </strong>
+                          {endpointIndex > 0 && (
+                            <button
+                              className="settings-inline-btn"
+                              type="button"
+                              aria-label={t("settings.removeEndpoint")}
+                              onClick={() => setLlmForm((prev) => ({
+                                ...prev,
+                                endpoints: prev.endpoints.filter((item) => item.id !== endpoint.id),
+                              }))}
+                            >
+                              <Trash2 size={13} />
+                              {t("settings.removeEndpoint")}
+                            </button>
+                          )}
+                        </div>
+                        <div className="settings-form-row">
+                          <label className="settings-field">
+                            <span>{t("settings.apiUrl")}</span>
+                            <input
+                              className="settings-input"
+                              value={endpoint.apiUrl}
+                              onChange={(e) => updateLlmEndpoint(endpoint.id, "apiUrl", e.target.value)}
+                              placeholder="https://api.example.com/v1"
+                              required
+                            />
+                          </label>
+                          <label className="settings-field">
+                            <span>{t("settings.apiKey")}</span>
+                            <input
+                              className="settings-input"
+                              type="password"
+                              value={endpoint.apiKey}
+                              onChange={(e) => updateLlmEndpoint(endpoint.id, "apiKey", e.target.value)}
+                              placeholder={t("settings.optionalBearerToken")}
+                            />
+                          </label>
+                        </div>
+                        <div className="settings-model-heading">
+                          <strong>{t("settings.endpointModels")}</strong>
                           <button
                             className="settings-inline-btn"
                             type="button"
-                            aria-label={t("settings.removeModel", { name: model.modelName.trim() || String(index + 1) })}
+                            disabled={totalLlmModels >= 33}
                             onClick={() => setLlmForm((prev) => ({
                               ...prev,
-                              models: prev.models.filter((_, modelIndex) => modelIndex !== index),
+                              endpoints: prev.endpoints.map((item) =>
+                                item.id === endpoint.id
+                                  ? { ...item, models: [...item.models, createLlmModel()] }
+                                  : item
+                              ),
                             }))}
                           >
-                            <Trash2 size={13} />
-                            {t("settings.removeModelButton")}
+                            <Plus size={13} />
+                            {t("settings.addModel")}
                           </button>
                         </div>
-                        <label className="settings-field settings-field-wide">
-                          <span>{t("settings.modelName")}</span>
-                          <input
-                            className="settings-input"
-                            value={model.modelName}
-                            onChange={(e) => updateAdditionalModel(index, "modelName", e.target.value)}
-                            placeholder="model-name"
-                          />
-                        </label>
-                        <label className="settings-field settings-field-wide">
-                          <span>{t("settings.apiUrl")}</span>
-                          <input
-                            className="settings-input"
-                            value={model.apiUrl}
-                            onChange={(e) => updateAdditionalModel(index, "apiUrl", e.target.value)}
-                            placeholder="https://api.example.com/v1"
-                          />
-                        </label>
-                        <label className="settings-field settings-field-wide">
-                          <span>{t("settings.apiKey")}</span>
-                          <input
-                            className="settings-input"
-                            type="password"
-                            value={model.apiKey}
-                            onChange={(e) => updateAdditionalModel(index, "apiKey", e.target.value)}
-                            placeholder={t("settings.optionalBearerToken")}
-                          />
-                        </label>
+                        {endpoint.models.map((model, modelIndex) => {
+                          const isDefault = endpointIndex === 0 && modelIndex === 0;
+                          return (
+                            <div className="settings-endpoint-model" key={model.id}>
+                              <div className="settings-model-item-header">
+                                <strong>
+                                  {isDefault
+                                    ? t("settings.defaultModel")
+                                    : model.modelName.trim() || t("settings.additionalModelNumber", { count: modelIndex + 1 })}
+                                </strong>
+                                <div className="settings-model-actions">
+                                  {!isDefault && (
+                                    <button
+                                      className="settings-inline-btn"
+                                      type="button"
+                                      onClick={() => setDefaultLlmModel(endpoint.id, model.id)}
+                                    >
+                                      {t("settings.makeDefaultModel")}
+                                    </button>
+                                  )}
+                                  {!isDefault && endpoint.models.length > 1 && (
+                                    <button
+                                      className="settings-inline-btn"
+                                      type="button"
+                                      aria-label={t("settings.removeModel", { name: model.modelName.trim() || String(modelIndex + 1) })}
+                                      onClick={() => setLlmForm((prev) => ({
+                                        ...prev,
+                                        endpoints: prev.endpoints.map((item) =>
+                                          item.id === endpoint.id
+                                            ? { ...item, models: item.models.filter((entry) => entry.id !== model.id) }
+                                            : item
+                                        ),
+                                      }))}
+                                    >
+                                      <Trash2 size={13} />
+                                      {t("settings.removeModelButton")}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <label className="settings-field">
+                                <span>{t("settings.modelName")}</span>
+                                <input
+                                  className="settings-input"
+                                  value={model.modelName}
+                                  onChange={(e) => updateLlmModel(endpoint.id, model.id, "modelName", e.target.value)}
+                                  placeholder="model-name"
+                                  required
+                                />
+                              </label>
+                              <div className="settings-parameters-grid">
+                                {LLM_PARAMETER_INPUTS.map(({ field, min, max, step }) => (
+                                  <label className="settings-field" key={field}>
+                                    <span>{t("settings." + field)}</span>
+                                    <input
+                                      className="settings-input"
+                                      type="number"
+                                      min={min}
+                                      max={max}
+                                      step={step}
+                                      value={model[field]}
+                                      onChange={(e) => updateLlmModel(endpoint.id, model.id, field, e.target.value)}
+                                      placeholder={isDefault
+                                        ? field === "maxTokens" ? "8192" : t("settings.providerDefault")
+                                        : t("settings.inheritDefault")}
+                                      required={isDefault && field === "maxTokens"}
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                              <div className="settings-model-input-capabilities">
+                                <label className="settings-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={model.supportsImageInput}
+                                    onChange={(e) => updateLlmModel(endpoint.id, model.id, "supportsImageInput", e.target.checked)}
+                                  />
+                                  {t("settings.supportsImageInput")}
+                                </label>
+                                <label className="settings-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={model.supportsPdfInput}
+                                    onChange={(e) => updateLlmModel(endpoint.id, model.id, "supportsPdfInput", e.target.checked)}
+                                  />
+                                  {t("settings.supportsPdfInput")}
+                                </label>
+                              </div>
+                              <small className="settings-help-text">{t("settings.modelInputCapabilitiesHelp")}</small>
+                              <small className="settings-help-text">
+                                {isDefault
+                                  ? t("settings.defaultModelParametersHelp")
+                                  : t("settings.additionalModelParametersHelp")}
+                              </small>
+                              {isDefault && (
+                                <div className="settings-model-capability">
+                                  <div>
+                                    <strong>{t("settings.detectedMaxTokens", { count: displayedModelCapabilities?.maxOutputTokens || "—" })}</strong>
+                                    <small>
+                                      {!capabilitiesMatchSavedDefault
+                                        ? t("settings.saveDefaultBeforeCapabilities")
+                                        : displayedModelCapabilities
+                                          ? t("settings.modelCapabilitySource." + displayedModelCapabilities.source)
+                                          : t("settings.modelCapabilityUnavailable")}
+                                      {displayedModelCapabilities?.contextWindow
+                                        ? " · " + t("settings.contextWindow", { count: displayedModelCapabilities.contextWindow })
+                                        : ""}
+                                    </small>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="settings-inline-btn"
+                                    onClick={() => void refreshModelCapabilities()}
+                                    disabled={loadingModelCapabilities || !capabilitiesMatchSavedDefault}
+                                    title={t("settings.refreshModelCapabilities")}
+                                  >
+                                    <RefreshCw size={13} className={loadingModelCapabilities ? "chat-spin" : ""} />
+                                    {t("settings.refreshModelCapabilities")}
+                                  </button>
+                                  {displayedModelCapabilities?.warning && (
+                                    <small className="settings-help-text">{displayedModelCapabilities.warning}</small>
+                                  )}
+                                  {capabilitiesMatchSavedDefault && modelCapabilityError && (
+                                    <small className="settings-error-banner" role="alert">{modelCapabilityError}</small>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     ))}
-                  </div>
-
-                  <div className="settings-field settings-field-wide">
-                    <span>{t("settings.maxTokens")}</span>
-                    <div className="settings-auto-value">
-                      <div>
-                        <strong>
-                          {modelCapabilities?.maxOutputTokens || llmForm.maxTokens || "—"} tokens
-                        </strong>
-                        <small>
-                          {modelCapabilities
-                            ? t(`settings.modelCapabilitySource.${modelCapabilities.source}`)
-                            : t("settings.modelCapabilityUnavailable")}
-                          {modelCapabilities?.contextWindow
-                            ? ` · ${t("settings.contextWindow", { count: modelCapabilities.contextWindow })}`
-                            : ""}
-                        </small>
-                      </div>
-                      <button
-                        type="button"
-                        className="settings-inline-btn"
-                        onClick={() => void refreshModelCapabilities()}
-                        disabled={loadingModelCapabilities}
-                        title={t("settings.refreshModelCapabilities")}
-                      >
-                        <RefreshCw size={13} className={loadingModelCapabilities ? "chat-spin" : ""} />
-                        {t("settings.refreshModelCapabilities")}
-                      </button>
-                    </div>
-                    {modelCapabilities?.warning && (
-                      <small className="settings-help-text">{modelCapabilities.warning}</small>
-                    )}
-                    {modelCapabilityError && (
-                      <small className="settings-error-banner" role="alert">{modelCapabilityError}</small>
-                    )}
                   </div>
 
                   <label className="settings-field settings-field-wide">
@@ -1420,7 +1621,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </label>
 
-                  <div className="settings-form-footer">
+                  <div className="settings-form-footer settings-llm-form-footer">
                     <span className="settings-help-text">
                       {t("settings.llmHelp")}
                     </span>

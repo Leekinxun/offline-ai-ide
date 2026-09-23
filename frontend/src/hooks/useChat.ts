@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   ChatMessage,
+  ChatAttachmentRef,
   ConversationSummary,
   FileContext,
   FileUpdate,
@@ -50,10 +51,38 @@ export interface ChatRuntimeOptions {
   defaultModelName: string;
   models: string[];
   modeModels: Partial<Record<AgentMode, string>>;
+  modelInputCapabilities: Record<string, { supportsImageInput: boolean; supportsPdfInput: boolean }>;
+}
+
+export interface RejectedAttachmentSend {
+  requestId: string;
+  content: string;
+  attachments: ChatAttachmentRef[];
+  error: string;
+  uncertain?: boolean;
+}
+
+export interface AttachmentSendReconciliation {
+  requestId: string;
+  content: string;
+  attachments: ChatAttachmentRef[];
+  status: "persisted" | "missing" | "processing" | "unavailable";
 }
 
 interface ForkConversationResponse {
   conversation?: ConversationSummary;
+}
+
+interface ChatRequestStatusResponse {
+  status: "accepted" | "processing" | "unknown";
+  conversationId?: string;
+}
+
+interface PendingAttachmentSend {
+  content: string;
+  attachments: ChatAttachmentRef[];
+  conversationId: string | null;
+  accepted: boolean;
 }
 
 const EMPTY_RUN_METRICS: AgentRunMetrics = {
@@ -75,7 +104,9 @@ const DEFAULT_AGENT_MODE: AgentMode = "code";
 export function useChat(
   token: string,
   workspaceDir: string,
-  onFileUpdate?: (update: FileUpdate) => void
+  onFileUpdate?: (update: FileUpdate) => void,
+  onAttachmentSendRejected?: (rejected: RejectedAttachmentSend) => void,
+  onAttachmentSendReconciled?: (result: AttachmentSendReconciliation) => void,
 ) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -93,6 +124,7 @@ export function useChat(
     defaultModelName: "",
     models: [],
     modeModels: {},
+    modelInputCapabilities: {},
   });
   const [selectedModelName, setSelectedModelName] = useState("");
   const [currentRunSummary, setCurrentRunSummary] = useState<ConversationRunSummary | null>(null);
@@ -119,6 +151,14 @@ export function useChat(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const onFileUpdateRef = useRef(onFileUpdate);
+  const onAttachmentSendRejectedRef = useRef(onAttachmentSendRejected);
+  const onAttachmentSendReconciledRef = useRef(onAttachmentSendReconciled);
+  const pendingAttachmentSendsRef = useRef(new Map<string, PendingAttachmentSend>());
+  const uncertainAttachmentSendsRef = useRef(new Map<string, PendingAttachmentSend>());
+  const outboundRequestIdsRef = useRef(new Set<string>());
+  const reconcilingAttachmentsRef = useRef(false);
+  const reconcileAgainRef = useRef(false);
+  const currentConversationIdRef = useRef(currentConversationId);
   const conversationLoadTokenRef = useRef(0);
   const contextManifest = useContextManifest(
     token,
@@ -130,6 +170,18 @@ export function useChat(
   useEffect(() => {
     onFileUpdateRef.current = onFileUpdate;
   }, [onFileUpdate]);
+
+  useEffect(() => {
+    onAttachmentSendRejectedRef.current = onAttachmentSendRejected;
+  }, [onAttachmentSendRejected]);
+
+  useEffect(() => {
+    onAttachmentSendReconciledRef.current = onAttachmentSendReconciled;
+  }, [onAttachmentSendReconciled]);
+
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId;
+  }, [currentConversationId]);
 
   const refreshConversations = useCallback(async () => {
     setHistoryLoading(true);
@@ -182,6 +234,10 @@ export function useChat(
         modeModels:
           payload.modeModels && typeof payload.modeModels === "object"
             ? payload.modeModels
+            : {},
+        modelInputCapabilities:
+          payload.modelInputCapabilities && typeof payload.modelInputCapabilities === "object"
+            ? payload.modelInputCapabilities
             : {},
       });
       setSelectedModelName((current) =>
@@ -282,6 +338,95 @@ export function useChat(
     setActiveRequestIds((prev) => prev.filter((value) => value !== requestId));
   }, []);
 
+  const reconcileUncertainAttachmentSends = useCallback(async () => {
+    if (!uncertainAttachmentSendsRef.current.size) return;
+    if (reconcilingAttachmentsRef.current) {
+      reconcileAgainRef.current = true;
+      return;
+    }
+    reconcilingAttachmentsRef.current = true;
+    const waitForNextCheck = () => new Promise<void>((resolve) => window.setTimeout(resolve, 1500));
+    try {
+      await Promise.all([...uncertainAttachmentSendsRef.current.keys()].map(async (requestId) => {
+        let consecutiveUnknown = 0;
+        let lastStatus: AttachmentSendReconciliation["status"] = "unavailable";
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const pending = uncertainAttachmentSendsRef.current.get(requestId);
+          if (!pending || wsRef.current?.readyState !== WebSocket.OPEN) return;
+          try {
+            const response = await fetch(`/api/chat/request-status/${encodeURIComponent(requestId)}`, {
+              headers: { Authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            if (!response.ok) throw new Error("Request status unavailable");
+            const result = await response.json() as ChatRequestStatusResponse;
+            if (!uncertainAttachmentSendsRef.current.has(requestId)) return;
+            if (result.status === "accepted") {
+              const conversationId = result.conversationId || pending.conversationId;
+              if (conversationId) {
+                if (currentConversationIdRef.current === null) {
+                  currentConversationIdRef.current = conversationId;
+                  setCurrentConversationId(conversationId);
+                }
+                try {
+                  const detailResponse = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                    cache: "no-store",
+                  });
+                  if (detailResponse.ok) {
+                    const detail = await detailResponse.json() as ConversationDetailResponse;
+                    const historicalMessages = Array.isArray(detail.messages) ? detail.messages : [];
+                    if (uncertainAttachmentSendsRef.current.has(requestId)
+                      && historicalMessages.some((message) => message.role === "user" && message.requestId === requestId)
+                      && (currentConversationIdRef.current === conversationId || currentConversationIdRef.current === null)) {
+                      currentConversationIdRef.current = conversationId;
+                      setCurrentConversationId(conversationId);
+                      setMessages(historicalMessages);
+                    }
+                  }
+                } catch {
+                  // The accepted status is authoritative even if history is briefly unavailable.
+                }
+              }
+              uncertainAttachmentSendsRef.current.delete(requestId);
+              onAttachmentSendReconciledRef.current?.({ requestId, ...pending, status: "persisted" });
+              await refreshConversations();
+              return;
+            }
+            if (result.status === "unknown") {
+              consecutiveUnknown += 1;
+              if (consecutiveUnknown >= 2) {
+                uncertainAttachmentSendsRef.current.delete(requestId);
+                onAttachmentSendReconciledRef.current?.({ requestId, ...pending, status: "missing" });
+                return;
+              }
+              lastStatus = "processing";
+            } else if (result.status === "processing") {
+              consecutiveUnknown = 0;
+              lastStatus = "processing";
+            } else {
+              consecutiveUnknown = 0;
+              lastStatus = "unavailable";
+            }
+          } catch {
+            consecutiveUnknown = 0;
+            lastStatus = "unavailable";
+          }
+          if (attempt < 7) await waitForNextCheck();
+        }
+        const pending = uncertainAttachmentSendsRef.current.get(requestId);
+        if (pending) onAttachmentSendReconciledRef.current?.({ requestId, ...pending, status: lastStatus });
+      }));
+    } finally {
+      reconcilingAttachmentsRef.current = false;
+      const shouldRecheck = reconcileAgainRef.current;
+      reconcileAgainRef.current = false;
+      if (shouldRecheck && uncertainAttachmentSendsRef.current.size && wsRef.current?.readyState === WebSocket.OPEN) {
+        void reconcileUncertainAttachmentSends();
+      }
+    }
+  }, [refreshConversations, token]);
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
@@ -291,12 +436,30 @@ export function useChat(
     ws.onopen = () => {
       setConnected(true);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (uncertainAttachmentSendsRef.current.size) void reconcileUncertainAttachmentSends();
     };
 
     ws.onclose = () => {
       // Only clear if this WebSocket is still the current one.
       // Prevents React StrictMode double-mount from wiping the new connection.
       if (wsRef.current === ws) {
+        outboundRequestIdsRef.current.clear();
+        const uncertain = [...pendingAttachmentSendsRef.current.entries()];
+        pendingAttachmentSendsRef.current.clear();
+        if (uncertain.length) {
+          const requestIds = new Set(uncertain.map(([requestId]) => requestId));
+          setMessages((previous) => previous.filter((message) => !message.requestId || !requestIds.has(message.requestId)));
+          setActiveRequestIds((previous) => previous.filter((requestId) => !requestIds.has(requestId)));
+          for (const [requestId, pending] of uncertain) {
+            uncertainAttachmentSendsRef.current.set(requestId, pending);
+            onAttachmentSendRejectedRef.current?.({
+              requestId,
+              ...pending,
+              error: t("chat.attachmentDeliveryUncertain"),
+              uncertain: true,
+            });
+          }
+        }
         setConnected(false);
         wsRef.current = null;
         reconnectTimer.current = setTimeout(connect, 3000);
@@ -311,13 +474,71 @@ export function useChat(
       const data = JSON.parse(event.data);
       switch (data.type) {
         case "conversation":
-          setCurrentConversationId(data.conversationId);
+          if (typeof data.conversationId === "string" && data.conversationId) {
+            if (currentConversationIdRef.current === data.conversationId) {
+              setCurrentConversationId(data.conversationId);
+            }
+          }
           void refreshConversations();
           break;
 
         case "conversation_updated":
           void refreshConversations();
           break;
+
+        case "request_accepted": {
+          const pending = data.requestId
+            ? pendingAttachmentSendsRef.current.get(data.requestId) || uncertainAttachmentSendsRef.current.get(data.requestId)
+            : undefined;
+          const conversationId = typeof data.conversationId === "string" ? data.conversationId : "";
+          if (pending) {
+            pending.accepted = true;
+            if (conversationId) pending.conversationId = conversationId;
+          }
+          if (conversationId && data.requestId && outboundRequestIdsRef.current.has(data.requestId)
+            && (currentConversationIdRef.current === null || currentConversationIdRef.current === conversationId)) {
+              currentConversationIdRef.current = conversationId;
+              setCurrentConversationId(conversationId);
+          }
+          if (data.replayed === true && data.requestId) {
+            outboundRequestIdsRef.current.delete(data.requestId);
+            pendingAttachmentSendsRef.current.delete(data.requestId);
+            uncertainAttachmentSendsRef.current.delete(data.requestId);
+            setMessages((previous) => previous.filter((message) => message.requestId !== data.requestId));
+            finishRequest(data.requestId);
+            if (pending) {
+              onAttachmentSendReconciledRef.current?.({
+                requestId: data.requestId,
+                ...pending,
+                status: "persisted",
+              });
+            }
+            if (conversationId) {
+              const loadToken = conversationLoadTokenRef.current;
+              void (async () => {
+                try {
+                  const response = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                    cache: "no-store",
+                  });
+                  if (!response.ok) return;
+                  const detail = await response.json() as ConversationDetailResponse;
+                  const historicalMessages = Array.isArray(detail.messages) ? detail.messages : [];
+                  if (conversationLoadTokenRef.current !== loadToken) return;
+                  if (!historicalMessages.some((message) => message.role === "user" && message.requestId === data.requestId)) return;
+                  if (currentConversationIdRef.current === conversationId || currentConversationIdRef.current === null) {
+                    currentConversationIdRef.current = conversationId;
+                    setCurrentConversationId(conversationId);
+                    setMessages(historicalMessages);
+                  }
+                } finally {
+                  void refreshConversations();
+                }
+              })().catch(() => { /* History may be temporarily unavailable; the sidebar refresh still runs. */ });
+            }
+          }
+          break;
+        }
 
         case "conversation_state":
           setAgentMode(data.mode || "code");
@@ -492,6 +713,8 @@ export function useChat(
           break;
 
         case "done":
+          if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
+          if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
           setPendingApprovals((previous) =>
             previous.filter((item) => item.requestId !== data.requestId)
           );
@@ -500,6 +723,8 @@ export function useChat(
           break;
 
         case "stopped":
+          if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
+          if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
           setPendingApprovals((previous) =>
             data.requestId
               ? previous.filter((item) => item.requestId !== data.requestId)
@@ -520,11 +745,26 @@ export function useChat(
         case "steering":
           break;
 
-        case "error":
-          updateAssistantByRequestId(data.requestId, (msg) => ({
-            ...msg,
-            content: msg.content || `Error: ${data.content}`,
-          }));
+        case "error": {
+          if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
+          const pendingAttachmentSend = data.requestId
+            ? pendingAttachmentSendsRef.current.get(data.requestId)
+            : undefined;
+          if (pendingAttachmentSend && !pendingAttachmentSend.accepted) {
+            pendingAttachmentSendsRef.current.delete(data.requestId);
+            setMessages((previous) => previous.filter((message) => message.requestId !== data.requestId));
+            onAttachmentSendRejectedRef.current?.({
+              requestId: data.requestId,
+              ...pendingAttachmentSend,
+              error: String(data.content || "Attachment rejected"),
+            });
+          } else {
+            if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
+            updateAssistantByRequestId(data.requestId, (msg) => ({
+              ...msg,
+              content: msg.content || `Error: ${data.content}`,
+            }));
+          }
           finishRequest(data.requestId);
           if (data.requestId) {
             setPendingApprovals((previous) =>
@@ -533,11 +773,12 @@ export function useChat(
           }
           void refreshConversations();
           break;
+        }
       }
     };
 
     wsRef.current = ws;
-  }, [contextManifest.acceptIndexEvent, contextManifest.acceptManifestEvent, finishRequest, refreshConversations, updateAssistantByRequestId, token]);
+  }, [contextManifest.acceptIndexEvent, contextManifest.acceptManifestEvent, finishRequest, reconcileUncertainAttachmentSends, refreshConversations, updateAssistantByRequestId, token]);
 
   useEffect(() => {
     connect();
@@ -549,6 +790,10 @@ export function useChat(
 
   useEffect(() => {
     conversationLoadTokenRef.current += 1;
+    pendingAttachmentSendsRef.current.clear();
+    uncertainAttachmentSendsRef.current.clear();
+    outboundRequestIdsRef.current.clear();
+    currentConversationIdRef.current = null;
     setMessages([]);
     setCurrentConversationId(null);
     setHistoryError(null);
@@ -577,9 +822,10 @@ export function useChat(
   }, [currentConversationId, refreshRunHistory]);
 
   const sendMessage = useCallback(
-    (content: string, context?: FileContext, modeOverride?: AgentMode) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      const requestId = createRequestId();
+    (content: string, context?: FileContext, modeOverride?: AgentMode, attachments: ChatAttachmentRef[] = [], retryRequestId?: string): boolean => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      const requestId = retryRequestId || createRequestId();
       const requestedMode = modeOverride || agentMode;
 
       const userMsg: ChatMessage = {
@@ -587,6 +833,7 @@ export function useChat(
         role: "user",
         content,
         timestamp: Date.now(),
+        ...(attachments.length ? { attachments } : {}),
       };
       const assistantMsg: ChatMessage = {
         requestId,
@@ -595,38 +842,41 @@ export function useChat(
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setActiveRequestIds((prev) =>
-        prev.includes(requestId) ? prev : [...prev, requestId]
-      );
-
       const history = messages.slice(-10).map((m) => ({
         role: m.role,
         content: m.content,
+        ...(m.attachments?.length ? { attachments: m.attachments.map((attachment) => attachment.id) } : {}),
       }));
 
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        finishRequest(requestId);
-        return;
-      }
-      wsRef.current.send(
-        JSON.stringify({
+      try {
+        ws.send(JSON.stringify({
           requestId,
           message: content,
+          attachments: attachments.map((attachment) => attachment.id),
           context,
           history,
           conversationId: currentConversationId,
           mode: requestedMode,
           ...(selectedModelName ? { modelName: selectedModelName } : {}),
-        })
+        }));
+      } catch {
+        return false;
+      }
+      setMessages((prev) => [...prev.filter((message) => message.requestId !== requestId), userMsg, assistantMsg]);
+      outboundRequestIdsRef.current.add(requestId);
+      if (attachments.length) pendingAttachmentSendsRef.current.set(requestId, { content, attachments, conversationId: currentConversationId, accepted: false });
+      setActiveRequestIds((prev) =>
+        prev.includes(requestId) ? prev : [...prev, requestId]
       );
+      return true;
     },
-    [agentMode, currentConversationId, finishRequest, messages, selectedModelName]
+    [agentMode, currentConversationId, messages, selectedModelName]
   );
 
   const sendSteering = useCallback(
-    (content: string, context?: FileContext) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    (content: string, context?: FileContext, attachments: ChatAttachmentRef[] = []): boolean => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
       const requestId = createRequestId();
 
       const userMsg: ChatMessage = {
@@ -634,6 +884,7 @@ export function useChat(
         role: "user",
         content,
         timestamp: Date.now(),
+        ...(attachments.length ? { attachments } : {}),
       };
       const assistantMsg: ChatMessage = {
         requestId,
@@ -642,22 +893,27 @@ export function useChat(
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setActiveRequestIds((prev) =>
-        prev.includes(requestId) ? prev : [...prev, requestId]
-      );
-
-      wsRef.current.send(
-        JSON.stringify({
+      try {
+        ws.send(JSON.stringify({
           type: "steer",
           requestId,
           message: content,
+          attachments: attachments.map((attachment) => attachment.id),
           context,
           conversationId: currentConversationId,
           mode: agentMode,
           ...(selectedModelName ? { modelName: selectedModelName } : {}),
-        })
+        }));
+      } catch {
+        return false;
+      }
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      outboundRequestIdsRef.current.add(requestId);
+      if (attachments.length) pendingAttachmentSendsRef.current.set(requestId, { content, attachments, conversationId: currentConversationId, accepted: false });
+      setActiveRequestIds((prev) =>
+        prev.includes(requestId) ? prev : [...prev, requestId]
       );
+      return true;
     },
     [agentMode, currentConversationId, selectedModelName]
   );
@@ -683,6 +939,10 @@ export function useChat(
 
   const clearMessages = useCallback(() => {
     conversationLoadTokenRef.current += 1;
+    pendingAttachmentSendsRef.current.clear();
+    uncertainAttachmentSendsRef.current.clear();
+    outboundRequestIdsRef.current.clear();
+    currentConversationIdRef.current = null;
     setMessages([]);
     setCurrentConversationId(null);
     setAgentMode(DEFAULT_AGENT_MODE);
@@ -750,7 +1010,7 @@ export function useChat(
   const retryLast = useCallback(() => {
     const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
     if (!lastUserMessage) return;
-    sendMessage(lastUserMessage.content);
+    sendMessage(lastUserMessage.content, undefined, undefined, lastUserMessage.attachments || []);
   }, [messages, sendMessage]);
 
   const fetchHydratedRun = useCallback(async (runId: string): Promise<AgentRunState> => {
@@ -769,6 +1029,11 @@ export function useChat(
   const loadConversation = useCallback(
     async (conversationId: string) => {
       const loadToken = ++conversationLoadTokenRef.current;
+      pendingAttachmentSendsRef.current.clear();
+      uncertainAttachmentSendsRef.current.clear();
+      outboundRequestIdsRef.current.clear();
+      const previousConversationId = currentConversationIdRef.current;
+      currentConversationIdRef.current = conversationId;
       const isCurrentLoad = () => conversationLoadTokenRef.current === loadToken;
       setHistoryLoadingId(conversationId);
       setHistoryError(null);
@@ -794,6 +1059,7 @@ export function useChat(
         const payload = (await response.json()) as ConversationDetailResponse;
         if (!isCurrentLoad()) return;
         setMessages(Array.isArray(payload.messages) ? payload.messages : []);
+        currentConversationIdRef.current = payload.id || conversationId;
         setCurrentConversationId(payload.id || conversationId);
         setAgentMode(payload.mode || "code");
         setCurrentRunSummary(payload.summary || null);
@@ -809,6 +1075,7 @@ export function useChat(
         }
       } catch (error) {
         if (!isCurrentLoad()) return;
+        currentConversationIdRef.current = previousConversationId;
         setHistoryError(
           error instanceof Error
             ? error.message
@@ -951,11 +1218,13 @@ export function useChat(
         { requestId, role: "user", content: resumeMessage, timestamp: Date.now() },
         { requestId, role: "assistant", content: "", timestamp: Date.now() },
       ]);
+      currentConversationIdRef.current = conversationId;
       setCurrentConversationId(conversationId);
       setActiveRequestIds([requestId]);
       wsRef.current.send(
         JSON.stringify({ type: "resume", conversationId, runId, requestId })
       );
+      outboundRequestIdsRef.current.add(requestId);
     },
     [activeRequestIds.length, currentConversationId, loadConversation]
   );
@@ -964,6 +1233,7 @@ export function useChat(
     messages,
     sendMessage,
     sendSteering,
+    recheckAttachmentSends: reconcileUncertainAttachmentSends,
     stopCurrentRun,
     clearMessages,
     retryLast,
