@@ -571,7 +571,9 @@ LLM runtime settings can be managed in two ways:
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately. The system prompt is included in this runtime configuration, so admins can customize the assistant behavior without rebuilding the image.
 
-In **Settings → LLM Configuration**, admins can keep the default model and add more models, each with a unique model name, OpenAI-compatible API URL, and API key. Users can choose a configured model in the main chat composer or editor assistant rail. New requests use the selected model's endpoint and key; the user-facing model list contains names only, never API keys.
+In **Settings → LLM Configuration**, admins can keep the default model and add more models. One OpenAI-compatible API URL and key can serve several uniquely named models. The default and additional models can configure an output-token limit, `temperature`, `top_p`, `frequency_penalty`, and `presence_penalty`. Blank sampling fields on the default model are omitted from provider requests; blank fields on additional models inherit the defaults. Agent profile budgets may further narrow the output-token limit. Users can choose a configured model in the main chat composer or editor assistant rail. New chat and agent requests use the selected model's endpoint and parameters; the user-facing model list contains names only, never API keys.
+
+Chat composers accept PNG, JPEG, WebP, single-frame GIF, UTF-8 text/code files, and PDFs, including attachment-only turns. Administrators must explicitly enable image and PDF input on models that support them; unsupported requests are rejected before acceptance. Images use OpenAI-compatible `image_url` parts, PDFs use Chat Completions `file` parts, and text files are supplied as untrusted text. Providers that lack these parts return a clear error. Chat attachments are separate from workspace uploads: each file is limited to 5 MiB, with at most four files and 12 MiB per turn. Conversation history stores controlled references rather than Base64 payloads.
 
 ### External MCP
 
