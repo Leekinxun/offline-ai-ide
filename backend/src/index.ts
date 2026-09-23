@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "http";
+import type { Socket } from "net";
 import { WebSocketServer, WebSocket } from "ws";
 import cors from "cors";
 import path from "path";
@@ -29,7 +30,9 @@ import { reloadExternalPlugins } from "./plugins/registry.js";
 
 const app = express();
 reloadExternalPlugins();
-app.use(cors());
+// The desktop window is same-origin with its loopback backend. Do not grant
+// arbitrary websites cross-origin access to that local server.
+if (process.env.CREWFORGE_DESKTOP !== "1") app.use(cors());
 // Signed webhook verification requires the exact bytes received from the provider.
 app.use("/api/delivery/webhooks", deliveryWebhookRouter);
 app.use(express.json({ limit: "10mb" }));
@@ -66,6 +69,12 @@ app.get("*", (_req, res) => {
 // HTTP + WebSocket server
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const connections = new Set<Socket>();
+
+server.on("connection", (socket) => {
+  connections.add(socket);
+  socket.on("close", () => connections.delete(socket));
+});
 
 server.on("upgrade", (request, socket, head) => {
   const url = request.url || "";
@@ -99,6 +108,36 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
   }
 });
 
-server.listen(config.port, "0.0.0.0", () => {
-  console.log(`CrownForge running at http://localhost:${config.port}`);
+server.on("error", (error: NodeJS.ErrnoException) => {
+  const code = ["EACCES", "EADDRINUSE", "EADDRNOTAVAIL", "EMFILE", "ENFILE"].includes(error.code || "")
+    ? error.code
+    : "STARTUP_FAILED";
+  console.error(`CrewForge backend failed to listen (${code})`);
+  if (process.send) {
+    try {
+      process.send({ type: "error", phase: "listen", code }, () => process.exit(1));
+      return;
+    } catch { /* The host already disconnected. */ }
+  }
+  process.exit(1);
+});
+
+process.on("message", (message: unknown) => {
+  if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "shutdown") return;
+  wss.clients.forEach((client) => client.terminate());
+  server.close(() => process.exit(0));
+  connections.forEach((socket) => socket.destroy());
+});
+
+server.listen(config.port, config.host, () => {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    console.error("CrewForge backend failed to resolve its listening address");
+    process.send?.({ type: "error", phase: "listen", code: "NO_LISTEN_ADDRESS" });
+    server.close(() => process.exit(1));
+    return;
+  }
+  const url = `http://${config.host}:${address.port}`;
+  console.log(`CrewForge running at ${url}`);
+  process.send?.({ type: "ready", url });
 });

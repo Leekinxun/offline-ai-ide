@@ -521,7 +521,12 @@ function savePersistedAppSettings(): void {
 }
 
 export const config = {
-  port: parsePositiveInteger(process.env.PORT, 3000),
+  // The desktop host owns the backend process and requests an ephemeral loopback port.
+  // Keep the existing port fallback for Web/Docker, where PORT=0 was invalid.
+  port: process.env.CREWFORGE_DESKTOP === "1" && process.env.PORT === "0"
+    ? 0
+    : parsePositiveInteger(process.env.PORT, 3000),
+  host: process.env.CREWFORGE_DESKTOP === "1" ? "127.0.0.1" : "0.0.0.0",
   defaultWorkspaceDir: resolveWorkspaceDir(),
   vllmApiUrl:
     persistedLlmSettings.vllmApiUrl ||

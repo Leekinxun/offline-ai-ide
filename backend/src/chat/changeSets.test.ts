@@ -260,7 +260,12 @@ test("explicit apply preserves dirty deletions and untracked files from its pers
   const directory = repo(t); fs.writeFileSync(path.join(directory, "delete.txt"), "remove\n"); git(directory, ["add", "."]); git(directory, ["commit", "-m", "add delete target"]);
   const worktree = createManagedWorktree(directory, { name: "dirty", parentRunId: "parent", childRunId: "child", toolCallId: "call" });
   fs.writeFileSync(path.join(worktree.path, "a.txt"), "committed and mixed\n"); git(worktree.path, ["add", "a.txt"]); git(worktree.path, ["commit", "-m", "committed portion"]); fs.rmSync(path.join(worktree.path, "delete.txt")); fs.writeFileSync(path.join(worktree.path, "new.txt"), "new\n");
+  let nullDiffOperand: string | undefined;
+  setChangeSetGitCommandHookForTests((_directory, args) => { if (args[0] === "diff" && args.includes("--no-index")) nullDiffOperand = args[args.indexOf("--") + 1]; });
+  t.after(() => setChangeSetGitCommandHookForTests(undefined));
   const changeSet = captureChangeSet(directory, worktree.id, { passed: true });
+  assert.equal(nullDiffOperand, process.platform === "win32" ? "NUL" : "/dev/null");
+  assert.match(fs.readFileSync(path.join(directory, ".history", "change-sets", changeSet.patchBlob!), "utf8"), /new file mode 100644[\s\S]*--- \/dev\/null[\s\S]*\+\+\+ b\/new\.txt/);
   assert.equal(changeSet.status, "ready_for_review"); assert.equal(changeSet.parentRunId, "parent"); assert.equal(fs.existsSync(path.join(directory, ".history", "change-sets", changeSet.patchBlob!)), true);
   for (const decision of ["merge", "cherry_pick"] as const) { const preflight = preflightChangeSetDecision(directory, changeSet, decision); assert.equal(preflight.applicable, false); assert.match(preflight.reasons.join(";"), /committed-only.*use apply/i); }
   await independentlyReview(directory, changeSet.id); applyChangeSetDecision(directory, changeSet, "apply");

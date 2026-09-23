@@ -1,9 +1,27 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { SessionManager } from "./sessionManager.js";
+
+test("desktop mode refuses damaged or empty credentials instead of defaulting to admin123", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-desktop-users-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const usersPath = path.join(root, "users.json");
+  const script = "await import('./src/auth/sessionManager.ts')";
+  for (const contents of ["{", "{}", '{"users":[]}', '{"users":[{}]}']) {
+    await writeFile(usersPath, contents);
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, CREWFORGE_DESKTOP: "1", USERS_CONFIG: usersPath, WORKSPACE_DIR: root, APP_SETTINGS_CONFIG: path.join(root, "app-settings.json"), PLUGINS_DIR: path.join(root, "plugins") },
+      encoding: "utf8",
+    });
+    assert.notEqual(child.status, 0, `desktop accepted invalid users.json: ${contents}`);
+    assert.doesNotMatch(child.stdout, /using defaults/);
+  }
+});
 
 test("keeps workspace selection isolated between sessions for the same user", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-session-"));
@@ -67,6 +85,22 @@ test("keeps workspace selection isolated between sessions for the same user", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("lists allowed roots through platform-specific ancestor separators", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-allowed-roots-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "group", "project");
+  await mkdir(workspace, { recursive: true });
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [workspace],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: workspace }],
+  }));
+  const manager = new SessionManager(configPath);
+  assert.deepEqual(manager.listDirectories(root), [{ name: "group", path: path.join(root, "group") }]);
+  assert.deepEqual(manager.listDirectories(path.join(root, "group")), [{ name: "project", path: workspace }]);
+  assert.deepEqual(manager.listDirectories(path.join(root, "elsewhere")), []);
 });
 
 test("persists registration requests and allows login only after admin approval", async () => {

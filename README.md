@@ -14,6 +14,8 @@ CrownForge is a self-hosted, web-based AI coding workspace featuring a code edit
 
 [中文文档](README_zh.md)
 
+**Desktop app downloads:** Installers for Windows 10/11 x64, Windows 7 SP1 x64, and macOS 13+ (Apple silicon or Intel) will appear on [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) when published. Download the matching `.sha256` file to verify your installer. See the [desktop guide](docs/desktop-app.md) for setup and current platform limits.
+
 ![Login](docs/screenshots/login.png)
 ![IDE](docs/screenshots/ide.png)
 
@@ -412,6 +414,10 @@ CrownForge fails agent shell execution closed. Do not add `SYS_ADMIN`, disable
 seccomp globally, or run the service as root to make the probe pass; keep agent
 shell disabled for that deployment or enable unprivileged user namespaces through
 the host's narrowly scoped container policy.
+
+### Desktop app
+
+The desktop edition runs locally on each computer. Build targets cover Windows 10/11 x64, macOS 13+ on Intel and Apple silicon, and a separate legacy Windows 7 SP1 x64 package. See [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) for published installers and matching SHA-256 files, and the [desktop guide](docs/desktop-app.md) for build commands, first-run login, and platform limitations. The Windows 7 package uses unsupported Electron 22 and requires acceptance testing on Windows 7 hardware before a stable release.
 
 ### Local Development
 

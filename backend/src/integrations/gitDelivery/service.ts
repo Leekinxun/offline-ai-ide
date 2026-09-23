@@ -58,7 +58,7 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 function git(directory: string, args: string[], options: { input?: string; timeout?: number; allowFailure?: boolean } = {}): string {
   const safeArgs = [
-    "-c", "core.hooksPath=/dev/null",
+    "-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
     "-c", "commit.gpgSign=false",
     "-c", "tag.gpgSign=false",
     "-c", "core.pager=cat",

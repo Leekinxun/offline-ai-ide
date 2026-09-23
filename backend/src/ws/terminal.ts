@@ -5,19 +5,26 @@ import type { UserSession } from "../auth/sessionManager.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 
 const INHERITED_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "HOME"] as const;
+const WINDOWS_ENV = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA"] as const;
 
 /**
  * Terminal sessions are an interactive user-controlled workspace feature, not
  * an AI sandbox.  Keep the launcher environment deliberately small so host
  * credentials and runtime injection knobs do not cross this boundary.
  */
-export function terminalEnvironment(): Record<string, string> {
+export function terminalEnvironment(platform: NodeJS.Platform = process.platform): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of INHERITED_ENV) {
+  const keys = platform === "win32" ? [...INHERITED_ENV, ...WINDOWS_ENV] : INHERITED_ENV;
+  for (const key of keys) {
     const value = process.env[key];
     if (value) env[key] = value;
   }
-  env.PATH ||= "/usr/bin:/bin";
+  if (platform === "win32") {
+    const systemRoot = env.SystemRoot || env.WINDIR || "C:\\Windows";
+    env.PATH ||= process.env.Path || `${systemRoot}\\System32;${systemRoot}`;
+  } else {
+    env.PATH ||= "/usr/bin:/bin";
+  }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
   return env;
@@ -53,18 +60,22 @@ try {
   console.warn("node-pty unavailable, will use child_process fallback for terminal");
 }
 
-function getShell(): string {
-  if (process.env.SHELL) return process.env.SHELL;
-  for (const s of ["/bin/bash", "/bin/zsh", "/bin/sh"]) {
-    if (fs.existsSync(s)) return s;
+export function terminalShell(platform: NodeJS.Platform = process.platform): { executable: string; ptyArgs: string[]; fallbackArgs: string[] } {
+  if (platform === "win32") {
+    return { executable: process.env.ComSpec || "cmd.exe", ptyArgs: ["/d"], fallbackArgs: ["/d"] };
   }
-  return "/bin/sh";
+  if (process.env.SHELL) return { executable: process.env.SHELL, ptyArgs: ["--login"], fallbackArgs: ["-i"] };
+  for (const s of ["/bin/bash", "/bin/zsh", "/bin/sh"]) {
+    if (fs.existsSync(s)) return { executable: s, ptyArgs: ["--login"], fallbackArgs: ["-i"] };
+  }
+  return { executable: "/bin/sh", ptyArgs: ["--login"], fallbackArgs: ["-i"] };
 }
 
 function spawnWithPty(ws: WebSocket, workspaceDir: string): boolean {
   if (!pty) return false;
   try {
-    const shell = pty.spawn(getShell(), ["--login"], {
+    const command = terminalShell();
+    const shell = pty.spawn(command.executable, command.ptyArgs, {
       name: "xterm-256color",
       cols: 80,
       rows: 24,
@@ -101,10 +112,12 @@ function spawnWithPty(ws: WebSocket, workspaceDir: string): boolean {
 }
 
 function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
-  const shellPath = getShell();
+  const command = terminalShell();
+  const shellPath = command.executable;
+  const windows = process.platform === "win32";
 
-  // Use Python's pty module to allocate a real PTY for the shell.
-  // This gives us echo, line editing, and job control without node-pty.
+  // POSIX uses Python's pty module to retain echo, line editing, and job
+  // control without node-pty. Windows uses cmd.exe with redirected pipes.
   const pyScript = [
     "import pty, os, sys, select, signal",
     `os.chdir(${JSON.stringify(workspaceDir)})`,
@@ -119,7 +132,7 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     "    os.dup2(slave, 2)",
     "    os.close(master)",
     "    os.close(slave)",
-    `    os.execvp(${JSON.stringify(shellPath)}, [${JSON.stringify(shellPath)}, "-i"])`,
+    `    os.execvp(${JSON.stringify(shellPath)}, [${JSON.stringify(shellPath)}, ${JSON.stringify(command.fallbackArgs[0])}])`,
     "else:",
     "    os.close(slave)",
     "    def terminate(_signal, _frame):",
@@ -146,12 +159,17 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     "        os.waitpid(pid, 0)",
   ].join("\n");
 
-  const proc: ChildProcess = spawn("python3", ["-u", "-c", pyScript], {
+  const proc: ChildProcess = spawn(windows ? shellPath : "python3", windows ? command.fallbackArgs : ["-u", "-c", pyScript], {
     cwd: workspaceDir,
-    env: { ...terminalEnvironment(), PYTHONUNBUFFERED: "1" },
-    detached: process.platform !== "win32",
+    env: windows ? terminalEnvironment() : { ...terminalEnvironment(), PYTHONUNBUFFERED: "1" },
+    detached: !windows,
+    windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
+
+  if (windows && ws.readyState === WebSocket.OPEN) {
+    ws.send("\r\n\x1b[33mPTY unavailable: using basic cmd.exe mode; terminal resize and full-screen programs are unsupported.\x1b[0m\r\n");
+  }
 
   proc.stdout?.on("data", (data: Buffer) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(data.toString());
@@ -161,7 +179,24 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     if (ws.readyState === WebSocket.OPEN) ws.send(data.toString());
   });
 
-  proc.on("exit", () => {
+  proc.once("error", (error) => {
+    console.error("Terminal child process failed:", error);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(`\r\n\x1b[31mTerminal error: ${error.message}\x1b[0m\r\n`);
+      ws.close();
+    }
+  });
+
+  // Writing after an early exit can otherwise raise an unhandled EPIPE.
+  proc.stdin?.on("error", (error) => {
+    console.warn("Terminal input failed:", error);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(`\r\n\x1b[31mTerminal input error: ${error.message}\x1b[0m\r\n`);
+      ws.close();
+    }
+  });
+
+  proc.on("close", () => {
     if (ws.readyState === WebSocket.OPEN) ws.close();
   });
 
@@ -173,7 +208,9 @@ function spawnWithChildProcess(ws: WebSocket, workspaceDir: string): void {
     } catch {}
   });
 
-  ws.on("close", () => { terminateProcessGroup(proc.pid); });
+  ws.on("close", () => {
+    if (proc.exitCode === null && proc.signalCode === null) terminateProcessGroup(proc.pid);
+  });
 }
 
 export function handleTerminalWs(ws: WebSocket, session: UserSession): void {

@@ -14,6 +14,8 @@ CrownForge 是一个可私有化部署的 Web AI 编程工作台，集代码编�
 
 [English](README.md)
 
+**桌面 App 下载：**Windows 10/11 x64、Windows 7 SP1 x64 与 macOS 13+（Apple 芯片或 Intel）的安装包发布后，可在 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) 下载。请同时下载对应的 `.sha256` 文件校验安装包；设置方法和平台限制见[桌面版指南](docs/desktop-app.md)。
+
 ![Login](docs/screenshots/login.png)
 ![IDE](docs/screenshots/ide.png)
 
@@ -332,6 +334,10 @@ volumes:
 Docker 后端依赖默认通过 `https://registry.npmmirror.com` 安装，因此锁文件中混合的 registry 地址不会要求部署环境访问 `registry.npmjs.org`。如果部署使用其他镜像，请在运行 Compose 前通过 `NPM_REGISTRY` 指定内部或备用 npm registry。
 
 Linux 镜像内置 `bubblewrap`。已批准的 Agent shell 进程通过 `bwrap --die-with-parent --unshare-net` 启动，因此可以执行本地工具，但不能使用父服务的网络命名空间；CrownForge 服务本身仍可访问模型与 MCP 网络。该能力要求 UID 10001 可以创建非特权用户命名空间，可用 `docker compose exec ai-ide bwrap --unshare-net -- /bin/true` 验证宿主机/运行时组合。如果 Docker seccomp、用户命名空间策略或宿主机内核拒绝该探测，CrownForge 会以 fail-closed 方式拒绝 Agent shell。不要为通过探测而添加 `SYS_ADMIN`、全局关闭 seccomp 或改用 root；应在该部署中保持 Agent shell 禁用，或通过宿主机的窄范围容器策略启用非特权用户命名空间。
+
+### 桌面 App
+
+桌面版可在每台电脑独立运行，提供 Windows 10/11 x64、macOS 13+（Intel/Apple 芯片）以及单独的 Windows 7 SP1 x64 旧版构建。已发布安装包及对应 SHA-256 文件见 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases)；构建命令、首次登录和平台功能边界见[桌面版指南](docs/desktop-app.md)。Windows 7 构建使用已停止维护的 Electron 22，正式发布前必须在 Windows 7 实机完成验收。
 
 ### 本地开发
 

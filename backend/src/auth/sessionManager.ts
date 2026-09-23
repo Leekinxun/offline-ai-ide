@@ -184,6 +184,16 @@ export class SessionManager {
   }
 
   private loadConfig(): UsersConfig {
+    if (process.env.CREWFORGE_DESKTOP === "1") {
+      // A desktop install must never recover a damaged credentials file by
+      // silently enabling the Web development default (admin/admin123).
+      const raw = JSON.parse(fs.readFileSync(this.configPath, "utf8")) as Partial<UsersConfig>;
+      if (!Array.isArray(raw.users) || !raw.users.some((user) => user && typeof user === "object" && this.normalizeUser(user))) {
+        throw new Error("Desktop users configuration has no valid account");
+      }
+      console.log(`Loaded users config from ${this.configPath}`);
+      return this.normalizeConfig(raw);
+    }
     for (const configPath of this.resolveConfigCandidates()) {
       try {
         const raw = fs.readFileSync(configPath, "utf-8");
@@ -202,11 +212,19 @@ export class SessionManager {
 
   private saveConfig(): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-    fs.writeFileSync(
-      this.configPath,
-      `${JSON.stringify(this.usersConfig, null, 2)}\n`,
-      "utf-8"
-    );
+    const tempPath = `${this.configPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+    try {
+      const fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+      try {
+        fs.writeFileSync(fd, `${JSON.stringify(this.usersConfig, null, 2)}\n`, "utf-8");
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(tempPath, this.configPath);
+    } finally {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+    }
   }
 
   private getUser(username: string): UserConfig | undefined {
@@ -639,13 +657,10 @@ export class SessionManager {
     const children = new Map<string, string>();
     for (const root of this.usersConfig.allowedRoots) {
       const resolvedRoot = path.resolve(root);
-      const prefix = resolved === "/" ? "/" : resolved + "/";
-      if (resolvedRoot.startsWith(prefix) || resolvedRoot === resolved) {
-        const relative = path.relative(resolved, resolvedRoot);
-        const firstPart = relative.split("/")[0];
-        if (firstPart) {
-          children.set(firstPart, path.join(resolved, firstPart));
-        }
+      const relative = path.relative(resolved, resolvedRoot);
+      if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+        const firstPart = relative.split(path.sep)[0];
+        children.set(firstPart, path.join(resolved, firstPart));
       }
     }
 

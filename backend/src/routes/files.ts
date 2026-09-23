@@ -397,7 +397,7 @@ filesRouter.get("/git-diff", (req, res) => {
 
     let diff = runDiff(["diff", "HEAD", "--no-ext-diff", "--unified=40", "--", relPath]);
     if (!diff && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      diff = runDiff(["diff", "--no-index", "--unified=40", "/dev/null", fullPath]);
+      diff = runDiff(["diff", "--no-index", "--unified=40", process.platform === "win32" ? "NUL" : "/dev/null", fullPath]);
       diff = diff.replaceAll(fullPath, relPath);
     }
 

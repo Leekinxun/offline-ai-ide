@@ -73,32 +73,59 @@ export function isChatAttachmentRef(value: unknown): value is ChatAttachmentRef 
       || (ref.kind === "pdf" && ref.mimeType === "application/pdf"));
 }
 
+function assertPlainDirectory(directory: string): void {
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new ChatAttachmentError("Unsafe attachment storage");
+}
+
 function ensurePrivateDirectory(directory: string): void {
   try {
     fs.mkdirSync(directory, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new ChatAttachmentError("Unsafe attachment storage");
+  assertPlainDirectory(directory);
   fs.chmodSync(directory, 0o700);
+}
+
+/** The desktop host puts APP_SETTINGS_CONFIG inside its per-user data directory. */
+export function resolveChatAttachmentStoragePath(
+  workspaceDir: string,
+  options: { platform?: string; desktop?: boolean; settingsConfigPath?: string } = {},
+): string {
+  const workspace = path.resolve(workspaceDir);
+  const platform = options.platform ?? process.platform;
+  const desktop = options.desktop ?? process.env.CREWFORGE_DESKTOP === "1";
+  if (platform !== "win32" || !desktop) return path.join(workspace, ".history", "attachments");
+  const settingsConfigPath = options.settingsConfigPath ?? process.env.APP_SETTINGS_CONFIG;
+  if (!settingsConfigPath || !path.isAbsolute(settingsConfigPath)) {
+    throw new ChatAttachmentError("Desktop attachment storage is unavailable");
+  }
+  const workspaceHash = crypto.createHash("sha256").update(workspace).digest("hex");
+  return path.join(path.dirname(settingsConfigPath), "attachments", workspaceHash);
 }
 
 function attachmentDirectory(workspaceDir: string, create: boolean): string {
   const workspace = path.resolve(workspaceDir);
-  const rootStat = fs.lstatSync(workspace);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new ChatAttachmentError("Unsafe attachment storage");
+  assertPlainDirectory(workspace);
   const history = path.join(workspace, ".history");
-  const attachments = path.join(history, "attachments");
   if (create) {
     ensurePrivateDirectory(history);
-    ensurePrivateDirectory(attachments);
   } else {
-    for (const directory of [history, attachments]) {
-      const stat = fs.lstatSync(directory);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new ChatAttachmentError("Unsafe attachment storage");
-    }
+    assertPlainDirectory(history);
   }
+  const desktopWindows = process.platform === "win32" && process.env.CREWFORGE_DESKTOP === "1";
+  const canonicalWorkspace = desktopWindows ? fs.realpathSync.native(workspace) : workspace;
+  const attachments = resolveChatAttachmentStoragePath(canonicalWorkspace);
+  if (desktopWindows) {
+    const attachmentsRoot = path.dirname(attachments);
+    const dataDirectory = path.dirname(attachmentsRoot);
+    assertPlainDirectory(dataDirectory);
+    if (create) ensurePrivateDirectory(attachmentsRoot);
+    else assertPlainDirectory(attachmentsRoot);
+  }
+  if (create) ensurePrivateDirectory(attachments);
+  else assertPlainDirectory(attachments);
   return attachments;
 }
 
@@ -202,28 +229,54 @@ function classify(name: string, suppliedMime: string, bytes: Buffer): Pick<ChatA
   return { kind: "text", mimeType: "text/plain" };
 }
 
-function readPrivateFile(filePath: string, maxBytes: number): Buffer {
-  let descriptor: number;
+function assertOpenedFileStillStored(workspaceDir: string, directory: string, filePath: string, opened: fs.Stats): void {
   try {
-    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    if (attachmentDirectory(workspaceDir, false) !== directory) throw new ChatAttachmentError("Attachment storage is invalid");
+    const current = fs.lstatSync(filePath);
+    if (!current.isFile() || current.isSymbolicLink()
+      || (opened.ino !== 0 && current.ino !== 0 && (opened.dev !== current.dev || opened.ino !== current.ino))) {
+      throw new ChatAttachmentError("Attachment storage is invalid");
+    }
+  } catch {
+    throw new ChatAttachmentError("Attachment storage is invalid");
+  }
+}
+
+function readPrivateFile(workspaceDir: string, directory: string, filePath: string, maxBytes: number): Buffer {
+  let descriptor: number;
+  let entry: fs.Stats;
+  try {
+    // O_NOFOLLOW is not available on every platform (notably Windows).
+    // Reject a link explicitly before opening the stored file as well.
+    entry = fs.lstatSync(filePath);
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new ChatAttachmentError("Attachment storage is invalid");
+    const flags = fs.constants.O_RDONLY | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW);
+    descriptor = fs.openSync(filePath, flags);
   } catch (error) {
+    if (error instanceof ChatAttachmentError) throw error;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ChatAttachmentError("Attachment not found", 404);
     throw new ChatAttachmentError("Attachment storage is invalid");
   }
   try {
     const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile() || stat.size > maxBytes || stat.size < 1 || (stat.mode & 0o077) !== 0) {
+    if (!stat.isFile() || stat.size > maxBytes || stat.size < 1
+      || (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
+      || (entry.ino !== 0 && stat.ino !== 0 && (entry.dev !== stat.dev || entry.ino !== stat.ino))) {
       throw new ChatAttachmentError("Attachment storage is invalid");
     }
-    return fs.readFileSync(descriptor);
+    assertOpenedFileStillStored(workspaceDir, directory, filePath, stat);
+    const bytes = fs.readFileSync(descriptor);
+    if (bytes.length > maxBytes || bytes.length < 1) throw new ChatAttachmentError("Attachment storage is invalid");
+    assertOpenedFileStillStored(workspaceDir, directory, filePath, stat);
+    return bytes;
   } finally {
     fs.closeSync(descriptor);
   }
 }
 
-function readStoredMetadata(directory: string, id: string): StoredChatAttachment {
+function readStoredMetadata(workspaceDir: string, directory: string, id: string): StoredChatAttachment {
   let raw: unknown;
-  try { raw = JSON.parse(readPrivateFile(attachmentPath(directory, id, ".json"), 4096).toString("utf8")); }
+  try { raw = JSON.parse(readPrivateFile(workspaceDir, directory, attachmentPath(directory, id, ".json"), 4096).toString("utf8")); }
   catch (error) {
     if (error instanceof ChatAttachmentError) throw error;
     throw new ChatAttachmentError("Attachment metadata is invalid");
@@ -312,7 +365,7 @@ export function deleteUnreferencedChatAttachments(workspaceDir: string, candidat
   for (const id of new Set(candidateIds)) {
     if (!ID_PATTERN.test(id) || referenced.has(id)) continue;
     try {
-      readStoredMetadata(directory, id);
+      readStoredMetadata(workspaceDir, directory, id);
       removeAttachmentPair(directory, id);
       removed += 1;
     } catch { /* Keep an invalid entry for inspection rather than risk deleting the wrong file. */ }
@@ -333,7 +386,7 @@ export function cleanupUnusedChatAttachments(workspaceDir: string, now = Date.no
     const id = entry.slice(0, -5);
     if (!ID_PATTERN.test(id) || referenced.has(id)) continue;
     try {
-      const metadata = readStoredMetadata(directory, id);
+      const metadata = readStoredMetadata(workspaceDir, directory, id);
       if (now - metadata.createdAt < UNUSED_RETENTION_MS) continue;
       removeAttachmentPair(directory, id);
       removed += 1;
@@ -428,8 +481,8 @@ export function readChatAttachment(workspaceDir: string, id: string): { attachme
     throw error;
   }
   scheduleUnusedAttachmentCleanup(workspaceDir);
-  const metadata = readStoredMetadata(directory, id);
-  const bytes = readPrivateFile(attachmentPath(directory, id, ".bin"), MAX_ATTACHMENT_BYTES);
+  const metadata = readStoredMetadata(workspaceDir, directory, id);
+  const bytes = readPrivateFile(workspaceDir, directory, attachmentPath(directory, id, ".bin"), MAX_ATTACHMENT_BYTES);
   if (bytes.length !== metadata.size || crypto.createHash("sha256").update(bytes).digest("hex") !== metadata.sha256) {
     throw new ChatAttachmentError("Attachment integrity check failed");
   }

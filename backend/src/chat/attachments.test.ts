@@ -9,6 +9,7 @@ import {
   ChatAttachmentError,
   cleanupUnusedChatAttachments,
   readChatAttachment,
+  resolveChatAttachmentStoragePath,
   resolveChatAttachments,
   storeChatAttachments,
 } from "./attachments.js";
@@ -37,6 +38,68 @@ function upload(name: string, mimetype: string, buffer: Buffer) {
   return { originalname: name, mimetype, buffer };
 }
 
+function withDesktopWindowsStorage(t: test.TestContext, run: (dataDirectory: string, actualPlatform: string) => void): void {
+  const dataDirectory = workspace(t);
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  assert(platform);
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  const priorSettings = process.env.APP_SETTINGS_CONFIG;
+  try {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    process.env.CREWFORGE_DESKTOP = "1";
+    process.env.APP_SETTINGS_CONFIG = path.join(dataDirectory, "app-settings.json");
+    run(dataDirectory, String(platform.value));
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+    if (priorSettings === undefined) delete process.env.APP_SETTINGS_CONFIG;
+    else process.env.APP_SETTINGS_CONFIG = priorSettings;
+  }
+}
+
+test("desktop Windows attachment path is stable and isolated per workspace", (t) => {
+  const dataDirectory = workspace(t);
+  const first = workspace(t);
+  const second = workspace(t);
+  const options = { platform: "win32", desktop: true, settingsConfigPath: path.join(dataDirectory, "app-settings.json") };
+  const firstPath = resolveChatAttachmentStoragePath(first, options);
+  assert.equal(path.dirname(firstPath), path.join(dataDirectory, "attachments"));
+  assert.match(path.basename(firstPath), /^[0-9a-f]{64}$/);
+  assert.equal(resolveChatAttachmentStoragePath(path.join(first, "."), options), firstPath);
+  assert.notEqual(resolveChatAttachmentStoragePath(second, options), firstPath);
+  assert.equal(resolveChatAttachmentStoragePath(first, { ...options, desktop: false }), path.join(first, ".history", "attachments"));
+  assert.equal(resolveChatAttachmentStoragePath(first, { ...options, platform: "darwin" }), path.join(first, ".history", "attachments"));
+});
+
+test("desktop Windows stores attachments in app data and never reads legacy workspace blobs", (t) => {
+  const first = workspace(t);
+  const second = workspace(t);
+  const [legacy] = storeChatAttachments(first, [upload("legacy.txt", "text/plain", Buffer.from("old"))]);
+  withDesktopWindowsStorage(t, (dataDirectory) => {
+    assert.throws(() => readChatAttachment(first, legacy.id), (error) => error instanceof ChatAttachmentError && error.status === 404);
+    const [attachment] = storeChatAttachments(first, [upload("new.txt", "text/plain", Buffer.from("new"))]);
+    const storage = resolveChatAttachmentStoragePath(fs.realpathSync.native(first));
+    assert.equal(path.dirname(storage), path.join(dataDirectory, "attachments"));
+    assert.equal(fs.readFileSync(path.join(storage, `${attachment.id}.bin`), "utf8"), "new");
+    assert.equal(fs.existsSync(path.join(first, ".history", "attachments", `${attachment.id}.bin`)), false);
+    assert.equal(readChatAttachment(first, attachment.id).bytes.toString("utf8"), "new");
+    assert.throws(() => readChatAttachment(second, attachment.id), (error) => error instanceof ChatAttachmentError && error.status === 404);
+  });
+});
+
+test("desktop Windows rejects a linked app-data attachment directory", (t) => {
+  const first = workspace(t);
+  const outside = workspace(t);
+  withDesktopWindowsStorage(t, (_dataDirectory, actualPlatform) => {
+    const [attachment] = storeChatAttachments(first, [upload("new.txt", "text/plain", Buffer.from("new"))]);
+    const storage = resolveChatAttachmentStoragePath(fs.realpathSync.native(first));
+    fs.rmSync(storage, { recursive: true });
+    fs.symlinkSync(outside, storage, actualPlatform === "win32" ? "junction" : "dir");
+    assert.throws(() => readChatAttachment(first, attachment.id), /Unsafe attachment storage/);
+  });
+});
+
 test("stores private attachment bytes and verifies workspace, digest, and file type", (t) => {
   const first = workspace(t);
   const second = workspace(t);
@@ -45,9 +108,11 @@ test("stores private attachment bytes and verifies workspace, digest, and file t
     id: attachment.id, name: "diagram.png", mimeType: "image/png", size: png.length, kind: "image",
   });
   const directory = path.join(first, ".history", "attachments");
-  assert.equal(fs.statSync(directory).mode & 0o077, 0);
-  assert.equal(fs.statSync(path.join(directory, `${attachment.id}.bin`)).mode & 0o077, 0);
-  assert.equal(fs.statSync(path.join(directory, `${attachment.id}.json`)).mode & 0o077, 0);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(directory).mode & 0o077, 0);
+    assert.equal(fs.statSync(path.join(directory, `${attachment.id}.bin`)).mode & 0o077, 0);
+    assert.equal(fs.statSync(path.join(directory, `${attachment.id}.json`)).mode & 0o077, 0);
+  }
   assert.deepEqual(readChatAttachment(first, attachment.id).bytes, png);
   assert.deepEqual(resolveChatAttachments(first, [attachment.id]), [attachment]);
   assert.throws(() => readChatAttachment(second, attachment.id), (error) => error instanceof ChatAttachmentError && error.status === 404);
@@ -58,8 +123,39 @@ test("stores private attachment bytes and verifies workspace, digest, and file t
   fs.rmSync(path.join(directory, `${attachment.id}.bin`));
   const outside = path.join(second, "outside.bin");
   fs.writeFileSync(outside, png);
-  fs.symlinkSync(outside, path.join(directory, `${attachment.id}.bin`));
+  try { fs.symlinkSync(outside, path.join(directory, `${attachment.id}.bin`)); }
+  catch (error) {
+    if (process.platform === "win32" && ["EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code || "")) {
+      t.diagnostic("Windows account cannot create file symlinks; storage link rejection is tested with directory junctions");
+      return;
+    }
+    throw error;
+  }
   assert.throws(() => readChatAttachment(first, attachment.id), /storage is invalid/);
+});
+
+test("file mode bits are enforced only where POSIX permissions are meaningful", (t) => {
+  const directory = workspace(t);
+  const [attachment] = storeChatAttachments(directory, [upload("notes.txt", "text/plain", Buffer.from("notes"))]);
+  const storage = path.join(directory, ".history", "attachments");
+  const metadataPath = path.join(storage, `${attachment.id}.json`);
+  const binaryPath = path.join(storage, `${attachment.id}.bin`);
+  for (const filePath of [metadataPath, binaryPath]) {
+    fs.chmodSync(filePath, 0o644);
+    if (process.platform === "win32") {
+      assert.equal(readChatAttachment(directory, attachment.id).bytes.toString("utf8"), "notes");
+    } else {
+      assert.throws(() => readChatAttachment(directory, attachment.id), /storage is invalid/);
+      fs.chmodSync(filePath, 0o600);
+    }
+  }
+});
+
+test("attachment storage rejects linked history directories", (t) => {
+  const directory = workspace(t);
+  const outside = workspace(t);
+  fs.symlinkSync(outside, path.join(directory, ".history"), process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => storeChatAttachments(directory, [upload("diagram.png", "image/png", png)]), /Unsafe attachment storage/);
 });
 
 test("rejects spoofed media, binary text, unsafe names, and oversized batches", (t) => {

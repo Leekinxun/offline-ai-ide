@@ -598,7 +598,8 @@ export function captureChangeSet(workspaceDir: string, worktreeId: string, evide
     const committedPatch = git(worktree.path, ["diff", "--binary", `${worktree.baseSha}...HEAD`]);
     const dirtyPatch = git(worktree.path, ["diff", "--binary", "HEAD"]);
     const untracked = status.split("\0").filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
-    const untrackedPatch = untracked.map((file) => gitDiffNoIndex(worktree.path, ["diff", "--no-index", "--binary", "--", "/dev/null", file])).join("\n");
+    const nullPath = process.platform === "win32" ? "NUL" : "/dev/null";
+    const untrackedPatch = untracked.map((file) => gitDiffNoIndex(worktree.path, ["diff", "--no-index", "--binary", "--", nullPath, file])).join("\n");
     const patch = Buffer.from(`${committedPatch}\n${dirtyPatch}\n${untrackedPatch}`, "utf8");
     const committedFiles = nulPaths(gitOutputStrict(worktree.path, ["diff", "--name-only", "-z", `${worktree.baseSha}...HEAD`]));
     const dirtyFiles = nulPaths(gitOutputStrict(worktree.path, ["diff", "--name-only", "-z", "HEAD"]));

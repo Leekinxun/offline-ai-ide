@@ -32,6 +32,21 @@ async function serve(workspaceDir: string) {
   return { base: `http://127.0.0.1:${address.port}`, close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) };
 }
 
+test("git diff route renders untracked files as additions", async (t) => {
+  const workspace = repository(t);
+  fs.writeFileSync(path.join(workspace, "tracked.txt"), "base\n");
+  git(workspace, ["add", "."]); git(workspace, ["commit", "-qm", "base"]);
+  fs.writeFileSync(path.join(workspace, "new.txt"), "new content\n");
+  const server = await serve(workspace); t.after(server.close);
+  const response = await fetch(`${server.base}/git-diff?path=new.txt`);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { diff: string; hasChanges: boolean; original: string; modified: string };
+  assert.equal(body.hasChanges, true);
+  assert.match(body.diff, /new file mode 100644[\s\S]*--- \/dev\/null/);
+  assert.equal(body.original, "");
+  assert.equal(body.modified, "new content\n");
+});
+
 async function mutate(base: string, route: string, method: "POST" | "DELETE", body?: unknown): Promise<Response> {
   return fetch(`${base}${route}`, { method, ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}) });
 }

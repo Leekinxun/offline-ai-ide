@@ -4,6 +4,9 @@ node_modules/
 # Build output
 backend/dist/
 frontend/dist/
+desktop/.stage/
+desktop/.stage-cross-*/
+desktop-dist/
 
 # Environment
 .env
