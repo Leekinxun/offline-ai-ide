@@ -44,7 +44,7 @@
   --radius-sm: 6px;
   --radius-xs: 4px;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-mono: "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  --font-mono: "Menlo", "Consolas", "Monaco", "Courier New", monospace;
   --transition: 0.15s ease;
   --sidebar-width: 260px;
   --chat-width: 380px;
@@ -12824,8 +12824,9 @@ body {
 }
 
 .workbench-view-files .tree-item-name {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  letter-spacing: normal;
 }
 
 .workbench-view-files .tree-item.directory .tree-item-name {
@@ -12984,8 +12985,8 @@ body {
   border-right: 1px solid var(--line-subtle);
   border-bottom: 2px solid transparent;
   background: transparent;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-size: 12px;
 }
 
 .workbench-view-files .tab.active {
@@ -13005,7 +13006,7 @@ body {
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface-panel-strong);
   color: var(--ink-muted);
-  font: 10px var(--font-mono);
+  font: 11px var(--font-sans);
   white-space: nowrap;
 }
 

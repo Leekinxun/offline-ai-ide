@@ -78,6 +78,7 @@ import {
 import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 import { getEditorThemeName } from "./editor/themeNames";
+import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
 import {
   applyHunkSelections,
   buildConflictHunks,
@@ -99,6 +100,10 @@ const DiffEditor = lazy(() =>
 );
 
 const EDITOR_FONT_OPTIONS = [
+  {
+    label: "VS Code default",
+    family: DEFAULT_EDITOR_FONT_FAMILY,
+  },
   {
     label: "SF Mono",
     family: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
@@ -3758,7 +3763,8 @@ function AuthenticatedApp({
                     readOnly: true,
                     renderSideBySide: true,
                     minimap: { enabled: false },
-                    fontSize: 13,
+                    ...DEFAULT_EDITOR_FONT_OPTIONS,
+                    fontFamily: editorFont,
                     automaticLayout: true,
                   }}
                 />

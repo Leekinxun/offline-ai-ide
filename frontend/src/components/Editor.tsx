@@ -11,6 +11,7 @@ import {
   CollaborationState,
 } from "../types";
 import { getEditorThemeName } from "../editor/theme";
+import { DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { useI18n } from "../i18n";
 import { runEditorMountHandlers } from "../plugins/runtime";
 import type { DocumentDiagnostic } from "../hooks/useFileSystem";
@@ -870,10 +871,8 @@ export const Editor: React.FC<EditorProps> = ({
         options={{
           "semanticHighlighting.enabled": true,
           readOnly,
-          fontSize: 13,
+          ...DEFAULT_EDITOR_FONT_OPTIONS,
           fontFamily,
-          fontLigatures: true,
-          lineHeight: 20,
           minimap: { enabled: false },
           glyphMargin: Boolean(onToggleBreakpoint || collaboration),
           scrollBeyondLastLine: false,

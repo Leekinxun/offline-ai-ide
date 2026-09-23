@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, ExternalLink, FileWarning, GitCompare, RefreshCw, X } from "lucide-react";
 import { getEditorThemeName } from "../editor/themeNames";
+import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { useI18n } from "../i18n";
 import { getLanguage, GitDiffPayload, GitStatusEntry } from "../types";
 import { useModalDialogFocus } from "./useModalDialogFocus";
@@ -121,6 +122,8 @@ export const ChangeDiffDialog: React.FC<ChangeDiffDialogProps> = ({
                 language={getLanguage(path)}
                 theme={getEditorThemeName(theme)}
                 options={{
+                  ...DEFAULT_EDITOR_FONT_OPTIONS,
+                  fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
                   readOnly: true,
                   originalEditable: false,
                   renderSideBySide: true,
