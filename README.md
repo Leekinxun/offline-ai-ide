@@ -571,6 +571,8 @@ LLM runtime settings can be managed in two ways:
 
 When settings are changed from the UI, they are written to `app-settings.json` and new AI requests will use the updated values immediately. The system prompt is included in this runtime configuration, so admins can customize the assistant behavior without rebuilding the image.
 
+In **Settings → LLM Configuration**, admins can keep the default model and add more models, each with a unique model name, OpenAI-compatible API URL, and API key. Users can choose a configured model in the main chat composer or editor assistant rail. New requests use the selected model's endpoint and key; the user-facing model list contains names only, never API keys.
+
 ### External MCP
 
 Administrators can add legacy HTTP endpoints or advanced MCP server JSON from **Settings → External MCP**, test connections, and inspect discovered tools. Advanced entries support remote HTTP with custom headers and OAuth bearer tokens loaded from an environment-variable name, plus persistent local `stdio` commands with arguments and environment overrides. Endpoints can be lazy so the Agent searches and activates only relevant tools. Unavailable servers are reported without preventing built-in tools from running.

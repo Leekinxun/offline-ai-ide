@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { config } from "../config.js";
+import { config, resolveModelEndpoint } from "../config.js";
 import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
@@ -178,6 +178,9 @@ export async function runSubagent(
     maxOutputTokens: config.agentMaxTokens,
   });
   const effectiveModel = profile.modelName || modelName;
+  const modelEndpoint = effectiveModel === modelName
+    ? { apiUrl: vllmApiUrl, apiKey: vllmApiKey }
+    : resolveModelEndpoint(effectiveModel);
   const tools =
     agentType === "Explore"
       ? SUB_TOOLS_EXPLORE
@@ -351,8 +354,8 @@ export async function runSubagent(
         tools: tools.map((tool) => tool.function.name),
       });
       const processed = await processModelTurn({
-        apiUrl: vllmApiUrl,
-        apiKey: vllmApiKey,
+        apiUrl: modelEndpoint.apiUrl,
+        apiKey: modelEndpoint.apiKey,
         model: effectiveModel,
         providerId: profile.providerId,
         messages,

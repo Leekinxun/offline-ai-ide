@@ -229,7 +229,8 @@ export function resolveEffectiveAgentPolicy(input: {
 
 export function listSelectableModelNames(
   overrides: AgentProfileOverrides = {},
-  defaultModelName = "default"
+  defaultModelName = "default",
+  additionalModelNames: readonly string[] = []
 ): string[] {
   const names = new Set<string>();
   const normalizedDefault = defaultModelName.trim();
@@ -238,6 +239,10 @@ export function listSelectableModelNames(
     const modelName = profile?.modelName?.trim();
     if (modelName) names.add(modelName);
   }
+  for (const modelName of additionalModelNames) {
+    const normalized = modelName.trim();
+    if (normalized) names.add(normalized);
+  }
   return Array.from(names);
 }
 
@@ -245,7 +250,8 @@ export function resolveSelectableModelName(
   id: AgentProfileId,
   requestedModelName: unknown,
   overrides: AgentProfileOverrides = {},
-  defaultModelName = "default"
+  defaultModelName = "default",
+  additionalModelNames: readonly string[] = []
 ): string {
   const profileModel = resolveAgentProfile(id, overrides, {
     modelName: defaultModelName,
@@ -255,7 +261,7 @@ export function resolveSelectableModelName(
   }
 
   const requested = requestedModelName.trim();
-  if (!listSelectableModelNames(overrides, defaultModelName).includes(requested)) {
+  if (!listSelectableModelNames(overrides, defaultModelName, additionalModelNames).includes(requested)) {
     throw new Error("Requested model is not configured for this workspace");
   }
   return requested;

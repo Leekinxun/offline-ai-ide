@@ -49,6 +49,7 @@ import { ChangeSummary } from "./ChangeSummary";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import type { ContextManifestController } from "../hooks/useContextManifest";
+import type { ChatRuntimeOptions } from "../hooks/useChat";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -95,8 +96,11 @@ interface ChatPanelProps {
   visible: boolean;
   focusRequest?: number;
   agentMode: AgentMode;
+  runtimeOptions: ChatRuntimeOptions;
+  selectedModelName: string;
   taskTitle: string;
   onAgentModeChange: (mode: AgentMode) => void;
+  onModelNameChange: (modelName: string) => void;
   currentRunSummary: ConversationRunSummary | null;
   contextState: ContextState;
   contextManifest: ContextManifestController;
@@ -154,8 +158,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   visible,
   focusRequest,
   agentMode,
+  runtimeOptions,
+  selectedModelName,
   taskTitle,
   onAgentModeChange,
+  onModelNameChange,
   currentRunSummary,
   contextState,
   contextManifest,
@@ -201,6 +208,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   style,
 }) => {
   const { locale, t } = useI18n();
+  const modeModelName = runtimeOptions.modeModels[agentMode]
+    || runtimeOptions.defaultModelName
+    || t("workbench.modelDefault");
   const [input, setInput] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
@@ -916,6 +926,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             ))}
           </div>
           {activeFileName && <code>{activeFileName}</code>}
+          <label className="chat-composer-model">
+            <span>{t("workbench.model")}</span>
+            <select
+              value={selectedModelName}
+              onChange={(event) => onModelNameChange(event.target.value)}
+              disabled={isStreaming || runtimeOptions.models.length === 0}
+            >
+              <option value="">{t("workbench.modelAutomatic", { model: modeModelName })}</option>
+              {runtimeOptions.models.map((modelName) => (
+                <option value={modelName} key={modelName}>{modelName}</option>
+              ))}
+            </select>
+          </label>
         </div>
         {/* Selection indicator */}
         {selectionInfo && activeFileName && (

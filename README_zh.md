@@ -481,6 +481,8 @@ LLM 运行时配置同样支持两种方式：
 
 通过管理员设置页保存后，配置会写入 `app-settings.json`，新的 AI 请求会立即使用最新设置。系统提示词也属于运行时配置，管理员可以不重建镜像就定制 AI 助手行为。
 
+管理员可在 **设置 → LLM 配置** 中保留一个默认模型，并添加多个模型；每个新增模型分别填写唯一的模型名称、OpenAI 兼容 API URL 和 API Key。普通用户可在主聊天框或编辑器 AI 侧栏选择已配置的模型，新请求会使用该模型对应的 URL 与 Key。普通用户的模型列表只包含名称，不会返回 API Key。
+
 ### Agent 档案与恢复
 
 管理员可在 **Settings → Agent 配置档案** 中分别覆盖 `ask`、`code`、`review`、`plan`、`explore`、`subagent` 和 `teammate` 的模型/Provider、轮次/工具/时间/Token/成本预算、工具允许/拒绝规则、计价及 step snapshot。子 Agent 的权限只能在父权限基础上继续收窄。

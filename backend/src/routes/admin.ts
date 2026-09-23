@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { sessionManager, UserSession } from "../auth/sessionManager.js";
 import {
+  LlmSettingsValidationError,
   clearPluginOverride,
   getAgentSettings,
   getAppSettings,
@@ -485,9 +486,10 @@ adminRouter.put("/llm", (req, res) => {
       maxTokens,
       maxAgentIterations,
       systemPrompt,
+      ...(req.body.models !== undefined ? { models: req.body.models } : {}),
     });
     res.json({ llm });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(error instanceof LlmSettingsValidationError ? 400 : 500).json({ error: error.message });
   }
 });

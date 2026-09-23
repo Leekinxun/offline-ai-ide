@@ -1,4 +1,4 @@
-import { config } from "../config.js";
+import { config, resolveModelEndpoint } from "../config.js";
 import { processModelTurn } from "../agent/modelProcessor.js";
 import { bindConfiguredFallbacks, buildProviderExecutionContract } from "../agent/providerRouting.js";
 
@@ -12,7 +12,7 @@ function sanitizeGeneratedTitle(value: string): string {
 
 export async function generateConversationTitle(
   userMessage: string,
-  context: { workspaceDir: string; conversationId: string; requestId?: string }
+  context: { workspaceDir: string; conversationId: string; requestId?: string; modelName?: string }
 ): Promise<string | null> {
   const prompt = userMessage.trim();
   if (!prompt) {
@@ -20,11 +20,12 @@ export async function generateConversationTitle(
   }
 
   try {
+    const modelEndpoint = resolveModelEndpoint(context.modelName || config.modelName);
     const executionContract = buildProviderExecutionContract({ id: "title:read-only", permissions: [], isolation: "workspace:read-only", tools: [] });
     const processed = await processModelTurn({
-      apiUrl: config.vllmApiUrl,
-      apiKey: config.vllmApiKey,
-      model: config.modelName,
+      apiUrl: modelEndpoint.apiUrl,
+      apiKey: modelEndpoint.apiKey,
+      model: modelEndpoint.modelName,
       executionContract,
       fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, 24),
       systemPrompt: "Generate a concise title for a coding assistant conversation. Return only the title, with no quotes, no markdown, and no explanation.",

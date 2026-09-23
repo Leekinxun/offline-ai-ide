@@ -10,10 +10,17 @@ import type {
   DeliveryRuntimeSettings,
 } from "./integrations/delivery/types.js";
 
+export interface LlmModelSettings {
+  modelName: string;
+  apiUrl: string;
+  apiKey: string;
+}
+
 interface LlmRuntimeSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  models: LlmModelSettings[];
   maxTokens: number;
   maxAgentIterations: number;
   systemPrompt?: string;
@@ -81,6 +88,64 @@ let appSettingsMigrationStatus: AppSettingsMigrationStatus = { state: "current",
 export function getAppSettingsMigrationStatus(): AppSettingsMigrationStatus { return { ...appSettingsMigrationStatus }; }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_ADDITIONAL_LLM_MODELS = 32;
+
+export class LlmSettingsValidationError extends Error {}
+
+function validateLlmApiUrl(value: unknown): string {
+  const apiUrl = typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+  if (!apiUrl || apiUrl.length > 2048) {
+    throw new LlmSettingsValidationError("LLM API URL is required and must be at most 2048 characters");
+  }
+  if (/\s/.test(apiUrl)) {
+    throw new LlmSettingsValidationError("LLM API URL must not contain whitespace");
+  }
+  try {
+    const parsed = new URL(apiUrl);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new Error("Invalid LLM API URL");
+    }
+  } catch {
+    throw new LlmSettingsValidationError("LLM API URL must be an http(s) URL without credentials, query, or fragment");
+  }
+  return apiUrl;
+}
+
+function validateLlmModelName(value: unknown): string {
+  const modelName = typeof value === "string" ? value.trim() : "";
+  if (!modelName || modelName.length > 200) {
+    throw new LlmSettingsValidationError("LLM model name is required and must be at most 200 characters");
+  }
+  return modelName;
+}
+
+function validateAdditionalLlmModels(value: unknown, defaultModelName: string): LlmModelSettings[] {
+  if (!Array.isArray(value) || value.length > MAX_ADDITIONAL_LLM_MODELS) {
+    throw new LlmSettingsValidationError(`LLM models must be an array with at most ${MAX_ADDITIONAL_LLM_MODELS} entries`);
+  }
+  const names = new Set([defaultModelName]);
+  return value.map((candidate, index) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new LlmSettingsValidationError(`LLM model ${index + 1} must be an object`);
+    }
+    const raw = candidate as Record<string, unknown>;
+    const modelName = validateLlmModelName(raw.modelName);
+    if (names.has(modelName)) {
+      throw new LlmSettingsValidationError(`Duplicate LLM model name: ${modelName}`);
+    }
+    names.add(modelName);
+    if (typeof raw.apiKey !== "string") {
+      throw new LlmSettingsValidationError(`LLM model ${index + 1} API key must be a string`);
+    }
+    return { modelName, apiUrl: validateLlmApiUrl(raw.apiUrl), apiKey: raw.apiKey };
+  });
+}
+
+function loadAdditionalLlmModels(value: unknown, defaultModelName: string): LlmModelSettings[] {
+  if (value === undefined) return [];
+  try { return validateAdditionalLlmModels(value, defaultModelName); }
+  catch { console.warn("Ignoring invalid persisted LLM models"); return []; }
+}
 
 export function normalizeDeliveryProviders(value: unknown): DeliveryProviderConfig[] {
   if (!Array.isArray(value)) return [];
@@ -365,6 +430,7 @@ const persistedLlmSettings = persistedAppSettings.llm || {};
 const persistedRuntimeSettings = persistedAppSettings.app || {};
 const persistedMcpSettings = persistedAppSettings.mcp || {};
 const persistedDeliverySettings = persistedAppSettings.delivery || {};
+const initialModelName = persistedLlmSettings.modelName || process.env.MODEL_NAME || process.env.AGENT_MODEL_ID || "default";
 const initialAgentSettings = normalizeAgentProfileOverrides(persistedAppSettings.agents);
 const initialMcpUrls = parseUrlList(
   persistedMcpSettings.baseUrls ||
@@ -396,15 +462,11 @@ export const config = {
     process.env.AGENT_BASE_URL ||
     "http://host.docker.internal:8000/v1",
   vllmApiKey:
-    persistedLlmSettings.vllmApiKey ||
-    process.env.VLLM_API_KEY ||
-    process.env.AGENT_API_KEY ||
-    "",
-  modelName:
-    persistedLlmSettings.modelName ||
-    process.env.MODEL_NAME ||
-    process.env.AGENT_MODEL_ID ||
-    "default",
+    typeof persistedLlmSettings.vllmApiKey === "string"
+      ? persistedLlmSettings.vllmApiKey
+      : process.env.VLLM_API_KEY || process.env.AGENT_API_KEY || "",
+  modelName: initialModelName,
+  models: loadAdditionalLlmModels(persistedLlmSettings.models, initialModelName),
   temperature:
     typeof persistedLlmSettings.temperature === "number"
       ? persistedLlmSettings.temperature
@@ -544,10 +606,20 @@ export function getLlmSettings(): LlmRuntimeSettings {
     vllmApiUrl: config.vllmApiUrl,
     vllmApiKey: config.vllmApiKey,
     modelName: config.modelName,
+    models: config.models.map((model) => ({ ...model })),
     maxTokens: config.agentMaxTokens,
     maxAgentIterations: config.maxAgentIterations,
     systemPrompt: config.systemPrompt,
     ...(typeof config.temperature === "number" ? { temperature: config.temperature } : {}),
+  };
+}
+
+export function resolveModelEndpoint(modelName: string): LlmModelSettings {
+  const configured = config.models.find((model) => model.modelName === modelName);
+  return configured ? { ...configured } : {
+    modelName,
+    apiUrl: config.vllmApiUrl,
+    apiKey: config.vllmApiKey,
   };
 }
 
@@ -624,10 +696,14 @@ export function clearPluginOverride(
   return nextOverrides;
 }
 
-export function updateLlmSettings(next: LlmRuntimeSettings): LlmRuntimeSettings {
-  config.vllmApiUrl = next.vllmApiUrl;
+export function updateLlmSettings(next: Omit<LlmRuntimeSettings, "models"> & { models?: unknown }): LlmRuntimeSettings {
+  const modelName = validateLlmModelName(next.modelName);
+  const vllmApiUrl = validateLlmApiUrl(next.vllmApiUrl);
+  const models = validateAdditionalLlmModels(next.models === undefined ? config.models : next.models, modelName);
+  config.vllmApiUrl = vllmApiUrl;
   config.vllmApiKey = next.vllmApiKey;
-  config.modelName = next.modelName;
+  config.modelName = modelName;
+  config.models = models;
   config.agentMaxTokens = next.maxTokens;
   config.maxAgentIterations = next.maxAgentIterations;
   config.systemPrompt = next.systemPrompt || "";
@@ -637,7 +713,7 @@ export function updateLlmSettings(next: LlmRuntimeSettings): LlmRuntimeSettings 
 
   persistedAppSettings = {
     ...persistedAppSettings,
-    llm: getLlmSettings(),
+    llm: { ...persistedAppSettings.llm, ...getLlmSettings() },
   };
   savePersistedAppSettings();
 

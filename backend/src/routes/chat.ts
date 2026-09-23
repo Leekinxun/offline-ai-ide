@@ -126,7 +126,7 @@ chatRouter.get("/runtime-options", (_req, res) => {
   const modes = ["ask", "plan", "code", "review"] as const;
   res.json({
     defaultModelName: config.modelName,
-    models: listSelectableModelNames(config.agentProfiles, config.modelName),
+    models: listSelectableModelNames(config.agentProfiles, config.modelName, config.models.map((model) => model.modelName)),
     modeModels: Object.fromEntries(
       modes.map((mode) => [
         mode,

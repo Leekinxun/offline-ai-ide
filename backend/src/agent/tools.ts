@@ -463,7 +463,8 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx.lineage && {
         ...ctx.lineage,
         ...(parentTaskId ? { parentTaskId } : {}),
-      }
+      },
+      ctx.modelName
     );
   },
 

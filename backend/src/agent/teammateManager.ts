@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { config } from "../config.js";
+import { config, resolveModelEndpoint } from "../config.js";
 import { DEFAULT_TEAMMATE_CAPABILITIES, TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
@@ -277,7 +277,8 @@ export class TeammateManager {
     prompt: string,
     authorizeTool?: PermissionAuthorizer,
     signal?: AbortSignal,
-    lineage?: ToolContext["lineage"]
+    lineage?: ToolContext["lineage"],
+    parentModelName = config.modelName
   ): Promise<string> {
     this.config = this.configStore.snapshot();
     const existingMember = this.findMember(name);
@@ -320,6 +321,11 @@ export class TeammateManager {
     const childReferences: CollaborationEventReferences = { ...requestedReferences, runId: childWorkspace.runId, worktreeId: childWorkspace.id };
     this.audit({ action: "worktree_capture_succeeded", outcome: "succeeded", ...childReferences });
     const generation = crypto.randomUUID();
+    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
+      modelName: parentModelName,
+      maxOutputTokens: config.agentMaxTokens,
+    });
+    const modelName = profile.modelName || parentModelName;
     let member = existingMember;
     if (member) {
       member.status = "working";
@@ -337,7 +343,7 @@ export class TeammateManager {
       member.childRunId = childWorkspace.runId;
       member.worktreePath = childWorkspace.path;
       member.worktreeId = childWorkspace.id;
-      member.model = config.modelName;
+      member.model = modelName;
       member.permissions = ["scoped_worktree"];
       member.capabilities = [...DEFAULT_TEAMMATE_CAPABILITIES];
       member.budget = { maxTokens: config.agentMaxTokens, maxDurationMs: resolveAgentProfile("teammate", config.agentProfiles).budget.maxDurationMs, maxCostUsd: resolveAgentProfile("teammate", config.agentProfiles).budget.maxCostUsd, ...member.budget, usedTokens: 0, usedCostUsd: 0, startedAt: Date.now() };
@@ -363,7 +369,7 @@ export class TeammateManager {
         childRunId: childWorkspace.runId,
         worktreePath: childWorkspace.path,
         worktreeId: childWorkspace.id,
-        model: config.modelName,
+        model: modelName,
         permissions: ["scoped_worktree"],
         capabilities: [...DEFAULT_TEAMMATE_CAPABILITIES],
         budget: { maxTokens: config.agentMaxTokens, usedTokens: 0, usedCostUsd: 0, startedAt: Date.now() },
@@ -381,10 +387,6 @@ export class TeammateManager {
     // Start background loop (non-blocking)
     const control = { abort: false, paused: false, steering: [], generation };
     this.activeLoops.set(name, control);
-    const profile = resolveAgentProfile("teammate", config.agentProfiles, {
-      modelName: config.modelName,
-      maxOutputTokens: config.agentMaxTokens,
-    });
     const authorize = authorizeTool
       ? narrowPermissionAuthorizer(authorizeTool, profile)
       : createPermissionAuthorizer({ mode: "code", readOnly: false, signal, profile });
@@ -405,7 +407,7 @@ export class TeammateManager {
       this.audit({ action: "spawn_failed", outcome: "failed", reasonCode: "run_start_failed", ...childReferences });
       throw error;
     }
-    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal).catch(() => {
+    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal, parentModelName).catch(() => {
       try { this.finalizeManagedWorktree(name, "failure"); } catch { /* report once below */ }
       try { this.setStatus(name, "failed", "Execution failed", control.generation); } catch { /* report once below */ }
       console.error(`[teammate:${name}] Critical collaboration lifecycle handling failed`);
@@ -427,18 +429,18 @@ export class TeammateManager {
     authorize: PermissionAuthorizer,
     childWorkspaceDir: string,
     childRunId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    parentModelName = config.modelName
   ): Promise<void> {
     this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work", control.generation);
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${childWorkspaceDir}. This is your isolated managed worktree; never access the parent workspace. Use idle when done with current work.`;
     const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
-    const vllmUrl = config.vllmApiUrl;
-    const vllmApiKey = config.vllmApiKey;
     const profile = resolveAgentProfile("teammate", config.agentProfiles, {
-      modelName: config.modelName,
+      modelName: parentModelName,
       maxOutputTokens: config.agentMaxTokens,
     });
-    const model = profile.modelName || config.modelName;
+    const model = profile.modelName || parentModelName;
+    const modelEndpoint = resolveModelEndpoint(model);
     const managedScope = listManagedWorktrees(this.workspaceDir).find((entry) => path.resolve(entry.path) === path.resolve(childWorkspaceDir));
     const startedAt = Date.now();
     let toolCalls = 0;
@@ -491,8 +493,8 @@ export class TeammateManager {
           tools: TEAMMATE_TOOLS.map((tool) => tool.function.name),
         });
         const processed = await processModelTurn({
-          apiUrl: vllmUrl,
-          apiKey: vllmApiKey,
+          apiUrl: modelEndpoint.apiUrl,
+          apiKey: modelEndpoint.apiKey,
           model,
           providerId: profile.providerId,
           systemPrompt: sysPrompt,
@@ -727,9 +729,9 @@ export class TeammateManager {
   steer(name: string, content: string): boolean { const control = this.activeLoops.get(name); const member = this.findMember(name); if (!member || !content.trim()) return false; if (control) control.steering.push(content.slice(0, 8000)); member.steering = [...(member.steering || []), content.slice(0, 8000)].slice(-20); this.saveConfig(); this.audit({ action: "agent_steered", outcome: "accepted", targetAgentId: member.id || `teammate:${name}`, ...this.auditReferences(name) }); return true; }
   pause(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = true; this.setStatus(name, "paused"); this.audit({ action: "agent_paused", outcome: "succeeded", status: "paused", ...this.auditReferences(name) }); return true; }
   resume(name: string): boolean { const control = this.activeLoops.get(name); if (!control || !this.findMember(name)) return false; control.paused = false; this.setStatus(name, "working"); this.audit({ action: "agent_resumed", outcome: "succeeded", status: "working", ...this.auditReferences(name) }); return true; }
-  retry(name: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const member = this.findMember(name); if (!member) return Promise.resolve(`Error: '${name}' not found`); return this.spawn(name, member.role, member.currentTask || "Continue previous task", authorizeTool, signal); }
+  retry(name: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const member = this.findMember(name); if (!member) return Promise.resolve(`Error: '${name}' not found`); return this.spawn(name, member.role, member.currentTask || "Continue previous task", authorizeTool, signal, undefined, member.model || config.modelName); }
   reassign(name: string, prompt: string): boolean { const member = this.findMember(name); if (!member) return false; member.currentTask = prompt.slice(0, 180); return this.steer(name, prompt); }
-  async replace(name: string, role: string, prompt: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const active = this.activeLoops.get(name); if (active) { active.abort = true; for (let attempt = 0; attempt < 100 && this.activeLoops.get(name) === active; attempt++) await new Promise((resolve) => setTimeout(resolve, 10)); if (this.activeLoops.get(name) === active) return `Error: '${name}' previous execution did not stop`; } return this.spawn(name, role, prompt, authorizeTool, signal); }
+  async replace(name: string, role: string, prompt: string, authorizeTool?: PermissionAuthorizer, signal?: AbortSignal): Promise<string> { const member = this.findMember(name); const active = this.activeLoops.get(name); if (active) { active.abort = true; for (let attempt = 0; attempt < 100 && this.activeLoops.get(name) === active; attempt++) await new Promise((resolve) => setTimeout(resolve, 10)); if (this.activeLoops.get(name) === active) return `Error: '${name}' previous execution did not stop`; } return this.spawn(name, role, prompt, authorizeTool, signal, undefined, member?.model || config.modelName); }
   /** Optimistic-concurrency budget update for transport clients. Runtime usage is
    * server-owned, so callers may only change limits, never used accounting. */
   updateBudget(name: string, budgetPatch: Partial<Pick<NonNullable<TeamMember["budget"]>, "maxConcurrentAgents" | "maxTokens" | "maxCostUsd" | "maxDurationMs">>, expectedVersion: number): TeamMember {

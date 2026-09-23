@@ -50,6 +50,14 @@ test("lists configured models and validates per-run model selection", () => {
     () => resolveSelectableModelName("code", "unknown-model", overrides, "default-model"),
     /not configured/
   );
+  assert.deepEqual(
+    listSelectableModelNames(overrides, "default-model", ["hosted-model"]),
+    ["default-model", "deep-model", "fast-model", "hosted-model"]
+  );
+  assert.equal(
+    resolveSelectableModelName("code", "hosted-model", overrides, "default-model", ["hosted-model"]),
+    "hosted-model"
+  );
 });
 
 test("keeps child defaults narrower than the primary code agent", () => {

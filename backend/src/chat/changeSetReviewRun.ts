@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { config } from "../config.js";
+import { config, resolveModelEndpoint } from "../config.js";
 import { resolveAgentProfile } from "../agent/agentProfiles.js";
 import { processModelTurn } from "../agent/modelProcessor.js";
 import type { OpenAIMessage } from "../agent/types.js";
@@ -57,8 +57,10 @@ async function productionRunner(input: ChangeSetReviewRunnerInput): Promise<unkn
   const messages: OpenAIMessage[] = [{ role: "user", content: `Independently ${input.stage === "review" ? "review" : "verify fixed findings for"} immutable revision ${revision}. You are in a fresh read-only checkout. Inspect only; network and writes are denied. Use read_file or read-only git bash commands as needed. Return findings only through report_review_finding, with reviewedRevision exactly ${revision}.${fixed}` }];
   const findings: unknown[] = [];
   const executionContract = buildProviderExecutionContract({ id: `${profile.id}:immutable-review`, permissions: profile.permissions.allow, isolation: `review_checkout:${input.reviewRunId}`, tools: tools.map((tool) => tool.function.name) });
+  const model = profile.modelName || config.modelName;
+  const modelEndpoint = resolveModelEndpoint(model);
   for (let step = 0; step < Math.min(12, profile.budget.maxSteps); step += 1) {
-    const result = await processModelTurn({ apiUrl: config.vllmApiUrl, apiKey: config.vllmApiKey, model: profile.modelName || config.modelName, providerId: profile.providerId, messages, tools, executionContract, fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens), fallbackMaxOutputTokens: profile.budget.maxOutputTokens, temperature: 0, contextAudit: { storeWorkspaceDir: input.auditWorkspaceDir, effectiveWorkspaceDir: input.checkoutDir, scope: { kind: "review_checkout", scopeId: input.reviewRunId, baseSha: input.changeSet.baseSha, headSha: revision }, purpose: "change_set_review", runId: input.reviewRunId, requestId: input.reviewRunId, agentId: input.actor.id, messageSources: [{ kind: "review_instruction", sourceType: "immutable_change_set", reason: "Independent review of an integrity-bound revision", revision, trust: "approved_user_artifact", integrity: "verified_digest", freshness: "fresh" }] } });
+    const result = await processModelTurn({ apiUrl: modelEndpoint.apiUrl, apiKey: modelEndpoint.apiKey, model, providerId: profile.providerId, messages, tools, executionContract, fallbacks: bindConfiguredFallbacks(config.modelFallbacks, executionContract, profile.budget.maxOutputTokens), fallbackMaxOutputTokens: profile.budget.maxOutputTokens, temperature: 0, contextAudit: { storeWorkspaceDir: input.auditWorkspaceDir, effectiveWorkspaceDir: input.checkoutDir, scope: { kind: "review_checkout", scopeId: input.reviewRunId, baseSha: input.changeSet.baseSha, headSha: revision }, purpose: "change_set_review", runId: input.reviewRunId, requestId: input.reviewRunId, agentId: input.actor.id, messageSources: [{ kind: "review_instruction", sourceType: "immutable_change_set", reason: "Independent review of an integrity-bound revision", revision, trust: "approved_user_artifact", integrity: "verified_digest", freshness: "fresh" }] } });
     const message = result.response.choices[0]?.message; const calls = message?.tool_calls || [];
     messages.push({ role: "assistant", content: message?.content || null, ...(calls.length ? { tool_calls: calls } : {}) });
     if (!calls.length) break;

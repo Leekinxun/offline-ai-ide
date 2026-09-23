@@ -166,6 +166,7 @@ export function useChat(
     try {
       const response = await fetch("/api/chat/runtime-options", {
         headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
       });
       if (!response.ok) return;
       const payload = (await response.json()) as Partial<ChatRuntimeOptions>;
@@ -190,6 +191,16 @@ export function useChat(
       // Mode defaults remain authoritative when runtime discovery is unavailable.
     }
   }, [token]);
+
+  useEffect(() => {
+    const refresh = () => { void refreshRuntimeOptions(); };
+    window.addEventListener("crewforge:llm-models-updated", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("crewforge:llm-models-updated", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [refreshRuntimeOptions]);
 
   const fetchExecutionPlan = useCallback(async (planId?: string): Promise<ExecutionPlan | undefined> => {
     if (!planId) return undefined;

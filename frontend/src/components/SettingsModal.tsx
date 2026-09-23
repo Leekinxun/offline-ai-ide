@@ -3,6 +3,7 @@ import {
   Check,
   KeyRound,
   Languages,
+  Plus,
   PlugZap,
   Power,
   RefreshCw,
@@ -63,6 +64,7 @@ interface LlmFormState {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  models: LlmSettings["models"];
   maxTokens: string;
   maxAgentIterations: string;
   systemPrompt: string;
@@ -92,6 +94,7 @@ const EMPTY_LLM_FORM: LlmFormState = {
   vllmApiUrl: "",
   vllmApiKey: "",
   modelName: "",
+  models: [],
   maxTokens: "8192",
   maxAgentIterations: "30",
   systemPrompt: "",
@@ -228,6 +231,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiUrl: data.llm.vllmApiUrl,
         vllmApiKey: data.llm.vllmApiKey,
         modelName: data.llm.modelName,
+        models: Array.isArray(data.llm.models) ? data.llm.models : [],
         maxTokens: String(data.llm.maxTokens),
         maxAgentIterations: String(data.llm.maxAgentIterations),
         systemPrompt: data.llm.systemPrompt || "",
@@ -386,6 +390,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const updateAdditionalModel = (
+    index: number,
+    field: keyof LlmSettings["models"][number],
+    value: string
+  ) => {
+    setLlmForm((prev) => ({
+      ...prev,
+      models: prev.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model
+      ),
+    }));
+  };
+
   const handleSaveLlm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingLlm) return;
@@ -400,6 +417,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       vllmApiUrl: llmForm.vllmApiUrl.trim(),
       vllmApiKey: llmForm.vllmApiKey,
       modelName: llmForm.modelName.trim(),
+      models: llmForm.models.map((model) => ({
+        modelName: model.modelName.trim(),
+        apiUrl: model.apiUrl.trim(),
+        apiKey: model.apiKey,
+      })),
       maxTokens,
       maxAgentIterations,
       systemPrompt: llmForm.systemPrompt.trim(),
@@ -407,6 +429,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     if (!payload.vllmApiUrl || !payload.modelName) {
       setError(t("settings.llmApiUrlAndModelRequired"));
+      return;
+    }
+
+    if (payload.models.some((model) => !model.modelName || !model.apiUrl)) {
+      setError(t("settings.additionalModelRequired"));
+      return;
+    }
+
+    const modelNames = [payload.modelName, ...payload.models.map((model) => model.modelName)];
+    if (new Set(modelNames).size !== modelNames.length) {
+      setError(t("settings.duplicateModelName"));
       return;
     }
 
@@ -439,11 +472,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         vllmApiUrl: saved.vllmApiUrl,
         vllmApiKey: saved.vllmApiKey,
         modelName: saved.modelName,
+        models: Array.isArray(saved.models) ? saved.models : [],
         maxTokens: String(saved.maxTokens),
         maxAgentIterations: String(saved.maxAgentIterations),
         systemPrompt: saved.systemPrompt || "",
       });
       setSettings((prev) => (prev ? { ...prev, llm: saved } : prev));
+      window.dispatchEvent(new Event("crewforge:llm-models-updated"));
       onShowToast(t("settings.llmSettingsSaved"));
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.failedToSaveLlmSettings"));
@@ -1194,6 +1229,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <form className="settings-form" onSubmit={handleSaveLlm}>
+                  <div className="settings-model-heading">
+                    <strong>{t("settings.defaultModel")}</strong>
+                    <span className="settings-help-text">{t("settings.defaultModelHelp")}</span>
+                  </div>
                   <label className="settings-field settings-field-wide">
                     <span>{t("settings.apiUrl")}</span>
                     <input
@@ -1239,6 +1278,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       placeholder="default"
                     />
                   </label>
+
+                  <div className="settings-model-list">
+                    <div className="settings-model-heading">
+                      <div>
+                        <strong>{t("settings.additionalModels")}</strong>
+                        <span className="settings-help-text">{t("settings.additionalModelsHelp")}</span>
+                      </div>
+                      <button
+                        className="settings-inline-btn"
+                        type="button"
+                        disabled={llmForm.models.length >= 32}
+                        onClick={() => setLlmForm((prev) => ({
+                          ...prev,
+                          models: [...prev.models, { modelName: "", apiUrl: "", apiKey: "" }],
+                        }))}
+                      >
+                        <Plus size={13} />
+                        {t("settings.addModel")}
+                      </button>
+                    </div>
+                    {llmForm.models.length === 0 && (
+                      <span className="settings-help-text">{t("settings.noAdditionalModels")}</span>
+                    )}
+                    {llmForm.models.map((model, index) => (
+                      <div className="settings-model-item" key={index}>
+                        <div className="settings-model-item-header">
+                          <strong>{model.modelName.trim() || t("settings.additionalModelNumber", { count: index + 1 })}</strong>
+                          <button
+                            className="settings-inline-btn"
+                            type="button"
+                            aria-label={t("settings.removeModel", { name: model.modelName.trim() || String(index + 1) })}
+                            onClick={() => setLlmForm((prev) => ({
+                              ...prev,
+                              models: prev.models.filter((_, modelIndex) => modelIndex !== index),
+                            }))}
+                          >
+                            <Trash2 size={13} />
+                            {t("settings.removeModelButton")}
+                          </button>
+                        </div>
+                        <label className="settings-field settings-field-wide">
+                          <span>{t("settings.modelName")}</span>
+                          <input
+                            className="settings-input"
+                            value={model.modelName}
+                            onChange={(e) => updateAdditionalModel(index, "modelName", e.target.value)}
+                            placeholder="model-name"
+                          />
+                        </label>
+                        <label className="settings-field settings-field-wide">
+                          <span>{t("settings.apiUrl")}</span>
+                          <input
+                            className="settings-input"
+                            value={model.apiUrl}
+                            onChange={(e) => updateAdditionalModel(index, "apiUrl", e.target.value)}
+                            placeholder="https://api.example.com/v1"
+                          />
+                        </label>
+                        <label className="settings-field settings-field-wide">
+                          <span>{t("settings.apiKey")}</span>
+                          <input
+                            className="settings-input"
+                            type="password"
+                            value={model.apiKey}
+                            onChange={(e) => updateAdditionalModel(index, "apiKey", e.target.value)}
+                            placeholder={t("settings.optionalBearerToken")}
+                          />
+                        </label>
+                      </div>
+                    ))}
+                  </div>
 
                   <div className="settings-field settings-field-wide">
                     <span>{t("settings.maxTokens")}</span>

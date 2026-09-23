@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { UserSession } from "../auth/sessionManager.js";
-import { getLlmSettings } from "../config.js";
+import { getLlmSettings, resolveModelEndpoint } from "../config.js";
 import { ModelBudgetGovernor, type BudgetScope, type BudgetScopeKind } from "../agent/modelBudget.js";
 import { getModelCapabilities } from "../agent/modelCapabilities.js";
 import { getProviderAdapter, listProviderAdapters } from "../agent/providerAdapter.js";
@@ -19,7 +19,8 @@ function canManage(req: unknown): boolean { const current = session(req); return
 modelGovernanceRouter.get("/capabilities", async (req, res) => {
   try {
     const llm = getLlmSettings(); const providerId = typeof req.query.providerId === "string" ? req.query.providerId : "openai-compatible"; const adapter = getProviderAdapter(providerId);
-    const capabilities = await getModelCapabilities({ apiUrl: llm.vllmApiUrl, apiKey: llm.vllmApiKey, modelName: typeof req.query.model === "string" && req.query.model.trim() ? req.query.model.trim() : llm.modelName, fallbackMaxOutputTokens: llm.maxTokens, declaredSupports: adapter.declaredSupports }, req.query.refresh === "1");
+    const modelEndpoint = resolveModelEndpoint(typeof req.query.model === "string" && req.query.model.trim() ? req.query.model.trim() : llm.modelName);
+    const capabilities = await getModelCapabilities({ apiUrl: modelEndpoint.apiUrl, apiKey: modelEndpoint.apiKey, modelName: modelEndpoint.modelName, fallbackMaxOutputTokens: llm.maxTokens, declaredSupports: adapter.declaredSupports }, req.query.refresh === "1");
     res.json({ providerId, capabilities, suitability: Object.fromEntries(ROLES.map((role) => [role, modelSuitability(role, capabilities)])), adapters: listProviderAdapters() });
   } catch (error) { res.status(502).json({ error: error instanceof Error ? error.message : "Capability discovery failed" }); }
 });

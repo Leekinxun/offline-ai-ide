@@ -13,6 +13,7 @@ import { registerAgentHooks } from "./agentHooks.js";
 import { TEAMMATE_CAPABILITY } from "./types.js";
 import { AgentRunRecorder, readRunRecord } from "../chat/runHistory.js";
 import { TraceStore } from "../chat/traceStore.js";
+import { config } from "../config.js";
 
 function initializeGitWorkspace(workspaceDir: string): void {
   execFileSync("git", ["init", "-q", workspaceDir]);
@@ -34,6 +35,43 @@ test("teammate allocation fails closed outside a Git workspace", async (t) => {
   const failed = new TraceStore(workspaceDir).list().find((event) => event.action === "collaboration.spawn_failed");
   assert.equal(failed?.metadata?.agentId, "teammate:writer");
   assert.equal(failed?.metadata?.reasonCode, "worktree_unavailable");
+});
+
+test("teammate inherits the selected model endpoint", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-selected-model-"));
+  initializeGitWorkspace(workspaceDir);
+  const previousModels = config.models;
+  const previousProfiles = config.agentProfiles;
+  const previousFallbacks = config.modelFallbacks;
+  const previousFetch = globalThis.fetch;
+  config.models = [{ modelName: "selected-teammate-model", apiUrl: "https://selected-teammate.invalid/v1", apiKey: "selected-teammate-key" }];
+  config.agentProfiles = {};
+  config.modelFallbacks = [];
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, authorization: new Headers(init?.headers).get("Authorization") });
+    if (url.endsWith("/models")) return Response.json({ data: [{ id: "selected-teammate-model", max_output_tokens: 1024 }] });
+    return Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "idle-call", type: "function", function: { name: "idle", arguments: "{}" } }] }, finish_reason: "tool_calls" }] });
+  };
+  t.after(async () => {
+    config.models = previousModels;
+    config.agentProfiles = previousProfiles;
+    config.modelFallbacks = previousFallbacks;
+    globalThis.fetch = previousFetch;
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  const manager = new TeammateManager(workspaceDir, new MessageBus(workspaceDir), new TaskManager(workspaceDir));
+  assert.match(await manager.spawn("selected", "implementation", "finish task", undefined, undefined, undefined, "selected-teammate-model"), /Spawned/);
+  for (let attempt = 0; attempt < 100 && manager.listDetails()[0]?.status === "working"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(manager.listDetails()[0]?.model, "selected-teammate-model");
+  const completions = calls.filter((call) => call.url.endsWith("/chat/completions"));
+  assert.ok(completions.length > 0);
+  assert.ok(completions.every((call) => call.url === "https://selected-teammate.invalid/v1/chat/completions"));
+  assert.ok(completions.every((call) => call.authorization === "Bearer selected-teammate-key"));
 });
 
 test("restart reconciliation persists interrupted agents", async (t) => {

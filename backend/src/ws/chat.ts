@@ -300,7 +300,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           resumeMode,
           resumableRun.modelName,
           config.agentProfiles,
-          config.modelName
+          config.modelName,
+          config.models.map((model) => model.modelName)
         );
         const requestId =
           typeof data.requestId === "string" && data.requestId.trim()
@@ -359,6 +360,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
             conversationId,
             mode: resumeMode,
             modelName: resumeModelName,
+            selectedModelName: resumeModelName,
             executionPlan,
           },
           steeringQueue,
@@ -385,7 +387,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         mode,
         data.modelName,
         config.agentProfiles,
-        config.modelName
+        config.modelName,
+        config.models.map((model) => model.modelName)
       );
 
       if (!userMessage.trim()) {
@@ -443,6 +446,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           workspaceDir: session.workspaceDir,
           conversationId,
           requestId: requestedRequestId || undefined,
+          modelName,
         })
           .then((title) => {
             if (!title) {
@@ -468,6 +472,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         conversationId,
         mode,
         modelName,
+        selectedModelName: typeof data.modelName === "string" && data.modelName.trim() ? modelName : undefined,
         executionPlan,
       };
 
@@ -541,6 +546,7 @@ interface PendingUserMessage {
   conversationId: string;
   mode: AgentMode;
   modelName: string;
+  selectedModelName?: string;
   executionPlan?: ExecutionPlan;
 }
 
@@ -859,10 +865,12 @@ async function processConversationQueue(
         mode: "code",
         modelName: resolveSelectableModelName(
           "code",
-          undefined,
+          initialTurn.selectedModelName,
           config.agentProfiles,
-          config.modelName
+          config.modelName,
+          config.models.map((model) => model.modelName)
         ),
+        selectedModelName: initialTurn.selectedModelName,
         executionPlan: approvedPlan,
       }
     : steeringQueue.shift();

@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { config } from "../config.js";
+import { config, resolveModelEndpoint } from "../config.js";
 import {
   OpenAIMessage,
   AgentMode,
@@ -169,6 +169,7 @@ export async function runAgentLoop(
   const workspacePolicy = policyStore.getWorkspaceOverride();
   const effectiveAgentPolicy = resolveEffectiveAgentPolicy({ admin: adminPolicy.permissions, profile: agentProfile, workspace: workspacePolicy.permissions, sandboxLayers: [adminPolicy.sandbox, workspacePolicy.sandbox] });
   const modelName = control?.modelName || agentProfile.modelName || config.modelName;
+  const modelEndpoint = resolveModelEndpoint(modelName);
   const runStartedAt = Date.now();
   const runSignal = control?.createAbortSignal();
   const tools = getAllTools({
@@ -190,8 +191,8 @@ export async function runAgentLoop(
   const toolLoopGuard = new ToolLoopGuard();
   const toolCtx = {
     workspaceDir: session.workspaceDir,
-    vllmApiUrl: config.vllmApiUrl,
-    vllmApiKey: config.vllmApiKey,
+    vllmApiUrl: modelEndpoint.apiUrl,
+    vllmApiKey: modelEndpoint.apiKey,
     modelName,
     actorName: session.username,
     todoManager,
@@ -519,8 +520,8 @@ export async function runAgentLoop(
       const result = await compactMessages({
         workspaceDir: session.workspaceDir,
         messages,
-        apiUrl: config.vllmApiUrl,
-        apiKey: config.vllmApiKey,
+        apiUrl: modelEndpoint.apiUrl,
+        apiKey: modelEndpoint.apiKey,
         model: modelName,
         executionContract: compactionContract,
         fallbacks: bindConfiguredFallbacks(config.modelFallbacks, compactionContract, 2000),
@@ -769,8 +770,8 @@ export async function runAgentLoop(
           tools: availableTools.map((tool) => tool.function.name),
         });
         processed = await processModelTurn({
-          apiUrl: config.vllmApiUrl,
-          apiKey: config.vllmApiKey,
+          apiUrl: modelEndpoint.apiUrl,
+          apiKey: modelEndpoint.apiKey,
           model: modelName,
           providerId: agentProfile.providerId,
           systemPrompt,

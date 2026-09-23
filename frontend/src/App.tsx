@@ -3406,8 +3406,11 @@ function AuthenticatedApp({
           visible={chatVisible && workspaceView === "chat"}
           focusRequest={chatFocusNonce}
           agentMode={chat.agentMode}
+          runtimeOptions={chat.runtimeOptions}
+          selectedModelName={chat.selectedModelName}
           taskTitle={workbenchTaskTitle}
           onAgentModeChange={chat.setAgentMode}
+          onModelNameChange={chat.setSelectedModelName}
           currentRunSummary={chat.currentRunSummary}
           contextState={chat.contextState}
           contextManifest={chat.contextManifest}

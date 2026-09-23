@@ -748,6 +748,7 @@ export interface LlmSettings {
   vllmApiUrl: string;
   vllmApiKey: string;
   modelName: string;
+  models: Array<{ modelName: string; apiUrl: string; apiKey: string }>;
   maxTokens: number;
   maxAgentIterations: number;
   systemPrompt?: string;
