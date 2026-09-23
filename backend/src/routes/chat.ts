@@ -1,12 +1,20 @@
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import {
   deleteConversation,
   conversationExists,
   forkConversation,
+  getChatRequestStatus,
+  isValidChatRequestId,
   listConversationSummaries,
   readConversationMessages,
 } from "../chat/history.js";
 import type { UserSession } from "../auth/sessionManager.js";
+import {
+  ChatAttachmentError,
+  readChatAttachment,
+  storeChatAttachments,
+} from "../chat/attachments.js";
 import { sessionManager } from "../auth/sessionManager.js";
 import {
   hasActiveRunForConversation,
@@ -22,7 +30,7 @@ import {
   listManagedWorktrees,
   removeManagedWorktree,
 } from "../chat/worktrees.js";
-import { config } from "../config.js";
+import { config, resolveModelInputCapabilities } from "../config.js";
 import {
   listSelectableModelNames,
   resolveSelectableModelName,
@@ -47,6 +55,10 @@ import { toSarifReviewFindings } from "../artifacts/reviewArtifact.js";
 import "../indexing/repositoryIndex.js";
 
 export const chatRouter = Router();
+const attachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 4, fields: 0, parts: 4 },
+});
 
 function getSessionWorkspace(req: unknown): string {
   return ((req as any).userSession as UserSession).workspaceDir;
@@ -124,9 +136,14 @@ function planRouteError(error: unknown, fallback: string): { status: 400 | 404; 
 
 chatRouter.get("/runtime-options", (_req, res) => {
   const modes = ["ask", "plan", "code", "review"] as const;
+  const models = listSelectableModelNames(config.agentProfiles, config.modelName, config.models.map((model) => model.modelName));
   res.json({
     defaultModelName: config.modelName,
-    models: listSelectableModelNames(config.agentProfiles, config.modelName, config.models.map((model) => model.modelName)),
+    models,
+    modelInputCapabilities: Object.fromEntries(models.map((name) => {
+      const capabilities = resolveModelInputCapabilities(name);
+      return [name, { supportsImageInput: capabilities.image_input, supportsPdfInput: capabilities.pdf_input }];
+    })),
     modeModels: Object.fromEntries(
       modes.map((mode) => [
         mode,
@@ -134,6 +151,51 @@ chatRouter.get("/runtime-options", (_req, res) => {
       ])
     ),
   });
+});
+
+chatRouter.get("/request-status/:requestId", (req, res) => {
+  if (!isValidChatRequestId(req.params.requestId)) {
+    return res.status(400).json({ error: "Invalid chat request id" });
+  }
+  try {
+    res.json(getChatRequestStatus(getSessionWorkspace(req), req.params.requestId));
+  } catch {
+    res.status(500).json({ error: "Failed to read chat request status" });
+  }
+});
+
+chatRouter.post("/attachments", (req, res, next) => {
+  attachmentUpload.array("files", 4)(req, res, (error: unknown) => {
+    if (!error) return next();
+    if (error instanceof multer.MulterError) {
+      return res.status(error.code === "LIMIT_FILE_SIZE" || error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_PART_COUNT" ? 413 : 400)
+        .json({ error: "Attachment upload exceeds its limits" });
+    }
+    return res.status(400).json({ error: "Invalid attachment upload" });
+  });
+}, (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files as Express.Multer.File[] : [];
+    const attachments = storeChatAttachments(getSessionWorkspace(req), files);
+    res.status(201).json({ attachments });
+  } catch (error) {
+    if (error instanceof ChatAttachmentError) return res.status(error.status).json({ error: error.message });
+    res.status(500).json({ error: "Failed to store attachments" });
+  }
+});
+
+chatRouter.get("/attachments/:id", (req, res) => {
+  try {
+    const { attachment, bytes } = readChatAttachment(getSessionWorkspace(req), req.params.id);
+    res.setHeader("Content-Type", attachment.kind === "text" ? "text/plain; charset=utf-8" : attachment.mimeType);
+    res.setHeader("Content-Disposition", `${attachment.kind === "pdf" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(bytes);
+  } catch (error) {
+    if (error instanceof ChatAttachmentError) return res.status(error.status).json({ error: error.message });
+    res.status(500).json({ error: "Failed to read attachment" });
+  }
 });
 
 chatRouter.get("/context-manifests", (req, res) => {

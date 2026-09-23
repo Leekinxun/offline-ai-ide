@@ -47,7 +47,23 @@ export class ModelBudgetGovernor {
   }
 }
 
+/** Rough, bounded allowance for media processing; provider usage remains authoritative. */
+export function estimateAttachmentReferenceTokens(messages: OpenAIMessage[]): number {
+  let tokens = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "attachment_ref") continue;
+      const size = Math.max(0, Number.isFinite(part.attachment.size) ? part.attachment.size : 0);
+      if (part.attachment.kind === "image") tokens += 2048;
+      else if (part.attachment.kind === "pdf") tokens += Math.min(16_000, Math.max(2048, Math.ceil(size / 64)));
+      else tokens += Math.ceil(Math.min(size, 128 * 1024) / 4);
+    }
+  }
+  return tokens;
+}
+
 export function estimateModelRequest(input: { messages: OpenAIMessage[]; tools?: OpenAIToolDef[]; systemPrompt?: string; maxOutputTokens: number; inputPerMillionUsd?: number; outputPerMillionUsd?: number }): { inputTokens: number; outputTokens: number; tokens: number; costUsd: number } {
-  const serialized = JSON.stringify({ systemPrompt: input.systemPrompt || "", messages: input.messages, tools: input.tools || [] }); const inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(serialized, "utf8") / 4)); const outputTokens = Math.max(0, Math.floor(input.maxOutputTokens)); const costUsd = Math.round((inputTokens / 1_000_000 * (input.inputPerMillionUsd || 0) + outputTokens / 1_000_000 * (input.outputPerMillionUsd || 0)) * 1_000_000) / 1_000_000; return { inputTokens, outputTokens, tokens: inputTokens + outputTokens, costUsd };
+  const serialized = JSON.stringify({ systemPrompt: input.systemPrompt || "", messages: input.messages, tools: input.tools || [] }); const inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(serialized, "utf8") / 4) + estimateAttachmentReferenceTokens(input.messages)); const outputTokens = Math.max(0, Math.floor(input.maxOutputTokens)); const costUsd = Math.round((inputTokens / 1_000_000 * (input.inputPerMillionUsd || 0) + outputTokens / 1_000_000 * (input.outputPerMillionUsd || 0)) * 1_000_000) / 1_000_000; return { inputTokens, outputTokens, tokens: inputTokens + outputTokens, costUsd };
 }
 export function budgetReceiptId(value: unknown): string { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }

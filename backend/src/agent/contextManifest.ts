@@ -19,6 +19,7 @@ export type ContextFreshness = "fresh" | "possibly_stale" | "stale" | "unknown";
 export type ContextTrust =
   | "platform"
   | "authenticated_user"
+  | "user_attachment_untrusted"
   | "approved_user_artifact"
   | "workspace_instruction"
   | "local_tool_output"

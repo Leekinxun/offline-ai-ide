@@ -3,6 +3,7 @@ import path from "node:path";
 import { processModelTurn } from "./modelProcessor.js";
 import { OpenAIMessage } from "./types.js";
 import { redactSecrets } from "./secretRedaction.js";
+import { estimateAttachmentReferenceTokens } from "./modelBudget.js";
 import type { ContextAuditOptions, ContextManifestState } from "./contextManifest.js";
 import type { ModelFallbackCandidate } from "./modelProcessor.js";
 import type { ProviderExecutionContract } from "./providerConformance.js";
@@ -53,7 +54,7 @@ function truncateForSummary(value: string): string {
 
 /** A deliberately conservative heuristic that works without a tokenizer. */
 export function estimateMessageTokens(messages: OpenAIMessage[]): number {
-  return Math.ceil(JSON.stringify(messages).length / 4);
+  return Math.ceil(JSON.stringify(messages).length / 4) + estimateAttachmentReferenceTokens(messages);
 }
 
 /** Keep recent tool output useful while removing stale, high-volume payloads. */
@@ -103,7 +104,7 @@ export function safeTrimMessages(messages: OpenAIMessage[], keepRecent = 8): Ope
 }
 
 function isImportantToolOutput(message: OpenAIMessage): boolean {
-  return /\b(error|failed|exception|warning|conflict|not found)\b/i.test(message.content || "");
+  return /\b(error|failed|exception|warning|conflict|not found)\b/i.test(typeof message.content === "string" ? message.content : "");
 }
 
 function transcriptName(): string {

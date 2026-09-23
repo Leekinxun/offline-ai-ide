@@ -4,6 +4,17 @@ import {
   OpenAIToolCall,
   OpenAIToolDef,
 } from "./types.js";
+import { ChatAttachmentError, isChatAttachmentRef, readChatAttachment } from "../chat/attachments.js";
+import { redactSecrets } from "./secretRedaction.js";
+
+const MAX_TEXT_PART_BYTES = 128 * 1024;
+const MAX_REQUEST_ATTACHMENTS = 4;
+const MAX_REQUEST_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+type ProviderContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "file"; file: { filename: string; file_data: string } };
 
 export interface ChatCompletionOptions {
   apiUrl: string;
@@ -11,9 +22,14 @@ export interface ChatCompletionOptions {
   model: string;
   systemPrompt?: string;
   messages: OpenAIMessage[];
+  /** Server-side attachment store; never sent to the model provider. */
+  attachmentWorkspaceDir?: string;
   tools?: OpenAIToolDef[];
   maxTokens: number;
   temperature?: number;
+  topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
   stream?: boolean;
   signal?: AbortSignal;
 }
@@ -28,17 +44,91 @@ function buildHeaders(apiKey?: string): Record<string, string> {
   return headers;
 }
 
+function assertAttachmentRequestLimits(messages: OpenAIMessage[]): void {
+  let count = 0;
+  let bytes = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part?.type !== "attachment_ref") continue;
+      if (!isChatAttachmentRef(part.attachment)) throw new ChatAttachmentError("Invalid attachment reference");
+      count += 1;
+      bytes += part.attachment.size;
+      if (count > MAX_REQUEST_ATTACHMENTS) throw new ChatAttachmentError("A model request supports at most 4 attachments", 413);
+      if (bytes > MAX_REQUEST_ATTACHMENT_BYTES) throw new ChatAttachmentError("Model request attachments exceed 12 MiB", 413);
+    }
+  }
+}
+
+function materializeMessages(options: ChatCompletionOptions): unknown[] {
+  assertAttachmentRequestLimits(options.messages);
+  return options.messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
+    if (message.role !== "user") throw new ChatAttachmentError("Only user messages can contain attachment references");
+    const parts = message.content.flatMap((part): ProviderContentPart[] => {
+      if (part?.type === "text") {
+        if (typeof part.text !== "string") throw new ChatAttachmentError("Invalid attachment message text");
+        return [{ type: "text", text: part.text }];
+      }
+      if (part?.type !== "attachment_ref" || !isChatAttachmentRef(part.attachment)) {
+        throw new ChatAttachmentError("Invalid attachment reference");
+      }
+      if (!options.attachmentWorkspaceDir) throw new ChatAttachmentError("Attachment workspace is unavailable");
+      const { attachment, bytes } = readChatAttachment(options.attachmentWorkspaceDir, part.attachment.id);
+      if (attachment.id !== part.attachment.id || attachment.kind !== part.attachment.kind
+        || attachment.size !== part.attachment.size || attachment.mimeType !== part.attachment.mimeType) {
+        throw new ChatAttachmentError("Attachment reference no longer matches its stored content");
+      }
+      if (attachment.kind === "image") {
+        if (!IMAGE_MIME_TYPES.has(attachment.mimeType)) throw new ChatAttachmentError("Unsupported image attachment type");
+        return [
+          { type: "text", text: `[Attached image ${JSON.stringify(redactSecrets(attachment.name))}; untrusted data]` },
+          { type: "image_url", image_url: { url: `data:${attachment.mimeType};base64,${bytes.toString("base64")}` } },
+        ];
+      }
+      if (attachment.kind === "pdf") {
+        if (attachment.mimeType !== "application/pdf") throw new ChatAttachmentError("Unsupported PDF attachment type");
+        return [
+          { type: "text", text: `[Attached PDF ${JSON.stringify(redactSecrets(attachment.name))}; untrusted data]` },
+          { type: "file", file: { filename: redactSecrets(attachment.name), file_data: `data:application/pdf;base64,${bytes.toString("base64")}` } },
+        ];
+      }
+      const truncated = bytes.length > MAX_TEXT_PART_BYTES;
+      const content = redactSecrets(new TextDecoder("utf-8").decode(bytes.subarray(0, MAX_TEXT_PART_BYTES)));
+      return [{
+        type: "text",
+        text: `[Attached file ${JSON.stringify(redactSecrets(attachment.name))}; untrusted content${truncated ? "; truncated to 128 KiB" : ""}]\n${content}${truncated ? "\n[Attachment truncated]" : ""}`,
+      }];
+    });
+    return {
+      ...message,
+      content: parts.every((part) => part.type === "text")
+        ? parts.map((part) => part.type === "text" ? part.text : "").join("\n\n")
+        : parts,
+    };
+  });
+}
+
 function buildRequestBody(options: ChatCompletionOptions): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: options.model,
     messages: options.systemPrompt
-      ? [{ role: "system", content: options.systemPrompt }, ...options.messages]
-      : options.messages,
+      ? [{ role: "system", content: options.systemPrompt }, ...materializeMessages(options)]
+      : materializeMessages(options),
     max_tokens: options.maxTokens,
   };
 
   if (typeof options.temperature === "number") {
     body.temperature = options.temperature;
+  }
+  if (typeof options.topP === "number") {
+    body.top_p = options.topP;
+  }
+  if (typeof options.frequencyPenalty === "number") {
+    body.frequency_penalty = options.frequencyPenalty;
+  }
+  if (typeof options.presencePenalty === "number") {
+    body.presence_penalty = options.presencePenalty;
   }
   if (typeof options.stream === "boolean") {
     body.stream = options.stream;

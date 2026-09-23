@@ -1,10 +1,16 @@
 import { WebSocket } from "ws";
+import type { ChatAttachmentRef } from "../chat/attachments.js";
 
 // --- OpenAI-compatible API types ---
 
+/** Attachment bytes live in the chat store and are loaded only for a provider request. */
+export type OpenAIInputPart =
+  | { type: "text"; text: string }
+  | { type: "attachment_ref"; attachment: ChatAttachmentRef };
+
 export interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | null | OpenAIInputPart[];
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 }
@@ -118,6 +124,7 @@ export interface AgentRunEventInput {
 // --- WebSocket message types (server -> client) ---
 
 export type WsServerMessage =
+  | { type: "request_accepted"; requestId: string; conversationId: string; replayed?: true }
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
   | {

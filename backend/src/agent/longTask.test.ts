@@ -27,6 +27,6 @@ test("keeps a synthetic long agent task within a bounded context window", () => 
   }
 
   assert.ok(messages.some((message) => message.role === "user"));
-  assert.ok(messages.some((message) => message.role === "tool" && /Error:/.test(message.content || "")));
+  assert.ok(messages.some((message) => message.role === "tool" && /Error:/.test(typeof message.content === "string" ? message.content : "")));
   assert.ok(estimateMessageTokens(messages) <= 28_000);
 });

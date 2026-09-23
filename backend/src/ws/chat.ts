@@ -5,8 +5,12 @@ import { runAgentLoop } from "../agent/loop.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import {
   appendConversationMessage,
+  beginChatRequest,
+  completeChatRequest,
   conversationExists,
   createConversationId,
+  failChatRequest,
+  getChatRequestStatus,
   updateConversationTitle,
   updateConversationState,
   readConversationMessages,
@@ -36,7 +40,8 @@ import {
   type ExecutionPlan,
 } from "../chat/executionPlans.js";
 import { checkExecutionPlanFreshness } from "../chat/planFreshness.js";
-import { config } from "../config.js";
+import { config, resolveModelInputCapabilities } from "../config.js";
+import { resolveChatAttachments, type ChatAttachmentRef } from "../chat/attachments.js";
 import { resolveSelectableModelName } from "../agent/agentProfiles.js";
 import {
   PLAN_CODE_HANDOFF_PROMPT,
@@ -186,7 +191,10 @@ function persistPlanAmendments(
   return currentPlan;
 }
 
-export function handleChatWs(ws: WebSocket, session: UserSession): void {
+export function handleChatWs(ws: WebSocket, liveSession: UserSession): void {
+  // Workspace switches mutate the live session in place. An in-flight turn must
+  // retain the workspace and managers it started with through persistence/ACK.
+  const session: UserSession = { ...liveSession };
   const steeringQueue: PendingUserMessage[] = [];
   const controlState = createRunControlState();
   const approvals = new ToolApprovalSession((request) => {
@@ -200,8 +208,18 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
   });
 
   ws.on("message", async (raw) => {
+    let requestIdForError: string | undefined;
+    let requestAccepted = false;
+    let processingRequestId: string | undefined;
     try {
       const data = JSON.parse(raw.toString());
+      requestIdForError = typeof data.requestId === "string" && data.requestId.trim()
+        ? data.requestId.trim() : undefined;
+      if (liveSession.workspaceDir !== session.workspaceDir) {
+        wsSend(ws, { type: "error", requestId: requestIdForError, content: "Workspace changed; reconnect chat before sending" });
+        ws.close();
+        return;
+      }
       if (data.type === "tool_approval_all") {
         const conversationId = typeof data.conversationId === "string"
           ? data.conversationId.trim()
@@ -292,7 +310,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
             executionPlan = undefined;
           }
         }
-        if (executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, executionPlan, ws)) {
+        if (executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, executionPlan, ws, requestIdForError)) {
           return;
         }
         const resumeMode = resumableRun.mode;
@@ -330,6 +348,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           content: RESUME_PROMPT,
           timestamp: Date.now(),
         });
+        requestAccepted = true;
+        wsSend(ws, { type: "request_accepted", requestId, conversationId });
         wsSend(ws, { type: "conversation", conversationId, created: false });
         wsSend(ws, {
           type: "conversation_state",
@@ -374,7 +394,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         return;
       }
 
-      const userMessage: string = data.message || "";
+      const userMessage = typeof data.message === "string" ? data.message : "";
       const context = data.context as
         | { path: string; content: string; language: string; selection?: string }
         | undefined;
@@ -382,6 +402,49 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         typeof data.conversationId === "string" ? data.conversationId.trim() : "";
       const requestedRequestId =
         typeof data.requestId === "string" ? data.requestId.trim() : "";
+      const pendingRequestId = requestedRequestId || createTurnRequestId();
+      const replayAcceptedRequest = (conversationId: string): void => {
+        const original = readConversationMessages(session.workspaceDir, conversationId).find((message) =>
+          message.role === "user" && message.requestId === pendingRequestId
+        );
+        const attachmentIds = data.attachments === undefined ? [] : data.attachments;
+        const originalAttachmentIds = original?.attachments?.map((attachment) => attachment.id) || [];
+        if (
+          (requestedConversationId && requestedConversationId !== conversationId) ||
+          !original || original.content !== userMessage.trim() ||
+          !Array.isArray(attachmentIds) ||
+          attachmentIds.length !== originalAttachmentIds.length ||
+          attachmentIds.some((id: unknown, index: number) => id !== originalAttachmentIds[index])
+        ) {
+          wsSend(ws, { type: "error", requestId: pendingRequestId, content: "This request ID belongs to a different message" });
+          return;
+        }
+        wsSend(ws, { type: "request_accepted", requestId: pendingRequestId, conversationId, replayed: true });
+        wsSend(ws, { type: "conversation", conversationId, created: false });
+        wsSend(ws, { type: "done", requestId: pendingRequestId });
+      };
+      if (requestedRequestId) {
+        const previous = getChatRequestStatus(session.workspaceDir, pendingRequestId);
+        if (previous.status === "accepted") {
+          replayAcceptedRequest(previous.conversationId);
+          return;
+        }
+        if (previous.status === "processing") {
+          const inProgress = beginChatRequest(session.workspaceDir, pendingRequestId);
+          if (inProgress.kind === "accepted") {
+            replayAcceptedRequest(inProgress.conversationId);
+            return;
+          }
+          if (inProgress.kind === "processing") {
+            const acceptedConversationId = await inProgress.completion;
+            if (acceptedConversationId) replayAcceptedRequest(acceptedConversationId);
+            else wsSend(ws, { type: "error", requestId: pendingRequestId, content: "The earlier request was not accepted; please retry" });
+            return;
+          }
+          // The first request failed between the status check and reservation.
+          failChatRequest(session.workspaceDir, pendingRequestId);
+        }
+      }
       let mode = normalizeAgentMode(data.mode);
       const modelName = resolveSelectableModelName(
         mode,
@@ -391,15 +454,20 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
         config.models.map((model) => model.modelName)
       );
 
-      if (!userMessage.trim()) {
-        wsSend(ws, { type: "error", content: "Empty message" });
+      const attachments = resolveChatAttachments(session.workspaceDir, data.attachments === undefined ? [] : data.attachments);
+      const inputCapabilities = resolveModelInputCapabilities(modelName);
+      if (attachments.some((attachment) => attachment.kind === "image") && !inputCapabilities.image_input) {
+        wsSend(ws, { type: "error", requestId: requestedRequestId || undefined, content: `Model ${modelName} is not configured for image input` });
         return;
       }
-      try {
-        const index = await getContextIndexAdapter().status(session.workspaceDir);
-        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, ...index });
-      } catch (error) {
-        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, status: "error", error: error instanceof Error ? error.message : "Context index status failed" });
+      if (attachments.some((attachment) => attachment.kind === "pdf") && !inputCapabilities.pdf_input) {
+        wsSend(ws, { type: "error", requestId: requestedRequestId || undefined, content: `Model ${modelName} is not configured for PDF input` });
+        return;
+      }
+
+      if (!userMessage.trim() && attachments.length === 0) {
+        wsSend(ws, { type: "error", requestId: requestedRequestId || undefined, content: "Empty message" });
+        return;
       }
 
       let conversationId = requestedConversationId;
@@ -407,7 +475,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
 
       if (conversationId) {
         if (!conversationExists(session.workspaceDir, conversationId)) {
-          wsSend(ws, { type: "error", content: "Conversation not found" });
+          wsSend(ws, { type: "error", requestId: requestedRequestId || undefined, content: "Conversation not found" });
           return;
         }
       } else {
@@ -421,9 +489,37 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
           session.workspaceDir,
           conversationId
         ) || undefined;
-        if (executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, executionPlan, ws)) {
+        if (executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, executionPlan, ws, pendingRequestId)) {
           return;
         }
+      }
+
+      const requestStatus = beginChatRequest(session.workspaceDir, pendingRequestId);
+      if (requestStatus.kind === "accepted") {
+        replayAcceptedRequest(requestStatus.conversationId);
+        return;
+      }
+      if (requestStatus.kind === "processing") {
+        const existingConversationId = await requestStatus.completion;
+        if (existingConversationId) {
+          replayAcceptedRequest(existingConversationId);
+        } else {
+          wsSend(ws, { type: "error", requestId: pendingRequestId, content: "The earlier request was not accepted; please retry" });
+        }
+        return;
+      }
+      processingRequestId = pendingRequestId;
+      if (activeRun && attachments.length > 0) {
+        failChatRequest(session.workspaceDir, pendingRequestId);
+        processingRequestId = undefined;
+        wsSend(ws, { type: "error", requestId: pendingRequestId, content: "Wait for the current run to finish before sending attachments" });
+        return;
+      }
+      try {
+        const index = await getContextIndexAdapter().status(session.workspaceDir);
+        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, ...index });
+      } catch (error) {
+        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, status: "error", error: error instanceof Error ? error.message : "Context index status failed" });
       }
 
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -434,11 +530,17 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
 
       const userEntry: PersistedChatMessage = {
         role: "user",
+        requestId: pendingRequestId,
         content: userMessage.trim(),
         timestamp: Date.now(),
+        ...(attachments.length ? { attachments } : {}),
       };
 
       await appendConversationMessage(session.workspaceDir, conversationId, userEntry);
+      requestAccepted = true;
+      completeChatRequest(session.workspaceDir, pendingRequestId, conversationId);
+      processingRequestId = undefined;
+      wsSend(ws, { type: "request_accepted", requestId: requestedRequestId || pendingRequestId, conversationId });
       wsSend(ws, { type: "conversation", conversationId, created });
 
       if (created) {
@@ -466,8 +568,9 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
       }
 
       const pendingMessage: PendingUserMessage = {
-        requestId: requestedRequestId || createTurnRequestId(),
+        requestId: pendingRequestId,
         message: userMessage.trim(),
+        attachments,
         context,
         conversationId,
         mode,
@@ -534,7 +637,8 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
       });
       await activeRun;
     } catch (e: any) {
-      wsSend(ws, { type: "error", content: e.message || String(e) });
+      if (processingRequestId && !requestAccepted) failChatRequest(session.workspaceDir, processingRequestId);
+      wsSend(ws, { type: "error", requestId: requestAccepted ? undefined : requestIdForError, content: e.message || String(e) });
     }
   });
 }
@@ -542,6 +646,7 @@ export function handleChatWs(ws: WebSocket, session: UserSession): void {
 interface PendingUserMessage {
   requestId: string;
   message: string;
+  attachments?: ChatAttachmentRef[];
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId: string;
   mode: AgentMode;
@@ -623,6 +728,7 @@ async function processConversationQueue(
       createAbortSignal: () => controlState.createAbortSignal(),
       mode: initialTurn.mode,
       modelName: initialTurn.modelName,
+      attachments: initialTurn.attachments,
       conversationId: activeConversationId,
       runRecorder: recorder,
       requestToolApproval: (input) => approvals.request({
@@ -875,7 +981,7 @@ async function processConversationQueue(
       }
     : steeringQueue.shift();
   if (nextTurn) {
-    if (nextTurn.executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, nextTurn.executionPlan, ws)) {
+    if (nextTurn.executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, nextTurn.executionPlan, ws, nextTurn.requestId)) {
       return;
     }
     const nextRunId = createRunId();
@@ -932,7 +1038,8 @@ async function processConversationQueue(
 function ensureApprovedPlanFresh(
   workspaceDir: string,
   plan: ExecutionPlan,
-  ws: WebSocket
+  ws: WebSocket,
+  requestId?: string
 ): boolean {
   if (
     plan.status === "needs_revision" ||
@@ -940,12 +1047,13 @@ function ensureApprovedPlanFresh(
   ) {
     wsSend(ws, {
       type: "error",
+      requestId,
       content: "Approved execution plan requires revision: a plan amendment is pending",
     });
     return false;
   }
   if (plan.status !== "approved" && plan.status !== "in_progress") {
-    wsSend(ws, { type: "error", content: "Execution plan is not available to run" });
+    wsSend(ws, { type: "error", requestId, content: "Execution plan is not available to run" });
     return false;
   }
   const result = checkExecutionPlanFreshness(workspaceDir, plan);
@@ -953,6 +1061,7 @@ function ensureApprovedPlanFresh(
   const revised = updateExecutionPlanStatus(workspaceDir, plan.id, "needs_revision");
   wsSend(ws, {
     type: "error",
+    requestId,
     content: `Approved execution plan requires revision: ${result.reason} (${revised.id})`,
   });
   return false;
@@ -1052,7 +1161,7 @@ function buildModelHistoryForTurn(
   workspaceDir: string,
   conversationId: string,
   trailingPendingCount: number
-): { role: string; content: string }[] {
+): { role: string; content: string; attachments?: ChatAttachmentRef[] }[] {
   const messages = readConversationMessages(workspaceDir, conversationId);
   const endIndex = Math.max(0, messages.length - trailingPendingCount);
 
@@ -1062,6 +1171,7 @@ function buildModelHistoryForTurn(
     .map((entry) => ({
       role: entry.role,
       content: entry.content,
+      ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
     }));
 }
 
