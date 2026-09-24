@@ -2,7 +2,7 @@
 
 This preview runs CrownForge locally on each computer. Download the installer for your operating system from this release's **Assets**, together with its matching `.sha256` file. ZIP archives and their checksums are also provided.
 
-**Windows layout fix:** Team, Recovery Center, Git, and other workbench side panels now occupy the same left dock instead of being pushed below the editor. Switching panels closes the previous one, and the terminal begins beside the active panel. Welcome-screen keyboard hints now use Ctrl on Windows and Linux.
+**Windows layout fix:** Team, Recovery Center, Git, and other workbench side panels now occupy the same left dock instead of being pushed below the editor. Switching panels closes the previous one, and the terminal begins beside the active panel. Long checkpoint titles stay within the sidebar, narrowing the window keeps a single drawer open, and width calculations account for classic Windows scrollbars. Welcome-screen keyboard hints now use Ctrl on Windows and Linux.
 
 **Chat polish:** The file and AI side panel resize grips are easier to drag. The AI side panel no longer shows its empty introductory card. Chat messages use left/right bubbles and color to distinguish AI and user without visible role labels. Successful quality-gate events are quiet in chat; warnings and the detailed check record remain available.
 
@@ -31,7 +31,7 @@ On first launch, the app creates an `admin` account and displays a random passwo
 
 本预览版在每台电脑本地独立运行。请在本次 Release 的 **Assets** 中按上表选择安装包，并下载同名 `.sha256` 文件校验；同时提供 ZIP 包及其校验文件。macOS 可在下载目录运行 `shasum -a 256 -c <安装包>.sha256`；Windows 可运行 `certutil -hashfile <安装包>.exe SHA256`，然后与对应校验文件比较。
 
-**Windows 布局修复：**团队协作、恢复中心、Git 等工作台侧栏现在共用左侧位置，切换时会关闭前一个面板，不再被排到编辑器下方；终端也会从当前侧栏右侧开始。Windows 和 Linux 的欢迎页快捷键提示已改为 `Ctrl` 写法。
+**Windows 布局修复：**团队协作、恢复中心、Git 等工作台侧栏现在共用左侧位置，切换时会关闭前一个面板，不再被排到编辑器下方；终端也会从当前侧栏右侧开始。检查点长标题不会撑出侧栏，窗口变窄时只保留一个抽屉，宽度计算会考虑 Windows 传统滚动条。Windows 和 Linux 的欢迎页快捷键提示已改为 `Ctrl` 写法。
 
 **聊天界面调整：**文件栏和 AI 协作栏的拖动区域更容易操作；右侧 AI 协作栏不再显示空白对话的引导卡片。用户与 AI 消息用左右位置和颜色区分，不显示可见的角色标题。聊天中不再显示成功的质量门禁事件，警告与检查详情仍保留。
 
