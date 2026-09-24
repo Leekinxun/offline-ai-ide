@@ -21,7 +21,6 @@ import {
   AgentRunState,
   ChatMessage,
   ConversationRunSummary,
-  SelectionInfo,
   ToolApprovalDecision,
   ToolApprovalRequest,
 } from "../types";
@@ -35,13 +34,13 @@ import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ModelSelector } from "./ModelSelector";
 import { WorkbenchSelect } from "./WorkbenchSelect";
+import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 
 interface EditorAssistantPanelProps {
   token: string;
   visible: boolean;
   activeFilePath: string | null;
   activeFileDirty: boolean;
-  selectionInfo: SelectionInfo | null;
   messages: ChatMessage[];
   connected: boolean;
   isStreaming: boolean;
@@ -99,7 +98,6 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   visible,
   activeFilePath,
   activeFileDirty,
-  selectionInfo,
   messages,
   connected,
   isStreaming,
@@ -149,7 +147,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     () => messages.filter((message) => getRenderableMessageContent(message.content) || message.attachments?.length),
     [messages]
   );
-  const runEvents = useMemo(() => runState?.events.slice(-6) || [], [runState]);
+  const runEvents = useMemo(
+    () => runState?.events.filter((event) => !isQuietCompletionEvent(event)).slice(-6) || [],
+    [runState]
+  );
+  const currentRunEvent = runState?.event && !isQuietCompletionEvent(runState.event)
+    ? runState.event
+    : runEvents[runEvents.length - 1];
   const modeModelName =
     runtimeOptions.modeModels[agentMode] || runtimeOptions.defaultModelName || t("workbench.modelDefault");
   const activeModelName = runState?.modelName || selectedModelName || modeModelName;
@@ -390,25 +394,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             container.scrollHeight - container.scrollTop - container.clientHeight < 48;
         }}
       >
-        {visibleMessages.length === 0 ? (
-          <article className="editor-assistant-message">
-            <p>{t("workbench.editorAssistantIntro")}</p>
-            <small>
-              {fileName
-                ? t("workbench.currentFileContext", {
-                    file: fileName,
-                    selection: selectionInfo
-                      ? t("workbench.linesSelected", {
-                          start: selectionInfo.startLine,
-                          end: selectionInfo.endLine,
-                        })
-                      : t("workbench.noSelection"),
-                  })
-                : t("workbench.openFileForContext")}
-            </small>
-          </article>
-        ) : (
-          visibleMessages.map((message, index) => (
+        {visibleMessages.map((message, index) => (
             <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`} aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
               {message.role === "assistant" ? (
                 <div className="editor-assistant-message-content">
@@ -426,8 +412,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                 })}</small>
               )}
             </article>
-          ))
-        )}
+          ))}
 
         {isStreaming && (!runState || runState.status === "running" || runState.status === "queued") && (
           <section className={`editor-agent-run-card status-${runState?.status || "idle"}`}>
@@ -436,7 +421,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               <div>
                 <strong>
                   {runState
-                    ? runState.event?.label || t("workbench.runProcessingFile")
+                    ? currentRunEvent?.label || t("workbench.runProcessingFile")
                     : t("workbench.runReady")}
                 </strong>
                 <small>{t(`chat.mode.${runState?.mode || agentMode}.label`)} · {activeModelName}</small>

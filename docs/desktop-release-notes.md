@@ -4,6 +4,8 @@ This preview runs CrownForge locally on each computer. Download the installer fo
 
 **Windows layout fix:** Team, Recovery Center, Git, and other workbench side panels now occupy the same left dock instead of being pushed below the editor. Switching panels closes the previous one, and the terminal begins beside the active panel. Welcome-screen keyboard hints now use Ctrl on Windows and Linux.
 
+**Chat polish:** The file and AI side panel resize grips are easier to drag. The AI side panel no longer shows its empty introductory card. Chat messages use left/right bubbles and color to distinguish AI and user without visible role labels. Successful quality-gate events are quiet in chat; warnings and the detailed check record remain available.
+
 **Interface update:** The desktop app now includes the latest Web workbench UI: unified selection menus, clearer chat conversations and model selection, more room for the chat composer, adjustable file and AI side panels, and clearer registration rejection feedback.
 
 **Open Folder fix:** The desktop app now uses the operating system's folder picker to open projects outside its built-in workspace, including another drive or volume. It remembers the selected project after restart. The welcome screen's Open Folder button now opens a folder, and switching away from unsaved files asks for confirmation.
@@ -30,6 +32,8 @@ On first launch, the app creates an `admin` account and displays a random passwo
 本预览版在每台电脑本地独立运行。请在本次 Release 的 **Assets** 中按上表选择安装包，并下载同名 `.sha256` 文件校验；同时提供 ZIP 包及其校验文件。macOS 可在下载目录运行 `shasum -a 256 -c <安装包>.sha256`；Windows 可运行 `certutil -hashfile <安装包>.exe SHA256`，然后与对应校验文件比较。
 
 **Windows 布局修复：**团队协作、恢复中心、Git 等工作台侧栏现在共用左侧位置，切换时会关闭前一个面板，不再被排到编辑器下方；终端也会从当前侧栏右侧开始。Windows 和 Linux 的欢迎页快捷键提示已改为 `Ctrl` 写法。
+
+**聊天界面调整：**文件栏和 AI 协作栏的拖动区域更容易操作；右侧 AI 协作栏不再显示空白对话的引导卡片。用户与 AI 消息用左右位置和颜色区分，不显示可见的角色标题。聊天中不再显示成功的质量门禁事件，警告与检查详情仍保留。
 
 **界面更新：**桌面版同步了最新版网页工作台界面：统一的选择菜单、更清晰的聊天会话与模型选择、更宽敞的聊天输入区、可调整宽度的文件和 AI 侧栏，以及更明确的注册拒绝提示。
 

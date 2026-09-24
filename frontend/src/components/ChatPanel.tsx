@@ -52,6 +52,7 @@ import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDi
 import { ModelSelector } from "./ModelSelector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
+import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -516,6 +517,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [activeRequestIds, messages]
   );
   const activeTool = activeAssistantMessage?.toolCalls?.find((step) => step.result === undefined);
+  const timelineEvents = useMemo(
+    () => runState?.events.filter((event) => !isQuietCompletionEvent(event)).slice(-10) || [],
+    [runState]
+  );
   const runStatus = isStreaming ? "running" : runState?.status || "queued";
   const runTone: TaskStateTone = runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
   const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
@@ -861,7 +866,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
           {runTimelineOpen && (
             <div className="chat-run-timeline">
-              {runState.events.slice(-10).map((event) => (
+              {timelineEvents.map((event) => (
                 <div className={`chat-run-timeline-event${event.isError ? " error" : ""}`} key={event.id}>
                   <span className="chat-run-timeline-dot" />
                   <div>

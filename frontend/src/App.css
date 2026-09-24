@@ -1060,6 +1060,7 @@ body {
 .checkpoint-card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 9px;
   margin-bottom: 8px;
   padding: 11px;
@@ -1072,12 +1073,16 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .checkpoint-card-head strong {
+  min-width: 0;
+  flex: 1 1 auto;
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .checkpoint-card-head time,
@@ -1087,15 +1092,22 @@ body {
 }
 
 .checkpoint-card-head time {
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 42%;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .checkpoint-meta {
+  min-width: 0;
   flex-wrap: wrap;
   gap: 5px 9px;
 }
 
 .checkpoint-meta code {
+  min-width: 0;
   overflow: hidden;
   max-width: 100%;
   text-overflow: ellipsis;
@@ -13030,14 +13042,20 @@ body {
   grid-column: 5;
 }
 
+.workbench-view-files > .sidebar-resize-handle::after,
+.workbench-view-files > .assistant-resize-handle::after {
+  left: -5px;
+  width: 16px;
+}
+
 .workbench-view-files > .sidebar-resize-handle::before,
 .workbench-view-files > .assistant-resize-handle::before {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 2px;
-  width: 1px;
-  background: var(--line-subtle);
+  width: 2px;
+  background: var(--line-strong);
   content: "";
 }
 

@@ -479,6 +479,9 @@ function AuthenticatedApp({
 
   const compactWorkspace = viewportWidth <= 1100;
   const narrowWorkspace = viewportWidth <= 860;
+  // Media-query thresholds follow the viewport; panel budgets use the actual
+  // content width, which can be smaller with classic Windows scrollbars.
+  const layoutAvailableWidth = Math.min(viewportWidth, document.documentElement.clientWidth || viewportWidth);
   const utilityDockWidth = compactWorkspace ? 0
     : teamVisible ? 320
       : gitVisible ? 300
@@ -490,7 +493,7 @@ function AuthenticatedApp({
     : 0;
   const sidebarMaxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
     FILES_SIDEBAR_MAX_WIDTH,
-    viewportWidth - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
+    layoutAvailableWidth - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
       - (dockedRightWidth ? dockedRightWidth + FILES_HANDLE_WIDTH : 0)
       - FILES_EDITOR_MIN_WIDTH
   ));
@@ -500,11 +503,11 @@ function AuthenticatedApp({
   const assistantMaxWidth = viewportWidth > 1180
     ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
         FILES_ASSISTANT_MAX_WIDTH,
-        viewportWidth - FILES_ACTIVITY_WIDTH
+        layoutAvailableWidth - FILES_ACTIVITY_WIDTH
           - fileDockWidth - (sidebarVisible ? FILES_HANDLE_WIDTH : 0)
           - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
       ))
-    : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, viewportWidth - FILES_ACTIVITY_WIDTH));
+    : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, layoutAvailableWidth - FILES_ACTIVITY_WIDTH));
   const effectiveAssistantWidth = Math.min(assistantWidth, assistantMaxWidth);
   panelWidthsRef.current = { sidebar: fileDockWidth, assistant: effectiveAssistantWidth };
 
@@ -775,6 +778,25 @@ function AuthenticatedApp({
     : null;
   const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
   const compactModalDrawerOpen = compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible);
+  const previousCompactWorkspaceRef = useRef(compactWorkspace);
+
+  useEffect(() => {
+    const becameCompact = compactWorkspace && !previousCompactWorkspaceRef.current;
+    previousCompactWorkspaceRef.current = compactWorkspace;
+    if (!becameCompact) return;
+    // Panels may coexist on a wide screen. Keep only the frontmost drawer when
+    // the window narrows, so fixed drawers do not cover one another.
+    setSidebarVisible(activeWorkspaceDrawer === "sidebar");
+    setTerminalVisible(activeWorkspaceDrawer === "terminal");
+    setTeamVisible(activeWorkspaceDrawer === "team");
+    setAgentsVisible(activeWorkspaceDrawer === "agents");
+    setGitVisible(activeWorkspaceDrawer === "git");
+    setCheckpointsVisible(activeWorkspaceDrawer === "checkpoints");
+    setProblemsVisible(activeWorkspaceDrawer === "problems");
+    setRunCenterVisible(activeWorkspaceDrawer === "run-center");
+    setDebugVisible(activeWorkspaceDrawer === "debug");
+    if (narrowWorkspace) setChatVisible(activeWorkspaceDrawer === "chat");
+  }, [activeWorkspaceDrawer, compactWorkspace, narrowWorkspace]);
 
   const closeWorkspaceDrawers = useCallback(() => {
     setSidebarVisible(false);
@@ -3825,7 +3847,6 @@ function AuthenticatedApp({
           visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
           activeFilePath={activeFilePath}
           activeFileDirty={Boolean(activeFile?.modified)}
-          selectionInfo={selectionInfo}
           messages={chat.messages}
           connected={chat.connected}
           isStreaming={chat.isStreaming}
