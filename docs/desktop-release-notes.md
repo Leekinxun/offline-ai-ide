@@ -1,6 +1,8 @@
-# CrownForge desktop preview · v1.1.0 Preview 4
+# CrownForge desktop preview · v1.1.0 Preview 5
 
 This preview runs CrownForge locally on each computer. Download the installer for your operating system from this release's **Assets**, together with its matching `.sha256` file. ZIP archives and their checksums are also provided.
+
+**Interface update:** The desktop app now includes the latest Web workbench UI: unified selection menus, clearer chat conversations and model selection, more room for the chat composer, adjustable file and AI side panels, and clearer registration rejection feedback.
 
 **Open Folder fix:** The desktop app now uses the operating system's folder picker to open projects outside its built-in workspace, including another drive or volume. It remembers the selected project after restart. The welcome screen's Open Folder button now opens a folder, and switching away from unsaved files asks for confirmation.
 
@@ -21,9 +23,11 @@ On first launch, the app creates an `admin` account and displays a random passwo
 
 ---
 
-# CrownForge 桌面预览版 · v1.1.0 预览 4
+# CrownForge 桌面预览版 · v1.1.0 预览 5
 
 本预览版在每台电脑本地独立运行。请在本次 Release 的 **Assets** 中按上表选择安装包，并下载同名 `.sha256` 文件校验；同时提供 ZIP 包及其校验文件。macOS 可在下载目录运行 `shasum -a 256 -c <安装包>.sha256`；Windows 可运行 `certutil -hashfile <安装包>.exe SHA256`，然后与对应校验文件比较。
+
+**界面更新：**桌面版同步了最新版网页工作台界面：统一的选择菜单、更清晰的聊天会话与模型选择、更宽敞的聊天输入区、可调整宽度的文件和 AI 侧栏，以及更明确的注册拒绝提示。
 
 **打开文件夹修复：**桌面版现在使用系统目录选择窗口，可打开内置工作区之外的项目，包括其他磁盘或卷；重启后会恢复上次选择的项目。欢迎页“打开文件夹”按钮也已接入该功能，切换前若有未保存文件会提示确认。
 
