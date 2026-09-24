@@ -49,6 +49,7 @@ import { ChangeSummary } from "./ChangeSummary";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import { ModelSelector } from "./ModelSelector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 
@@ -949,19 +950,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             ))}
           </div>
           {activeFileName && <code>{activeFileName}</code>}
-          <label className="chat-composer-model">
+          <div className="chat-composer-model">
             <span>{t("workbench.model")}</span>
-            <select
+            <ModelSelector
               value={selectedModelName}
-              onChange={(event) => onModelNameChange(event.target.value)}
+              onChange={onModelNameChange}
               disabled={isStreaming || runtimeOptions.models.length === 0}
-            >
-              <option value="">{t("workbench.modelAutomatic", { model: modeModelName })}</option>
-              {runtimeOptions.models.map((modelName) => (
-                <option value={modelName} key={modelName}>{modelName}</option>
-              ))}
-            </select>
-          </label>
+              models={runtimeOptions.models}
+              automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+              label={t("workbench.model")}
+            />
+          </div>
         </div>
         {/* Selection indicator */}
         {selectionInfo && activeFileName && (

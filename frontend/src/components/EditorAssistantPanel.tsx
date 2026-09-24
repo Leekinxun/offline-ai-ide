@@ -33,6 +33,7 @@ import { ContextInspector } from "./ContextInspector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
+import { ModelSelector } from "./ModelSelector";
 
 interface EditorAssistantPanelProps {
   token: string;
@@ -541,20 +542,17 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               ))}
             </select>
           </label>
-          <label className="editor-assistant-composer-model">
+          <div className="editor-assistant-composer-model">
             <span className="sr-only">{t("workbench.model")}</span>
-            <select
+            <ModelSelector
               value={selectedModelName}
-              onChange={(event) => onModelNameChange(event.target.value)}
+              onChange={onModelNameChange}
               disabled={isStreaming || runtimeOptions.models.length === 0}
-              title={`${t("workbench.model")}: ${selectedModelName || modeModelName}`}
-            >
-              <option value="">{t("workbench.modelAutomatic", { model: modeModelName })}</option>
-              {runtimeOptions.models.map((modelName) => (
-                <option value={modelName} key={modelName}>{modelName}</option>
-              ))}
-            </select>
-          </label>
+              models={runtimeOptions.models}
+              automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+              label={t("workbench.model")}
+            />
+          </div>
           <button
             type="button"
             onClick={handleSubmit}

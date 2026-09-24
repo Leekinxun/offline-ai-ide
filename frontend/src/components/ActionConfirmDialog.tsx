@@ -49,7 +49,7 @@ export const ActionConfirmDialog: React.FC<ActionConfirmDialogProps> = ({ intent
   }, [intent?.id]);
   if (!intent) return null;
   return createPortal(
-    <div className="delivery-approval-overlay" onMouseDown={() => !busy && onClose()}>
+    <div className="delivery-approval-overlay action-confirm-overlay" onMouseDown={() => !busy && onClose()}>
       <section ref={dialogRef} className="delivery-approval-dialog panel-shell" role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} aria-busy={busy} onMouseDown={(event) => event.stopPropagation()}>
         <header className="delivery-approval-header">
           <span className="delivery-approval-icon" aria-hidden="true"><AlertTriangle size={20} /></span>
