@@ -34,6 +34,7 @@ import type { ContextManifestController } from "../hooks/useContextManifest";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ModelSelector } from "./ModelSelector";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 
 interface EditorAssistantPanelProps {
   token: string;
@@ -369,7 +370,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           {completionEvidence.ledger.criteria.map((criterion, index) => <div className={criterion.state === "passed" ? "" : "warning"} key={`${criterion.criterion}-${index}`}><Check size={14} /><span>{criterion.criterion}<small>{criterion.evidenceRefs.join(", ") || "—"}</small></span><strong>{t(`chat.criterion.${criterion.state}`)}</strong></div>)}
           {completionEvidence.ledger.blockers.map((blocker) => <div className="warning" key={blocker}><AlertCircle size={14} /><span>{t("chat.blocker")}</span><strong>{blocker}</strong></div>)}
         </div>}
-        {qualityGate && <div className={`editor-assistant-recovery status-${qualityGate.status === "blocked" ? "failed" : "completed"}`} role={qualityGate.status === "blocked" ? "alert" : undefined}>{qualityGate.status === "blocked" ? <AlertCircle size={14} /> : <Check size={14} />}<span><strong>{t("chat.qualityGate")} · {t(`chat.qualityGate.${qualityGate.status}`)}</strong>{qualityGate.error && <small>{qualityGate.error}</small>}</span></div>}
+        {qualityGate?.status === "blocked" && <div className="editor-assistant-recovery status-failed" role="alert"><AlertCircle size={14} /><span><strong>{t("chat.qualityGate")} · {t("chat.qualityGate.blocked")}</strong>{qualityGate.error && <small>{qualityGate.error}</small>}</span></div>}
         {pendingAmendments.map((amendment) => <div className="editor-assistant-recovery status-failed" key={amendment.id}><AlertCircle size={14} /><span><strong>{t("chat.amendmentPending")}</strong><small>{amendment.reason}<br />{amendment.requestedFiles.join(", ")}<br />{amendment.requestedVerificationCommands.join(", ")}</small></span><button type="button" aria-label={`${t("chat.approve")}: ${amendment.reason}`} onClick={() => void onPlanAmendmentDecision(executionPlan!.id, amendment.id, "approved")}>{t("chat.approve")}</button><button type="button" aria-label={`${t("chat.reject")}: ${amendment.reason}`} onClick={() => void onPlanAmendmentDecision(executionPlan!.id, amendment.id, "rejected")}>{t("chat.reject")}</button></div>)}
       </section>}
 
@@ -384,7 +385,6 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       >
         {visibleMessages.length === 0 ? (
           <article className="editor-assistant-message">
-            <div className="editor-assistant-message-header"><span>CF</span><strong>CrewForge</strong></div>
             <p>{t("workbench.editorAssistantIntro")}</p>
             <small>
               {fileName
@@ -402,11 +402,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </article>
         ) : (
           visibleMessages.map((message, index) => (
-            <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`}>
-              <div className="editor-assistant-message-header">
-                <span>{message.role === "user" ? t("chat.you") : "CF"}</span>
-                <strong>{message.role === "user" ? t("chat.you") : "CrewForge"}</strong>
-              </div>
+            <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`} aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
               {message.role === "assistant" ? (
                 <div className="editor-assistant-message-content">
                   {renderChatTextPart(getRenderableMessageContent(message.content), message)}
@@ -529,19 +525,20 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           recheckDisabled={!connected}
         />
         <div className="editor-assistant-composer-controls">
-          <label className="editor-assistant-composer-mode">
+          <div className="editor-assistant-composer-mode">
             <span className="sr-only">{t("workbench.workMode")}</span>
-            <select
+            <WorkbenchSelect
+              label={t("workbench.workMode")}
               value={agentMode}
-              onChange={(event) => onAgentModeChange(event.target.value as AgentMode)}
+              onChange={(value) => onAgentModeChange(value as AgentMode)}
               disabled={isStreaming}
               title={t("workbench.workMode")}
-            >
-              {(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => (
-                <option value={mode} key={mode}>{t(`chat.mode.${mode}.label`)}</option>
-              ))}
-            </select>
-          </label>
+              options={(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => ({
+                value: mode,
+                label: t(`chat.mode.${mode}.label`),
+              }))}
+            />
+          </div>
           <div className="editor-assistant-composer-model">
             <span className="sr-only">{t("workbench.model")}</span>
             <ModelSelector

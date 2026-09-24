@@ -31,6 +31,7 @@ import { PluginManagerPanel } from "./PluginManagerPanel";
 import { KnowledgeManagerPanel } from "./KnowledgeManagerPanel";
 import { ModelGovernancePanel } from "./ModelGovernancePanel";
 import { ActionConfirmDialog } from "./ActionConfirmDialog";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface SettingsModalProps {
@@ -857,34 +858,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div className="settings-form">
-                <label className="settings-field settings-field-wide">
+                <div className="settings-field settings-field-wide">
                   <span>{t("settings.language")}</span>
-                  <select
-                    className="settings-input"
+                  <WorkbenchSelect
+                    label={t("settings.language")}
                     value={locale}
-                    onChange={(e) => setLocale(e.target.value)}
-                  >
-                    {locales.map((option) => (
-                      <option key={option.code} value={option.code}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="settings-field settings-field-wide">
+                    onChange={setLocale}
+                    options={locales.map((option) => ({ value: option.code, label: option.label }))}
+                  />
+                </div>
+                <div className="settings-field settings-field-wide">
                   <span>{t("settings.editorFont")}</span>
-                  <select
-                    className="settings-input"
+                  <WorkbenchSelect
+                    label={t("settings.editorFont")}
                     value={editorFont}
-                    onChange={(e) => onEditorFontChange(e.target.value)}
-                  >
-                    {editorFontOptions.map((option) => (
-                      <option key={option.family} value={option.family}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={onEditorFontChange}
+                    options={editorFontOptions.map((option) => ({ value: option.family, label: option.label }))}
+                  />
+                </div>
                 <div className="settings-help-text">{t("settings.languageHelp")}</div>
               </div>
             </section>

@@ -7,6 +7,7 @@ import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import type { DetailTab } from "./components/RunDetailsPanel";
 import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
+import { WorkbenchSelect } from "./components/WorkbenchSelect";
 import { useChatAttachmentDraft } from "./components/ChatAttachmentPicker";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
@@ -2964,24 +2965,22 @@ function AuthenticatedApp({
                   </button>
                 )}
                 {openFiles.length > 1 && (
-                  <label className="editor-compare-picker">
+                  <div className="editor-compare-picker">
                     <Columns2 size={13} aria-hidden="true" />
                     <span>{t("editor.compareWith")}</span>
-                    <select
-                      aria-label={t("editor.compareWith")}
+                    <WorkbenchSelect
+                      label={t("editor.compareWith")}
+                      className="editor-compare-select"
                       value={compareFilePath || ""}
-                      onChange={(event) => setCompareFilePath(event.target.value || null)}
-                    >
-                      <option value="">{t("editor.compareNone")}</option>
-                      {openFiles
+                      onChange={(value) => setCompareFilePath(value || null)}
+                      options={[
+                        { value: "", label: t("editor.compareNone") },
+                        ...openFiles
                         .filter((file) => file.path !== activeFile.path)
-                        .map((file) => (
-                          <option key={file.path} value={file.path}>
-                            {file.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
+                        .map((file) => ({ value: file.path, label: file.name })),
+                      ]}
+                    />
+                  </div>
                 )}
                 {compareFile && (
                   <button

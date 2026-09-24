@@ -5,6 +5,7 @@ import type { ChangeSet } from "../hooks/useCheckpoints";
 import type { useGitDelivery } from "../hooks/useGitDelivery";
 import { useI18n } from "../i18n";
 import { isChangeSetIntegrable } from "./changeSetRecoveryPolicy";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 
 type GitDeliveryController = ReturnType<typeof useGitDelivery>;
 
@@ -70,7 +71,7 @@ export const GitLocalPanel: React.FC<GitLocalPanelProps> = ({ controller, change
     <div className="delivery-form">
       <label><span>{t("delivery.branchName")}</span><input className="dialog-input" value={branchName} onChange={(event) => setBranchName(event.target.value)} placeholder="crewforge/my-change" disabled={readOnly} /></label>
       {action === "commit_change_set" && <>
-        <label><span>{t("delivery.changeSet")}</span><select className="dialog-input" value={changeSetId} onChange={(event) => setChangeSetId(event.target.value)} disabled={readOnly || readyChangeSets.length === 0}><option value="">{t("delivery.selectChangeSet")}</option>{readyChangeSets.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 12)} · {t("delivery.files", { count: item.changedFiles.length })}</option>)}</select></label>
+        <div className="delivery-field"><span>{t("delivery.changeSet")}</span><WorkbenchSelect label={t("delivery.changeSet")} value={changeSetId} onChange={setChangeSetId} disabled={readOnly || readyChangeSets.length === 0} options={[{ value: "", label: t("delivery.selectChangeSet") }, ...readyChangeSets.map((item) => ({ value: item.id, label: item.id.slice(0, 12), meta: t("delivery.files", { count: item.changedFiles.length }) }))]} /></div>
         <label><span>{t("delivery.commitMessage")}</span><input className="dialog-input" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("delivery.commitMessagePlaceholder")} disabled={readOnly} /></label>
       </>}
     </div>

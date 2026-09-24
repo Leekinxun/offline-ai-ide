@@ -4,6 +4,7 @@ import type { ChangeSet } from "../hooks/useCheckpoints";
 import type { useOfflineBundles } from "../hooks/useOfflineBundles";
 import { useI18n } from "../i18n";
 import { changeSetReviewRevision, isCurrentChangeSet } from "../hooks/changeSetContract";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 
 type OfflineBundleController = ReturnType<typeof useOfflineBundles>;
 
@@ -34,8 +35,8 @@ export const OfflineBundlePanel: React.FC<OfflineBundlePanelProps> = ({ controll
   return <section className="offline-bundle-panel" aria-labelledby="offline-bundle-title">
     <header><FileArchive size={16} /><div><strong id="offline-bundle-title">{t("bundle.title")}</strong><span>{t("bundle.hint")}</span></div></header>
     <div className="delivery-form">
-      <label><span>{t("delivery.changeSet")}</span><select className="dialog-input" value={selected?.id || ""} onChange={(event) => setChangeSetId(event.target.value)}><option value="">{t("delivery.selectChangeSet")}</option>{changeSets.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 12)} · {item.patch.sha256.slice(0, 12)} · {t(`recovery.changeSetStatus.${item.status}`)}</option>)}</select></label>
-      <label><span>{t("bundle.signaturePolicy")}</span><select className="dialog-input" value={signaturePolicy} onChange={(event) => setSignaturePolicy(event.target.value as "optional" | "required")}><option value="optional">{t("bundle.signatureOptional")}</option><option value="required">{t("bundle.signatureRequired")}</option></select></label>
+      <div className="delivery-field"><span>{t("delivery.changeSet")}</span><WorkbenchSelect label={t("delivery.changeSet")} value={selected?.id || ""} onChange={setChangeSetId} options={[{ value: "", label: t("delivery.selectChangeSet") }, ...changeSets.map((item) => ({ value: item.id, label: item.id.slice(0, 12), meta: `${item.patch.sha256.slice(0, 12)} · ${t(`recovery.changeSetStatus.${item.status}`)}` }))]} /></div>
+      <div className="delivery-field"><span>{t("bundle.signaturePolicy")}</span><WorkbenchSelect label={t("bundle.signaturePolicy")} value={signaturePolicy} onChange={(value) => setSignaturePolicy(value as "optional" | "required")} options={[{ value: "optional", label: t("bundle.signatureOptional") }, { value: "required", label: t("bundle.signatureRequired") }]} /></div>
       <label className="delivery-checkbox"><input type="checkbox" checked={includeTrace} onChange={(event) => setIncludeTrace(event.target.checked)} />{t("bundle.includeTrace")}</label>
       <label className="delivery-checkbox"><input type="checkbox" checked={includeTestOutput} onChange={(event) => setIncludeTestOutput(event.target.checked)} />{t("bundle.includeTestOutput")}</label>
     </div>

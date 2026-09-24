@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { WorkbenchSelect } from "../../components/WorkbenchSelect";
 import { useModalDialogFocus } from "../../components/useModalDialogFocus";
 import { derivePluginScopes } from "../permissions";
 import type { BuiltinPluginDefinition } from "../types";
@@ -382,30 +383,32 @@ const JsonMutationDialog: React.FC<{
             )}
             {needsValue && (
               <>
-                <label>
+                <div className="json-preview-dialog-field">
                   <span>{t("jsonPreview.valueType")}</span>
-                  <select
+                  <WorkbenchSelect
                     ref={(node) => {
                       if (!firstInputRef.current) firstInputRef.current = node;
                     }}
                     value={valueType}
-                    onChange={(event) => {
-                      const nextType = event.target.value as JsonDraftType;
+                    onChange={(value) => {
+                      const nextType = value as JsonDraftType;
                       setValueType(nextType);
                       if (nextType === "boolean" && valueInput !== "true" && valueInput !== "false") {
                         setValueInput("true");
                       }
                       setError(null);
                     }}
-                  >
-                    <option value="string">{t("jsonPreview.typeString")}</option>
-                    <option value="number">{t("jsonPreview.typeNumber")}</option>
-                    <option value="boolean">{t("jsonPreview.typeBoolean")}</option>
-                    <option value="null">{t("jsonPreview.typeNull")}</option>
-                    <option value="object">{t("jsonPreview.typeObject")}</option>
-                    <option value="array">{t("jsonPreview.typeArray")}</option>
-                  </select>
-                </label>
+                    label={t("jsonPreview.valueType")}
+                    options={[
+                      { value: "string", label: t("jsonPreview.typeString") },
+                      { value: "number", label: t("jsonPreview.typeNumber") },
+                      { value: "boolean", label: t("jsonPreview.typeBoolean") },
+                      { value: "null", label: t("jsonPreview.typeNull") },
+                      { value: "object", label: t("jsonPreview.typeObject") },
+                      { value: "array", label: t("jsonPreview.typeArray") },
+                    ]}
+                  />
+                </div>
                 {(valueType === "string" || valueType === "number") && (
                   <label>
                     <span>{t("jsonPreview.nodeValue")}</span>
@@ -423,19 +426,21 @@ const JsonMutationDialog: React.FC<{
                   </label>
                 )}
                 {valueType === "boolean" && (
-                  <label>
+                  <div className="json-preview-dialog-field">
                     <span>{t("jsonPreview.nodeValue")}</span>
-                    <select
+                    <WorkbenchSelect
                       value={valueInput === "false" ? "false" : "true"}
-                      onChange={(event) => {
-                        setValueInput(event.target.value);
+                      onChange={(value) => {
+                        setValueInput(value);
                         setError(null);
                       }}
-                    >
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  </label>
+                      label={t("jsonPreview.nodeValue")}
+                      options={[
+                        { value: "true", label: "true" },
+                        { value: "false", label: "false" },
+                      ]}
+                    />
+                  </div>
                 )}
                 {(valueType === "object" || valueType === "array") && (
                   <p className="json-preview-value-hint">

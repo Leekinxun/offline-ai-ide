@@ -5,6 +5,7 @@ import { Copy, Plus, Users } from "lucide-react";
 import { PanelHeader, PanelState } from "./PanelChrome";
 import { TaskStateStrip } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface TeamPanelProps {
@@ -234,24 +235,24 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
       {loading && teams.length === 0 && !activeTeam && !visibleError && <PanelState tone="loading" title={t("team.loadingTitle")} detail={t("team.loadingHint")} />}
 
       <div className="team-panel-section">
-        <label className="team-panel-label" htmlFor="team-switcher">{t("team.switcher")}</label>
-        <select
-          id="team-switcher"
+        <div className="team-panel-label">{t("team.switcher")}</div>
+        <WorkbenchSelect
           className="team-panel-select"
+          label={t("team.switcher")}
           value={activeTeam?.id || ""}
-          onChange={(e) => {
-            if (e.target.value) {
-              void onSwitchTeam(e.target.value);
+          onChange={(value) => {
+            if (value) {
+              void onSwitchTeam(value);
             }
           }}
-        >
-          <option value="">{t("team.noActiveTeam")}</option>
-          {teams.map((team) => (
-            <option key={team.id} value={team.id}>
-              {team.name} · {team.onlineCount}/{team.memberCount}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: t("team.noActiveTeam") },
+            ...teams.map((team) => ({
+              value: team.id,
+              label: `${team.name} · ${team.onlineCount}/${team.memberCount}`,
+            })),
+          ]}
+        />
       </div>
 
       {currentRole !== "viewer" && <div className="team-panel-section">
@@ -324,18 +325,14 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
             <div className="team-panel-section-head">
               <div className="team-panel-label">{t("team.members")}</div>
               <div className="team-member-controls">
-                <select
+                <WorkbenchSelect
                   className="team-member-role-select"
+                  label={t("team.inviteRole")}
                   value={inviteRole}
-                  onChange={(event) => setInviteRole(event.target.value as TeamRole)}
+                  onChange={(value) => setInviteRole(value as TeamRole)}
                   disabled={!canManageTeam}
-                >
-                  {inviteRoleOptions.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
+                  options={inviteRoleOptions.map((role) => ({ value: role, label: role }))}
+                />
                 <button
                   type="button"
                   className="team-panel-btn"
@@ -381,22 +378,18 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
                         </div>
                         {manageable ? (
                           <div className="team-member-controls">
-                            <select
+                            <WorkbenchSelect
                               className="team-member-role-select"
+                              label={t("team.memberRole", { username: member.username })}
                               value={member.role}
-                              onChange={(event) =>
+                              onChange={(value) =>
                                 void onUpdateMemberRole(
                                   member.username,
-                                  event.target.value as TeamRole
+                                  value as TeamRole
                                 )
                               }
-                            >
-                              {assignableRoles.map((role) => (
-                                <option key={role} value={role}>
-                                  {role}
-                                </option>
-                              ))}
-                            </select>
+                              options={assignableRoles.map((role) => ({ value: role, label: role }))}
+                            />
                             <button
                               type="button"
                               className="team-panel-btn danger"
@@ -540,7 +533,7 @@ const CollaborationSection: React.FC<CollaborationSectionProps> = ({ state, acti
         <label>{t("collaboration.comment")}<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder={t("collaboration.commentPlaceholder")} /></label>
         <label>{t("collaboration.evidence")}<input value={evidence} onChange={(event) => setEvidence(event.target.value)} placeholder="run:… / https://…" /></label>
         <button type="button" disabled={busy || !comment.trim()} onClick={() => void invoke(() => onAddComment({ body: comment.trim(), path: activeFilePath, evidenceLinks: evidence.split(/\s+/).filter(Boolean) }), () => { setComment(""); setEvidence(""); })}>{t("collaboration.addComment")}</button>
-        <div className="collaboration-review-compose"><select value={reviewer} onChange={(event) => setReviewer(event.target.value)}><option value="">{t("collaboration.selectReviewer")}</option>{members.map((member) => <option key={member.username} value={member.username}>{member.username}</option>)}</select><button type="button" disabled={busy || !reviewer} onClick={() => void invoke(() => onCreateReview({ assignees: [{ kind: "human", id: reviewer }], path: activeFilePath, message: comment.trim() || undefined }), () => setReviewer(""))}>{t("collaboration.requestReview")}</button></div>
+        <div className="collaboration-review-compose"><WorkbenchSelect label={t("collaboration.selectReviewer")} value={reviewer} onChange={setReviewer} options={[{ value: "", label: t("collaboration.selectReviewer") }, ...members.map((member) => ({ value: member.username, label: member.username }))]} /><button type="button" disabled={busy || !reviewer} onClick={() => void invoke(() => onCreateReview({ assignees: [{ kind: "human", id: reviewer }], path: activeFilePath, message: comment.trim() || undefined }), () => setReviewer(""))}>{t("collaboration.requestReview")}</button></div>
       </div>}
       <div className="collaboration-thread-list">{comments.map((item) => <article key={item.id} className="collaboration-thread"><header><strong>{item.author.id}</strong><span>L{item.anchor.startLine} · {item.anchor.status}</span></header><p>{item.body}</p>{item.mentions.length > 0 && <small>{t("collaboration.mentions")}: {item.mentions.map((mention) => `@${mention.id}`).join(", ")}</small>}{item.evidenceLinks.length > 0 && <div className="collaboration-evidence-list">{item.evidenceLinks.map((link) => <code key={link}>{link}</code>)}</div>}</article>)}</div>
       {reviews.length > 0 && <div className="collaboration-review-list">{reviews.map((request) => <div key={request.id} className="collaboration-review-row"><strong>{t("collaboration.reviewRequest")}</strong><span>{request.assignees.map((item) => item.id).join(", ")} · {request.status}</span></div>)}</div>}

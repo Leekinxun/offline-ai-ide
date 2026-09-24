@@ -36,6 +36,8 @@ export function useModalDialogFocus<T extends HTMLElement>({
   useEffect(() => {
     if (!open || suspended) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && event.target instanceof Element
+        && event.target.closest("[data-workbench-select-menu]")) return;
       if (closeOnEscape && claimModalEscape(event, () => onCloseRef.current())) return;
       if (event.key !== "Tab" || !dialogRef.current) return;
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));

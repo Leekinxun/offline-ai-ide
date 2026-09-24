@@ -18,6 +18,7 @@ import {
   ContextSourceMutation,
 } from "../types";
 import { useI18n } from "../i18n";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 
 type ContextFilter = "all" | ContextSourceDecision | "pinned";
 
@@ -130,19 +131,18 @@ export const ContextInspector: React.FC<ContextInspectorProps> = ({
       </div>
 
       {manifests.length > 1 && (
-        <label className="context-manifest-picker">
+        <div className="context-manifest-picker">
           <span>{t("context.modelCall")}</span>
-          <select
+          <WorkbenchSelect
             value={manifest?.id || ""}
-            onChange={(event) => onSelectManifest?.(event.target.value)}
-          >
-            {manifests.map((item, index) => (
-              <option key={item.id} value={item.id}>
-                {manifestLabel(item, t("context.modelCallNumber", { count: index + 1 }))}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(value) => onSelectManifest?.(value)}
+            label={t("context.modelCall")}
+            options={manifests.map((item, index) => ({
+              value: item.id,
+              label: manifestLabel(item, t("context.modelCallNumber", { count: index + 1 })),
+            }))}
+          />
+        </div>
       )}
 
       {manifest && (

@@ -1069,18 +1069,13 @@ const MessageItem: React.FC<MessageItemProps> = ({
   const showCursor = isStreaming && !hasToolCalls;
 
   return (
-    <div className={`chat-message ${message.role}`}>
-      <div className="chat-message-header">
-        <span className="chat-message-label">
-          {message.role === "user" ? t("chat.you") : t("chat.ai")}
-        </span>
-        {onFork && (
-          <button type="button" className="chat-message-fork" onClick={onFork} title={t("chat.forkFromHere")} aria-label={t("chat.forkFromHere")}>
-            <GitFork size={11} className={forking ? "chat-spin" : ""} />
-            <span>{t("chat.fork")}</span>
-          </button>
-        )}
-      </div>
+    <div className={`chat-message ${message.role}`} role="group" aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
+      {onFork && (
+        <button type="button" className="chat-message-fork" onClick={onFork} title={t("chat.forkFromHere")} aria-label={t("chat.forkFromHere")}>
+          <GitFork size={11} className={forking ? "chat-spin" : ""} />
+          <span>{t("chat.fork")}</span>
+        </button>
+      )}
 
       {/* Thinking text (collapsible) */}
       {hasThinking && (
