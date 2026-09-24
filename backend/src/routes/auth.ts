@@ -1,6 +1,12 @@
 import { Router } from "express";
+import path from "node:path";
 import { sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
+import {
+  DesktopFolderPickerTimeoutError,
+  DesktopFolderPickerUnavailableError,
+  pickDesktopFolder,
+} from "../auth/desktopFolderPicker.js";
 import { getDebugSession, stopDebugSession } from "../debug/service.js";
 import { stopDiagnosticsSession } from "../diagnostics/service.js";
 
@@ -30,7 +36,7 @@ authRouter.post("/login", (req, res) => {
   if (!result) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
-  res.json(result);
+  res.json({ ...result, desktop: process.env.CREWFORGE_DESKTOP === "1" });
 });
 
 // POST /api/auth/logout
@@ -55,6 +61,7 @@ authRouter.get("/me", (req, res) => {
     workspaceRoot: session.workspaceRoot,
     isAdmin: session.isAdmin,
     isolated: session.isolated,
+    desktop: process.env.CREWFORGE_DESKTOP === "1",
   });
 });
 
@@ -84,6 +91,44 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   res.json(result);
 });
 
+// POST /api/auth/workspace/pick
+authRouter.post("/workspace/pick", authMiddleware, async (req, res) => {
+  const session = (req as any).userSession;
+  if (process.env.CREWFORGE_DESKTOP !== "1") {
+    return res.status(404).json({ error: "Desktop folder picker is unavailable" });
+  }
+  if (session.isolated) {
+    return res.status(403).json({ error: "Isolated Vibe windows are locked to their worktree" });
+  }
+
+  const previousWorkspace = session.workspaceDir;
+  try {
+    const picked = await pickDesktopFolder(session.workspaceDir);
+    if (!picked.path) {
+      return res.json({ cancelled: true });
+    }
+    const result = sessionManager.changeWorkspaceFromTrustedDesktopPicker(session.token, picked.path);
+    if (!result) {
+      return res.status(400).json({ error: "Selected folder is not an accessible directory" });
+    }
+    if (result.workspaceDir !== previousWorkspace) {
+      try { stopDiagnosticsSession(previousWorkspace); } catch { /* no active watcher */ }
+      if (getDebugSession(previousWorkspace)) {
+        try { await stopDebugSession(previousWorkspace); } catch { /* already stopped */ }
+      }
+    }
+    return res.json(result);
+  } catch (error: any) {
+    if (error instanceof DesktopFolderPickerUnavailableError) {
+      return res.status(503).json({ error: error.message });
+    }
+    if (error instanceof DesktopFolderPickerTimeoutError) {
+      return res.status(504).json({ error: error.message });
+    }
+    return res.status(500).json({ error: error?.message || "Desktop folder picker failed" });
+  }
+});
+
 // GET /api/auth/workspace/list?path=xxx
 authRouter.get("/workspace/list", authMiddleware, (req, res) => {
   const session = (req as any).userSession;
@@ -96,5 +141,6 @@ authRouter.get("/workspace/list", authMiddleware, (req, res) => {
     ...result,
     selectable: true,
     canNavigateUp: result.path !== result.rootPath,
+    parentPath: result.path !== result.rootPath ? path.dirname(result.path) : null,
   });
 });

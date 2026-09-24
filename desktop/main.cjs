@@ -15,6 +15,7 @@ let backend;
 let backendUrl;
 let mainWindow;
 let quitting = false;
+let folderPickerOpen = false;
 
 if (!isPrimaryInstance) app.quit();
 
@@ -38,7 +39,7 @@ function ensureDesktopData() {
   if (!fs.existsSync(usersPath)) {
     initialPassword = crypto.randomBytes(18).toString("base64url");
     const users = {
-      allowedRoots: [app.getPath("home")],
+      allowedRoots: [app.getPath("home"), workspaceDir],
       pendingRegistrations: [],
       users: [{
         username: "admin",
@@ -112,9 +113,58 @@ function startBackend(data) {
         resolve(message.url);
       } else if (message && message.type === "error") {
         fail(new Error(`本地服务启动失败（${message.phase || "startup"}: ${message.code || "unknown"}）`));
+      } else if (message && message.type === "desktop-pick-folder") {
+        void handleFolderPickerRequest(child, message);
       }
     });
   });
+}
+
+function sendFolderPickerResult(child, requestId, result) {
+  if (!child.connected || !requestId) return;
+  child.send({ type: "desktop-pick-folder-result", requestId, ...result });
+}
+
+function normalizeDefaultPath(defaultPath) {
+  if (typeof defaultPath !== "string" || !defaultPath.trim()) return undefined;
+  return path.resolve(defaultPath);
+}
+
+async function handleFolderPickerRequest(child, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  if (!requestId) return;
+  if (child !== backend) {
+    sendFolderPickerResult(child, requestId, { path: null, error: "INVALID_BACKEND_PROCESS" });
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    sendFolderPickerResult(child, requestId, { path: null, error: "MAIN_WINDOW_UNAVAILABLE" });
+    return;
+  }
+  if (folderPickerOpen) {
+    sendFolderPickerResult(child, requestId, { path: null, error: "FOLDER_PICKER_BUSY" });
+    return;
+  }
+
+  const properties = ["openDirectory"];
+  if (process.platform === "darwin") properties.push("createDirectory");
+
+  folderPickerOpen = true;
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties,
+      defaultPath: normalizeDefaultPath(message.defaultPath),
+    });
+    const selectedPath = result.canceled ? null : result.filePaths[0] || null;
+    sendFolderPickerResult(child, requestId, { path: selectedPath });
+  } catch (error) {
+    sendFolderPickerResult(child, requestId, {
+      path: null,
+      error: error && error.message ? error.message : String(error),
+    });
+  } finally {
+    folderPickerOpen = false;
+  }
 }
 
 function localAppUrl(url) {

@@ -10,6 +10,8 @@ interface WorkspaceWelcomeProps {
   tree: FileNode[];
   openFiles: OpenFile[];
   onQuickOpen: () => void;
+  onOpenFolder: () => void;
+  folderPickerBusy: boolean;
   onFocusChat: () => void;
   onOpenTerminal: () => void;
   onOpenFile: (path: string) => void;
@@ -31,6 +33,8 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
   tree,
   openFiles,
   onQuickOpen,
+  onOpenFolder,
+  folderPickerBusy,
   onFocusChat,
   onOpenTerminal,
   onOpenFile,
@@ -60,7 +64,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
           <TerminalSquare size={18} />
           <span><strong>{t("welcome.openTerminal")}</strong><small>Cmd/Ctrl+`</small></span>
         </button>
-        <button type="button" className="welcome-action" onClick={onQuickOpen}>
+        <button type="button" className="welcome-action" onClick={onOpenFolder} disabled={folderPickerBusy}>
           <FolderOpen size={18} />
           <span><strong>{t("welcome.openFolder")}</strong><small>{t("welcome.openFolderHint")}</small></span>
         </button>

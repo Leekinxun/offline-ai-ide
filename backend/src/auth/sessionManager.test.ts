@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SessionManager } from "./sessionManager.js";
+import { config } from "../config.js";
+import { SessionManager, setCreateSessionSingletonsForTests } from "./sessionManager.js";
 
 test("desktop mode refuses damaged or empty credentials instead of defaulting to admin123", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-desktop-users-"));
@@ -194,4 +195,140 @@ test("locks derived isolated sessions to their managed worktree", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("desktop trusted picker can persist and reopen a workspace outside the web root", async (t) => {
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  const priorDefaultWorkspace = config.defaultWorkspaceDir;
+  process.env.CREWFORGE_DESKTOP = "1";
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-desktop-pick-"));
+  const initial = path.join(root, "initial");
+  const external = path.join(root, "external-volume", "project");
+  const configPath = path.join(root, "users.json");
+  config.defaultWorkspaceDir = initial;
+  t.after(async () => {
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+    config.defaultWorkspaceDir = priorDefaultWorkspace;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await mkdir(initial, { recursive: true });
+  await mkdir(external, { recursive: true });
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [initial],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: initial }],
+  }));
+
+  const manager = new SessionManager(configPath);
+  const session = manager.login("alice", "secret");
+  assert.ok(session);
+  assert.equal(manager.changeWorkspaceWithinUserRoot(session.token, external), null);
+
+  const canonicalExternal = await realpath(external);
+  assert.deepEqual(
+    manager.changeWorkspaceFromTrustedDesktopPicker(session.token, external),
+    { workspaceDir: canonicalExternal, workspaceRoot: canonicalExternal }
+  );
+  assert.equal(manager.getSession(session.token)?.workspaceRoot, canonicalExternal);
+
+  const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
+    allowedRoots: string[];
+    users: Array<{ username: string; defaultWorkspace: string }>;
+  };
+  assert.ok(persisted.allowedRoots.includes(canonicalExternal));
+  assert.equal(persisted.users.find((user) => user.username === "alice")?.defaultWorkspace, canonicalExternal);
+
+  const restarted = new SessionManager(configPath);
+  const restartedSession = restarted.login("alice", "secret");
+  assert.ok(restartedSession);
+  assert.equal(restartedSession.workspaceDir, canonicalExternal);
+
+  await rm(path.join(root, "external-volume"), { recursive: true, force: true });
+  const fallback = new SessionManager(configPath).login("alice", "secret");
+  assert.ok(fallback);
+  assert.equal(fallback.workspaceDir, await realpath(initial));
+  await assert.rejects(() => access(external));
+
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [canonicalExternal],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: canonicalExternal }],
+  }));
+  const legacyFallback = new SessionManager(configPath).login("alice", "secret");
+  assert.ok(legacyFallback);
+  assert.equal(legacyFallback.workspaceDir, await realpath(initial));
+  await assert.rejects(() => access(external));
+});
+
+test("desktop login falls back to built-in workspace when saved external startup fails", async (t) => {
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  const priorDefaultWorkspace = config.defaultWorkspaceDir;
+  process.env.CREWFORGE_DESKTOP = "1";
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-desktop-startup-fallback-"));
+  const initial = path.join(root, "initial");
+  const external = path.join(root, "external");
+  const configPath = path.join(root, "users.json");
+  config.defaultWorkspaceDir = initial;
+  t.after(async () => {
+    setCreateSessionSingletonsForTests();
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+    config.defaultWorkspaceDir = priorDefaultWorkspace;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await mkdir(initial, { recursive: true });
+  await mkdir(external, { recursive: true });
+  const canonicalInitial = await realpath(initial);
+  const canonicalExternal = await realpath(external);
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [canonicalInitial, canonicalExternal],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: canonicalExternal }],
+  }));
+
+  setCreateSessionSingletonsForTests((workspaceDir) => {
+    if (workspaceDir === canonicalExternal) {
+      throw new Error("simulated startup failure");
+    }
+    return {
+      taskManager: {} as any,
+      messageBus: {} as any,
+      teammateManager: {} as any,
+    };
+  });
+
+  const session = new SessionManager(configPath).login("alice", "secret");
+  assert.ok(session);
+  assert.equal(session.workspaceDir, canonicalInitial);
+});
+
+test("desktop trusted picker rejects invalid and isolated workspace changes", async (t) => {
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  process.env.CREWFORGE_DESKTOP = "1";
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-desktop-invalid-"));
+  t.after(async () => {
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const project = path.join(root, "project");
+  const worktree = path.join(root, ".crownforge-worktrees", "project", "vibe-1");
+  const configPath = path.join(root, "users.json");
+  await mkdir(project, { recursive: true });
+  await mkdir(worktree, { recursive: true });
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [root],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: project }],
+  }));
+
+  const manager = new SessionManager(configPath);
+  const session = manager.login("alice", "secret");
+  assert.ok(session);
+  assert.equal(manager.changeWorkspaceFromTrustedDesktopPicker(session.token, path.join(root, "missing")), null);
+
+  const isolated = manager.createIsolatedSession(session.token, worktree);
+  assert.equal(manager.changeWorkspaceFromTrustedDesktopPicker(isolated.token, project), null);
 });

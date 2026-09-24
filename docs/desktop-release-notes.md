@@ -1,6 +1,8 @@
-# CrownForge desktop preview · v1.1.0 Preview 3
+# CrownForge desktop preview · v1.1.0 Preview 4
 
 This preview runs CrownForge locally on each computer. Download the installer for your operating system from this release's **Assets**, together with its matching `.sha256` file. ZIP archives and their checksums are also provided.
+
+**Open Folder fix:** The desktop app now uses the operating system's folder picker to open projects outside its built-in workspace, including another drive or volume. It remembers the selected project after restart. The welcome screen's Open Folder button now opens a folder, and switching away from unsaved files asks for confirmation.
 
 **Font update:** The editor now follows VS Code's platform font defaults (Menlo on macOS, Consolas on Windows), with normal token weight, automatic line height, and ligatures off. File tree and tab labels use the interface font. If you previously chose a custom editor font, select **VS Code default** in Settings to switch.
 
@@ -19,9 +21,11 @@ On first launch, the app creates an `admin` account and displays a random passwo
 
 ---
 
-# CrownForge 桌面预览版 · v1.1.0 预览 3
+# CrownForge 桌面预览版 · v1.1.0 预览 4
 
 本预览版在每台电脑本地独立运行。请在本次 Release 的 **Assets** 中按上表选择安装包，并下载同名 `.sha256` 文件校验；同时提供 ZIP 包及其校验文件。macOS 可在下载目录运行 `shasum -a 256 -c <安装包>.sha256`；Windows 可运行 `certutil -hashfile <安装包>.exe SHA256`，然后与对应校验文件比较。
+
+**打开文件夹修复：**桌面版现在使用系统目录选择窗口，可打开内置工作区之外的项目，包括其他磁盘或卷；重启后会恢复上次选择的项目。欢迎页“打开文件夹”按钮也已接入该功能，切换前若有未保存文件会提示确认。
 
 **字体更新：**编辑器默认使用 VS Code 对应平台的字体（macOS 为 Menlo、Windows 为 Consolas），语法文本恢复常规字重、自动行高并关闭连字；文件树和标签改用界面字体。如果你此前主动选择了其他字体，可在设置里选择 **VS Code default**。
 

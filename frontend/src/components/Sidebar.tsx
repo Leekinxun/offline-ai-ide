@@ -48,6 +48,10 @@ interface SidebarProps {
   onRefreshTree: () => void;
   workspaceDir: string;
   workspaceLocked?: boolean;
+  desktopApp: boolean;
+  folderPickerBusy: boolean;
+  onPickDesktopWorkspace: () => Promise<void>;
+  folderOpenRequestId: number;
   onChangeWorkspace: (path: string) => Promise<boolean>;
   onSearchInPath: (path: string) => void;
   onSearchContent: (options: WorkspaceSearchOptions) => Promise<WorkspaceSearchResponse>;
@@ -182,6 +186,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRefreshTree,
   workspaceDir,
   workspaceLocked = false,
+  desktopApp,
+  folderPickerBusy,
+  onPickDesktopWorkspace,
+  folderOpenRequestId,
   onChangeWorkspace,
   onSearchInPath,
   onSearchContent,
@@ -207,6 +215,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [folderBrowser, setFolderBrowser] = useState<{
     currentPath: string;
     rootPath: string;
+    parentPath: string | null;
     entries: { name: string; path: string }[];
     loading: boolean;
     switching: boolean;
@@ -233,6 +242,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetPathRef = useRef("");
+  const lastFolderOpenRequestId = useRef(folderOpenRequestId);
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
   const createDialogRef = useModalDialogFocus<HTMLDivElement>({ open: Boolean(dialog), onClose: () => setDialog(null), initialFocusRef: dialogInputRef });
   const folderDialogRef = useModalDialogFocus<HTMLDivElement>({ open: Boolean(folderBrowser), onClose: () => setFolderBrowser(null), initialFocusRef: folderPathInputRef });
@@ -626,6 +636,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setFolderBrowser((prev) => ({
         currentPath: prev?.currentPath || dir,
         rootPath: prev?.rootPath || "",
+        parentPath: prev?.parentPath || null,
         entries: prev?.entries || [],
         loading: true,
         switching: false,
@@ -647,6 +658,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setFolderBrowser({
           currentPath: data.path || dir,
           rootPath: data.rootPath || data.path || dir,
+          parentPath: typeof data.parentPath === "string" ? data.parentPath : null,
           entries: data.entries,
           loading: false,
           switching: false,
@@ -674,8 +686,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const openFolderBrowser = useCallback(() => {
     if (workspaceLocked) return;
+    if (desktopApp) {
+      void onPickDesktopWorkspace();
+      return;
+    }
     fetchDirectories("");
-  }, [fetchDirectories, workspaceLocked]);
+  }, [desktopApp, fetchDirectories, onPickDesktopWorkspace, workspaceLocked]);
+
+  useEffect(() => {
+    if (folderOpenRequestId === lastFolderOpenRequestId.current) return;
+    lastFolderOpenRequestId.current = folderOpenRequestId;
+    openFolderBrowser();
+  }, [folderOpenRequestId, openFolderBrowser]);
 
   const handleFolderSelect = useCallback(
     async (path: string) => {
@@ -706,12 +728,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const handleFolderUp = useCallback(() => {
-    if (!folderBrowser?.canNavigateUp) return;
-    const parent = folderBrowser.currentPath.split("/").slice(0, -1).join("/") || "/";
-    fetchDirectories(parent);
+    if (!folderBrowser?.canNavigateUp || !folderBrowser.parentPath) return;
+    fetchDirectories(folderBrowser.parentPath);
   }, [folderBrowser, fetchDirectories]);
 
-  const workspaceName = workspaceDir.split("/").pop() || workspaceDir;
+  const workspaceName = workspaceDir.split(/[\\/]/).filter(Boolean).pop() || workspaceDir;
   const filteredTree = useMemo(
     () => filterTree(tree, treeQuery, contentMatchPaths),
     [contentMatchPaths, tree, treeQuery]
@@ -780,6 +801,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title={t("sidebar.openFolder")}
             aria-label={t("sidebar.openFolder")}
             onClick={openFolderBrowser}
+            disabled={workspaceLocked || folderPickerBusy}
           >
             <FolderOpen size={15} />
           </button>
@@ -835,6 +857,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title={t("sidebar.openFolder")}
             aria-label={t("sidebar.openFolder")}
             onClick={openFolderBrowser}
+            disabled={workspaceLocked || folderPickerBusy}
           >
             <ChevronRight size={15} />
           </button>
@@ -877,7 +900,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         className="sidebar-workspace-card"
         title={t(workspaceLocked ? "sidebar.isolatedWorkspaceLocked" : "sidebar.openFolder")}
         onClick={openFolderBrowser}
-        disabled={workspaceLocked}
+        disabled={workspaceLocked || folderPickerBusy}
       >
         <div className="sidebar-workspace-icon" aria-hidden="true">
           <FolderOpen size={16} />

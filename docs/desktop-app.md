@@ -71,10 +71,14 @@ workspace `.history/attachments` blobs are left in place and are not
 automatically read or migrated. Keep the user data directory private to the
 current OS account, including when setting `CREWFORGE_DESKTOP_DATA_DIR`.
 
-The initial allowed workspace root is the current user's home directory. To
-open a project on another drive or volume, close the app, add that path to
-`allowedRoots` in the per-user `users.json`, and restart. A malformed
-`users.json` blocks startup instead of enabling a default password.
+Use **Open Folder** in the file explorer or welcome screen to choose any local
+project directory with the operating system's folder picker, including a
+different drive or volume. The selected directory becomes that user's workspace
+and is restored after restarting. If the directory is temporarily unavailable
+at login, that session opens the built-in workspace; a later login restores the
+project once the directory is available again. Existing
+Web sessions keep their configured workspace boundaries. A malformed `users.json`
+blocks startup instead of enabling a default password.
 
 The application listens only on loopback and chooses a free port on each launch.
 The local API is unavailable to other computers. The login session is scoped to

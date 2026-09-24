@@ -78,6 +78,14 @@ function createSessionSingletons(workspaceDir: string) {
   return { taskManager, messageBus, teammateManager };
 }
 
+let createSessionSingletonsForManager = createSessionSingletons;
+
+export function setCreateSessionSingletonsForTests(
+  value?: typeof createSessionSingletons
+): void {
+  createSessionSingletonsForManager = value || createSessionSingletons;
+}
+
 export class SessionManager {
   private sessions = new Map<string, UserSession>();
   private usersConfig: UsersConfig;
@@ -150,6 +158,10 @@ export class SessionManager {
           .filter((root): root is string => typeof root === "string" && root.trim().length > 0)
           .map((root) => path.resolve(root))
       : [path.resolve(config.defaultWorkspaceDir)];
+    const initialDesktopRoot = path.resolve(config.defaultWorkspaceDir);
+    if (process.env.CREWFORGE_DESKTOP === "1" && !allowedRoots.includes(initialDesktopRoot)) {
+      allowedRoots.push(initialDesktopRoot);
+    }
 
     const users = Array.isArray(raw.users)
       ? raw.users
@@ -211,12 +223,16 @@ export class SessionManager {
   }
 
   private saveConfig(): void {
+    this.writeConfig(this.usersConfig);
+  }
+
+  private writeConfig(configToSave: UsersConfig): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
     const tempPath = `${this.configPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
     try {
       const fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
       try {
-        fs.writeFileSync(fd, `${JSON.stringify(this.usersConfig, null, 2)}\n`, "utf-8");
+        fs.writeFileSync(fd, `${JSON.stringify(configToSave, null, 2)}\n`, "utf-8");
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
@@ -229,6 +245,14 @@ export class SessionManager {
 
   private getUser(username: string): UserConfig | undefined {
     return this.usersConfig.users.find((user) => user.username === username);
+  }
+
+  private cloneUsersConfig(): UsersConfig {
+    return {
+      allowedRoots: [...this.usersConfig.allowedRoots],
+      users: this.usersConfig.users.map((user) => ({ ...user })),
+      pendingRegistrations: this.usersConfig.pendingRegistrations.map((registration) => ({ ...registration })),
+    };
   }
 
   private isValidUsername(username: string): boolean {
@@ -295,7 +319,7 @@ export class SessionManager {
         : "Workspace is not an accessible directory within allowed roots");
     }
     const token = crypto.randomUUID();
-    const singletons = createSessionSingletons(canonicalWorkspace);
+    const singletons = createSessionSingletonsForManager(canonicalWorkspace);
     const session: UserSession = {
       token,
       username,
@@ -334,13 +358,26 @@ export class SessionManager {
   ): SessionSummary | null {
     const user = this.getUser(username);
     if (!user || user.password !== password) return null;
+    const defaultWorkspace = path.resolve(user.defaultWorkspace);
+    const fallbackWorkspace = path.resolve(config.defaultWorkspaceDir);
+    const workspaceDir =
+      process.env.CREWFORGE_DESKTOP === "1" && !this.resolveSelectableWorkspace(defaultWorkspace)
+        ? fallbackWorkspace
+        : defaultWorkspace;
     try {
       return this.createSession(
         user.username,
-        user.defaultWorkspace,
+        workspaceDir,
         Boolean(user.isAdmin)
       );
     } catch {
+      if (process.env.CREWFORGE_DESKTOP === "1" && path.resolve(workspaceDir) !== fallbackWorkspace) {
+        try {
+          return this.createSession(user.username, fallbackWorkspace, Boolean(user.isAdmin));
+        } catch {
+          return null;
+        }
+      }
       return null;
     }
   }
@@ -553,7 +590,7 @@ export class SessionManager {
     if (!resolved) return null;
 
     session.workspaceDir = resolved;
-    const singletons = createSessionSingletons(resolved);
+    const singletons = createSessionSingletonsForManager(resolved);
     session.taskManager = singletons.taskManager;
     session.messageBus = singletons.messageBus;
     session.teammateManager = singletons.teammateManager;
@@ -576,13 +613,57 @@ export class SessionManager {
     if (!resolved) return null;
 
     session.workspaceDir = resolved;
-    const singletons = createSessionSingletons(resolved);
+    const singletons = createSessionSingletonsForManager(resolved);
     session.taskManager = singletons.taskManager;
     session.messageBus = singletons.messageBus;
     session.teammateManager = singletons.teammateManager;
     setActiveTeamId(session, null);
 
     return { workspaceDir: resolved };
+  }
+
+  changeWorkspaceFromTrustedDesktopPicker(
+    token: string,
+    newDir: string
+  ): { workspaceDir: string; workspaceRoot: string } | null {
+    const session = this.sessions.get(token);
+    if (!session || session.isolated || process.env.CREWFORGE_DESKTOP !== "1") return null;
+
+    let canonicalWorkspace: string;
+    try {
+      const resolved = path.resolve(newDir);
+      if (!fs.statSync(resolved).isDirectory()) return null;
+      canonicalWorkspace = fs.realpathSync.native(resolved);
+    } catch {
+      return null;
+    }
+
+    const singletons = createSessionSingletonsForManager(canonicalWorkspace);
+
+    const nextConfig = this.cloneUsersConfig();
+    const user = nextConfig.users.find((entry) => entry.username === session.username);
+    if (!user) return null;
+    user.defaultWorkspace = canonicalWorkspace;
+
+    const hasAllowedRoot = nextConfig.allowedRoots.some((root) => {
+      const resolvedRoot = path.resolve(root);
+      return resolvedRoot === canonicalWorkspace;
+    });
+    if (!hasAllowedRoot) {
+      nextConfig.allowedRoots.push(canonicalWorkspace);
+    }
+
+    this.writeConfig(nextConfig);
+    this.usersConfig = nextConfig;
+
+    session.workspaceDir = canonicalWorkspace;
+    session.workspaceRoot = canonicalWorkspace;
+    session.taskManager = singletons.taskManager;
+    session.messageBus = singletons.messageBus;
+    session.teammateManager = singletons.teammateManager;
+    setActiveTeamId(session, null);
+
+    return { workspaceDir: canonicalWorkspace, workspaceRoot: canonicalWorkspace };
   }
 
   listUserWorkspaceDirectories(
@@ -670,4 +751,8 @@ export class SessionManager {
   }
 }
 
-export const sessionManager = new SessionManager();
+export let sessionManager = new SessionManager();
+
+export function setSessionManagerForTests(manager: SessionManager): void {
+  sessionManager = manager;
+}

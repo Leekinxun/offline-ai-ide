@@ -31,7 +31,7 @@ import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
-import { useAuth } from "./hooks/useAuth";
+import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
 import {
   DefinitionLocation,
@@ -228,8 +228,10 @@ export default function App() {
       workspaceDir={auth.user.workspaceDir}
       isAdmin={auth.user.isAdmin}
       isolatedWindow={auth.user.isolated}
+      desktopApp={auth.user.desktop}
       onLogout={handleLogout}
       onChangeWorkspace={auth.changeWorkspace}
+      onPickDesktopWorkspace={auth.pickDesktopWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
       editorFont={editorFont}
@@ -245,8 +247,10 @@ interface AuthenticatedAppProps {
   workspaceDir: string;
   isAdmin: boolean;
   isolatedWindow: boolean;
+  desktopApp: boolean;
   onLogout: () => void;
   onChangeWorkspace: (path: string) => Promise<boolean>;
+  onPickDesktopWorkspace: () => Promise<DesktopFolderPickResult>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
   editorFont: string;
@@ -340,8 +344,10 @@ function AuthenticatedApp({
   workspaceDir,
   isAdmin,
   isolatedWindow,
+  desktopApp,
   onLogout,
   onChangeWorkspace,
+  onPickDesktopWorkspace,
   theme,
   onToggleTheme,
   editorFont,
@@ -360,6 +366,7 @@ function AuthenticatedApp({
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [workspaceView, setWorkspaceView] = useState<"chat" | "files">("files");
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
+  const [folderOpenRequestId, setFolderOpenRequestId] = useState(0);
   const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
   const [runDetailsVisible, setRunDetailsVisible] = useState(false);
   const [runDetailsTab, setRunDetailsTab] = useState<DetailTab>("changes");
@@ -396,6 +403,8 @@ function AuthenticatedApp({
   );
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
+  const [pickingWorkspace, setPickingWorkspace] = useState(false);
+  const pickingWorkspaceRef = useRef(false);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [chatWidth, setChatWidth] = useState(380);
@@ -2172,6 +2181,33 @@ function AuthenticatedApp({
     [onChangeWorkspace, showToast, t]
   );
 
+  const handlePickDesktopWorkspace = useCallback(async () => {
+    if (pickingWorkspaceRef.current) return;
+    if (openFiles.some((file) => file.modified) && !window.confirm(t("app.unsavedWorkspaceSwitch"))) {
+      return;
+    }
+    pickingWorkspaceRef.current = true;
+    setPickingWorkspace(true);
+    try {
+      const result = await onPickDesktopWorkspace();
+      if (result.status === "selected") showToast(t("app.workspaceChanged"));
+      if (result.status === "error") showToast(result.message || t("app.failedToChangeWorkspace"));
+    } finally {
+      pickingWorkspaceRef.current = false;
+      setPickingWorkspace(false);
+    }
+  }, [onPickDesktopWorkspace, openFiles, showToast, t]);
+
+  const handleOpenFolder = useCallback(() => {
+    if (isolatedWindow) return;
+    if (desktopApp) {
+      void handlePickDesktopWorkspace();
+    } else {
+      setSidebarVisible(true);
+      setFolderOpenRequestId((current) => current + 1);
+    }
+  }, [desktopApp, handlePickDesktopWorkspace, isolatedWindow]);
+
   // --- Global keyboard shortcuts ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2838,6 +2874,10 @@ function AuthenticatedApp({
           onRefreshTree={loadTree}
           workspaceDir={workspaceDir}
           workspaceLocked={isolatedWindow}
+          desktopApp={desktopApp}
+          folderPickerBusy={pickingWorkspace}
+          onPickDesktopWorkspace={handlePickDesktopWorkspace}
+          folderOpenRequestId={folderOpenRequestId}
           onChangeWorkspace={handleChangeWorkspace}
           onSearchInPath={(path) => {
             setWorkspaceSearchScope(path);
@@ -3291,6 +3331,8 @@ function AuthenticatedApp({
                 tree={fileTree}
                 openFiles={openFiles}
                 onQuickOpen={() => openCommandPalette("files")}
+                onOpenFolder={handleOpenFolder}
+                folderPickerBusy={pickingWorkspace}
                 onFocusChat={focusChat}
                 onOpenTerminal={() => toggleTerminalPanel(true)}
                 onOpenFile={openFile}

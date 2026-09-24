@@ -31,7 +31,12 @@ interface AuthUser {
   workspaceDir: string;
   isAdmin: boolean;
   isolated: boolean;
+  desktop: boolean;
 }
+
+export type DesktopFolderPickResult =
+  | { status: "selected" | "cancelled" }
+  | { status: "error"; message: string };
 
 export function useAuth() {
   const [token, setToken] = useState<string | null>(initialAuth.token);
@@ -57,6 +62,7 @@ export function useAuth() {
           workspaceDir: data.workspaceDir,
           isAdmin: Boolean(data.isAdmin),
           isolated: Boolean(data.isolated),
+          desktop: Boolean(data.desktop),
         });
       })
       .catch(() => {
@@ -88,6 +94,7 @@ export function useAuth() {
         workspaceDir: data.workspaceDir,
         isAdmin: Boolean(data.isAdmin),
         isolated: false,
+        desktop: Boolean(data.desktop),
       });
       return null; // no error
     } catch {
@@ -153,5 +160,29 @@ export function useAuth() {
     }
   }, [token, user?.isolated]);
 
-  return { token, user, loading, login, register, logout, changeWorkspace };
+  const pickDesktopWorkspace = useCallback(async (): Promise<DesktopFolderPickResult> => {
+    if (!token || !user?.desktop || user.isolated) {
+      return { status: "error", message: "Folder selection is unavailable" };
+    }
+    try {
+      const res = await fetch("/api/auth/workspace/pick", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { status: "error", message: data.error || "Failed to open folder" };
+      }
+      if (data.cancelled) return { status: "cancelled" };
+      if (typeof data.workspaceDir !== "string") {
+        return { status: "error", message: "Invalid folder selection response" };
+      }
+      setUser((previous) => previous ? { ...previous, workspaceDir: data.workspaceDir } : null);
+      return { status: "selected" };
+    } catch {
+      return { status: "error", message: "Failed to open folder" };
+    }
+  }, [token, user?.desktop, user?.isolated]);
+
+  return { token, user, loading, login, register, logout, changeWorkspace, pickDesktopWorkspace };
 }
