@@ -28,6 +28,31 @@ function countFiles(nodes: FileNode[]): number {
   );
 }
 
+function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const platform = navigator.platform || "";
+  const userAgent = navigator.userAgent || "";
+  return /Mac|iPhone|iPad|iPod/.test(platform) || /Macintosh|Mac OS X|iPhone|iPad|iPod/.test(userAgent);
+}
+
+function getShortcutLabels() {
+  if (isMacPlatform()) {
+    return {
+      quickOpen: "⌘P",
+      commands: "⌘⇧P",
+      toggleChat: "⌘J",
+      openTerminal: "⌘`",
+    };
+  }
+
+  return {
+    quickOpen: "Ctrl+P",
+    commands: "Ctrl+Shift+P",
+    toggleChat: "Ctrl+J",
+    openTerminal: "Ctrl+`",
+  };
+}
+
 export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
   workspaceDir,
   tree,
@@ -41,6 +66,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
 }) => {
   const { t } = useI18n();
   const fileCount = countFiles(tree);
+  const shortcuts = getShortcutLabels();
 
   return (
     <div className="workspace-welcome">
@@ -54,7 +80,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
       <div className="workspace-welcome-actions">
         <button type="button" className="welcome-action primary" onClick={onQuickOpen}>
           <Search size={18} />
-          <span><strong>{t("welcome.quickOpen")}</strong><small>Cmd/Ctrl+P</small></span>
+          <span><strong>{t("welcome.quickOpen")}</strong><small>{shortcuts.quickOpen}</small></span>
         </button>
         <button type="button" className="welcome-action" onClick={onFocusChat}>
           <MessageSquareText size={18} />
@@ -62,7 +88,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
         </button>
         <button type="button" className="welcome-action" onClick={onOpenTerminal}>
           <TerminalSquare size={18} />
-          <span><strong>{t("welcome.openTerminal")}</strong><small>Cmd/Ctrl+`</small></span>
+          <span><strong>{t("welcome.openTerminal")}</strong><small>{shortcuts.openTerminal}</small></span>
         </button>
         <button type="button" className="welcome-action" onClick={onOpenFolder} disabled={folderPickerBusy}>
           <FolderOpen size={18} />
@@ -82,9 +108,9 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
       )}
 
       <div className="workspace-welcome-shortcuts">
-        <span><kbd>⌘P</kbd> {t("welcome.quickOpen")}</span>
-        <span><kbd>⌘⇧P</kbd> {t("welcome.commands")}</span>
-        <span><kbd>⌘J</kbd> {t("welcome.toggleChat")}</span>
+        <span><kbd>{shortcuts.quickOpen}</kbd> {t("welcome.quickOpen")}</span>
+        <span><kbd>{shortcuts.commands}</kbd> {t("welcome.commands")}</span>
+        <span><kbd>{shortcuts.toggleChat}</kbd> {t("welcome.toggleChat")}</span>
       </div>
     </div>
   );

@@ -479,6 +479,12 @@ function AuthenticatedApp({
 
   const compactWorkspace = viewportWidth <= 1100;
   const narrowWorkspace = viewportWidth <= 860;
+  const utilityDockWidth = compactWorkspace ? 0
+    : teamVisible ? 320
+      : gitVisible ? 300
+        : agentsVisible ? 320
+          : checkpointsVisible || problemsVisible || runCenterVisible || debugVisible ? 340
+            : 0;
   const dockedRightWidth = viewportWidth > 1180
     ? runDetailsVisible ? 400 : editorAssistantVisible ? assistantWidth : 0
     : 0;
@@ -489,16 +495,18 @@ function AuthenticatedApp({
       - FILES_EDITOR_MIN_WIDTH
   ));
   const effectiveSidebarWidth = sidebarVisible ? Math.min(sidebarWidth, sidebarMaxWidth) : 0;
+  const fileDockWidth = sidebarVisible ? effectiveSidebarWidth : utilityDockWidth;
+  const chatDockWidth = sidebarVisible ? 286 : utilityDockWidth;
   const assistantMaxWidth = viewportWidth > 1180
     ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
         FILES_ASSISTANT_MAX_WIDTH,
         viewportWidth - FILES_ACTIVITY_WIDTH
-          - (sidebarVisible ? effectiveSidebarWidth + FILES_HANDLE_WIDTH : 0)
+          - fileDockWidth - (sidebarVisible ? FILES_HANDLE_WIDTH : 0)
           - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
       ))
     : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, viewportWidth - FILES_ACTIVITY_WIDTH));
   const effectiveAssistantWidth = Math.min(assistantWidth, assistantMaxWidth);
-  panelWidthsRef.current = { sidebar: effectiveSidebarWidth, assistant: effectiveAssistantWidth };
+  panelWidthsRef.current = { sidebar: fileDockWidth, assistant: effectiveAssistantWidth };
 
   useEffect(() => {
     const handleViewportResize = () => setViewportWidth(window.innerWidth);
@@ -608,9 +616,9 @@ function AuthenticatedApp({
     const utilityOpen =
       gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible;
     const nextOpen = switchingToFiles || utilityOpen ? true : !sidebarVisible;
+    if (nextOpen) setTeamVisible(false);
     if (nextOpen && window.innerWidth <= 1100) {
       captureDrawerTrigger();
-      setTeamVisible(false);
       setTerminalVisible(false);
       if (window.innerWidth <= 860) setChatVisible(false);
     }
@@ -638,9 +646,9 @@ function AuthenticatedApp({
       const nextOpen = forceOpen || !isOpen;
       if (nextOpen) {
         setSidebarVisible(false);
+        setTeamVisible(false);
         if (window.innerWidth <= 1100) {
           captureDrawerTrigger();
-          setTeamVisible(false);
           setTerminalVisible(false);
         }
         if (window.innerWidth <= 860) {
@@ -659,11 +667,13 @@ function AuthenticatedApp({
 
   const toggleTeamPanel = useCallback((forceOpen = false) => {
     const nextOpen = forceOpen || !teamVisible;
+    if (nextOpen) {
+      setSidebarVisible(false);
+      closeUtilityPanels();
+    }
     if (nextOpen && window.innerWidth <= 1100) {
       captureDrawerTrigger();
-      setSidebarVisible(false);
       setTerminalVisible(false);
-      closeUtilityPanels();
       if (window.innerWidth <= 860) setChatVisible(false);
     }
     setTeamVisible(nextOpen);
@@ -2286,10 +2296,12 @@ function AuthenticatedApp({
     if (desktopApp) {
       void handlePickDesktopWorkspace();
     } else {
+      setTeamVisible(false);
+      closeUtilityPanels();
       setSidebarVisible(true);
       setFolderOpenRequestId((current) => current + 1);
     }
-  }, [desktopApp, handlePickDesktopWorkspace, isolatedWindow]);
+  }, [closeUtilityPanels, desktopApp, handlePickDesktopWorkspace, isolatedWindow]);
 
   // --- Global keyboard shortcuts ---
   useEffect(() => {
@@ -2743,7 +2755,8 @@ function AuthenticatedApp({
         ref={mainLayoutRef}
         className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible && !runDetailsVisible ? " with-editor-assistant" : ""}`}
         style={{
-          "--files-sidebar-width": `${effectiveSidebarWidth}px`,
+          "--files-sidebar-width": `${fileDockWidth}px`,
+          "--chat-sidebar-width": `${chatDockWidth}px`,
           "--files-sidebar-handle-width": sidebarVisible && workspaceView === "files" ? `${FILES_HANDLE_WIDTH}px` : "0px",
           "--files-assistant-width": `${effectiveAssistantWidth}px`,
         } as React.CSSProperties}
@@ -3718,7 +3731,7 @@ function AuthenticatedApp({
           onOpenSettings={() => setSettingsVisible(true)}
           collaboration={team.collaboration}
           activeFilePath={activeFilePath}
-          onOpenCollaboration={() => setTeamVisible(true)}
+          onOpenCollaboration={() => toggleTeamPanel(true)}
           onOpenFile={openFile}
           onOpenDiff={handleOpenGitDiff}
           onOpenReviewFinding={(finding) => void handleNavigateToLocation(finding.path, {

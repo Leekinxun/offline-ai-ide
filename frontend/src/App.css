@@ -8005,13 +8005,14 @@ select:focus-visible,
 
 .main-layout.workbench-view-chat {
   display: grid;
-  grid-template-columns: 56px 286px minmax(420px, 1fr);
+  grid-template-columns: 56px var(--chat-sidebar-width, 286px) minmax(420px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   background: var(--surface-workbench);
 }
 
 .main-layout.workbench-view-chat.with-run-details {
-  grid-template-columns: 56px 286px minmax(420px, 1fr) 324px;
+  grid-template-columns: 56px var(--chat-sidebar-width, 286px) minmax(420px, 1fr) 324px;
 }
 
 .workbench-view-chat > .activity-rail {
@@ -8020,14 +8021,17 @@ select:focus-visible,
 
 .workbench-view-chat > .task-sidebar {
   grid-column: 2;
+  grid-row: 1;
 }
 
 .workbench-view-chat > .chat-panel {
   grid-column: 3;
+  grid-row: 1;
 }
 
 .workbench-view-chat > .run-details-panel {
   grid-column: 4;
+  grid-row: 1;
 }
 
 .workbench-view-chat > .sidebar,
@@ -9831,7 +9835,7 @@ select:focus-visible,
 @media (max-width: 1180px) {
   .main-layout.workbench-view-chat,
   .main-layout.workbench-view-chat.with-run-details {
-    grid-template-columns: 56px 286px minmax(420px, 1fr);
+    grid-template-columns: 56px var(--chat-sidebar-width, 286px) minmax(420px, 1fr);
   }
 
   .workbench-view-chat > .run-details-panel {
@@ -12979,6 +12983,7 @@ body {
 .main-layout.workbench-view-files {
   display: grid;
   grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(360px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   background: var(--surface-panel-strong);
 }
@@ -13065,6 +13070,20 @@ body {
 
 .workbench-view-files > .chat-panel {
   display: none;
+}
+
+@media (min-width: 1101px) {
+  .main-layout.workbench-view-files > :is(.team-sidebar, .git-panel, .agent-board, .checkpoint-panel, .problems-panel, .run-center-panel, .debug-panel),
+  .main-layout.workbench-view-chat > :is(.team-sidebar, .git-panel, .agent-board, .checkpoint-panel, .problems-panel, .run-center-panel, .debug-panel) {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-right: 1px solid var(--line-subtle);
+    border-left: 0;
+  }
 }
 
 .workbench-view-files .sidebar-header {
