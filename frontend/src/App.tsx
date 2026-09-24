@@ -133,6 +133,14 @@ async function sha256Text(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const FILES_ACTIVITY_WIDTH = 56;
+const FILES_HANDLE_WIDTH = 6;
+const FILES_EDITOR_MIN_WIDTH = 360;
+const FILES_SIDEBAR_MIN_WIDTH = 180;
+const FILES_SIDEBAR_MAX_WIDTH = 500;
+const FILES_ASSISTANT_MIN_WIDTH = 280;
+const FILES_ASSISTANT_MAX_WIDTH = 720;
+
 export default function App() {
   const { t } = useI18n();
   const auth = useAuth();
@@ -407,7 +415,9 @@ function AuthenticatedApp({
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const pickingWorkspaceRef = useRef(false);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [sidebarWidth, setSidebarWidth] = useState(286);
+  const [assistantWidth, setAssistantWidth] = useState(400);
+  const [draggingPanel, setDraggingPanel] = useState<"sidebar" | "assistant" | "chat" | "terminal" | null>(null);
   const [chatWidth, setChatWidth] = useState(380);
   const [terminalHeight, setTerminalHeight] = useState(260);
   const [previewModes, setPreviewModes] = useState<Record<string, FilePreviewMode>>(
@@ -425,7 +435,8 @@ function AuthenticatedApp({
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const draggingRef = useRef<"sidebar" | "chat" | "terminal" | null>(null);
+  const draggingRef = useRef<"sidebar" | "assistant" | "chat" | "terminal" | null>(null);
+  const panelWidthsRef = useRef({ sidebar: sidebarWidth, assistant: assistantWidth });
   const navigationRequestRef = useRef(0);
   const highlightRequestRef = useRef(0);
   const editorViewStatesRef = useRef<
@@ -468,6 +479,26 @@ function AuthenticatedApp({
 
   const compactWorkspace = viewportWidth <= 1100;
   const narrowWorkspace = viewportWidth <= 860;
+  const dockedRightWidth = viewportWidth > 1180
+    ? runDetailsVisible ? 400 : editorAssistantVisible ? assistantWidth : 0
+    : 0;
+  const sidebarMaxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
+    FILES_SIDEBAR_MAX_WIDTH,
+    viewportWidth - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
+      - (dockedRightWidth ? dockedRightWidth + FILES_HANDLE_WIDTH : 0)
+      - FILES_EDITOR_MIN_WIDTH
+  ));
+  const effectiveSidebarWidth = sidebarVisible ? Math.min(sidebarWidth, sidebarMaxWidth) : 0;
+  const assistantMaxWidth = viewportWidth > 1180
+    ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
+        FILES_ASSISTANT_MAX_WIDTH,
+        viewportWidth - FILES_ACTIVITY_WIDTH
+          - (sidebarVisible ? effectiveSidebarWidth + FILES_HANDLE_WIDTH : 0)
+          - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
+      ))
+    : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, viewportWidth - FILES_ACTIVITY_WIDTH));
+  const effectiveAssistantWidth = Math.min(assistantWidth, assistantMaxWidth);
+  panelWidthsRef.current = { sidebar: effectiveSidebarWidth, assistant: effectiveAssistantWidth };
 
   useEffect(() => {
     const handleViewportResize = () => setViewportWidth(window.innerWidth);
@@ -881,21 +912,42 @@ function AuthenticatedApp({
 
   // --- Resize drag handling ---
   const handleResizeStart = useCallback(
-    (panel: "sidebar" | "chat", e: React.MouseEvent) => {
+    (panel: "sidebar" | "assistant" | "chat", e: React.MouseEvent) => {
+      if (e.button !== 0 || viewportWidth <= 780) return;
       e.preventDefault();
       draggingRef.current = panel;
+      setDraggingPanel(panel);
       startXRef.current = e.clientX;
-      startWidthRef.current = panel === "sidebar" ? sidebarWidth : chatWidth;
+      startWidthRef.current = panel === "sidebar"
+        ? effectiveSidebarWidth
+        : panel === "assistant" ? effectiveAssistantWidth : chatWidth;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [sidebarWidth, chatWidth]
+    [chatWidth, effectiveAssistantWidth, effectiveSidebarWidth, viewportWidth]
   );
+
+  const handlePanelResizeKeyDown = useCallback((panel: "sidebar" | "assistant", event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    let next: number;
+    if (event.key === "Home") next = panel === "sidebar" ? FILES_SIDEBAR_MIN_WIDTH : FILES_ASSISTANT_MIN_WIDTH;
+    else if (event.key === "End") next = panel === "sidebar" ? sidebarMaxWidth : assistantMaxWidth;
+    else if (event.key === "ArrowLeft") next = panel === "sidebar" ? effectiveSidebarWidth - step : effectiveAssistantWidth + step;
+    else if (event.key === "ArrowRight") next = panel === "sidebar" ? effectiveSidebarWidth + step : effectiveAssistantWidth - step;
+    else return;
+    event.preventDefault();
+    if (panel === "sidebar") {
+      setSidebarWidth(Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(sidebarMaxWidth, next)));
+    } else {
+      setAssistantWidth(Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(assistantMaxWidth, next)));
+    }
+  }, [assistantMaxWidth, effectiveAssistantWidth, effectiveSidebarWidth, sidebarMaxWidth]);
 
   const handleTerminalResizeStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       draggingRef.current = "terminal";
+      setDraggingPanel("terminal");
       startYRef.current = e.clientY;
       startHeightRef.current = terminalHeight;
       document.body.style.cursor = "row-resize";
@@ -933,7 +985,31 @@ function AuthenticatedApp({
       if (!draggingRef.current) return;
       const delta = e.clientX - startXRef.current;
       if (draggingRef.current === "sidebar") {
-        setSidebarWidth(Math.max(150, Math.min(500, startWidthRef.current + delta)));
+        const layout = mainLayoutRef.current;
+        const width = layout?.clientWidth || window.innerWidth;
+        const rightWidth = window.innerWidth > 1180 && layout?.classList.contains("with-run-details")
+          ? 400
+          : window.innerWidth > 1180 && layout?.classList.contains("with-editor-assistant")
+            ? panelWidthsRef.current.assistant
+            : 0;
+        const maxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
+          FILES_SIDEBAR_MAX_WIDTH,
+          width - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
+            - (rightWidth ? rightWidth + FILES_HANDLE_WIDTH : 0)
+            - FILES_EDITOR_MIN_WIDTH
+        ));
+        setSidebarWidth(Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(maxWidth, startWidthRef.current + delta)));
+      } else if (draggingRef.current === "assistant") {
+        const width = mainLayoutRef.current?.clientWidth || window.innerWidth;
+        const maxWidth = window.innerWidth > 1180
+          ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
+              FILES_ASSISTANT_MAX_WIDTH,
+              width - FILES_ACTIVITY_WIDTH
+                - (panelWidthsRef.current.sidebar ? panelWidthsRef.current.sidebar + FILES_HANDLE_WIDTH : 0)
+                - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
+            ))
+          : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, width - FILES_ACTIVITY_WIDTH));
+        setAssistantWidth(Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(maxWidth, startWidthRef.current - delta)));
       } else if (draggingRef.current === "chat") {
         setChatWidth(Math.max(250, Math.min(600, startWidthRef.current - delta)));
       } else {
@@ -947,14 +1023,20 @@ function AuthenticatedApp({
     const onMouseUp = () => {
       if (!draggingRef.current) return;
       draggingRef.current = null;
+      setDraggingPanel(null);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onMouseUp);
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onMouseUp);
+      draggingRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, []);
 
@@ -2657,7 +2739,15 @@ function AuthenticatedApp({
       </Suspense>
 
       {/* Main Layout */}
-      <div ref={mainLayoutRef} className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible ? " with-editor-assistant" : ""}`}>
+      <div
+        ref={mainLayoutRef}
+        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible && !runDetailsVisible ? " with-editor-assistant" : ""}`}
+        style={{
+          "--files-sidebar-width": `${effectiveSidebarWidth}px`,
+          "--files-sidebar-handle-width": sidebarVisible && workspaceView === "files" ? `${FILES_HANDLE_WIDTH}px` : "0px",
+          "--files-assistant-width": `${effectiveAssistantWidth}px`,
+        } as React.CSSProperties}
+      >
         {workspaceDrawerOpen && (
           <button
             type="button"
@@ -2888,12 +2978,19 @@ function AuthenticatedApp({
           onCancelContentSearch={fs.cancelWorkspaceSearch}
           token={token}
           activeTeam={team.activeTeam}
-          style={sidebarVisible && workspaceView === "files" ? { width: sidebarWidth } : undefined}
         />
 
         <div
-          className={`resize-handle${!sidebarVisible || workspaceView === "chat" ? " hidden" : ""}${draggingRef.current === "sidebar" ? " dragging" : ""}`}
+          className={`resize-handle sidebar-resize-handle${!sidebarVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "sidebar" ? " dragging" : ""}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("sidebar.resize")}
+          aria-valuemin={FILES_SIDEBAR_MIN_WIDTH}
+          aria-valuemax={sidebarMaxWidth}
+          aria-valuenow={effectiveSidebarWidth}
+          tabIndex={sidebarVisible && workspaceView === "files" && viewportWidth > 780 ? 0 : -1}
           onMouseDown={(e) => handleResizeStart("sidebar", e)}
+          onKeyDown={(e) => handlePanelResizeKeyDown("sidebar", e)}
         />
 
         <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
@@ -3349,7 +3446,7 @@ function AuthenticatedApp({
           </div>
           {terminalVisible && !compactWorkspace && (
             <div
-              className={`terminal-resize-handle${draggingRef.current === "terminal" ? " dragging" : ""}`}
+              className={`terminal-resize-handle${draggingPanel === "terminal" ? " dragging" : ""}`}
               role="separator"
               aria-orientation="horizontal"
               aria-label={t("terminal.resize")}
@@ -3581,7 +3678,7 @@ function AuthenticatedApp({
         />
 
         <div
-          className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingRef.current === "chat" ? " dragging" : ""}`}
+          className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "chat" ? " dragging" : ""}`}
           onMouseDown={(e) => handleResizeStart("chat", e)}
         />
 
@@ -3696,6 +3793,20 @@ function AuthenticatedApp({
             if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
           }}
         />
+        {workspaceView === "files" && editorAssistantVisible && !runDetailsVisible && (
+          <div
+            className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("workbench.resizeAssistant")}
+            aria-valuemin={FILES_ASSISTANT_MIN_WIDTH}
+            aria-valuemax={assistantMaxWidth}
+            aria-valuenow={effectiveAssistantWidth}
+            tabIndex={viewportWidth > 780 ? 0 : -1}
+            onMouseDown={(e) => handleResizeStart("assistant", e)}
+            onKeyDown={(e) => handlePanelResizeKeyDown("assistant", e)}
+          />
+        )}
         <EditorAssistantPanel
           token={token}
           visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}

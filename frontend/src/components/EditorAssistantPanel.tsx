@@ -158,6 +158,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const evidenceOutcome = qualityGate?.status === "blocked" || (runState?.status === "failed" && completionEvidence?.outcome === "completed") ? "failed" : completionEvidence?.outcome;
   const executionPlan = runState?.executionPlan || currentRunSummary?.executionPlan;
   const pendingAmendments = executionPlan?.amendmentRequests?.filter((item) => item.status === "pending") || [];
+  const hasRunningSummary = isStreaming || runState?.status === "running" || runState?.status === "queued";
+  const hasRecoverySummary = !isStreaming && Boolean(runState && (runState.status === "failed" || runState.status === "stopped"));
+  const showAssistantSummary = hasRunningSummary || hasRecoverySummary;
+  const hasBlockedQualityGate = qualityGate?.status === "blocked";
+  const hasCompletionBlockers = Boolean(completionEvidence?.ledger.blockers.length);
+  const showCompletionEvidence = Boolean(completionEvidence && (evidenceOutcome !== "completed" || hasCompletionBlockers));
+  const showRunAttention = showCompletionEvidence || hasBlockedQualityGate || pendingAmendments.length > 0;
 
   useEffect(() => {
     if (!isStreaming) return;
@@ -261,9 +268,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     <aside className="editor-assistant-panel" aria-label={t("workbench.editorAssistant")}>
       <header className="editor-assistant-header">
         <strong>{t("workbench.editorAssistant")}</strong>
-        {(runState?.executionContract || runState?.executionContractKind) && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`}>{t(`chat.contract.${runState.executionContract?.kind || runState.executionContractKind}`)}</span>}
+        {showAssistantSummary && (runState?.executionContract || runState?.executionContractKind) && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`}>{t(`chat.contract.${runState.executionContract?.kind || runState.executionContractKind}`)}</span>}
         <div className="editor-assistant-header-actions">
-          <button
+          {showAssistantSummary && <button
             type="button"
             onClick={handleToggleDetails}
             title={t(detailsCollapsed ? "workbench.showAssistantOverview" : "workbench.hideAssistantOverview")}
@@ -272,7 +279,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             aria-expanded={!detailsCollapsed}
           >
             {detailsCollapsed ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
-          </button>
+          </button>}
           <button
             type="button"
             onClick={handleNewConversation}
@@ -287,7 +294,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </button>
         </div>
       </header>
-      <div id="editor-assistant-details" className="editor-assistant-details" hidden={detailsCollapsed}>
+      {showAssistantSummary && <div id="editor-assistant-details" className="editor-assistant-details" hidden={detailsCollapsed}>
       <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
 
       <section className="editor-assistant-context">
@@ -350,8 +357,8 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </button>
         )}
       </section>
-      </div>
-      {detailsCollapsed && (
+      </div>}
+      {detailsCollapsed && showAssistantSummary && (
         <div className="editor-assistant-compact-summary">
           <div className="editor-assistant-compact-copy">
             <strong>{fileName || t("workbench.noActiveFile")}</strong>
@@ -363,8 +370,8 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         </div>
       )}
 
-      {(completionEvidence || pendingAmendments.length > 0) && <section className="editor-assistant-context" aria-label={t("chat.evidence")}>
-        {completionEvidence && <div className="run-check-list">
+      {showRunAttention && <section className="editor-assistant-context" aria-label={t("chat.evidence")}>
+        {showCompletionEvidence && completionEvidence && <div className="run-check-list">
           <div className={evidenceOutcome === "completed" ? "" : "warning"} role={evidenceOutcome === "completed" ? undefined : "alert"}>{evidenceOutcome === "completed" ? <Check size={14} /> : <AlertCircle size={14} />}<span>{t("chat.outcome")}</span><strong>{t(`chat.outcome.${evidenceOutcome}`)}</strong></div>
           {completionEvidence.ledger.verification.map((check, index) => <div className={check.status === "passed" ? "" : "warning"} key={`${check.command}-${index}`}><Check size={14} /><span><code>{check.command}</code><small>{check.toolCallId || "—"} · {check.outputDigest || "—"}</small></span><strong>{t(`chat.verification.${check.status}`)}{check.exitCode !== undefined ? ` (${check.exitCode})` : ""}</strong></div>)}
           {completionEvidence.ledger.criteria.map((criterion, index) => <div className={criterion.state === "passed" ? "" : "warning"} key={`${criterion.criterion}-${index}`}><Check size={14} /><span>{criterion.criterion}<small>{criterion.evidenceRefs.join(", ") || "—"}</small></span><strong>{t(`chat.criterion.${criterion.state}`)}</strong></div>)}
