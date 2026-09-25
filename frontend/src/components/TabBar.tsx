@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import "./TabBar.css";
 
 interface TabBarProps {
   openFiles: OpenFile[];
@@ -253,23 +254,26 @@ export const TabBar: React.FC<TabBarProps> = ({
                 }
               }}
             >
-              {file.modified && <span className="tab-modified" title={t("tabs.unsaved")} />}
-              {file.remoteUpdated && <span className="tab-remote-updated" title={t("tabs.remoteUpdated")} />}
+              <FileCode2 size={13} className="tab-icon" />
               <span className="tab-label">
                 <span className="tab-name">{file.name}</span>
                 {pathLabels.get(file.path) && <span className="tab-path">{pathLabels.get(file.path)}</span>}
               </span>
-              <button
-                type="button"
-                className="tab-close"
-                aria-label={t("tabs.close", { name: file.name })}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCloseTab(file.path);
-                }}
-              >
-                <X size={12} />
-              </button>
+              <div className="tab-trailing">
+                {file.modified && <span className="tab-modified" title={t("tabs.unsaved")} />}
+                {file.remoteUpdated && <span className="tab-remote-updated" title={t("tabs.remoteUpdated")} />}
+                <button
+                  type="button"
+                  className="tab-close"
+                  aria-label={t("tabs.close", { name: file.name })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseTab(file.path);
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
             </div>
           );
         })}
@@ -288,9 +292,7 @@ export const TabBar: React.FC<TabBarProps> = ({
             setOpenEditorsOpen((prev) => !prev);
           }}
         >
-          <Layers size={13} />
-          <span className="tabbar-action-badge">{uniqueOpenFiles.length}</span>
-          <ChevronDown size={11} className={`tabbar-chevron${openEditorsOpen ? " open" : ""}`} />
+          <ChevronDown size={14} className={`tabbar-chevron${openEditorsOpen ? " open" : ""}`} />
         </button>
 
         {/* 已打开文件下拉列表 */}

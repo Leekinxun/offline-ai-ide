@@ -1,0 +1,448 @@
+/* ==================== TabBar Component Styles ==================== */
+
+.tabbar-container {
+  display: flex;
+  align-items: center;
+  height: var(--tabbar-height, 38px);
+  background: var(--surface-panel-strong);
+  border-bottom: 1px solid var(--line-subtle);
+  flex-shrink: 0;
+  position: relative;
+  user-select: none;
+  padding: 0 6px;
+}
+
+/* 标签横向滑动区域 */
+.tabbar {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  scrollbar-width: none;
+  order: 1;
+  gap: 4px;
+  padding: 4px 0;
+  background: transparent;
+}
+
+.tabbar::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
+/* 单个标签项：独立悬浮胶囊卡片 (无生硬垂直割裂线) */
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 124px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* 非活动标签悬停 */
+.tab:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+  color: var(--text-primary);
+}
+
+/* 活动标签项 (Active Tab)：低调优雅的高质感灰色卡片，兼顾亮色与暗色模式，无刺眼高饱和感 */
+.tab.active {
+  background: var(--surface-quiet);
+  color: var(--text-primary);
+  font-weight: 500;
+  border-color: var(--line-subtle);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  z-index: 2;
+}
+
+.tab.active .tab-name {
+  color: var(--text-primary);
+}
+
+.tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 标签内文件代码图标 */
+.tab-icon {
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.tab:hover .tab-icon {
+  opacity: 0.9;
+}
+
+.tab.active .tab-icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* 标签文字与消歧路径 */
+.tab-label {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  flex: 1;
+}
+
+.tab-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.tab-path {
+  max-width: 76px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+/* 标签右侧尾部操作区 (关闭按钮与未保存小圆点容器) */
+.tab-trailing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* 未保存与远程变动指示圆点 (与关闭按钮绝对互斥) */
+.tab-modified {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 60%, transparent);
+  flex-shrink: 0;
+  transition: opacity 0.12s ease;
+}
+
+.tab-remote-updated {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning, #f59e0b);
+  flex-shrink: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* 标签关闭按钮 */
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* 正常情况下：悬浮标签或活动标签展示关闭按钮 */
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 0.7;
+}
+
+.tab-close:hover {
+  opacity: 1 !important;
+  background: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
+  color: var(--text-primary);
+}
+
+/* 关键互斥规则：当标签有未保存修改时，关闭按钮和圆点绝不重叠 */
+/* 默认态：未保存圆点保持居中展示，关闭按钮彻底隐藏 */
+.tab.modified .tab-close {
+  display: none;
+}
+
+/* 交互态：当鼠标真正悬停进 tab-trailing 时，圆点退场，关闭按钮显现 */
+.tab.modified .tab-trailing:hover .tab-modified {
+  display: none;
+}
+
+.tab.modified .tab-trailing:hover .tab-close {
+  display: flex;
+  opacity: 1;
+}
+
+/* 标签栏右侧快捷操作工具组 (消除背景色差与割裂感) */
+.tabbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  position: relative;
+  flex-shrink: 0;
+  z-index: 10;
+  order: 2;
+}
+
+/* 下拉触发按钮：严格对齐全系统标题栏按钮的 28x28 正方微磨砂质感 */
+.tabbar-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.tabbar-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tabbar-action-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.tabbar-chevron {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tabbar-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* 已打开文件下拉清单浮层 (现代化微毛玻璃) */
+.tabbar-dropdown {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 4px;
+  width: min(340px, calc(100vw - 32px));
+  max-width: min(340px, calc(100vw - 32px));
+  max-height: min(440px, 62vh);
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--elevated-surface) 90%, transparent);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px -4px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  overflow: hidden;
+  animation: dropdown-fade-in 140ms ease-out;
+}
+
+.tabbar-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tabbar-dropdown-count {
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-left: 8px;
+  margin-right: auto;
+  border: 1px solid var(--border-light);
+}
+
+.tabbar-dropdown-close-all {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 5px;
+  transition: all 0.15s ease;
+}
+
+.tabbar-dropdown-close-all:hover {
+  background: var(--status-danger-bg, rgba(239, 68, 68, 0.15));
+  color: var(--status-danger-fg, #ef4444);
+}
+
+.tabbar-dropdown-list {
+  overflow-y: auto;
+  max-height: 360px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tabbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.tabbar-dropdown-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.tabbar-dropdown-item.active {
+  background: color-mix(in srgb, var(--accent-light) 60%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tabbar-dropdown-icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.tabbar-dropdown-item:hover .tabbar-dropdown-icon {
+  opacity: 1;
+}
+
+.tabbar-dropdown-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabbar-dropdown-path {
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tabbar-dropdown-item-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.tabbar-dropdown-item:hover .tabbar-dropdown-item-close {
+  opacity: 1;
+}
+
+.tabbar-dropdown-item-close:hover {
+  background: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
+  color: var(--text-primary);
+}
+
+/* 标签右键菜单 (浮层毛玻璃与柔和 Accent Hover) */
+.tab-context-menu {
+  width: 204px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--elevated-surface) 90%, transparent);
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px -4px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+  animation: dropdown-fade-in 120ms ease-out;
+}
+
+.tab-context-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-context-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.tab-context-item:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.tab-context-divider {
+  height: 1px;
+  background: var(--border-light);
+  margin: 5px 0;
+}
+
+@keyframes dropdown-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

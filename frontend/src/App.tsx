@@ -1995,7 +1995,6 @@ function AuthenticatedApp({
             : f
         )
       );
-      showToast(t("app.fileSaved"));
       return true;
     } catch (error) {
       const claimError = error as Error & {
@@ -2069,7 +2068,6 @@ function AuthenticatedApp({
     try {
       const result = await fs.writeFile(pending.file.path, pending.file.content, true, pending.file.version);
       setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? { ...file, modified: false, version: result.version, updatedAt: result.updatedAt, ...buildClearedRemoteState() } : file));
-      showToast(t("app.fileSaved"));
       setClaimSaveConfirmation(null);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("app.failedToSaveFile");
@@ -2368,7 +2366,6 @@ function AuthenticatedApp({
       );
       setDiffViewerPath(null);
       setMergeSelections({});
-      showToast(t("app.fileSaved"));
     } catch {
       showToast(t("app.failedToSaveFile"));
     }
