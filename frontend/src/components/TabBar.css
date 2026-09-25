@@ -4,8 +4,8 @@
   display: flex;
   align-items: center;
   height: var(--tabbar-height, 38px);
-  background: var(--surface-panel-strong);
-  border-bottom: 1px solid var(--line-subtle);
+  background: var(--surface-workbench);
+  border-bottom: none;
   flex-shrink: 0;
   position: relative;
   user-select: none;
@@ -62,13 +62,13 @@
   color: var(--text-primary);
 }
 
-/* 活动标签项 (Active Tab)：低调优雅的高质感灰色卡片，兼顾亮色与暗色模式，无刺眼高饱和感 */
+/* 活动标签项 (Active Tab)：低调优雅的高质感微卡片，纯色阶自然脱离底色，零细线切分 */
 .tab.active {
-  background: var(--surface-quiet);
+  background: var(--surface-panel-strong);
   color: var(--text-primary);
   font-weight: 500;
-  border-color: var(--line-subtle);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
   z-index: 2;
 }
 

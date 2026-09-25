@@ -1,0 +1,244 @@
+/* ==================== Editor Toolbar Component Styles ==================== */
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  background: var(--surface-panel);
+  border: none;
+  user-select: none;
+  flex-shrink: 0;
+  order: 1;
+}
+
+/* 左侧：文件面包屑导航 */
+.editor-toolbar-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.editor-toolbar-breadcrumb-icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+  color: var(--accent);
+}
+
+.editor-toolbar-breadcrumb-workspace {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.editor-toolbar-breadcrumb-sep {
+  flex-shrink: 0;
+  opacity: 0.35;
+  color: var(--text-tertiary);
+}
+
+.editor-toolbar-breadcrumb-part {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-toolbar-breadcrumb-part.current {
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+/* 中间/靠右：可预览文件 (如 Markdown) 专属的模式分段控制器 */
+.editor-toolbar-preview-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.editor-toolbar-preview-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 0 8px;
+  height: 20px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-preview-btn:hover {
+  color: var(--text-primary);
+}
+
+.editor-toolbar-preview-btn.active {
+  background: var(--surface-panel-strong);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  font-weight: 500;
+}
+
+/* 右侧：动作工具组 */
+.editor-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.editor-toolbar-online {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.editor-toolbar-online i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.editor-toolbar-online i.connected {
+  background: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent);
+}
+
+.editor-toolbar-primary-actions {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  height: 24px;
+}
+
+.editor-toolbar-btn {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-btn:hover {
+  color: var(--text-primary);
+}
+
+.editor-toolbar-btn.active {
+  background: var(--surface-panel-strong);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  font-weight: 500;
+}
+
+.editor-toolbar-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-run-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.editor-toolbar-run-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-toolbar-compare-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.editor-toolbar-compare-select {
+  width: 120px;
+  min-width: 0;
+  max-width: 120px;
+}
+
+.editor-toolbar-compare-picker .workbench-select-trigger {
+  height: 24px;
+  min-height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.editor-toolbar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-icon-btn:hover {
+  color: var(--text-primary);
+}
+
+.editor-toolbar-icon-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.editor-toolbar-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.editor-toolbar-status.modified {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.editor-toolbar-status.remote {
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
+}

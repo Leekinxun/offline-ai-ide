@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRe
 import type * as monaco from "monaco-editor";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
+import { EditorToolbar } from "./components/EditorToolbar";
 import { ChatPanel } from "./components/ChatPanel";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
@@ -3293,131 +3294,37 @@ function AuthenticatedApp({
             onShowToast={showToast}
           />
           {activeFile && (
-            <div className="editor-context-bar">
-              <div className="editor-context-path" title={activeFile.path}>
-                <span className="editor-context-kicker">{t("editor.activeFile")}</span>
-                <FileCode2 size={13} />
-                <strong>{activeFile.name}</strong>
-                <span className="editor-context-workspace">{workspaceLabel}</span>
-                <ChevronRight size={12} />
-                <code>{activeFile.path}</code>
-              </div>
-              <div className="editor-context-actions">
-                <span className="editor-online-state">
-                  <i className={chat.connected ? "connected" : ""} />
-                  {chat.connected ? t("chat.online") : t("chat.offline")}
-                </span>
-                <div className="editor-primary-actions" role="group" aria-label={t("workbench.editorActions")}>
-                  <button
-                    type="button"
-                    className={editorAssistantVisible ? "active" : ""}
-                    onClick={() => {
-                      setRunDetailsVisible(false);
-                      setEditorAssistantVisible((prev) => !prev);
-                    }}
-                  >
-                    <Bot size={13} />
-                    <span>{t("workbench.editorAssistant")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={terminalVisible ? "active" : ""}
-                    onClick={() => toggleTerminalPanel()}
-                  >
-                    <TerminalSquare size={13} />
-                    <span>{t("workbench.details.terminal")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={runDetailsVisible ? "active" : ""}
-                    onClick={() => {
-                      setEditorAssistantVisible(false);
-                      setRunDetailsTab("changes");
-                      setRunDetailsVisible(true);
-                    }}
-                  >
-                    <GitBranch size={13} />
-                    <span>{t("chat.changes")}</span>
-                  </button>
-                </div>
-                {isDebuggablePath(activeFile.path) && (
-                  <button
-                    type="button"
-                    className="editor-run-current"
-                    onClick={() => void runCurrentFile()}
-                    disabled={readOnlyWorkspace}
-                    title={t("debug.runCurrentFile")}
-                    aria-label={t("debug.runCurrentFile")}
-                  >
-                    <Play size={13} />
-                    <span>{t("debug.run")}</span>
-                  </button>
-                )}
-                {openFiles.length > 1 && (
-                  <div className="editor-compare-picker">
-                    <Columns2 size={13} aria-hidden="true" />
-                    <span>{t("editor.compareWith")}</span>
-                    <WorkbenchSelect
-                      label={t("editor.compareWith")}
-                      className="editor-compare-select"
-                      value={compareFilePath || ""}
-                      onChange={(value) => setCompareFilePath(value || null)}
-                      options={[
-                        { value: "", label: t("editor.compareNone") },
-                        ...openFiles
-                        .filter((file) => file.path !== activeFile.path)
-                        .map((file) => ({ value: file.path, label: file.name })),
-                      ]}
-                    />
-                  </div>
-                )}
-                {compareFile && (
-                  <button
-                    type="button"
-                    className={`editor-compare-sync${compareScrollLinked ? " active" : ""}`}
-                    onClick={() => setCompareScrollLinked((linked) => !linked)}
-                    aria-pressed={compareScrollLinked}
-                    title={compareScrollLinked ? t("editor.disableSyncScroll") : t("editor.enableSyncScroll")}
-                  >
-                    {compareScrollLinked ? <Link2 size={13} /> : <Unlink2 size={13} />}
-                    <span>{t("editor.syncScroll")}</span>
-                  </button>
-                )}
-                {compareFile && (
-                  <button
-                    type="button"
-                    className="editor-compare-close"
-                    onClick={() => setCompareFilePath(null)}
-                    title={t("editor.stopCompare")}
-                    aria-label={t("editor.stopCompare")}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-                <div className="editor-context-statuses">
-                  {activeFile.modified && (
-                    <span className="editor-context-status modified">
-                      {t("editor.unsaved")}
-                    </span>
-                  )}
-                  {activeFile.remoteUpdated && (
-                    <span className="editor-context-status remote">
-                      {t("editor.remoteUpdated")}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          {activeFile && (
-            <div className="editor-breadcrumb-bar" aria-label={t("workbench.fileBreadcrumb")}>
-              {activeFile.path.split("/").map((part, index, parts) => (
-                <React.Fragment key={`${part}-${index}`}>
-                  <span className={index === parts.length - 1 ? "current" : ""}>{part}</span>
-                  {index < parts.length - 1 && <ChevronRight size={11} />}
-                </React.Fragment>
-              ))}
-            </div>
+            <EditorToolbar
+              activeFile={activeFile}
+              workspaceLabel={workspaceLabel}
+              hasPreview={Boolean(activePreviewRenderer)}
+              activePreviewMode={activePreviewMode}
+              onSelectPreviewMode={setActivePreviewMode}
+              chatConnected={chat.connected}
+              editorAssistantVisible={editorAssistantVisible}
+              onToggleEditorAssistant={() => {
+                setRunDetailsVisible(false);
+                setEditorAssistantVisible((prev) => !prev);
+              }}
+              terminalVisible={terminalVisible}
+              onToggleTerminal={toggleTerminalPanel}
+              runDetailsVisible={runDetailsVisible}
+              onOpenChanges={() => {
+                setEditorAssistantVisible(false);
+                setRunDetailsTab("changes");
+                setRunDetailsVisible(true);
+              }}
+              canRunCurrent={isDebuggablePath(activeFile.path)}
+              onRunCurrent={() => void runCurrentFile()}
+              readOnlyWorkspace={readOnlyWorkspace}
+              openFiles={openFiles}
+              compareFilePath={compareFilePath}
+              onSelectCompareFile={(value) => setCompareFilePath(value)}
+              compareFileActive={Boolean(compareFile)}
+              compareScrollLinked={compareScrollLinked}
+              onToggleCompareScrollLinked={() => setCompareScrollLinked((linked) => !linked)}
+              onCloseCompare={() => setCompareFilePath(null)}
+            />
           )}
           <div className="editor-main">
             {activeConflictFile && (
@@ -3582,40 +3489,6 @@ function AuthenticatedApp({
                 </div>
               ) : activePreviewRenderer ? (
                 <div className="editor-workbench">
-                  <div className="editor-workbench-toolbar">
-                    <div className="editor-workbench-segmented">
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "edit" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("edit")}
-                        aria-pressed={activePreviewMode === "edit"}
-                      >
-                        {t("editor.modeEdit")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "preview" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("preview")}
-                        aria-pressed={activePreviewMode === "preview"}
-                      >
-                        {t("editor.modePreview")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "split" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("split")}
-                        aria-pressed={activePreviewMode === "split"}
-                      >
-                        {t("editor.modeSplit")}
-                      </button>
-                    </div>
-                  </div>
                   <div
                     className={`editor-workbench-body mode-${activePreviewMode}`}
                   >
