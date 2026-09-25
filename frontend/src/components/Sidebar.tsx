@@ -22,6 +22,7 @@ import {
 import type {
   CopyEntryResult,
   MoveEntryResult,
+  UploadEntriesError,
   WorkspaceSearchOptions,
   WorkspaceSearchResponse,
 } from "../hooks/useFileSystem";
@@ -43,7 +44,7 @@ interface SidebarProps {
   onDownloadEntry: (path: string, type: FileNode["type"]) => Promise<void>;
   onUploadEntries: (
     files: UploadedFileInput[],
-    options?: { overwrite?: boolean; targetPath?: string }
+    options?: { overwrite?: boolean; overwriteFirstBatchOnly?: boolean; targetPath?: string; expectedWorkspaceDir?: string }
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
   workspaceDir: string;
@@ -69,7 +70,7 @@ interface UploadedFileInput {
 type SidebarConfirmAction =
   | { kind: "delete"; node: FileNode }
   | { kind: "batch-delete"; paths: string[] }
-  | { kind: "upload-overwrite"; files: UploadedFileInput[]; targetPath: string };
+  | { kind: "upload-overwrite" | "upload-retry"; files: UploadedFileInput[]; targetPath: string; expectedWorkspaceDir: string; completedUploaded: number };
 
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
@@ -236,6 +237,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [confirmAction, setConfirmAction] = useState<SidebarConfirmAction | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const uploadInProgressRef = useRef(false);
+  const uploadPendingRef = useRef(false);
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const folderPathInputRef = useRef<HTMLInputElement>(null);
   const treeSearchInputRef = useRef<HTMLInputElement>(null);
@@ -360,15 +364,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [canEditWorkspace]);
 
   const requestConfirmation = useCallback((action: SidebarConfirmAction, intent: Omit<ActionConfirmIntent, "id">) => {
+    if (action.kind === "upload-overwrite" || action.kind === "upload-retry") uploadPendingRef.current = true;
     setConfirmAction(action);
     setConfirmError(null);
-    const id = action.kind === "delete" ? action.node.path : action.kind === "batch-delete" ? action.paths.join("|") : `${action.targetPath}:${action.files.map((file) => file.path).join("|")}`;
+    const id = action.kind === "delete" ? action.node.path : action.kind === "batch-delete" ? action.paths.join("|") : `${action.expectedWorkspaceDir}:${action.targetPath}:${action.files.map((file) => file.path).join("|")}`;
     setConfirmIntent({ ...intent, id: `${action.kind}:${id}` });
   }, []);
+
+  const requestUploadOverwrite = useCallback((
+    files: UploadedFileInput[], targetPath: string, expectedWorkspaceDir: string, completedUploaded: number, conflicts: string[]
+  ) => {
+    requestConfirmation(
+      { kind: "upload-overwrite", files, targetPath, expectedWorkspaceDir, completedUploaded },
+      { title: t("sidebar.uploadOverwriteTitle"), description: t("sidebar.confirmUploadOverwrite", {
+        count: conflicts.length,
+        sample: conflicts.slice(0, 3).join(", "),
+        completed: completedUploaded,
+        remaining: files.length,
+      }), confirmLabel: t("sidebar.overwrite"), tone: "danger" }
+    );
+  }, [requestConfirmation, t]);
+
+  const requestUploadRetry = useCallback((
+    files: UploadedFileInput[], targetPath: string, expectedWorkspaceDir: string, completedUploaded: number, reason: string, uncertain: boolean
+  ) => {
+    requestConfirmation(
+      { kind: "upload-retry", files, targetPath, expectedWorkspaceDir, completedUploaded },
+      { title: t("sidebar.uploadRetryTitle"), description: t("sidebar.confirmUploadRetry", {
+        reason,
+        completed: completedUploaded,
+        remaining: files.length,
+        uncertainty: uncertain ? ` ${t("sidebar.uploadBatchUncertain")}` : "",
+      }), confirmLabel: t("sidebar.retryRemaining"), tone: "primary" }
+    );
+  }, [requestConfirmation, t]);
 
   const executeConfirmedAction = useCallback(async () => {
     const action = confirmAction;
     if (!action) return;
+    const isUpload = action.kind === "upload-overwrite" || action.kind === "upload-retry";
+    if (isUpload && uploadInProgressRef.current) {
+      setConfirmError(t("sidebar.uploadBusy"));
+      return;
+    }
+    if (isUpload) {
+      uploadInProgressRef.current = true;
+      setUploadBusy(true);
+    }
     setConfirmBusy(true);
     setConfirmError(null);
     try {
@@ -379,18 +421,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
         await onDeleteEntries(action.paths);
         setSelectedPaths([]);
       } else {
-        await onUploadEntries(action.files, { overwrite: true, targetPath: action.targetPath });
+        const result = await onUploadEntries(action.files, {
+          targetPath: action.targetPath,
+          expectedWorkspaceDir: action.expectedWorkspaceDir,
+          overwrite: action.kind === "upload-overwrite",
+          overwriteFirstBatchOnly: action.kind === "upload-overwrite",
+        });
+        setNotice({ tone: "status", message: t("sidebar.uploadComplete", {
+          count: action.completedUploaded + result.uploaded,
+        }) });
       }
       onRefreshTree();
       setConfirmAction(null);
       setConfirmIntent(null);
+      if (isUpload) uploadPendingRef.current = false;
     } catch (error) {
       const fallback = action.kind === "delete" ? t("sidebar.operationFailed") : action.kind === "batch-delete" ? t("sidebar.batchDeleteFailed") : t("sidebar.uploadFailed");
-      setConfirmError(error instanceof Error ? error.message : fallback);
+      if (isUpload) {
+        const uploadError = error as UploadEntriesError;
+        const completed = action.completedUploaded + (uploadError.completedUploaded || 0);
+        const remaining = uploadError.remainingFiles || action.files;
+        onRefreshTree();
+        setNotice(null);
+        if (uploadError.code === "UPLOAD_WORKSPACE_CHANGED") {
+          uploadPendingRef.current = false;
+          setConfirmAction(null);
+          setConfirmIntent(null);
+          setNotice({ tone: "error", message: t("sidebar.uploadWorkspaceChanged", { completed }) });
+        } else if (uploadError.code === "UPLOAD_CONFLICT") {
+          requestUploadOverwrite(remaining, action.targetPath, action.expectedWorkspaceDir, completed, uploadError.conflicts || []);
+        } else if (uploadError.batchMayHaveUploaded) {
+          requestUploadRetry(remaining, action.targetPath, action.expectedWorkspaceDir, completed,
+            error instanceof Error ? error.message : fallback, true);
+        } else {
+          setConfirmAction({ ...action, files: remaining, completedUploaded: completed });
+          setConfirmError(t("sidebar.uploadCannotRetry", {
+            reason: error instanceof Error ? error.message : fallback,
+            completed,
+          }));
+        }
+      } else {
+        setConfirmError(error instanceof Error ? error.message : fallback);
+      }
     } finally {
       setConfirmBusy(false);
+      if (isUpload) {
+        uploadInProgressRef.current = false;
+        setUploadBusy(false);
+      }
     }
-  }, [confirmAction, onDeleteEntries, onDeleteEntry, onRefreshTree, onUploadEntries, t]);
+  }, [confirmAction, onDeleteEntries, onDeleteEntry, onRefreshTree, onUploadEntries, requestUploadOverwrite, requestUploadRetry, t]);
 
   const handleDelete = useCallback(
     (node: FileNode) => {
@@ -512,6 +592,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       targetPath = ""
     ) => {
       if (!canEditWorkspace || !fileList || fileList.length === 0) return;
+      if (uploadInProgressRef.current || uploadPendingRef.current) {
+        setNotice({ tone: "error", message: t("sidebar.uploadBusy") });
+        return;
+      }
+      uploadInProgressRef.current = true;
+      setUploadBusy(true);
+      setNotice({ tone: "status", message: t("sidebar.uploadInProgress") });
+      const expectedWorkspaceDir = workspaceDir;
 
       try {
         const files = Array.from(fileList).map((file) => ({
@@ -523,27 +611,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }));
 
         try {
-          await onUploadEntries(files, { targetPath });
+          const result = await onUploadEntries(files, { targetPath, expectedWorkspaceDir });
           onRefreshTree();
+          setNotice({ tone: "status", message: t("sidebar.uploadComplete", { count: result.uploaded }) });
         } catch (e) {
-          const uploadError = e as Error & { code?: string; conflicts?: string[] };
+          const uploadError = e as UploadEntriesError;
           if (uploadError.code !== "UPLOAD_CONFLICT") {
             throw e;
           }
 
-          const conflicts = uploadError.conflicts || [];
-          requestConfirmation(
-            { kind: "upload-overwrite", files, targetPath },
-            { title: t("sidebar.uploadOverwriteTitle"), description: t("sidebar.confirmUploadOverwrite", {
-              count: conflicts.length,
-              sample: conflicts.slice(0, 3).join(", "),
-            }), confirmLabel: t("sidebar.overwrite"), tone: "danger" }
-          );
+          const remaining = uploadError.remainingFiles || files;
+          const completed = uploadError.completedUploaded || 0;
+          onRefreshTree();
+          setNotice(null);
+          requestUploadOverwrite(remaining, targetPath, expectedWorkspaceDir, completed, uploadError.conflicts || []);
           return;
         }
       } catch (e) {
-        setNotice({ tone: "error", message: e instanceof Error ? e.message : t("sidebar.uploadFailed") });
+        const uploadError = e as UploadEntriesError;
+        onRefreshTree();
+        if (uploadError.code === "UPLOAD_WORKSPACE_CHANGED") {
+          setNotice({ tone: "error", message: t("sidebar.uploadWorkspaceChanged", {
+            completed: uploadError.completedUploaded || 0,
+          }) });
+        } else if (Array.isArray(uploadError.remainingFiles) && uploadError.batchMayHaveUploaded) {
+          setNotice(null);
+          requestUploadRetry(uploadError.remainingFiles, targetPath, expectedWorkspaceDir,
+            uploadError.completedUploaded || 0,
+            e instanceof Error ? e.message : t("sidebar.uploadFailed"), true);
+        } else if (Array.isArray(uploadError.remainingFiles)) {
+          setNotice({ tone: "error", message: t("sidebar.uploadPartialFailure", {
+            reason: e instanceof Error ? e.message : t("sidebar.uploadFailed"),
+            completed: uploadError.completedUploaded,
+            remaining: uploadError.remainingFiles.length,
+          }) });
+        } else {
+          setNotice({ tone: "error", message: e instanceof Error ? e.message : t("sidebar.uploadFailed") });
+        }
       } finally {
+        uploadInProgressRef.current = false;
+        setUploadBusy(false);
         if (fileUploadInputRef.current) {
           fileUploadInputRef.current.value = "";
         }
@@ -552,12 +659,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
       }
     },
-    [canEditWorkspace, onRefreshTree, onUploadEntries, requestConfirmation, t]
+    [canEditWorkspace, onRefreshTree, onUploadEntries, requestUploadOverwrite, requestUploadRetry, t, workspaceDir]
   );
 
   const openUploadPicker = useCallback(
     (targetPath: string, preserveRelativePath: boolean) => {
       if (!canEditWorkspace) return;
+      if (uploadInProgressRef.current || uploadPendingRef.current) {
+        setNotice({ tone: "error", message: t("sidebar.uploadBusy") });
+        return;
+      }
       uploadTargetPathRef.current = targetPath;
       const input = preserveRelativePath
         ? folderUploadInputRef.current
@@ -565,7 +676,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       input?.click();
       setContextMenu(null);
     },
-    [canEditWorkspace]
+    [canEditWorkspace, t]
   );
 
   const handleDroppedFiles = useCallback(
@@ -738,6 +849,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [contentMatchPaths, tree, treeQuery]
   );
   const treeStats = useMemo(() => countTreeNodes(filteredTree), [filteredTree]);
+  const uploadUnavailable = uploadBusy || confirmAction?.kind === "upload-overwrite" || confirmAction?.kind === "upload-retry";
 
   if (!visible) return null;
 
@@ -810,7 +922,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title={t("sidebar.uploadFiles")}
             aria-label={t("sidebar.uploadFiles")}
             onClick={() => openUploadPicker("", false)}
-            disabled={!canEditWorkspace}
+            disabled={!canEditWorkspace || uploadUnavailable}
           >
             <FileUp size={15} />
           </button>
@@ -819,7 +931,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title={t("sidebar.uploadFolder")}
             aria-label={t("sidebar.uploadFolder")}
             onClick={() => openUploadPicker("", true)}
-            disabled={!canEditWorkspace}
+            disabled={!canEditWorkspace || uploadUnavailable}
           >
             <FolderUp size={15} />
           </button>
@@ -1131,14 +1243,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button
                     className="context-menu-item"
                     onClick={() => openUploadPicker(contextMenu.node!.path, false)}
-                    disabled={!canEditWorkspace}
+                    disabled={!canEditWorkspace || uploadUnavailable}
                   >
                     <FileUp size={14} /> {t("sidebar.uploadFiles")}
                   </button>
                   <button
                     className="context-menu-item"
                     onClick={() => openUploadPicker(contextMenu.node!.path, true)}
-                    disabled={!canEditWorkspace}
+                    disabled={!canEditWorkspace || uploadUnavailable}
                   >
                     <FolderUp size={14} /> {t("sidebar.uploadFolder")}
                   </button>
@@ -1223,14 +1335,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 className="context-menu-item"
                 onClick={() => openUploadPicker("", false)}
-                disabled={!canEditWorkspace}
+                disabled={!canEditWorkspace || uploadUnavailable}
               >
                 <FileUp size={14} /> {t("sidebar.uploadFiles")}
               </button>
               <button
                 className="context-menu-item"
                 onClick={() => openUploadPicker("", true)}
-                disabled={!canEditWorkspace}
+                disabled={!canEditWorkspace || uploadUnavailable}
               >
                 <FolderUp size={14} /> {t("sidebar.uploadFolder")}
               </button>
@@ -1385,7 +1497,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         intent={confirmIntent}
         busy={confirmBusy}
         error={confirmError}
-        onClose={() => { setConfirmIntent(null); setConfirmAction(null); setConfirmError(null); }}
+        onClose={() => { uploadPendingRef.current = false; setConfirmIntent(null); setConfirmAction(null); setConfirmError(null); }}
         onConfirm={() => executeConfirmedAction()}
       />
     </div>

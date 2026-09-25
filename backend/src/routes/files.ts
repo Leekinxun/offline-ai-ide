@@ -33,6 +33,8 @@ import {
 export const filesRouter = Router();
 
 const MAX_DIFF_SOURCE_BYTES = 2 * 1024 * 1024;
+const UPLOAD_WORKSPACE_CHANGED_DETAIL =
+  "Workspace changed during upload. Return to the original workspace and select the folder again.";
 
 interface DiffSource {
   content: string;
@@ -99,6 +101,40 @@ function createUploadMiddleware() {
 
 function getWorkspace(req: Request): string {
   return ((req as any).userSession as UserSession).workspaceDir;
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function getPinnedUploadWorkspace(req: Request): string {
+  const workspaceDir = (req as any).uploadWorkspaceDir;
+  if (typeof workspaceDir !== "string" || !workspaceDir) {
+    return getWorkspace(req);
+  }
+  return workspaceDir;
+}
+
+function validatePinnedUploadWorkspace(req: Request, res: any): boolean {
+  const workspaceDir = getPinnedUploadWorkspace(req);
+  if (!sameWorkspace(getWorkspace(req), workspaceDir)) {
+    res.status(409).json({
+      detail: UPLOAD_WORKSPACE_CHANGED_DETAIL,
+      code: "UPLOAD_WORKSPACE_CHANGED",
+    });
+    return false;
+  }
+
+  const expectedWorkspaceDir = getFormFieldValues(req.body?.expectedWorkspaceDir)[0];
+  if (expectedWorkspaceDir && !sameWorkspace(expectedWorkspaceDir, workspaceDir)) {
+    res.status(409).json({
+      detail: UPLOAD_WORKSPACE_CHANGED_DETAIL,
+      code: "UPLOAD_WORKSPACE_CHANGED",
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function requireWorkspaceWrite(req: Request, res: any): boolean {
@@ -855,6 +891,7 @@ filesRouter.post("/move", (req, res) => {
 // POST /upload multipart/form-data { targetPath, overwrite, files[], paths[] }
 filesRouter.post("/upload", (req, res, next) => {
   if (!requireWorkspaceWrite(req, res)) return;
+  (req as any).uploadWorkspaceDir = getWorkspace(req);
 
   createUploadMiddleware().array("files")(req, res, (error) => {
     if (error) {
@@ -866,6 +903,8 @@ filesRouter.post("/upload", (req, res, next) => {
           : "Upload failed";
       return res.status(400).json({ detail: message });
     }
+    if (!validatePinnedUploadWorkspace(req, res)) return;
+    if (!requireWorkspaceWrite(req, res)) return;
     next();
   });
 }, (req, res) => {
@@ -885,7 +924,7 @@ filesRouter.post("/upload", (req, res, next) => {
 
   try {
     const session = (req as any).userSession as UserSession;
-    const workspaceDir = getWorkspace(req);
+    const workspaceDir = getPinnedUploadWorkspace(req);
     const prepared = files.map((file, index) => {
       const relPath = joinUploadTarget(
         targetPath,

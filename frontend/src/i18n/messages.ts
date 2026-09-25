@@ -819,12 +819,25 @@ export const EN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.dropFilesHere": "Drop files to upload",
   "sidebar.uploadFailed": "Upload failed",
   "sidebar.uploadComplete": "Uploaded {count} file(s)",
+  "sidebar.uploadInProgress": "Uploading files. Please wait and keep this page open.",
+  "sidebar.uploadBusy": "An upload is in progress or waiting for confirmation. Finish or cancel it first.",
+  "sidebar.uploadPartialFailure":
+    "Upload stopped: {reason}. {completed} file(s) are confirmed uploaded; {remaining} remain. Check the failed files, then select the folder again. Existing files require confirmation before overwrite.",
+  "sidebar.uploadRetryTitle": "Resume upload",
+  "sidebar.retryRemaining": "Retry remaining files",
+  "sidebar.confirmUploadRetry":
+    "Upload stopped: {reason}. {completed} file(s) are confirmed uploaded; {remaining} remain.{uncertainty} Retry only the remaining files without overwriting? Any conflict will require confirmation.",
+  "sidebar.uploadCannotRetry":
+    "Upload stopped: {reason}. {completed} file(s) are confirmed uploaded. Cancel this dialog, correct the failed files, and select them again.",
+  "sidebar.uploadWorkspaceChanged":
+    "The workspace changed during upload. {completed} file(s) were confirmed uploaded to the original workspace. Return to that workspace, then select the folder again.",
+  "sidebar.uploadBatchUncertain": "The interrupted batch may also have reached the server.",
   "sidebar.copyItem": "Copy",
   "sidebar.copyPath": "Copy Path",
   "sidebar.copyPathFailed": "Failed to copy the file path",
   "sidebar.copyPathSuccess": "File path copied",
   "sidebar.uploadOverwriteTitle": "Overwrite existing files",
-  "sidebar.overwrite": "Overwrite",
+  "sidebar.overwrite": "Overwrite this batch",
   "sidebar.pasteItem": "Paste",
   "sidebar.clipboardItem": "Copied: {name}",
   "sidebar.clearClipboard": "Clear copied item",
@@ -840,7 +853,7 @@ export const EN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.moveTargetMissing": "The source or target folder no longer exists.",
   "sidebar.moveFailed": "Move failed",
   "sidebar.confirmUploadOverwrite":
-    "{count} file(s) already exist, including {sample}. Overwrite them?",
+    "{count} file(s) already exist in this batch, including {sample}. {completed} file(s) have already uploaded; {remaining} remain. Overwrite existing files in this batch? Later batches will ask again if they conflict.",
   "sidebar.toggleMultiSelect": "Toggle multi-select",
   "sidebar.selectItem": "Select item",
   "sidebar.unselectItem": "Unselect item",
@@ -2370,12 +2383,25 @@ export const ZH_CN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.dropFilesHere": "松开以上传到当前目录",
   "sidebar.uploadFailed": "上传失败",
   "sidebar.uploadComplete": "已上传 {count} 个文件",
+  "sidebar.uploadInProgress": "正在上传文件，请等待并保持页面打开。",
+  "sidebar.uploadBusy": "已有上传正在进行或等待确认。请先完成或取消。",
+  "sidebar.uploadPartialFailure":
+    "上传中断：{reason}。已确认上传 {completed} 个文件，剩余 {remaining} 个。请检查失败的文件，再重新选择文件夹；覆盖已有文件前会要求确认。",
+  "sidebar.uploadRetryTitle": "继续上传",
+  "sidebar.retryRemaining": "仅重试剩余文件",
+  "sidebar.confirmUploadRetry":
+    "上传中断：{reason}。已确认上传 {completed} 个文件，剩余 {remaining} 个。{uncertainty}仅重试剩余文件且不覆盖已有文件吗？如遇冲突会再次请求确认。",
+  "sidebar.uploadCannotRetry":
+    "上传中断：{reason}。已确认上传 {completed} 个文件。请取消此对话框，修正失败的文件后重新选择。",
+  "sidebar.uploadWorkspaceChanged":
+    "上传期间工作区已切换。已确认有 {completed} 个文件上传到原工作区。请返回原工作区后重新选择文件夹上传。",
+  "sidebar.uploadBatchUncertain": "中断时正在上传的批次也可能已到达服务器。",
   "sidebar.copyItem": "复制",
   "sidebar.copyPath": "复制路径",
   "sidebar.copyPathFailed": "复制文件路径失败",
   "sidebar.copyPathSuccess": "文件路径已复制",
   "sidebar.uploadOverwriteTitle": "覆盖已有文件",
-  "sidebar.overwrite": "覆盖",
+  "sidebar.overwrite": "覆盖此批",
   "sidebar.pasteItem": "粘贴",
   "sidebar.clipboardItem": "已复制：{name}",
   "sidebar.clearClipboard": "清除已复制项目",
@@ -2391,7 +2417,7 @@ export const ZH_CN_MESSAGES: LocaleMessageDictionary = {
   "sidebar.moveTargetMissing": "源项目或目标文件夹已不存在。",
   "sidebar.moveFailed": "移动失败",
   "sidebar.confirmUploadOverwrite":
-    "有 {count} 个文件已存在，包括 {sample}。要覆盖它们吗？",
+    "当前批次有 {count} 个文件已存在，包括 {sample}。此前已上传 {completed} 个文件，剩余 {remaining} 个。覆盖当前批次中已存在的文件吗？后续批次如有冲突会再次请求确认。",
   "sidebar.toggleMultiSelect": "切换多选",
   "sidebar.selectItem": "选择此项",
   "sidebar.unselectItem": "取消选择此项",

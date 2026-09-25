@@ -8,6 +8,106 @@ export interface UploadFilePayload {
   file: File;
 }
 
+export interface UploadEntriesError extends Error {
+  code?: string;
+  conflicts?: string[];
+  completedUploaded: number;
+  completedOverwritten: number;
+  remainingFiles: UploadFilePayload[];
+  batchMayHaveUploaded: boolean;
+}
+
+const UPLOAD_BATCH_BYTES = 8 * 1024 * 1024;
+const UPLOAD_BATCH_FILES = 50;
+
+interface UploadBatch {
+  start: number;
+  files: UploadFilePayload[];
+}
+
+function makeUploadBatches(files: UploadFilePayload[]): UploadBatch[] {
+  const batches: UploadBatch[] = [];
+  let start = 0;
+  let size = 0;
+
+  for (let index = 0; index < files.length; index++) {
+    const fileSize = files[index].file.size;
+    if (index > start && (index - start >= UPLOAD_BATCH_FILES || size + fileSize > UPLOAD_BATCH_BYTES)) {
+      batches.push({ start, files: files.slice(start, index) });
+      start = index;
+      size = 0;
+    }
+    // A single file above 8 MiB must be sent alone; the server still enforces
+    // its configured per-file limit (250 MiB by default).
+    size += fileSize;
+  }
+  if (start < files.length) batches.push({ start, files: files.slice(start) });
+  return batches;
+}
+
+export async function uploadEntriesInBatches(
+  files: UploadFilePayload[],
+  options: { targetPath?: string; overwrite?: boolean; overwriteFirstBatchOnly?: boolean; expectedWorkspaceDir?: string } | undefined,
+  headers: Record<string, string>
+): Promise<{ uploaded: number; overwritten: number }> {
+  let uploaded = 0;
+  let overwritten = 0;
+
+  for (const [batchIndex, batch] of makeUploadBatches(files).entries()) {
+    const formData = new FormData();
+    formData.append("targetPath", options?.targetPath || "");
+    formData.append("expectedWorkspaceDir", options?.expectedWorkspaceDir ?? "");
+    formData.append("overwrite", String(Boolean(options?.overwrite && (!options.overwriteFirstBatchOnly || batchIndex === 0))));
+    for (const entry of batch.files) {
+      formData.append("files", entry.file, entry.file.name);
+      formData.append("paths", entry.path);
+    }
+
+    let batchMayHaveUploaded = true;
+    try {
+      const res = await fetch(`${API}/upload`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+      if (!res.ok) {
+        const payload: unknown = await res.json().catch(() => ({}));
+        const data = payload && typeof payload === "object"
+          ? payload as Record<string, unknown> : {};
+        const message = typeof data.detail === "string" && data.detail.trim() ? data.detail
+          : typeof data.error === "string" && data.error.trim() ? data.error
+          : "Failed to upload";
+        const error = new Error(message) as Error & {
+          code?: string;
+          conflicts?: string[];
+        };
+        if (typeof data.code === "string") error.code = data.code;
+        if (Array.isArray(data.conflicts)) {
+          error.conflicts = data.conflicts.filter(
+            (item: unknown): item is string => typeof item === "string"
+          );
+        }
+        // Conflict and request-validation responses happen before files are written.
+        batchMayHaveUploaded = res.status >= 500 || res.status === 408 || res.status === 429;
+        throw error;
+      }
+
+      const data = await res.json();
+      uploaded += data.uploaded;
+      overwritten += data.overwritten;
+    } catch (cause) {
+      const error = (cause instanceof Error ? cause : new Error(String(cause))) as UploadEntriesError;
+      error.completedUploaded = uploaded;
+      error.completedOverwritten = overwritten;
+      error.remainingFiles = files.slice(batch.start);
+      error.batchMayHaveUploaded = batchMayHaveUploaded;
+      throw error;
+    }
+  }
+
+  return { uploaded, overwritten };
+}
+
 export interface WorkspaceSearchResult {
   path: string;
   line: number;
@@ -417,44 +517,9 @@ export function useFileSystem(token: string) {
   const uploadEntries = useCallback(
     async (
       files: UploadFilePayload[],
-      options?: { targetPath?: string; overwrite?: boolean }
+      options?: { targetPath?: string; overwrite?: boolean; overwriteFirstBatchOnly?: boolean; expectedWorkspaceDir?: string }
     ): Promise<{ uploaded: number; overwritten: number }> => {
-      const formData = new FormData();
-      formData.append("targetPath", options?.targetPath || "");
-      formData.append("overwrite", String(Boolean(options?.overwrite)));
-      for (const file of files) {
-        formData.append("files", file.file, file.file.name);
-        formData.append("paths", file.path);
-      }
-
-      const res = await fetch(`${API}/upload`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const error = new Error(data.detail || "Failed to upload") as Error & {
-          code?: string;
-          conflicts?: string[];
-        };
-        if (typeof data.code === "string") {
-          error.code = data.code;
-        }
-        if (Array.isArray(data.conflicts)) {
-          error.conflicts = data.conflicts.filter(
-            (item: unknown): item is string => typeof item === "string"
-          );
-        }
-        throw error;
-      }
-
-      const data = await res.json();
-      return {
-        uploaded: data.uploaded,
-        overwritten: data.overwritten,
-      };
+      return uploadEntriesInBatches(files, options, authHeaders());
     },
     [authHeaders]
   );
