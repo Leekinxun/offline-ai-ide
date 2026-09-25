@@ -34,6 +34,8 @@ import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
+import { usePlatformEnvironment } from "./hooks/usePlatformEnvironment";
+import { useViewportBreakpoint } from "./hooks/useViewportBreakpoint";
 import {
   DefinitionLocation,
   FileNode,
@@ -71,6 +73,10 @@ import {
   Play,
   Search,
   Smartphone,
+  Maximize2,
+  Minimize2,
+  FolderOpen,
+  LayoutGrid,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -143,6 +149,7 @@ async function sha256Text(value: string): Promise<string> {
 const FILES_ACTIVITY_WIDTH = 56;
 const FILES_HANDLE_WIDTH = 6;
 const FILES_EDITOR_MIN_WIDTH = 360;
+const FILES_EDITOR_IDEAL_MIN_WIDTH = 500;
 const FILES_SIDEBAR_MIN_WIDTH = 180;
 const FILES_SIDEBAR_MAX_WIDTH = 500;
 const FILES_ASSISTANT_MIN_WIDTH = 280;
@@ -158,6 +165,8 @@ export default function App() {
 function DesktopApp() {
   const { t } = useI18n();
   const auth = useAuth();
+  const platform = usePlatformEnvironment(auth.user?.desktop);
+  const viewport = useViewportBreakpoint();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
     return (saved as "light" | "dark") || "light";
@@ -171,14 +180,30 @@ function DesktopApp() {
   );
   const [sessionExpired, setSessionExpired] = useState(false);
 
+  const [userDensityOverride, setUserDensityOverride] = useState<"normal" | "compact" | null>(() => {
+    return (localStorage.getItem("user-density") as "normal" | "compact" | null) || null;
+  });
+  const currentDensity = userDensityOverride || viewport.recommendedDensity;
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-os", platform.os);
+    document.documentElement.setAttribute("data-platform", platform.host);
+    document.documentElement.setAttribute("data-density", currentDensity);
     localStorage.setItem("theme", theme);
-  }, [theme]);
+  }, [theme, platform.os, platform.host, currentDensity]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
+
+  const toggleDensity = useCallback(() => {
+    setUserDensityOverride((prev) => {
+      const next = (prev || viewport.recommendedDensity) === "compact" ? "normal" : "compact";
+      localStorage.setItem("user-density", next);
+      return next;
+    });
+  }, [viewport.recommendedDensity]);
 
   const changeEditorFont = useCallback((fontFamily: string) => {
     setEditorFont(fontFamily);
@@ -269,6 +294,8 @@ function DesktopApp() {
       onPickDesktopWorkspace={auth.pickDesktopWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
+      density={currentDensity}
+      onToggleDensity={toggleDensity}
       editorFont={editorFont}
       editorFontOptions={EDITOR_FONT_OPTIONS}
       onEditorFontChange={changeEditorFont}
@@ -289,6 +316,8 @@ interface AuthenticatedAppProps {
   onPickDesktopWorkspace: () => Promise<DesktopFolderPickResult>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  density: "normal" | "compact";
+  onToggleDensity: () => void;
   editorFont: string;
   editorFontOptions: typeof EDITOR_FONT_OPTIONS;
   onEditorFontChange: (fontFamily: string) => void;
@@ -387,11 +416,15 @@ function AuthenticatedApp({
   onPickDesktopWorkspace,
   theme,
   onToggleTheme,
+  density,
+  onToggleDensity,
   editorFont,
   editorFontOptions,
   onEditorFontChange,
 }: AuthenticatedAppProps) {
   const { t } = useI18n();
+  const platform = usePlatformEnvironment(desktopApp);
+  const viewport = useViewportBreakpoint();
   const editorProblems = useEditorProblems();
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
@@ -401,6 +434,24 @@ function AuthenticatedApp({
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
   const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(typeof document !== "undefined" && document.fullscreenElement));
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, []);
+
   const [workspaceView, setWorkspaceView] = useState<"chat" | "files">("files");
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
   const [folderOpenRequestId, setFolderOpenRequestId] = useState(0);
@@ -517,27 +568,35 @@ function AuthenticatedApp({
         : agentsVisible ? 320
           : checkpointsVisible || problemsVisible || runCenterVisible || debugVisible ? 340
             : 0;
+  const isLaptopOrCompact = viewportWidth < 1440;
+  const responsiveDefaultSidebarWidth = isLaptopOrCompact ? Math.min(sidebarWidth, 240) : sidebarWidth;
+  const responsiveDefaultAssistantWidth = isLaptopOrCompact ? Math.min(assistantWidth, 340) : assistantWidth;
+
   const dockedRightWidth = viewportWidth > 1180
-    ? runDetailsVisible ? 400 : editorAssistantVisible ? assistantWidth : 0
+    ? runDetailsVisible ? (isLaptopOrCompact ? 340 : 400) : editorAssistantVisible ? responsiveDefaultAssistantWidth : 0
     : 0;
+
+  // 黄金编辑区保底空间：大屏保留 520px，中屏保留 460px，紧凑模式保留至少 360px
+  const reservedEditorBudget = viewportWidth > 1440 ? 520 : viewportWidth > 1180 ? 460 : FILES_EDITOR_MIN_WIDTH;
+
   const sidebarMaxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
     FILES_SIDEBAR_MAX_WIDTH,
     layoutAvailableWidth - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
       - (dockedRightWidth ? dockedRightWidth + FILES_HANDLE_WIDTH : 0)
-      - FILES_EDITOR_MIN_WIDTH
+      - reservedEditorBudget
   ));
-  const effectiveSidebarWidth = sidebarVisible ? Math.min(sidebarWidth, sidebarMaxWidth) : 0;
+  const effectiveSidebarWidth = sidebarVisible ? Math.min(responsiveDefaultSidebarWidth, sidebarMaxWidth) : 0;
   const fileDockWidth = sidebarVisible ? effectiveSidebarWidth : utilityDockWidth;
-  const chatDockWidth = sidebarVisible ? 286 : utilityDockWidth;
+  const chatDockWidth = sidebarVisible ? (isLaptopOrCompact ? 250 : 286) : utilityDockWidth;
   const assistantMaxWidth = viewportWidth > 1180
     ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
         FILES_ASSISTANT_MAX_WIDTH,
         layoutAvailableWidth - FILES_ACTIVITY_WIDTH
           - fileDockWidth - (sidebarVisible ? FILES_HANDLE_WIDTH : 0)
-          - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
+          - FILES_HANDLE_WIDTH - reservedEditorBudget
       ))
     : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, layoutAvailableWidth - FILES_ACTIVITY_WIDTH));
-  const effectiveAssistantWidth = Math.min(assistantWidth, assistantMaxWidth);
+  const effectiveAssistantWidth = Math.min(responsiveDefaultAssistantWidth, assistantMaxWidth);
   panelWidthsRef.current = { sidebar: fileDockWidth, assistant: effectiveAssistantWidth };
 
   useEffect(() => {
@@ -640,6 +699,15 @@ function AuthenticatedApp({
     }
     setChatVisible(nextOpen);
   }, [captureDrawerTrigger, chatVisible, closeUtilityPanels]);
+
+  const handleToggleAiAssistant = useCallback(() => {
+    if (workspaceView === "files") {
+      setRunDetailsVisible(false);
+      setEditorAssistantVisible((prev) => !prev);
+    } else {
+      toggleChatPanel();
+    }
+  }, [workspaceView, toggleChatPanel]);
 
   const toggleExplorerPanel = useCallback(() => {
     const switchingToFiles = workspaceView !== "files";
@@ -782,41 +850,38 @@ function AuthenticatedApp({
     [toggleChatPanel, toggleExplorerPanel, toggleFocusMode, toggleTeamPanel, toggleTerminalPanel, toggleUtilityPanel]
   );
 
-  const activeWorkspaceDrawer = compactWorkspace
-    ? terminalVisible
-      ? "terminal"
-      : teamVisible
-        ? "team"
-        : agentsVisible
-          ? "agents"
-          : gitVisible
-            ? "git"
-            : checkpointsVisible
-              ? "checkpoints"
-              : problemsVisible
-                ? "problems"
-                : runCenterVisible
-                  ? "run-center"
-                  : debugVisible
-                    ? "debug"
-                    : sidebarVisible
-                      ? "sidebar"
-                      : narrowWorkspace && chatVisible
-                        ? "chat"
-                        : null
+  const isMobileViewport = viewportWidth <= 640;
+  const isTabletOrMobile = viewportWidth <= 860;
+  const activeWorkspaceDrawer = isTabletOrMobile
+    ? teamVisible
+      ? "team"
+      : agentsVisible
+        ? "agents"
+        : gitVisible
+          ? "git"
+          : checkpointsVisible
+            ? "checkpoints"
+            : problemsVisible
+              ? "problems"
+              : runCenterVisible
+                ? "run-center"
+                : debugVisible
+                  ? "debug"
+                  : isMobileViewport && sidebarVisible
+                    ? "sidebar"
+                    : isMobileViewport && chatVisible
+                      ? "chat"
+                      : null
     : null;
   const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
-  const compactModalDrawerOpen = compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible);
-  const previousCompactWorkspaceRef = useRef(compactWorkspace);
+  const compactModalDrawerOpen = isTabletOrMobile && (agentsVisible || teamVisible || gitVisible);
+  const previousCompactWorkspaceRef = useRef(isMobileViewport);
 
   useEffect(() => {
-    const becameCompact = compactWorkspace && !previousCompactWorkspaceRef.current;
-    previousCompactWorkspaceRef.current = compactWorkspace;
-    if (!becameCompact) return;
-    // Panels may coexist on a wide screen. Keep only the frontmost drawer when
-    // the window narrows, so fixed drawers do not cover one another.
+    const becameMobile = isMobileViewport && !previousCompactWorkspaceRef.current;
+    previousCompactWorkspaceRef.current = isMobileViewport;
+    if (!becameMobile) return;
     setSidebarVisible(activeWorkspaceDrawer === "sidebar");
-    setTerminalVisible(activeWorkspaceDrawer === "terminal");
     setTeamVisible(activeWorkspaceDrawer === "team");
     setAgentsVisible(activeWorkspaceDrawer === "agents");
     setGitVisible(activeWorkspaceDrawer === "git");
@@ -825,15 +890,16 @@ function AuthenticatedApp({
     setRunCenterVisible(activeWorkspaceDrawer === "run-center");
     setDebugVisible(activeWorkspaceDrawer === "debug");
     if (narrowWorkspace) setChatVisible(activeWorkspaceDrawer === "chat");
-  }, [activeWorkspaceDrawer, compactWorkspace, narrowWorkspace]);
+  }, [activeWorkspaceDrawer, isMobileViewport, narrowWorkspace]);
 
   const closeWorkspaceDrawers = useCallback(() => {
-    setSidebarVisible(false);
+    if (isMobileViewport) {
+      setSidebarVisible(false);
+      setChatVisible(false);
+    }
     setTeamVisible(false);
-    setTerminalVisible(false);
     closeUtilityPanels();
-    if (window.innerWidth <= 860) setChatVisible(false);
-  }, [closeUtilityPanels]);
+  }, [closeUtilityPanels, isMobileViewport]);
 
   useEffect(() => {
     const previousDrawer = previousDrawerRef.current;
@@ -937,6 +1003,14 @@ function AuthenticatedApp({
         setProblemsVisible(false);
         return;
       }
+      if (viewportWidth <= 1180 && editorAssistantVisible) {
+        setEditorAssistantVisible(false);
+        return;
+      }
+      if (viewportWidth <= 1180 && runDetailsVisible) {
+        setRunDetailsVisible(false);
+        return;
+      }
 
       if (workspaceDrawerOpen) {
         closeWorkspaceDrawers();
@@ -961,6 +1035,9 @@ function AuthenticatedApp({
     teamVisible,
     workspaceSearchVisible,
     workspaceDrawerOpen,
+    editorAssistantVisible,
+    runDetailsVisible,
+    viewportWidth,
   ]);
 
 
@@ -2358,6 +2435,13 @@ function AuthenticatedApp({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isShortcut = e.metaKey || e.ctrlKey;
+      if (isShortcut && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (activeFile && activeFile.modified) {
+          void saveFile();
+        }
+        return;
+      }
       if (isShortcut && e.key.toLowerCase() === "p") {
         e.preventDefault();
         openCommandPalette(e.shiftKey ? "commands" : "files");
@@ -2697,7 +2781,12 @@ function AuthenticatedApp({
     : activeConversationTitle || (workspaceView === "files" ? activeFile?.name : t("workbench.newTask")) || t("app.openFileToStart");
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      data-os={platform.os}
+      data-platform={platform.host}
+      data-density={viewport.recommendedDensity}
+    >
       {/* Title Bar */}
       <div className="titlebar">
         <div className="titlebar-left">
@@ -2724,10 +2813,21 @@ function AuthenticatedApp({
           <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("commands")}>
             <Command size={14} />
             <span>{t("command.commandPalette")}…</span>
-            <kbd>⌘⇧P</kbd>
+            <kbd>{platform.isMacOS ? "⌘⇧P" : "Ctrl+Shift+P"}</kbd>
           </button>
         </div>
         <div className="titlebar-right">
+          {platform.isWeb && (
+            <button
+              type="button"
+              className={`titlebar-btn${isFullscreen ? " active" : ""}`}
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "退出全屏" : "全屏模式 (F11)"}
+              aria-label={isFullscreen ? "退出全屏" : "全屏模式"}
+            >
+              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          )}
           <button
             className="titlebar-btn titlebar-mobile-command"
             onClick={() => openCommandPalette("commands")}
@@ -2748,11 +2848,11 @@ function AuthenticatedApp({
             <PanelLeft size={17} />
           </button>
           <button
-            className={`titlebar-btn${chatVisible ? " active" : ""}`}
-            onClick={toggleChatPanel}
+            className={`titlebar-btn${(workspaceView === "files" ? editorAssistantVisible : chatVisible) ? " active" : ""}`}
+            onClick={handleToggleAiAssistant}
             title={t("app.toggleAiChat")}
             aria-label={t("app.toggleAiChat")}
-            aria-pressed={chatVisible}
+            aria-pressed={workspaceView === "files" ? editorAssistantVisible : chatVisible}
             data-drawer-trigger="chat"
           >
             <MessageSquare size={17} />
@@ -2771,6 +2871,10 @@ function AuthenticatedApp({
                   {t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
                 </span>
               </button>
+              <button type="button" onClick={onToggleDensity}>
+                <LayoutGrid size={15} />
+                <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
+              </button>
               <button type="button" onClick={() => setSettingsVisible(true)}>
                 <Settings size={15} />
                 <span>{t("app.settings")}</span>
@@ -2779,10 +2883,17 @@ function AuthenticatedApp({
                 <Smartphone size={15} />
                 <span>手机控制台</span>
               </button>}
-              <button type="button" onClick={onLogout}>
-                <LogOut size={15} />
-                <span>{t("app.logout")}</span>
-              </button>
+              {desktopApp ? (
+                <button type="button" onClick={() => void onPickDesktopWorkspace()}>
+                  <FolderOpen size={15} />
+                  <span>打开工作区…</span>
+                </button>
+              ) : (
+                <button type="button" onClick={onLogout}>
+                  <LogOut size={15} />
+                  <span>{t("app.logout")}</span>
+                </button>
+              )}
             </div>
           </details>
         </div>
@@ -2864,7 +2975,7 @@ function AuthenticatedApp({
               setWorkspaceSearchScope("");
               setWorkspaceSearchVisible(true);
             }}
-            title={`${t("search.title")} (⇧⌘F / Ctrl+Shift+F)`}
+            title={`${t("search.title")} (${platform.isMacOS ? "⇧⌘F" : "Ctrl+Shift+F"})`}
             aria-label={t("search.title")}
           >
             <Search size={18} />
@@ -3000,15 +3111,24 @@ function AuthenticatedApp({
             </summary>
             <div className="activity-user-popover">
               <strong>{username}</strong>
+              <button type="button" onClick={onToggleDensity}>
+                <LayoutGrid size={14} /> {density === "compact" ? "标准视图模式" : "紧凑密度模式"}
+              </button>
               <button type="button" onClick={() => setSettingsVisible(true)}>
                 <Settings size={14} /> {t("app.settings")}
               </button>
               {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
                 <Smartphone size={14} /> 手机控制台
               </button>}
-              <button type="button" onClick={onLogout}>
-                <LogOut size={14} /> {t("app.logout")}
-              </button>
+              {desktopApp ? (
+                <button type="button" onClick={() => void onPickDesktopWorkspace()}>
+                  <FolderOpen size={14} /> 打开工作区…
+                </button>
+              ) : (
+                <button type="button" onClick={onLogout}>
+                  <LogOut size={14} /> {t("app.logout")}
+                </button>
+              )}
             </div>
           </details>
         </nav>
@@ -3103,7 +3223,7 @@ function AuthenticatedApp({
                     className={editorAssistantVisible ? "active" : ""}
                     onClick={() => {
                       setRunDetailsVisible(false);
-                      setEditorAssistantVisible(true);
+                      setEditorAssistantVisible((prev) => !prev);
                     }}
                   >
                     <Bot size={13} />
@@ -3526,13 +3646,13 @@ function AuthenticatedApp({
               />
             )}
           </div>
-          {terminalVisible && !compactWorkspace && (
+          {terminalVisible && (
             <div
               className={`terminal-resize-handle${draggingPanel === "terminal" ? " dragging" : ""}`}
               role="separator"
               aria-orientation="horizontal"
               aria-label={t("terminal.resize")}
-              aria-valuemin={160}
+              aria-valuemin={140}
               aria-valuemax={680}
               aria-valuenow={terminalHeight}
               tabIndex={0}
@@ -3543,11 +3663,11 @@ function AuthenticatedApp({
           <Terminal
             key={workspaceDir}
             visible={terminalVisible}
-            style={compactWorkspace ? undefined : { height: terminalHeight }}
+            style={{ height: terminalHeight }}
             token={token}
             disabled={readOnlyWorkspace}
             disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
-            drawerMode={compactWorkspace}
+            drawerMode={isMobileViewport}
             onClose={() => setTerminalVisible(false)}
           />
         </div>

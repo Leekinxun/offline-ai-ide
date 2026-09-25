@@ -129,7 +129,17 @@ export const Terminal: React.FC<TerminalProps> = ({
     wsRef.current = ws;
     fitAddonRef.current = fitAddon;
 
-    const handleResize = () => fitAddon.fit();
+    let rafId: number | null = null;
+    const handleResize = () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+        } catch {
+          // Ignore transient resize errors when panel is unmounting
+        }
+      });
+    };
     window.addEventListener("resize", handleResize);
     const resizeObserver = typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(handleResize)
@@ -139,6 +149,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     }
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       window.removeEventListener("resize", handleResize);
       resizeObserver?.disconnect();
       ws.close();

@@ -36,12 +36,19 @@ function createWorkbenchChunk(id: string): string | undefined {
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: "0.0.0.0",
     port: 5173,
+    strictPort: false,
     proxy: {
-      "/api": backendProxyUrl,
+      "/api": {
+        target: backendProxyUrl,
+        changeOrigin: true,
+        secure: false,
+      },
       "/ws": {
         target: backendProxyUrl.replace(/^http/, "ws"),
         ws: true,
+        changeOrigin: true,
       },
     },
   },

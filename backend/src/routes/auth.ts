@@ -77,7 +77,24 @@ authRouter.post("/logout", (req, res) => {
 authRouter.get("/me", (req, res) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const session = sessionManager.getSession(token);
+  let session = sessionManager.getSession(token);
+
+  // 桌面模式免密直接使用：若无 token 或 token 已失效，自动就地创建/复用桌面本地会话
+  if (!session && process.env.CREWFORGE_DESKTOP === "1") {
+    const desktopSession = sessionManager.getOrCreateDesktopLocalSession();
+    if (desktopSession) {
+      return res.json({
+        username: desktopSession.username,
+        workspaceDir: desktopSession.workspaceDir,
+        workspaceRoot: desktopSession.workspaceRoot,
+        isAdmin: desktopSession.isAdmin,
+        isolated: desktopSession.isolated,
+        desktop: true,
+        token: desktopSession.token,
+      });
+    }
+  }
+
   if (!session) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -88,6 +105,7 @@ authRouter.get("/me", (req, res) => {
     isAdmin: session.isAdmin,
     isolated: session.isolated,
     desktop: process.env.CREWFORGE_DESKTOP === "1",
+    token: session.token,
   });
 });
 

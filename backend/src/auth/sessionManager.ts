@@ -531,6 +531,31 @@ export class SessionManager {
     }
   }
 
+  getOrCreateDesktopLocalSession(): SessionSummary | null {
+    if (process.env.CREWFORGE_DESKTOP !== "1") return null;
+    const now = Date.now();
+    for (const session of this.sessions.values()) {
+      if (session.username === "admin" && !session.isolated) {
+        if (session.expiresAt && now >= session.expiresAt) continue;
+        session.lastSeenAt = now;
+        return {
+          token: session.token,
+          username: session.username,
+          workspaceDir: session.workspaceDir,
+          workspaceRoot: session.workspaceRoot,
+          isAdmin: session.isAdmin,
+          isolated: session.isolated,
+          expiresAt: session.expiresAt,
+        };
+      }
+    }
+    const adminUser = this.usersConfig.users.find((u) => u.isAdmin) || this.usersConfig.users[0];
+    if (adminUser) {
+      return this.openUserSession(adminUser);
+    }
+    return null;
+  }
+
   getSession(token: string | null | undefined, options: { touch?: boolean } = {}): UserSession | null {
     if (!token) return null;
     const session = this.sessions.get(token);

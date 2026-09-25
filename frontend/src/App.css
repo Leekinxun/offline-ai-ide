@@ -43,17 +43,17 @@
   --radius: 10px;
   --radius-sm: 6px;
   --radius-xs: 4px;
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-mono: "Menlo", "Consolas", "Monaco", "Courier New", monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Ubuntu", "Cantarell", sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace;
   --transition: 0.15s ease;
   --sidebar-width: 260px;
   --chat-width: 380px;
-  --titlebar-height: 52px;
-  --statusbar-height: 26px;
-  --tabbar-height: 38px;
+  --titlebar-height: 48px;
+  --statusbar-height: 25px;
+  --tabbar-height: 36px;
   --control-height: 30px;
-  --panel-header-height: 42px;
-  --font-size-base: 14px;
+  --panel-header-height: 38px;
+  --font-size-base: 13.5px;
   --font-size-meta: 12px;
   /* CrownForge Workbench visual roles */
   --activity-rail-width: 52px;
@@ -126,6 +126,46 @@
   --focus-ring: 0 0 0 3px rgba(122, 162, 255, 0.2);
 }
 
+/* 紧凑密度模式 (可由小屏自适应触发或用户手动切换) */
+[data-density="compact"] {
+  --titlebar-height: 40px;
+  --statusbar-height: 22px;
+  --tabbar-height: 32px;
+  --control-height: 26px;
+  --panel-header-height: 34px;
+  --font-size-base: 12.5px;
+  --font-size-meta: 11px;
+  --activity-rail-width: 46px;
+  --sidebar-workbench-width: 240px;
+  --chat-width: 340px;
+}
+
+@media (max-height: 740px), (max-width: 1180px) {
+  :root {
+    --titlebar-height: 40px;
+    --statusbar-height: 22px;
+    --tabbar-height: 32px;
+    --control-height: 26px;
+    --panel-header-height: 34px;
+    --font-size-base: 12.5px;
+    --font-size-meta: 11px;
+    --activity-rail-width: 46px;
+    --sidebar-workbench-width: 240px;
+    --chat-width: 340px;
+  }
+}
+
+/* 针对不同操作系统的首选字系微调 */
+[data-os="windows"] {
+  --font-sans: "Segoe UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, "Courier New", monospace;
+}
+
+[data-os="linux"] {
+  --font-sans: system-ui, "Noto Sans CJK SC", "Noto Sans SC", "Ubuntu", "Cantarell", "DejaVu Sans", sans-serif;
+  --font-mono: "Fira Code", "Liberation Mono", "DejaVu Sans Mono", monospace;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -138,18 +178,20 @@ body {
   background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   font-size: var(--font-size-base);
   line-height: 1.45;
 }
 
+/* 全平台统一覆写细窄悬浮滚动条，避免 Linux 原生粗滚动条挤占视口 */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 
 *::-webkit-scrollbar-track {
@@ -157,15 +199,22 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: var(--border);
   background-clip: padding-box;
+  transition: background-color 0.2s ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
   background: var(--text-tertiary);
   background-clip: padding-box;
+}
+
+/* 保护 Monaco Editor 与 Xterm 原生滚动渲染不受全局覆盖干扰 */
+.monaco-editor .monaco-scrollable-element > .scrollbar,
+.xterm .xterm-viewport {
+  scrollbar-width: auto;
 }
 
 .sr-only {
@@ -311,6 +360,9 @@ body {
 .titlebar-command-btn span {
   flex: 1;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .titlebar-command-btn kbd,
@@ -322,6 +374,8 @@ body {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .titlebar-brand {
@@ -3140,6 +3194,9 @@ select:focus-visible,
 
 .command-palette-item-copy strong {
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .command-palette-item-copy small {
@@ -6509,15 +6566,13 @@ select:focus-visible,
     cursor: pointer;
   }
 
-  .sidebar,
   .git-panel,
   .agent-board,
   .checkpoint-panel,
   .problems-panel,
   .run-center-panel,
   .debug-panel,
-  .team-sidebar,
-  .terminal-panel {
+  .team-sidebar {
     position: fixed;
     top: var(--titlebar-height);
     right: 0;
@@ -6533,14 +6588,6 @@ select:focus-visible,
     animation: workspace-drawer-enter 160ms ease-out;
   }
 
-  .sidebar {
-    right: auto;
-    left: 0;
-    border-right: 1px solid var(--border-light);
-    border-left: 0;
-    animation-name: none;
-  }
-
   .team-sidebar {
     display: flex;
     overflow: hidden;
@@ -6549,14 +6596,6 @@ select:focus-visible,
 
   .team-panel {
     width: 100%;
-  }
-
-  .terminal-panel {
-    width: min(560px, 94vw) !important;
-  }
-
-  .terminal-resize-handle {
-    display: none;
   }
 
   .terminal-body {
@@ -6582,7 +6621,6 @@ select:focus-visible,
     animation: workspace-drawer-enter 160ms ease-out;
   }
 
-  .terminal-panel,
   .team-sidebar,
   .agent-board {
     width: min(100%, 94vw) !important;
@@ -8008,11 +8046,6 @@ select:focus-visible,
   --ink-muted: oklch(68% 0.008 250);
   --line-subtle: oklch(28% 0.008 250);
   --line-strong: oklch(38% 0.01 250);
-}
-
-.app > .titlebar,
-.app > .statusbar {
-  display: none;
 }
 
 .main-layout.workbench-view-chat {
@@ -11059,6 +11092,7 @@ body {
   transform: none;
   justify-self: end;
   width: min(188px, 100%);
+  white-space: nowrap;
 }
 
 .titlebar-command-btn {
@@ -11069,6 +11103,8 @@ body {
   border-radius: 9px;
   background: var(--surface-panel-strong);
   box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .titlebar-right {
@@ -12994,18 +13030,18 @@ body {
 /* ==================== 2026 editor-first workbench refresh ==================== */
 .main-layout.workbench-view-files {
   display: grid;
-  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(360px, 1fr);
+  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   background: var(--surface-panel-strong);
 }
 
 .main-layout.workbench-view-files.with-editor-assistant {
-  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(360px, 1fr) 6px var(--files-assistant-width, 400px);
+  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(0, 1fr) 6px var(--files-assistant-width, 400px);
 }
 
 .main-layout.workbench-view-files.with-run-details {
-  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(360px, 1fr) 400px;
+  grid-template-columns: 56px var(--files-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(0, 1fr) 400px;
 }
 
 .workbench-view-files > .activity-rail {
@@ -14343,4 +14379,142 @@ body {
   .plugin-policy-form, .governance-suitability-grid, .governance-budget-form, .governance-preflight { grid-template-columns: 1fr; }
   .collaboration-merge-hunk { grid-template-columns: 1fr; }
   .governance-dispatch-warning { grid-column: auto; }
+}
+
+/* ========================================================
+ * 跨平台、跨形态与多分辨率自适应优化专区
+ * CrownForge Multi-Device & Cross-Platform Adaptive Suite
+ * ======================================================== */
+
+/* 1. Desktop 桌面客户端原生窗口特性 */
+[data-platform="desktop"] .titlebar {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+[data-platform="desktop"] .titlebar button,
+[data-platform="desktop"] .titlebar input,
+[data-platform="desktop"] .titlebar summary,
+[data-platform="desktop"] .titlebar a,
+[data-platform="desktop"] .titlebar .titlebar-command-btn,
+[data-platform="desktop"] .titlebar .workbench-task-pill {
+  -webkit-app-region: no-drag;
+}
+
+/* 2. Web 模式轻量标题栏与全屏体验 */
+[data-platform="web"] .titlebar {
+  user-select: auto;
+}
+
+/* 3. 操作系统排版微调 (Windows 高分屏 vs CentOS) */
+[data-os="windows"] {
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+[data-os="linux"] {
+  font-weight: 420;
+}
+
+[data-os="linux"] .tree-item-name,
+[data-os="linux"] .sidebar-title,
+[data-os="linux"] .workbench-task-title {
+  font-weight: 500;
+}
+
+/* 4. 工作区与编辑器弹性容器保护 (仅在文件工作台视图下生效，严禁干扰 AI 任务视图) */
+.workbench-view-files > .editor-area:not(.workbench-surface-hidden) {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.workbench-surface-hidden {
+  display: none !important;
+}
+
+.editor-main {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 5. 标签栏 (TabBar) 超长自适应 */
+.tabbar {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tabbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* 6. 多显示器与视口断点深度适配 */
+@media (max-width: 1260px) {
+  .titlebar {
+    grid-template-columns: auto minmax(160px, 1fr) auto;
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .titlebar-left {
+    width: auto;
+    flex: 0 0 auto;
+    max-width: 170px;
+    padding-right: 8px;
+  }
+
+  .titlebar-brand .brand-lockup-subtitle {
+    max-width: 110px;
+  }
+
+  .workbench-task-pill {
+    max-width: 280px;
+  }
+
+  .editor-context-bar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .editor-context-workspace {
+    display: none;
+  }
+
+  .editor-primary-actions button span {
+    display: none;
+  }
+
+  .editor-primary-actions button {
+    padding: 0 6px;
+  }
+}
+
+@media (max-height: 750px) {
+  .terminal-panel {
+    max-height: 38vh !important;
+  }
+
+  .context-strip {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+
+  .context-strip-card {
+    min-height: 42px;
+    padding: 4px 6px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .workbench-task-pill {
+    max-width: 520px;
+  }
+
+  .titlebar-command-bar {
+    width: 260px;
+  }
 }

@@ -245,7 +245,6 @@ if (isPrimaryInstance) {
   app.whenReady().then(async () => {
     try {
       const data = ensureDesktopData();
-      await showInitialPassword(data.initialPassword);
       backendUrl = await startBackend(data);
       mainWindow = new BrowserWindow({
         width: 1440,

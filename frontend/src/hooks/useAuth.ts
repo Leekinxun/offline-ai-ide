@@ -43,20 +43,22 @@ export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Validate stored token on mount
+  // Validate stored token on mount, or auto-authenticate if in desktop environment
   useEffect(() => {
     const stored = token;
-    if (!stored) {
-      setLoading(false);
-      return;
-    }
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${stored}` } })
+    const headers: HeadersInit = stored ? { Authorization: `Bearer ${stored}` } : {};
+
+    fetch("/api/auth/me", { headers })
       .then((res) => {
         if (!res.ok) throw new Error("Invalid token");
         return res.json();
       })
       .then((data) => {
-        setToken(stored);
+        const effectiveToken = data.token || stored;
+        if (effectiveToken) {
+          localStorage.setItem(TOKEN_KEY, effectiveToken);
+          setToken(effectiveToken);
+        }
         setUser({
           username: data.username,
           workspaceDir: data.workspaceDir,
@@ -66,8 +68,10 @@ export function useAuth() {
         });
       })
       .catch(() => {
-        if (sessionStorage.getItem(ISOLATED_TOKEN_KEY) === stored) sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
-        else localStorage.removeItem(TOKEN_KEY);
+        if (stored) {
+          if (sessionStorage.getItem(ISOLATED_TOKEN_KEY) === stored) sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
+          else localStorage.removeItem(TOKEN_KEY);
+        }
         setToken(null);
         setUser(null);
       })
