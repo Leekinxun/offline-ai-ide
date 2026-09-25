@@ -311,9 +311,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [onCancelContentSearch, onSearchContent, treeQuery, visible]);
 
   useEffect(() => {
-    folderUploadInputRef.current?.setAttribute("webkitdirectory", "");
-    folderUploadInputRef.current?.setAttribute("directory", "");
-  }, []);
+    if (folderUploadInputRef.current) {
+      folderUploadInputRef.current.setAttribute("webkitdirectory", "");
+      folderUploadInputRef.current.setAttribute("directory", "");
+    }
+  }, [visible]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
@@ -517,7 +519,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const files = Array.from(fileList).map((file) => ({
             path:
               preserveRelativePath && file.webkitRelativePath
-                ? file.webkitRelativePath
+                ? file.webkitRelativePath.replace(/\\/g, "/")
                 : file.name,
             file,
           }));
@@ -767,6 +769,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-hidden-file-input"
             type="file"
             multiple
+            {...({ webkitdirectory: "", directory: "" } as any)}
             onChange={(e) =>
               void handleUploadFiles(
                 e.target.files,

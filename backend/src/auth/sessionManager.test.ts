@@ -332,3 +332,56 @@ test("desktop trusted picker rejects invalid and isolated workspace changes", as
   const isolated = manager.createIsolatedSession(session.token, worktree);
   assert.equal(manager.changeWorkspaceFromTrustedDesktopPicker(isolated.token, project), null);
 });
+
+test("web mode automatically permits default workspace and allows admin directory listing across allowed roots", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-web-workspace-"));
+  const workspaceA = path.join(root, "project-a");
+  const workspaceB = path.join(root, "project-b");
+  const subDir = path.join(workspaceA, "src");
+  const configPath = path.join(root, "users.json");
+
+  await mkdir(workspaceA, { recursive: true });
+  await mkdir(workspaceB, { recursive: true });
+  await mkdir(subDir, { recursive: true });
+
+  const priorDefaultWorkspace = config.defaultWorkspaceDir;
+  config.defaultWorkspaceDir = workspaceA;
+
+  t.after(async () => {
+    config.defaultWorkspaceDir = priorDefaultWorkspace;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [root],
+    users: [
+      { username: "admin", password: "secret", defaultWorkspace: workspaceA, isAdmin: true },
+      { username: "bob", password: "secret", defaultWorkspace: workspaceA, isAdmin: false },
+    ],
+  }));
+
+  const manager = new SessionManager(configPath);
+  const adminSession = manager.login("admin", "secret");
+  assert.ok(adminSession);
+
+  // Admin should be able to list workspaceA subdirectories
+  const listA = manager.listUserWorkspaceDirectories(adminSession.token);
+  assert.ok(listA);
+  assert.equal(listA.entries.some((entry) => entry.name === "src"), true);
+
+  // Admin can list parent root directory and switch to workspaceB
+  const listRoot = manager.listUserWorkspaceDirectories(adminSession.token, root);
+  assert.ok(listRoot);
+  assert.equal(listRoot.entries.some((entry) => entry.name === "project-b"), true);
+
+  const changed = manager.changeWorkspace(adminSession.token, workspaceB);
+  assert.ok(changed);
+  assert.equal(manager.getSession(adminSession.token)?.workspaceDir, await realpath(workspaceB));
+
+  // Non-admin user bob is restricted within their workspaceRoot
+  const bobSession = manager.login("bob", "secret");
+  assert.ok(bobSession);
+  assert.equal(manager.listUserWorkspaceDirectories(bobSession.token, root), null);
+  assert.equal(manager.changeWorkspaceWithinUserRoot(bobSession.token, workspaceB), null);
+});
+

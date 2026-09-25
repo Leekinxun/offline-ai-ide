@@ -43,6 +43,26 @@ export interface SafeRegistrationRequest {
   requestedAt: number;
 }
 
+export function isSameOrDescendantPath(candidate: string, parent: string): boolean {
+  const c = path.resolve(candidate);
+  const p = path.resolve(parent);
+  if (process.platform === "win32") {
+    const cLower = c.toLowerCase();
+    const pLower = p.toLowerCase();
+    return cLower === pLower || cLower.startsWith(`${pLower}${path.sep}`);
+  }
+  return c === p || c.startsWith(`${p}${path.sep}`);
+}
+
+export function isSamePath(a: string, b: string): boolean {
+  const resA = path.resolve(a);
+  const resB = path.resolve(b);
+  if (process.platform === "win32") {
+    return resA.toLowerCase() === resB.toLowerCase();
+  }
+  return resA === resB;
+}
+
 export interface UserSession {
   token: string;
   username: string;
@@ -171,9 +191,10 @@ export class SessionManager {
           .filter((root): root is string => typeof root === "string" && root.trim().length > 0)
           .map((root) => path.resolve(root))
       : [path.resolve(config.defaultWorkspaceDir)];
-    const initialDesktopRoot = path.resolve(config.defaultWorkspaceDir);
-    if (process.env.CREWFORGE_DESKTOP === "1" && !allowedRoots.includes(initialDesktopRoot)) {
-      allowedRoots.push(initialDesktopRoot);
+    const initialWorkspaceRoot = path.resolve(config.defaultWorkspaceDir);
+    const hasDefaultRoot = allowedRoots.some((root) => isSameOrDescendantPath(initialWorkspaceRoot, root));
+    if (!hasDefaultRoot) {
+      allowedRoots.push(initialWorkspaceRoot);
     }
 
     const users = Array.isArray(raw.users)
@@ -739,7 +760,7 @@ export class SessionManager {
           // A non-existent root cannot contain an existing selectable directory.
           return false;
         }
-        return canonical === canonicalRoot || canonical.startsWith(`${canonicalRoot}${path.sep}`);
+        return isSameOrDescendantPath(canonical, canonicalRoot);
       });
       return withinCanonicalRoot ? canonical : null;
     } catch {
@@ -813,7 +834,7 @@ export class SessionManager {
 
     const hasAllowedRoot = nextConfig.allowedRoots.some((root) => {
       const resolvedRoot = path.resolve(root);
-      return resolvedRoot === canonicalWorkspace;
+      return isSamePath(resolvedRoot, canonicalWorkspace);
     });
     if (!hasAllowedRoot) {
       nextConfig.allowedRoots.push(canonicalWorkspace);
@@ -843,11 +864,37 @@ export class SessionManager {
     const session = this.getSession(token);
     if (!session) return null;
 
-    const requestedPath = dir?.trim() || session.workspaceRoot;
-    const selectableDirectory = this.resolveSelectableWorkspaceWithinRoot(
-      requestedPath,
-      session.workspaceRoot
-    );
+    const requestedPath = dir?.trim() || session.workspaceDir || session.workspaceRoot;
+    let selectableDirectory: string | null = null;
+    let effectiveRootPath = session.workspaceRoot;
+
+    if (session.isAdmin) {
+      selectableDirectory = this.resolveSelectableWorkspace(requestedPath);
+      if (selectableDirectory) {
+        const matchedRoot = this.usersConfig.allowedRoots.find((root) => {
+          try {
+            const canonicalRoot = fs.realpathSync.native(path.resolve(root));
+            return isSameOrDescendantPath(selectableDirectory!, canonicalRoot);
+          } catch {
+            return false;
+          }
+        });
+        if (matchedRoot) {
+          try {
+            effectiveRootPath = fs.realpathSync.native(path.resolve(matchedRoot));
+          } catch {
+            effectiveRootPath = path.resolve(matchedRoot);
+          }
+        }
+      }
+    } else {
+      selectableDirectory = this.resolveSelectableWorkspaceWithinRoot(
+        requestedPath,
+        session.workspaceRoot
+      );
+      effectiveRootPath = session.workspaceRoot;
+    }
+
     if (!selectableDirectory) return null;
 
     try {
@@ -862,7 +909,7 @@ export class SessionManager {
         }));
       return {
         path: selectableDirectory,
-        rootPath: session.workspaceRoot,
+        rootPath: effectiveRootPath,
         entries,
       };
     } catch {
@@ -878,7 +925,7 @@ export class SessionManager {
     if (!selectable) return null;
 
     const canonicalRoot = path.resolve(workspaceRoot);
-    return selectable === canonicalRoot || selectable.startsWith(`${canonicalRoot}${path.sep}`)
+    return isSameOrDescendantPath(selectable, canonicalRoot)
       ? selectable
       : null;
   }

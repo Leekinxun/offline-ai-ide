@@ -1,6 +1,6 @@
 import { Router } from "express";
 import path from "node:path";
-import { sessionManager } from "../auth/sessionManager.js";
+import { isSamePath, sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
 import { loginLimiter } from "../auth/loginLimiter.js";
 import {
@@ -163,10 +163,11 @@ authRouter.get("/workspace/list", authMiddleware, (req, res) => {
   if (!result) {
     return res.status(403).json({ error: "Path is outside the user's workspace root" });
   }
+  const isAtRoot = isSamePath(result.path, result.rootPath);
   res.json({
     ...result,
     selectable: true,
-    canNavigateUp: result.path !== result.rootPath,
-    parentPath: result.path !== result.rootPath ? path.dirname(result.path) : null,
+    canNavigateUp: !isAtRoot,
+    parentPath: !isAtRoot ? path.dirname(result.path) : null,
   });
 });
