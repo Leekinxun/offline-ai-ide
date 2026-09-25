@@ -2,11 +2,12 @@ import express from "express";
 import { createServer } from "http";
 import type { Socket } from "net";
 import { WebSocketServer, WebSocket } from "ws";
-import cors from "cors";
 import path from "path";
 import { config } from "./config.js";
 import { filesRouter } from "./routes/files.js";
 import { authRouter } from "./routes/auth.js";
+import { mobilePairingRouter } from "./routes/mobilePairing.js";
+import { mobileDataRouter } from "./routes/mobileData.js";
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
 import { pluginsRouter } from "./routes/plugins.js";
@@ -25,20 +26,26 @@ import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
 import { handleTerminalWs } from "./ws/terminal.js";
 import { handleTeamWs } from "./ws/team.js";
-import { UserSession } from "./auth/sessionManager.js";
+import { handleMobileWs } from "./ws/mobile.js";
+import { getMobileSessionFromUpgrade } from "./mobile/pairing.js";
+import { stopRunsForSession } from "./chat/runCoordinator.js";
+import { sessionManager, type UserSession } from "./auth/sessionManager.js";
+import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam } from "./team/sessionBridge.js";
 import { reloadExternalPlugins } from "./plugins/registry.js";
 
 const app = express();
+app.disable("x-powered-by");
 reloadExternalPlugins();
-// The desktop window is same-origin with its loopback backend. Do not grant
-// arbitrary websites cross-origin access to that local server.
-if (process.env.CREWFORGE_DESKTOP !== "1") app.use(cors());
+// The Web and desktop frontends use same-origin API requests. Cross-origin
+// credentials are deliberately unavailable to external sites.
 // Signed webhook verification requires the exact bytes received from the provider.
 app.use("/api/delivery/webhooks", deliveryWebhookRouter);
 app.use(express.json({ limit: "10mb" }));
 
 // Auth routes (no middleware — login/logout must be public)
 app.use("/api/auth", authRouter);
+app.use("/api/mobile/pairing", mobilePairingRouter);
+app.use("/api/mobile/data", mobileDataRouter);
 app.use("/api/plugins", pluginsRouter);
 
 // Protected API routes
@@ -61,6 +68,11 @@ app.get("/api/health", (_req, res) => {
 
 // Static frontend files
 const staticPath = path.resolve(config.staticDir);
+app.use("/mobile", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 app.use(express.static(staticPath));
 app.get("*", (_req, res) => {
   res.sendFile(path.join(staticPath, "index.html"));
@@ -70,6 +82,15 @@ app.get("*", (_req, res) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const connections = new Set<Socket>();
+const desktopSockets = new Map<string, Set<WebSocket>>();
+
+sessionManager.onSessionRevoked((token) => {
+  stopRunsForSession(token);
+  for (const ws of desktopSockets.get(token) || []) {
+    try { ws.close(1008, "Session ended"); } catch { ws.terminate(); }
+  }
+  desktopSockets.delete(token);
+});
 
 server.on("connection", (socket) => {
   connections.add(socket);
@@ -80,6 +101,17 @@ server.on("upgrade", (request, socket, head) => {
   const url = request.url || "";
   if (!url.startsWith("/ws/")) {
     socket.destroy();
+    return;
+  }
+
+  if (new URL(url, "http://localhost").pathname === "/ws/mobile") {
+    const mobile = getMobileSessionFromUpgrade(request);
+    if (!mobile) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => handleMobileWs(ws, request, mobile));
     return;
   }
 
@@ -97,6 +129,30 @@ server.on("upgrade", (request, socket, head) => {
 
 wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
   const url = req.url || "";
+  const sockets = desktopSockets.get(session.token) || new Set<WebSocket>();
+  sockets.add(ws);
+  desktopSockets.set(session.token, sockets);
+  const originalWorkspace = session.workspaceDir;
+  const originalTeamId = resolveActiveTeam(session)?.id || null;
+  const validate = setInterval(() => {
+    if (sessionManager.getSession(session.token, { touch: false }) !== session || session.workspaceDir !== originalWorkspace) {
+      ws.close(1008, "Session or workspace changed");
+      return;
+    }
+    if (originalTeamId) {
+      try {
+        const team = getTeamManager(session).getTeamDetails(originalTeamId, session.username);
+        if (team.workspaceDir !== originalWorkspace) { ws.close(1008, "Team access changed"); return; }
+      } catch { ws.close(1008, "Team access changed"); return; }
+    }
+    if (url.startsWith("/ws/terminal") && !canWriteActiveWorkspace(session)) ws.close(1008, "Terminal permission changed");
+  }, 15_000);
+  validate.unref?.();
+  ws.on("close", () => {
+    clearInterval(validate);
+    sockets.delete(ws);
+    if (sockets.size === 0) desktopSockets.delete(session.token);
+  });
   if (url.startsWith("/ws/chat")) {
     handleChatWs(ws, session);
   } else if (url.startsWith("/ws/terminal")) {

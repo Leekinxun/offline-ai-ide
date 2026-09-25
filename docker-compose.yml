@@ -52,6 +52,9 @@ services:
     cpus: "2.0"
     init: true
     environment:
+      - NODE_ENV=production
+      # Set this to the HTTPS origin reachable from a phone to enable QR pairing.
+      - MOBILE_PUBLIC_BASE_URL=${MOBILE_PUBLIC_BASE_URL:-}
       # LLM API (OpenAI-compatible: vLLM / OpenAI / DeepSeek / etc.)
       - VLLM_API_URL=http://host.docker.internal:8000/v1
       - VLLM_API_KEY=

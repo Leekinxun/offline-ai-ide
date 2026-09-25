@@ -122,9 +122,11 @@ export interface ToolApprovalRequestInput {
 
 export interface ToolApprovalRequestEvent extends ToolApprovalRequestInput {
   approvalId: string;
+  createdAt: number;
 }
 
 interface PendingApproval {
+  request: ToolApprovalRequestEvent;
   conversationId?: string;
   risk: ToolRisk;
   canAllowSession: boolean;
@@ -156,15 +158,15 @@ export class ToolApprovalSession {
       return Promise.resolve("allow_session");
     }
 
-    const approvalId = crypto.randomUUID();
-    this.emitRequest({ approvalId, ...input });
+    const request = { approvalId: crypto.randomUUID(), createdAt: Date.now(), ...input };
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this.pending.delete(approvalId);
+        this.pending.delete(request.approvalId);
         resolve("deny");
       }, this.timeoutMs);
       timer.unref?.();
-      this.pending.set(approvalId, {
+      this.pending.set(request.approvalId, {
+        request,
         conversationId: input.conversationId,
         risk: input.risk,
         canAllowSession: input.canAllowSession,
@@ -172,7 +174,19 @@ export class ToolApprovalSession {
         resolve,
         timer,
       });
+      this.emitRequest(request);
     });
+  }
+
+  listPending(conversationId?: string): ToolApprovalRequestEvent[] {
+    return [...this.pending.values()]
+      .filter((pending) => !conversationId || pending.conversationId === conversationId)
+      .map((pending) => ({ ...pending.request }));
+  }
+
+  getPending(approvalId: string): ToolApprovalRequestEvent | null {
+    const pending = this.pending.get(approvalId);
+    return pending ? { ...pending.request } : null;
   }
 
   allowConversation(conversationId: string): number {

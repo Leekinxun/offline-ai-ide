@@ -4,6 +4,30 @@ import path from "path";
 
 export type TeamRole = "owner" | "admin" | "member" | "viewer";
 
+export interface TeamAccessChange {
+  teamId: string;
+  username: string;
+  role: TeamRole | null;
+}
+
+const accessChangeListeners = new Set<(change: TeamAccessChange) => void>();
+
+export function subscribeTeamAccessChanges(listener: (change: TeamAccessChange) => void): () => void {
+  accessChangeListeners.add(listener);
+  return () => accessChangeListeners.delete(listener);
+}
+
+function publishTeamAccessChange(change: TeamAccessChange): void {
+  for (const listener of accessChangeListeners) {
+    try { listener(change); } catch { /* A run listener cannot undo a persisted team change. */ }
+  }
+}
+
+function canonicalWorkspace(workspaceDir: string): string {
+  try { return fs.realpathSync.native(workspaceDir); }
+  catch { return path.resolve(workspaceDir); }
+}
+
 export interface TeamMemberRecord {
   username: string;
   role: TeamRole;
@@ -502,11 +526,11 @@ export class TeamManager {
   }
 
   syncUserWorkspaceTeam(username: string, workspaceDir: string): TeamDetails | null {
-    const target = path.resolve(workspaceDir);
+    const target = canonicalWorkspace(workspaceDir);
     const index = this.readIndex();
     const team = index.teams.find(
       (entry) =>
-        entry.workspaceDir === target &&
+        canonicalWorkspace(entry.workspaceDir) === target &&
         entry.members.some((member) => member.username === username)
     );
     return team ? this.toDetails(team, username) : null;
@@ -514,6 +538,13 @@ export class TeamManager {
 
   getTeamByWorkspace(username: string, workspaceDir: string): TeamDetails | null {
     return this.syncUserWorkspaceTeam(username, workspaceDir);
+  }
+
+  /** Read-only ownership check. A removed member must not regain write access
+   * by treating a team directory as an ordinary personal workspace. */
+  hasTeamAtWorkspace(workspaceDir: string): boolean {
+    const target = canonicalWorkspace(workspaceDir);
+    return this.readIndex().teams.some((team) => canonicalWorkspace(team.workspaceDir) === target);
   }
 
   upsertPresence(
@@ -659,6 +690,7 @@ export class TeamManager {
       ...team.activity,
     ]);
     this.writeIndex(index);
+    if (nextRole === "viewer") publishTeamAccessChange({ teamId, username: targetUsername, role: nextRole });
     return this.toDetails(team, actorUsername);
   }
 
@@ -755,6 +787,7 @@ export class TeamManager {
       ...team.activity,
     ]);
     this.writeIndex(index);
+    publishTeamAccessChange({ teamId, username: targetUsername, role: null });
   }
 
   leaveTeam(teamId: string, username: string): void {
@@ -793,6 +826,7 @@ export class TeamManager {
       ...team.activity,
     ]);
     this.writeIndex(index);
+    publishTeamAccessChange({ teamId, username, role: null });
   }
 
   appendActivity(

@@ -64,7 +64,9 @@ export function getActiveTeamRole(session: UserSession): TeamRole | null {
 }
 
 export function canWriteActiveWorkspace(session: UserSession): boolean {
-  return getActiveTeamRole(session) !== "viewer";
+  const team = resolveActiveTeam(session);
+  if (team) return team.role !== "viewer";
+  return !getManager().hasTeamAtWorkspace(session.workspaceDir);
 }
 
 export function canManageActiveTeam(session: UserSession): boolean {

@@ -2,6 +2,7 @@ import { Router } from "express";
 import path from "node:path";
 import { sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
+import { loginLimiter } from "../auth/loginLimiter.js";
 import {
   DesktopFolderPickerTimeoutError,
   DesktopFolderPickerUnavailableError,
@@ -13,30 +14,55 @@ import { stopDiagnosticsSession } from "../diagnostics/service.js";
 export const authRouter = Router();
 
 // POST /api/auth/register
-authRouter.post("/register", (req, res) => {
+authRouter.post("/register", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const username = typeof req.body?.username === "string" ? req.body.username : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (username.length > 128 || password.length > 1024) {
+    return res.status(400).json({ error: "Username or password is too long" });
+  }
+  const attempt = loginLimiter.start(req.ip || req.socket.remoteAddress || "unknown", `register:${username}`);
+  if (!attempt.allowed) {
+    res.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return res.status(429).json({ error: "Too many registration attempts" });
+  }
   try {
-    const registration = sessionManager.requestRegistration(username, password);
-    res.status(201).json({ status: "pending", registration });
+    const registration = await sessionManager.requestRegistrationAsync(username, password);
+    // Registrations are intentionally counted toward the per-IP KDF budget.
+    attempt.finish(false);
+    return res.status(201).json({ status: "pending", registration });
   } catch (error: any) {
+    attempt.finish(false);
     const message = error?.message || "Registration failed";
     const status = message.includes("already registered") ? 409 : 400;
-    res.status(status).json({ error: message });
+    return res.status(status).json({ error: message });
   }
 });
 
 // POST /api/auth/login
-authRouter.post("/login", (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
+authRouter.post("/login", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const username = req.body?.username;
+  const password = req.body?.password;
+  if (typeof username !== "string" || !username || username.length > 128 ||
+      typeof password !== "string" || !password || password.length > 1024) {
     return res.status(400).json({ error: "Username and password required" });
   }
-  const result = sessionManager.login(username, password);
-  if (!result) {
-    return res.status(401).json({ error: "Invalid credentials" });
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const attempt = loginLimiter.start(ip, username);
+  if (!attempt.allowed) {
+    res.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return res.status(429).json({ error: "Too many login attempts" });
   }
-  res.json({ ...result, desktop: process.env.CREWFORGE_DESKTOP === "1" });
+  try {
+    const result = await sessionManager.loginAsync(username, password);
+    attempt.finish(Boolean(result));
+    if (!result) return res.status(401).json({ error: "Invalid credentials" });
+    return res.json({ ...result, desktop: process.env.CREWFORGE_DESKTOP === "1" });
+  } catch {
+    attempt.finish(null);
+    return res.status(503).json({ error: "Login temporarily unavailable" });
+  }
 });
 
 // POST /api/auth/logout

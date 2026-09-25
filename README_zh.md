@@ -222,6 +222,7 @@ CrownForge 会把持久化的协作记录投影为浏览器安全的执行图，
 - **文件浏览器** — 树形文件管理，支持新建、重命名、复制路径、复制/粘贴、拖拽移动、文件/文件夹上传、下载、批量删除、文件夹 zip 下载、文件名/内容联合搜索和自动刷新；“打开文件夹”从当前用户自己的工作区根目录开始
 - **管理员设置页** — 可在界面中管理用户、重置密码、配置 LLM 的 URL / API Key / Model / Max Tokens / Max Agent Iterations / System Prompt / 上传大小限制，并切换英文 / 简体中文界面语言
 - **多用户认证** — 支持由 `users.json` 管理的本地账号密码登录、用户自助注册和管理员审核；每个审核通过的登录会话拥有独立工作区、终端和 AI 上下文
+- **Web 手机控制台** — 已登录网页可生成一次性二维码，在微信 H5 中经双端短码确认后查看授权工作区的任务并远程控制运行；部署要求与会话边界见[手机控制台指南](docs/mobile-web-control.md)
 - **团队协作** — 支持在共享工作区内创建/加入团队、按 `owner/admin/member/viewer` 邀请成员、查看在线状态与活跃文件、认领文件、查看协作活动，并通过冲突安全保存流程降低多人编辑冲突
 - **多智能体协作** — 可生成自主运行的 AI 队友，它们能认领任务、通过消息总线通信、并行工作，并通过 Agent Board 展示层级、阻塞原因、产物和生命周期
 - **持久化多智能体控制面** — 智能体运行、任务、租约、父子关系、消息、追踪、发现、预算、执行图游标和恢复状态可跨重启保留；父级完成判定会递归等待后代终态、ChangeSet 决策与独立验证证据
@@ -423,6 +424,7 @@ npm run dev
 | `PYTHON_EXECUTABLE` | `python3`（Windows 为 `python`） | 工作区没有 `.venv` 或 `venv` 解释器时用于调试的 Python 解释器 |
 | `DEBUGPY_PYTHON_EXECUTABLE` | `PYTHON_EXECUTABLE` | 已安装 `debugpy==1.8.21` 的 Python 解释器；Docker 镜像会自动配置 |
 | `PORT` | `3000` | 服务端口 |
+| `MOBILE_PUBLIC_BASE_URL` | *（空，手机控制台不可配对）* | 手机可访问的 HTTPS 源，例如 `https://forge.example.com`；开发时可用 HTTP loopback |
 | `MAX_AGENT_ITERATIONS` | `30` | 每次 AI 回复的最大工具调用轮数 |
 | `AGENT_MAX_TOKENS` | `8192` | 每次 AI 回复的最大 Token 数 |
 | `SYSTEM_PROMPT` | *（空）* | AI 智能体默认 System Prompt 覆盖项 |
@@ -435,7 +437,7 @@ npm run dev
 
 | 文件 | 作用 |
 |------|------|
-| `users.json` | 存储用户、密码、管理员标记和允许访问的工作区根目录 |
+| `users.json` | 存储用户、scrypt 密码哈希、管理员标记和允许访问的工作区根目录；旧明文格式在成功登录后迁移 |
 | `app-settings.json` | 存储管理员配置的 LLM、分 Agent 档案、MCP 服务、插件覆盖项和上传大小限制等运行时设置 |
 | `<workspace>/.history/*.jsonl` | 存储按工作区隔离的历史对话、自动生成标题和消息记录 |
 | `TEAM_STORE_ROOT/.team/teams.json` | 存储进程全局团队索引中的成员、角色、邀请码、在线状态、文件认领和协作活动；它不同于工作区本地的运行时团队状态 |

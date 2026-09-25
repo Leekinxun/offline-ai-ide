@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f8f8f7" />
+  <title>CrownForge · 手机控制台 V2</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f8f8f7;
+      --surface: #fff;
+      --surface-soft: #f4f6f8;
+      --ink: #1b2430;
+      --ink-soft: #4c5868;
+      --muted: #778292;
+      --line: #e5e9ee;
+      --line-strong: #d4dce5;
+      --blue: #315fd4;
+      --blue-dark: #244cae;
+      --blue-soft: #edf2ff;
+      --gold: #e3a93a;
+      --gold-soft: #fff8e8;
+      --green: #218760;
+      --green-soft: #eaf7f0;
+      --red: #bd4b4b;
+      --red-soft: #fff0ee;
+      --shadow: 0 24px 70px rgba(30, 43, 63, .16);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; min-height: 100%; }
+    body { font: 14px/1.5 var(--font); color: var(--ink); background: #e8edf3; -webkit-font-smoothing: antialiased; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    button:focus-visible, textarea:focus-visible { outline: 3px solid rgba(49, 95, 212, .3); outline-offset: 2px; }
+    .stage { min-height: 100dvh; display: flex; justify-content: center; align-items: flex-start; gap: clamp(48px, 8vw, 132px); padding: 24px 36px; background: radial-gradient(circle at 72% 28%, #f7f9fc 0, transparent 37%), #e8edf3; }
+    .guide { width: 326px; height: min(820px, calc(100dvh - 48px)); overflow-y: auto; scrollbar-width: thin; flex: none; }
+    .guide-brand { display: flex; align-items: center; gap: 11px; font-size: 13px; font-weight: 720; letter-spacing: -.02em; }
+    .guide-brand img { width: 36px; height: 36px; }
+    .guide-kicker { margin: 48px 0 12px; color: var(--blue); font: 700 11px/1.2 var(--mono); letter-spacing: .13em; }
+    .guide h1 { margin: 0; font-size: clamp(31px, 3vw, 42px); line-height: 1.17; letter-spacing: -.055em; font-weight: 740; }
+    .guide h1 span { color: var(--blue); }
+    .guide-lead { margin: 18px 0 30px; color: #566273; font-size: 14px; line-height: 1.75; }
+    .guide-label { color: #647184; font-size: 11px; font-weight: 700; letter-spacing: .1em; margin: 26px 0 9px; }
+    .guide-options { display: grid; gap: 7px; }
+    .guide-option { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 11px; color: #536174; background: rgba(255,255,255,.46); border: 1px solid transparent; border-radius: 11px; text-align: left; font-weight: 590; }
+    .guide-option svg { width: 17px; height: 17px; }
+    .guide-option.active { color: var(--blue-dark); border-color: #c4d1f3; background: #fff; box-shadow: 0 4px 12px rgba(49,95,212,.06); }
+    .guide-option small { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--muted); }
+    .guide-foot { border-top: 1px solid #d5dce4; margin-top: 30px; padding-top: 18px; font-size: 11px; line-height: 1.65; color: #758294; }
+    .device { width: 404px; height: min(820px, calc(100dvh - 48px)); min-height: 630px; flex: none; border: 8px solid #202c3e; border-radius: 42px; background: var(--canvas); box-shadow: var(--shadow), inset 0 0 0 1px rgba(255,255,255,.3); position: relative; overflow: hidden; display: flex; flex-direction: column; }
+    .device::before { content: ""; position: absolute; z-index: 30; top: 7px; left: 50%; width: 104px; height: 19px; border-radius: 0 0 15px 15px; transform: translateX(-50%); background: #202c3e; pointer-events: none; }
+    .app-header { background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); padding: 20px 18px 11px; flex: none; }
+    .header-top { display: flex; align-items: center; gap: 9px; }
+    .header-top img { width: 32px; height: 32px; flex: none; }
+    .header-title { min-width: 0; flex: 1; }
+    .header-title strong { display: block; font-size: 15px; line-height: 1.18; letter-spacing: -.025em; }
+    .header-title small { display: block; font-size: 10px; color: var(--muted); letter-spacing: .07em; margin-top: 1px; }
+    .avatar-button { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 11px; color: var(--blue); font-size: 12px; font-weight: 730; background: var(--blue-soft); }
+    .scope-button { width: 100%; margin-top: 13px; padding: 8px 10px; display: flex; align-items: center; gap: 9px; text-align: left; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+    .scope-button > svg { width: 18px; height: 18px; color: var(--blue); }
+    .scope-text { min-width: 0; flex: 1; }
+    .scope-text strong { display: block; font-size: 12px; line-height: 1.2; }
+    .scope-text small { display: block; color: var(--muted); font-size: 10px; margin-top: 2px; }
+    .scope-button .chevron { color: var(--muted); width: 15px; height: 15px; }
+    .offline-banner { flex: none; display: flex; align-items: center; gap: 8px; color: #8e5b20; background: #fff2dc; padding: 9px 16px; font-size: 12px; border-bottom: 1px solid #f1dfbc; }
+    .offline-banner svg { width: 16px; height: 16px; flex: none; }
+    .app-main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+    .screen { padding: 18px 16px 26px; }
+    .screen-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .screen-eyebrow { color: var(--muted); font-size: 11px; font-weight: 620; margin: 0 0 3px; }
+    .screen-heading h2 { font-size: 25px; letter-spacing: -.045em; line-height: 1.2; margin: 0; }
+    .sync-pill { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 10px; color: var(--green); padding: 5px 8px; border-radius: 100px; background: var(--green-soft); margin-bottom: 1px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+    .section-row { display: flex; justify-content: space-between; align-items: center; margin: 22px 1px 10px; }
+    .section-row h3 { font-size: 14px; margin: 0; letter-spacing: -.015em; }
+    .section-row > span, .section-row > button { color: var(--muted); font-size: 11px; }
+    .link-button { border: 0; background: transparent; color: var(--blue) !important; font-weight: 640; padding: 5px; }
+    .attention { background: var(--gold-soft); border: 1px solid #f2ddb0; border-radius: 15px; padding: 15px; }
+    .attention-top { display: flex; justify-content: space-between; gap: 8px; color: #90631b; font-size: 11px; font-weight: 680; }
+    .attention-top .attention-count { border-radius: 100px; background: #fff; padding: 2px 7px; border: 1px solid #f2dfbc; }
+    .attention h3 { margin: 13px 0 4px; font-size: 17px; letter-spacing: -.025em; }
+    .attention p { margin: 0; color: #7c6c50; font-size: 12px; line-height: 1.55; }
+    .attention button { display: inline-flex; gap: 5px; align-items: center; min-height: 44px; color: #80550e; background: transparent; border: 0; padding: 10px 0 0; font-size: 12px; font-weight: 700; }
+    .attention button svg { width: 14px; height: 14px; }
+    .task-hero, .list-card, .approval-card, .connect-card, .detail-card { background: var(--surface); border: 1px solid var(--line); border-radius: 15px; }
+    .task-hero { padding: 15px; }
+    .task-hero-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .tiny-path { font: 600 10px/1.4 var(--mono); color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; border-radius: 100px; padding: 4px 8px; white-space: nowrap; }
+    .status.running { color: var(--green); background: var(--green-soft); }
+    .status.waiting { color: #a26817; background: var(--gold-soft); }
+    .status.done { color: #687484; background: var(--surface-soft); }
+    .status.stopping { color: var(--red); background: var(--red-soft); }
+    .task-hero h3 { font-size: 17px; letter-spacing: -.025em; line-height: 1.3; margin: 12px 0 5px; }
+    .task-hero p { font-size: 12px; color: var(--ink-soft); margin: 0; }
+    .task-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin: 17px 0 13px; }
+    .task-step { border-top: 3px solid var(--line); padding-top: 8px; color: var(--muted); font-size: 10px; }
+    .task-step.done { border-color: #6ec59a; color: var(--green); }
+    .task-step.now { border-color: var(--blue); color: var(--blue); font-weight: 730; }
+    .task-hero-foot { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .task-hero-foot span { color: var(--muted); font-size: 11px; }
+    .small-primary { border: 0; color: #fff; background: var(--blue); border-radius: 9px; min-height: 44px; padding: 0 12px; font-weight: 670; font-size: 11px; }
+    .list-card { overflow: hidden; }
+    .task-row { width: 100%; min-height: 69px; border: 0; border-bottom: 1px solid var(--line); padding: 12px 14px; background: #fff; display: flex; align-items: center; gap: 10px; text-align: left; }
+    .task-row:last-child { border-bottom: 0; }
+    .task-row:active { background: var(--surface-soft); }
+    .task-row-icon { width: 30px; height: 30px; border-radius: 9px; background: var(--blue-soft); color: var(--blue); display: grid; place-items: center; flex: none; }
+    .task-row-icon svg { width: 16px; height: 16px; }
+    .task-row-copy { min-width: 0; flex: 1; }
+    .task-row-copy strong { display: block; font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-row-copy small { display: block; color: var(--muted); font-size: 10px; margin-top: 4px; }
+    .task-row > svg { color: #9aa5b2; width: 15px; height: 15px; }
+    .empty-panel { border: 1px dashed var(--line-strong); color: var(--muted); border-radius: 15px; padding: 26px 18px; text-align: center; font-size: 12px; }
+    .empty-panel svg { display: block; margin: 0 auto 10px; color: var(--blue); }
+    .empty-panel strong { display: block; color: var(--ink); font-size: 13px; margin-bottom: 3px; }
+    .segmented { display: grid; grid-template-columns: 1fr 1fr; background: #eaeef3; border-radius: 11px; padding: 3px; margin: 3px 0 14px; }
+    .segmented button { border: 0; background: transparent; border-radius: 8px; min-height: 44px; color: var(--muted); font-size: 12px; font-weight: 660; }
+    .segmented button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(20,38,59,.07); }
+    .group-label { font: 650 11px/1.3 var(--mono); color: var(--muted); margin: 18px 1px 9px; }
+    .back-button { display: inline-flex; align-items: center; gap: 3px; min-height: 44px; border: 0; background: transparent; color: var(--blue); padding: 0 0 10px; font-weight: 650; font-size: 12px; }
+    .back-button svg { width: 16px; height: 16px; transform: rotate(180deg); }
+    .detail-title { font-size: 22px; line-height: 1.25; letter-spacing: -.04em; margin: 0 0 10px; overflow-wrap: anywhere; }
+    .detail-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-bottom: 17px; }
+    .screen[data-screen-panel="task"] { min-height: 100%; display: flex; flex-direction: column; }
+    #runDetailContent { flex: 1; display: flex; flex-direction: column; }
+    [data-tab-panel="chat"] { flex: 1; display: flex; flex-direction: column; }
+    .tabline { display: grid; grid-template-columns: repeat(3,1fr); border-bottom: 1px solid var(--line); margin: 0 -16px 17px; padding: 0 16px; }
+    .tabline button { min-height: 44px; border: 0; border-bottom: 2px solid transparent; background: transparent; font-size: 12px; color: var(--muted); font-weight: 640; }
+    .tabline button.active { color: var(--blue); border-bottom-color: var(--blue); }
+    .chat-message { margin-bottom: 17px; }
+    .chat-author { font-size: 10px; font-weight: 700; color: var(--muted); margin-bottom: 5px; }
+    .chat-bubble { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; font-size: 12px; line-height: 1.65; }
+    .chat-message.mine .chat-bubble { background: var(--blue-soft); border-color: #d9e3fb; }
+    .tool-summary { width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 12px; display: flex; align-items: center; gap: 8px; text-align: left; min-height: 48px; padding: 0 11px; color: var(--ink-soft); font-size: 11px; }
+    .tool-summary svg { width: 15px; height: 15px; color: var(--blue); }
+    .tool-summary span { flex: 1; }
+    .composer { position: sticky; bottom: -26px; margin: auto -16px -26px; background: rgba(248,248,247,.97); border-top: 1px solid var(--line); padding: 10px 12px 14px; display: flex; gap: 7px; align-items: flex-end; }
+    .composer textarea { min-height: 41px; max-height: 105px; resize: vertical; flex: 1; border-radius: 11px; border: 1px solid var(--line-strong); background: #fff; outline: 0; padding: 10px 11px; font-size: 12px; }
+    .composer button { width: 41px; height: 41px; border: 0; border-radius: 11px; color: #fff; background: var(--blue); display: grid; place-items: center; flex: none; }
+    .composer button svg { width: 17px; height: 17px; }
+    .timeline { border-left: 1px solid var(--line-strong); margin-left: 6px; padding-left: 18px; }
+    .event { position: relative; padding-bottom: 20px; }
+    .event:last-child { padding-bottom: 0; }
+    .event::before { content: ""; position: absolute; top: 5px; left: -24px; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+    .event.muted::before { background: #a5b1c1; box-shadow: 0 0 0 1px #a5b1c1; }
+    .event strong { font-size: 12px; display: block; }
+    .event small { color: var(--muted); display: block; font-size: 10px; margin-top: 3px; }
+    .event p { color: var(--ink-soft); font-size: 11px; margin: 6px 0 0; }
+    .summary-metrics { display: flex; gap: 8px; margin-bottom: 13px; }
+    .metric { flex: 1; background: #fff; border: 1px solid var(--line); border-radius: 11px; padding: 10px; }
+    .metric strong { display: block; font: 700 15px/1.3 var(--mono); }
+    .metric small { color: var(--muted); font-size: 10px; }
+    .file-list { background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .file-row { width: 100%; min-height: 51px; display: flex; gap: 8px; align-items: center; text-align: left; padding: 0 11px; background: #fff; border: 0; border-bottom: 1px solid var(--line); }
+    .file-row:last-child { border-bottom: 0; }
+    .file-row svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+    .file-row span { flex: 1; min-width: 0; font: 11px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-row small { color: var(--green); font: 10px var(--mono); }
+    .approval-card { padding: 15px; margin-bottom: 10px; }
+    .approval-head { display: flex; align-items: flex-start; gap: 9px; }
+    .approval-icon { background: var(--gold-soft); color: #9c681b; width: 35px; height: 35px; flex: none; border-radius: 10px; display: grid; place-items: center; }
+    .approval-icon svg { width: 17px; height: 17px; }
+    .approval-head-text { flex: 1; min-width: 0; }
+    .approval-head-text strong { display: block; font-size: 13px; }
+    .approval-head-text small { color: var(--muted); display: block; font-size: 10px; margin-top: 3px; }
+    .approval-card p { color: var(--ink-soft); font-size: 12px; margin: 13px 0; }
+    .approval-card .small-primary { width: 100%; min-height: 39px; }
+    .hint { display: flex; align-items: flex-start; gap: 8px; color: var(--ink-soft); font-size: 11px; line-height: 1.55; padding: 12px; background: var(--blue-soft); border-radius: 11px; }
+    .hint svg { width: 15px; height: 15px; color: var(--blue); flex: none; margin-top: 1px; }
+    .code-block { background: #1b2635; color: #e9f0f6; border-radius: 11px; padding: 13px; font: 11px/1.7 var(--mono); white-space: pre; overflow-x: auto; max-width: 100%; }
+    .decision-row { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; margin-top: 18px; }
+    .decision-row button { min-height: 44px; border-radius: 10px; font-weight: 690; font-size: 12px; }
+    .secondary-button { color: var(--ink); border: 1px solid var(--line-strong); background: #fff; }
+    .primary-button { color: #fff; border: 1px solid var(--blue); background: var(--blue); }
+    .primary-button:disabled, .small-primary:disabled, .composer button:disabled { opacity: .45; cursor: not-allowed; }
+    .readonly-note { margin-top: 12px; font-size: 11px; color: var(--red); }
+    .connect-card { padding: 15px; margin-bottom: 13px; }
+    .connect-header { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+    .connect-header > span { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--blue-soft); color: var(--blue); }
+    .connect-header strong { font-size: 13px; display: block; }
+    .connect-header small { color: var(--muted); font-size: 10px; display: block; margin-top: 2px; }
+    .connect-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .connect-facts small { color: var(--muted); display: block; font-size: 10px; }
+    .connect-facts strong { font-size: 11px; display: block; margin-top: 3px; }
+    .logout-button { width: 100%; min-height: 43px; border: 1px solid #efc9c9; background: #fff; color: var(--red); border-radius: 11px; font-weight: 690; font-size: 12px; }
+    .nav { flex: none; border-top: 1px solid var(--line); background: rgba(255,255,255,.97); display: grid; grid-template-columns: repeat(4,1fr); padding: 5px 5px 8px; }
+    .nav button { min-height: 49px; border: 0; border-radius: 10px; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); font-size: 10px; font-weight: 620; position: relative; }
+    .nav button svg { width: 18px; height: 18px; }
+    .nav button.active { color: var(--blue); background: var(--blue-soft); }
+    .nav-badge { position: absolute; top: 4px; left: calc(50% + 7px); min-width: 15px; height: 15px; display: grid; place-items: center; padding: 0 3px; border-radius: 100px; background: #cc6c4d; color: #fff; font-size: 9px; }
+    .pair-view { position: absolute; inset: 0; z-index: 19; background: var(--canvas); overflow-y: auto; padding: 75px 24px 25px; }
+    .pair-logo { width: 48px; height: 48px; }
+    .pair-kicker { color: var(--blue); font: 700 10px var(--mono); letter-spacing: .1em; margin: 29px 0 8px; }
+    .pair-view h2 { font-size: 27px; letter-spacing: -.045em; line-height: 1.25; margin: 0 0 9px; }
+    .pair-lead { color: var(--ink-soft); font-size: 12px; margin: 0 0 25px; line-height: 1.65; }
+    .pair-code-box { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+    .pair-code-box small { color: var(--muted); font-size: 10px; }
+    .pair-code { font: 700 31px/1.25 var(--mono); letter-spacing: .13em; margin: 5px 0 13px; color: var(--blue-dark); }
+    .pair-code-box p { border-top: 1px solid var(--line); margin: 0; padding-top: 11px; font-size: 11px; color: var(--ink-soft); }
+    .pair-target { margin: 17px 0; border: 1px solid var(--line); background: #fff; border-radius: 13px; padding: 12px 14px; }
+    .pair-target strong { font-size: 12px; display: block; }
+    .pair-target small { color: var(--muted); font-size: 10px; display: block; margin-top: 3px; }
+    .pair-permissions { color: var(--ink-soft); font-size: 11px; line-height: 1.75; padding-left: 16px; margin: 0 0 23px; }
+    .pair-bottom { border-top: 1px solid var(--line); padding-top: 15px; display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 10px; }
+    .pair-bottom button { color: var(--blue); min-height: 44px; border: 0; background: none; font-weight: 670; font-size: 10px; padding: 4px; }
+    .pair-demo-button { display: block; margin-top: 27px; width: 100%; min-height: 44px; border: 1px dashed var(--line-strong); color: var(--muted); background: transparent; border-radius: 10px; font-size: 11px; }
+    .demo-outcomes { display: flex; gap: 7px; margin-top: 15px; }
+    .demo-outcomes button { flex: 1; min-height: 34px; background: #fff; border: 1px dashed var(--line-strong); border-radius: 9px; color: var(--muted); font-size: 10px; }
+    .sheet-mask { position: absolute; inset: 0; z-index: 40; background: rgba(18,30,45,.32); opacity: 0; pointer-events: none; transition: opacity .18s; }
+    .sheet-mask.open { opacity: 1; pointer-events: auto; }
+    .sheet { position: absolute; z-index: 41; bottom: 0; left: 0; right: 0; max-height: 80%; overflow-y: auto; border-radius: 19px 19px 0 0; background: #fff; box-shadow: 0 -10px 38px rgba(18,30,45,.12); transform: translateY(105%); pointer-events: none; transition: transform .2s; padding: 9px 16px 23px; }
+    .sheet.open { transform: translateY(0); pointer-events: auto; }
+    .sheet-handle { width: 38px; height: 4px; background: #d4dbe4; border-radius: 100px; margin: 0 auto 15px; }
+    .sheet-top { display: flex; align-items: center; justify-content: space-between; }
+    .sheet-top h3 { font-size: 15px; margin: 0; }
+    .icon-button { width: 44px; height: 44px; border: 0; background: var(--surface-soft); border-radius: 9px; display: grid; place-items: center; }
+    .icon-button svg { width: 17px; height: 17px; }
+    .sheet-description { color: var(--muted); font-size: 11px; margin: 5px 0 13px; }
+    .scope-option { width: 100%; border: 1px solid var(--line); border-radius: 11px; min-height: 50px; background: #fff; display: flex; align-items: center; gap: 9px; text-align: left; padding: 0 12px; margin-top: 8px; }
+    .scope-option svg { width: 17px; height: 17px; color: var(--blue); }
+    .scope-option span { flex: 1; font-size: 12px; font-weight: 650; }
+    .scope-option small { color: var(--muted); font-size: 10px; }
+    .diff { overflow-x: auto; white-space: pre; background: #1b2635; color: #e4ebf3; border-radius: 10px; padding: 12px; font: 11px/1.7 var(--mono); }
+    .diff .add { color: #9de0bd; }
+    .diff .del { color: #f1aaa1; }
+    .toast { position: absolute; z-index: 60; left: 14px; right: 14px; bottom: 78px; background: #1d2b3d; color: #fff; padding: 10px 13px; border-radius: 10px; font-size: 11px; opacity: 0; transform: translateY(9px); pointer-events: none; transition: .18s; text-align: center; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 800px) {
+      body { background: var(--canvas); }
+      .stage { display: block; min-height: 100dvh; padding: 0; background: var(--canvas); }
+      .guide { display: none; }
+      .device { width: 100vw; height: 100dvh; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+      .device::before { display: none; }
+      .app-header { padding-top: calc(env(safe-area-inset-top, 0px) + 14px); }
+      .nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6px); }
+      .pair-view { padding-top: calc(env(safe-area-inset-top, 0px) + 61px); }
+      .sheet { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); }
+    }
+    @media (max-width: 340px) { .screen { padding-inline: 12px; } .task-hero h3 { font-size: 15px; } .pair-code { font-size: 27px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 4h16l2 11v5H2v-5L4 4Z"/><path d="M2 15h6l2 3h4l2-3h6"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a4 4 0 0 1-4 4H8l-4 3V7a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4Z"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 11h7l-1 9 10-12h-7l1-8Z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 8 3v6c0 5-3.2 8.4-8 11-4.8-2.6-8-6-8-11V5l8-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6Z"/><path d="M14 2v5h4"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 7 5 5-5 5M12 17h8"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3h.01"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="12" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6"/><path d="M20 4v7h-7"/></symbol>
+  </svg>
+
+  <div class="stage">
+    <aside class="guide" aria-label="原型预览控制">
+      <div class="guide-brand"><img src="../frontend/public/favicon.svg" alt="" /> CrownForge / Mobile</div>
+      <p class="guide-kicker">INTERACTIVE PROTOTYPE · V2</p>
+      <h1>任务还在继续，<br /><span>控制随你移动。</span></h1>
+      <p class="guide-lead">从工作区进入任务，把进度、待办和对话放在同一条清晰的路径上。右侧可点击体验，所有数据与操作均为原型演示。</p>
+      <div class="guide-label">页面</div>
+      <div class="guide-options" id="previewScreens">
+        <button class="guide-option active" data-go="home"><svg><use href="#i-grid"/></svg>总览<small>工作区与进度</small></button>
+        <button class="guide-option" data-go="tasks"><svg><use href="#i-list"/></svg>任务<small>多任务切换</small></button>
+        <button class="guide-option" data-go="task"><svg><use href="#i-chat"/></svg>任务详情<small>对话 · 过程 · 变更</small></button>
+        <button class="guide-option" data-go="approvals"><svg><use href="#i-inbox"/></svg>待办<small>任务级审批</small></button>
+        <button class="guide-option" data-go="connections"><svg><use href="#i-phone"/></svg>我的连接<small>设备与会话</small></button>
+      </div>
+      <div class="guide-label">连接与权限状态</div>
+      <div class="guide-options" id="previewStates">
+        <button class="guide-option active" data-mode="online"><svg><use href="#i-check"/></svg>已连接</button>
+        <button class="guide-option" data-mode="pair"><svg><use href="#i-phone"/></svg>扫码待确认</button>
+        <button class="guide-option" data-mode="offline"><svg><use href="#i-refresh"/></svg>网络断开</button>
+        <button class="guide-option" data-mode="viewer"><svg><use href="#i-lock"/></svg>只读成员</button>
+      </div>
+      <div class="guide-label">扫码结果</div>
+      <div class="guide-options">
+        <button class="guide-option" data-pair-outcome="approved"><svg><use href="#i-check"/></svg>模拟网页确认</button>
+        <button class="guide-option" data-pair-outcome="rejected"><svg><use href="#i-close"/></svg>模拟网页拒绝</button>
+        <button class="guide-option" data-pair-outcome="expired"><svg><use href="#i-clock"/></svg>模拟票据过期</button>
+      </div>
+      <div class="guide-foot">交互原型，未接入后端。扫码、审批和停止任务只展示产品状态与反馈；正式实现以服务端回执和权限判定为准。</div>
+    </aside>
+
+    <div class="device" id="device">
+      <div id="mainView" style="display:flex; flex-direction:column; min-height:0; height:100%">
+        <header class="app-header">
+          <div class="header-top">
+            <img src="../frontend/public/favicon.svg" alt="CrownForge" />
+            <div class="header-title"><strong>CrownForge</strong><small>手机控制台</small></div>
+            <button class="avatar-button" type="button" data-go="connections" aria-label="我的连接">LX</button>
+          </div>
+          <button class="scope-button" type="button" data-action="scope" aria-label="切换工作区">
+            <svg><use href="#i-folder"/></svg>
+            <span class="scope-text"><strong id="scopeLabel">全部工作区</strong><small id="roleLabel">2 个工作区 · 成员权限</small></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
+        </header>
+        <div class="offline-banner" id="offlineBanner" hidden><svg><use href="#i-alert"/></svg>连接中断，正在重试。此时不能提交操作。</div>
+        <main class="app-main" id="appMain">
+          <section class="screen" data-screen-panel="home">
+            <div class="screen-heading">
+              <div><p class="screen-eyebrow">今天 · 9 月 24 日</p><h2>工作台</h2></div>
+              <span class="sync-pill" id="syncPill"><span class="dot"></span>实时同步</span>
+            </div>
+            <div id="homeCrown">
+              <div class="attention" id="homeAttention">
+                <div class="attention-top"><span>需要你处理</span><span class="attention-count" id="attentionCount">1 项待确认</span></div>
+                <h3>构建命令等待授权</h3>
+                <p>优化 AI 对话工作流 · 确认后任务才能继续。</p>
+                <button type="button" data-go="approval">审查操作 <svg><use href="#i-chevron"/></svg></button>
+              </div>
+              <div class="section-row"><h3>正在进行</h3><button class="link-button" type="button" data-go="tasks">全部任务</button></div>
+              <article class="task-hero">
+                <div class="task-hero-top"><span class="tiny-path">CrownForge / ai-ide</span><span class="status running" id="runStatus"><span class="dot"></span>运行中</span></div>
+                <h3>优化 AI 对话工作流</h3>
+                <p id="runSubtitle">正在执行前端检查与样式调整</p>
+                <div class="task-steps"><div class="task-step done">理解需求</div><div class="task-step done">修改代码</div><div class="task-step now">验证中</div></div>
+                <div class="task-hero-foot"><span>最近更新 · 刚刚</span><button class="small-primary" type="button" data-go="task">打开任务</button></div>
+              </article>
+              <div class="section-row"><h3>最近任务</h3><span>按最近更新</span></div>
+              <div class="list-card">
+                <button class="task-row" type="button" data-task="done"><span class="task-row-icon"><svg><use href="#i-check"/></svg></span><span class="task-row-copy"><strong>修复终端重连逻辑</strong><small>CrownForge / ai-ide · 已完成</small></span><svg><use href="#i-chevron"/></svg></button>
+                <button class="task-row" type="button" data-task="docs"><span class="task-row-icon"><svg><use href="#i-file"/></svg></span><span class="task-row-copy"><strong>整理接入说明与部署步骤</strong><small>文档站 · 待继续</small></span><svg><use href="#i-chevron"/></svg></button>
+              </div>
+            </div>
+            <div id="homeDocs" hidden>
+              <div class="empty-panel"><svg><use href="#i-clock"/></svg><strong>这里暂时没有运行中的任务</strong>你可以查看文档站的历史任务。</div>
+              <div class="section-row"><h3>最近任务</h3></div>
+              <div class="list-card"><button class="task-row" type="button" data-task="docs"><span class="task-row-icon"><svg><use href="#i-file"/></svg></span><span class="task-row-copy"><strong>整理接入说明与部署步骤</strong><small>文档站 · 待继续</small></span><svg><use href="#i-chevron"/></svg></button></div>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="tasks" hidden>
+            <div class="screen-heading"><div><p class="screen-eyebrow">跨工作区</p><h2>任务</h2></div><span class="sync-pill" id="taskCountPill"><span class="dot"></span>3 个任务</span></div>
+            <div class="segmented"><button class="active" type="button" data-list-view="workspace">按工作区</button><button type="button" data-list-view="timeline">按时间线</button></div>
+            <div class="group-label" id="tasksCrownLabel">CrownForge / ai-ide</div>
+            <div class="list-card" id="tasksCrown">
+              <button class="task-row" type="button" data-task="run"><span class="task-row-icon"><svg><use href="#i-bolt"/></svg></span><span class="task-row-copy"><strong>优化 AI 对话工作流</strong><small>运行中 · 正在验证 · 刚刚更新</small></span><svg><use href="#i-chevron"/></svg></button>
+              <button class="task-row" type="button" data-task="done"><span class="task-row-icon"><svg><use href="#i-check"/></svg></span><span class="task-row-copy"><strong>修复终端重连逻辑</strong><small>已完成 · 今天 09:42</small></span><svg><use href="#i-chevron"/></svg></button>
+            </div>
+            <div class="group-label" id="tasksDocsLabel">文档站</div>
+            <div class="list-card" id="tasksDocs"><button class="task-row" type="button" data-task="docs"><span class="task-row-icon"><svg><use href="#i-file"/></svg></span><span class="task-row-copy"><strong>整理接入说明与部署步骤</strong><small>待继续 · 昨天 18:20</small></span><svg><use href="#i-chevron"/></svg></button></div>
+            <div class="list-card" id="tasksTimeline" hidden>
+              <button class="task-row" type="button" data-task="run" data-ws="crown"><span class="task-row-icon"><svg><use href="#i-bolt"/></svg></span><span class="task-row-copy"><strong>优化 AI 对话工作流</strong><small>CrownForge / ai-ide · 刚刚更新</small></span><svg><use href="#i-chevron"/></svg></button>
+              <button class="task-row" type="button" data-task="done" data-ws="crown"><span class="task-row-icon"><svg><use href="#i-check"/></svg></span><span class="task-row-copy"><strong>修复终端重连逻辑</strong><small>CrownForge / ai-ide · 今天 09:42</small></span><svg><use href="#i-chevron"/></svg></button>
+              <button class="task-row" type="button" data-task="docs" data-ws="docs"><span class="task-row-icon"><svg><use href="#i-file"/></svg></span><span class="task-row-copy"><strong>整理接入说明与部署步骤</strong><small>文档站 · 昨天 18:20</small></span><svg><use href="#i-chevron"/></svg></button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="task" hidden>
+            <button class="back-button" type="button" data-go="tasks"><svg><use href="#i-chevron"/></svg>全部任务</button>
+            <h2 class="detail-title" id="detailTitle">优化 AI 对话工作流</h2>
+            <div class="detail-sub"><span class="status running" id="detailStatus"><span class="dot"></span>运行中</span><span id="detailWorkspace">CrownForge / ai-ide</span><span>·</span><span id="detailUpdated">刚刚更新</span></div>
+            <div id="runDetailContent">
+              <div class="tabline"><button class="active" type="button" data-detail-tab="chat">对话</button><button type="button" data-detail-tab="process">过程</button><button type="button" data-detail-tab="changes">变更</button></div>
+              <div data-tab-panel="chat">
+                <div class="chat-message mine"><div class="chat-author">你 · 10:03</div><div class="chat-bubble">优化 ChatPanel 的信息层级，让工具步骤收进运行过程，保留清晰的对话阅读流。</div></div>
+                <div class="chat-message"><div class="chat-author">CrownForge · 10:04</div><div class="chat-bubble">已梳理对话和任务状态的展示方式。现在正在验证前端检查；完成后我会给出变更摘要。</div></div>
+                <button class="tool-summary" type="button" data-detail-tab="process"><svg><use href="#i-terminal"/></svg><span>正在验证 · 3 个过程事件</span><svg><use href="#i-chevron"/></svg></button>
+                <div id="demoMessages"></div>
+                <div class="composer"><textarea id="chatInput" rows="1" placeholder="补充指令或询问进度…" aria-label="补充指令"></textarea><button type="button" data-action="send" class="requires-write" aria-label="发送指令"><svg><use href="#i-arrow"/></svg></button></div>
+              </div>
+              <div data-tab-panel="process" hidden>
+                <div class="hint" style="margin-bottom:18px"><svg><use href="#i-bolt"/></svg>当前阶段：验证中。新的过程事件会在这里更新。</div>
+                <div class="timeline"><div class="event"><strong>前端检查进行中</strong><small>刚刚 · npm run build</small><p>正在检查打包结果，等待操作授权。</p></div><div class="event muted"><strong>修改对话布局</strong><small>2 分钟前 · 2 个文件</small><p>将任务状态和工具过程从消息正文中分离。</p></div><div class="event muted"><strong>读取相关组件</strong><small>4 分钟前 · 3 个文件</small></div></div>
+                <div class="decision-row"><button class="secondary-button requires-write" type="button" data-action="stop">请求停止任务</button><button class="primary-button" type="button" data-go="approval">查看待审批</button></div>
+              </div>
+              <div data-tab-panel="changes" hidden>
+                <div class="summary-metrics"><div class="metric"><strong>3</strong><small>变更文件</small></div><div class="metric"><strong>+128</strong><small>新增行</small></div><div class="metric"><strong>−67</strong><small>删除行</small></div></div>
+                <div class="file-list"><button class="file-row" type="button" data-diff="chat"><svg><use href="#i-file"/></svg><span>frontend/src/components/ChatPanel.tsx</span><small>+42 −21</small></button><button class="file-row" type="button" data-diff="tools"><svg><use href="#i-file"/></svg><span>frontend/src/components/ToolCallStep.tsx</span><small>+30 −18</small></button><button class="file-row" type="button" data-diff="css"><svg><use href="#i-file"/></svg><span>frontend/src/App.css</span><small>+56 −28</small></button></div>
+                <p style="color:var(--muted);font-size:11px;margin-top:12px">文件预览为只读。长代码行只在代码区域内横向滚动。</p>
+              </div>
+            </div>
+            <div id="otherTaskContent" hidden>
+              <div class="detail-card" style="padding:15px"><p class="screen-eyebrow" style="margin-bottom:10px">上次任务摘要 · 原型示例</p><p id="otherSummary" style="font-size:12px;line-height:1.7;margin:0"></p></div>
+              <div class="section-row"><h3>最近对话</h3></div>
+              <div class="chat-message"><div class="chat-author">CrownForge · 上次更新</div><div class="chat-bubble" id="otherMessage"></div></div>
+              <button class="small-primary requires-write" type="button" data-action="resume-history" id="otherAction" style="min-height:42px;width:100%">继续这项任务</button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="approvals" hidden>
+            <div class="screen-heading"><div><p class="screen-eyebrow">需要你决定</p><h2>待办</h2></div><span class="sync-pill" id="approvalCount"><span class="dot"></span>1 项待处理</span></div>
+            <article class="approval-card" id="approvalCard"><div class="approval-head"><span class="approval-icon"><svg><use href="#i-shield"/></svg></span><span class="approval-head-text"><strong>运行构建命令</strong><small>优化 AI 对话工作流 · 刚刚</small></span><span class="status waiting">待确认</span></div><p>Agent 请求执行前端构建，用于验证本次界面改动。</p><button class="small-primary" type="button" data-go="approval">查看请求详情</button></article>
+            <div class="empty-panel" id="approvalEmpty" hidden><svg><use href="#i-check"/></svg><strong>没有待处理的请求</strong>需要你决定的操作会集中出现在这里。</div>
+            <div class="section-row"><h3>权限边界</h3></div>
+            <div class="hint"><svg><use href="#i-lock"/></svg>手机端仅展示当前账号有权处理的请求。高风险授权需要额外验证或回到网页端完成。</div>
+          </section>
+
+          <section class="screen" data-screen-panel="approval" hidden>
+            <button class="back-button" type="button" data-go="approvals"><svg><use href="#i-chevron"/></svg>返回待办</button>
+            <p class="screen-eyebrow">操作请求 · #A-2048</p><h2 class="detail-title">运行构建命令</h2>
+            <div class="detail-sub"><span class="status waiting" id="approvalStatus">等待决定</span><span>来自「优化 AI 对话工作流」</span></div>
+            <div class="detail-card" style="padding:14px;margin-bottom:13px"><p style="margin:0 0 8px;font-size:11px;color:var(--muted)">将在 CrownForge / ai-ide 中执行</p><div class="code-block">npm run build</div></div>
+            <div class="section-row"><h3>将影响什么</h3></div>
+            <div class="hint"><svg><use href="#i-shield"/></svg>此命令会读取项目并生成构建产物。仅授权这一次请求，不会自动允许后续命令。</div>
+            <div class="section-row"><h3>请求信息</h3></div>
+            <div class="connect-card"><div class="connect-facts" style="border:0;padding:0"><div><small>请求任务</small><strong>优化 AI 对话工作流</strong></div><div><small>有效状态</small><strong>等待审批</strong></div><div><small>工作区</small><strong>CrownForge / ai-ide</strong></div><div><small>风险等级</small><strong>需确认</strong></div></div></div>
+            <div class="decision-row"><button class="secondary-button requires-write" type="button" data-action="deny">拒绝</button><button class="primary-button requires-write" type="button" data-action="allow">允许一次</button></div>
+            <div class="demo-outcomes" id="approvalDemoControls" hidden><button type="button" data-action="approval-success">演示：服务端确认</button><button type="button" data-action="approval-conflict">演示：网页已处理</button><button type="button" data-action="approval-failed">演示：提交失败</button></div>
+            <p class="readonly-note" id="readonlyNote" hidden>当前是只读成员，不能处理审批。</p>
+          </section>
+
+          <section class="screen" data-screen-panel="connections" hidden>
+            <div class="screen-heading"><div><p class="screen-eyebrow">账号与安全</p><h2>我的连接</h2></div></div>
+            <div class="connect-card"><div class="connect-header"><span><svg><use href="#i-phone"/></svg></span><div><strong>这台手机 · 微信浏览器</strong><small id="connectionLabel">已连接 · 会话有效</small></div></div><div class="connect-facts"><div><small>当前身份</small><strong>lijinxuan · <span id="roleFact">成员</span></strong></div><div><small>连接范围</small><strong>2 个工作区</strong></div><div><small>最近同步</small><strong id="syncFact">刚刚</strong></div><div><small>会话到期</small><strong>今天 18:30</strong></div></div></div>
+            <div class="connect-card"><div class="connect-header" style="margin:0"><span><svg><use href="#i-monitor"/></svg></span><div><strong>网页工作台</strong><small>配对来源 · 当前在线</small></div></div></div>
+            <div class="hint" style="margin:15px 0"><svg><use href="#i-shield"/></svg>手机权限会随账号和团队角色实时更新。网页端可以随时撤销这台设备的访问。</div>
+            <button class="logout-button" type="button" data-action="logout">退出这台手机</button>
+          </section>
+        </main>
+        <nav class="nav" aria-label="主导航">
+          <button class="active" type="button" data-nav="home" data-go="home"><svg><use href="#i-grid"/></svg>总览</button>
+          <button type="button" data-nav="tasks" data-go="tasks"><svg><use href="#i-list"/></svg>任务</button>
+          <button type="button" data-nav="approvals" data-go="approvals"><svg><use href="#i-inbox"/></svg>待办<span class="nav-badge" id="navBadge">1</span></button>
+          <button type="button" data-nav="connections" data-go="connections"><svg><use href="#i-user"/></svg>我的</button>
+        </nav>
+      </div>
+
+      <div class="pair-view" id="pairView" hidden>
+        <img class="pair-logo" src="../frontend/public/favicon.svg" alt="CrownForge" />
+        <p class="pair-kicker">SECURE PAIRING</p>
+        <h2 id="pairTitle">等待网页端确认</h2>
+        <p class="pair-lead" id="pairLead">请在网页端核对下方短码，再点击「允许这台手机」。确认前，此手机无法查看工作区内容。</p>
+        <div class="pair-code-box" id="pairCodeBox"><small>在网页和手机上核对同一短码</small><div class="pair-code">482 391</div><p>短码仅用于核对本次连接，不是登录密码。</p></div>
+        <div class="pair-target" id="pairTarget"><strong>将连接到 CrownForge 工作台</strong><small>账号和工作区信息将在网页确认后显示</small></div>
+        <ul class="pair-permissions" id="pairPermissions"><li>查看授权范围内的任务与运行状态</li><li>按当前账号权限提交指令与处理待办</li><li>可在网页端随时撤销本次连接</li></ul>
+        <div class="pair-bottom"><span id="pairExpiry">票据将在 01:28 后失效</span><button type="button" data-action="pair-cancel">取消连接</button></div>
+        <button class="pair-demo-button" id="pairDemoButton" type="button" data-action="pair-approve">原型演示：模拟网页端已确认</button>
+      </div>
+
+      <div class="sheet-mask" id="sheetMask" data-action="close-sheet" hidden></div>
+      <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+        <div class="sheet-handle"></div><div class="sheet-top"><h3 id="sheetTitle">工作区</h3><button class="icon-button" type="button" data-action="close-sheet" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div>
+        <p class="sheet-description" id="sheetDescription"></p><div id="sheetContent"></div>
+      </div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+    const state = { screen: "home", detailTab: "chat", mode: "online", role: "member", workspace: "all", task: "run", approval: "pending", run: "running", listView: "workspace" };
+    let toastTimer;
+    let focusBeforeSheet = null;
+
+    function toast(message) {
+      const el = $("#toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
+    }
+    function closeSheet() {
+      const wasOpen = !$("#sheet").hidden;
+      $("#sheet").classList.remove("open");
+      $("#sheetMask").classList.remove("open");
+      $("#sheet").hidden = true;
+      $("#sheetMask").hidden = true;
+      if (wasOpen && focusBeforeSheet?.isConnected) focusBeforeSheet.focus();
+      focusBeforeSheet = null;
+    }
+    function openSheet(title, description, html) {
+      focusBeforeSheet = document.activeElement;
+      $("#sheetTitle").textContent = title;
+      $("#sheetDescription").textContent = description;
+      $("#sheetContent").innerHTML = html;
+      $("#sheet").hidden = false;
+      $("#sheetMask").hidden = false;
+      $("#sheet").classList.add("open");
+      $("#sheetMask").classList.add("open");
+      $("#sheet .icon-button").focus();
+    }
+    function setActive(selector, attribute, value) {
+      $$(selector).forEach(node => node.classList.toggle("active", node.getAttribute(attribute) === value));
+    }
+    function go(screen) {
+      if (screen === "approval" && state.workspace === "docs") screen = "approvals";
+      if (screen !== "pair") {
+        $("#pairView").hidden = true;
+        $("#mainView").hidden = false;
+      }
+      state.screen = screen;
+      $$("[data-screen-panel]").forEach(node => node.hidden = node.dataset.screenPanel !== screen);
+      const mainNav = screen === "task" ? "tasks" : screen === "approval" ? "approvals" : screen;
+      setActive("[data-nav]", "data-nav", mainNav);
+      setActive("#previewScreens [data-go]", "data-go", screen);
+      $("#appMain").scrollTop = 0;
+      closeSheet();
+    }
+    function setMode(mode) {
+      state.mode = mode;
+      state.role = mode === "viewer" ? "viewer" : "member";
+      if (mode === "pair") {
+        $("#mainView").hidden = true;
+        $("#pairView").hidden = false;
+        $("#pairCodeBox").hidden = false;
+        $("#pairTarget").hidden = false;
+        $("#pairPermissions").hidden = false;
+        $("#pairTitle").textContent = "等待网页端确认";
+        $("#pairLead").textContent = "请在网页端核对下方短码，再点击「允许这台手机」。确认前，此手机无法查看工作区内容。";
+        $("#pairExpiry").textContent = "票据将在 01:28 后失效";
+        $("#pairDemoButton").textContent = "原型演示：模拟网页端已确认";
+        $("#pairDemoButton").dataset.action = "pair-approve";
+      } else {
+        $("#mainView").hidden = false;
+        $("#pairView").hidden = true;
+        go("home");
+      }
+      const offline = mode === "offline";
+      const viewer = mode === "viewer";
+      $("#offlineBanner").hidden = !offline;
+      $("#syncPill").innerHTML = `<span class="dot"></span>${offline ? "等待重连" : "实时同步"}`;
+      $("#syncPill").style.color = offline ? "#9c681b" : "";
+      $("#roleFact").textContent = viewer ? "只读成员" : "成员";
+      $("#roleLabel").textContent = `2 个工作区 · ${viewer ? "只读权限" : "成员权限"}`;
+      $("#connectionLabel").textContent = offline ? "连接中断 · 等待重连" : "已连接 · 会话有效";
+      $("#syncFact").textContent = offline ? "连接中断" : "刚刚";
+      $("#readonlyNote").hidden = !viewer;
+      updateActionAvailability();
+      renderApprovalView();
+      setActive("#previewStates [data-mode]", "data-mode", mode);
+    }
+    function updateActionAvailability() {
+      $$(".requires-write").forEach(button => {
+        const approvalDecision = ["allow", "deny"].includes(button.dataset.action);
+        button.disabled = state.mode === "offline" || state.role === "viewer" || approvalDecision && state.approval !== "pending";
+      });
+    }
+    function pairOutcome(outcome) {
+      if (outcome === "approved") {
+        setMode("online");
+        return toast("原型演示：网页端已确认连接");
+      }
+      setMode("pair");
+      const content = {
+        rejected: ["网页端拒绝了连接", "这台手机没有获得访问权限。若仍需连接，请从网页端重新生成二维码。"],
+        expired: ["本次二维码已过期", "连接票据已经失效。请回到网页端重新生成二维码后再扫码。"],
+        cancelled: ["连接已取消", "手机尚未取得任何工作区访问权限。"],
+        ended: ["这台手机已退出", "移动会话已结束。再次连接需要在网页端重新扫码确认。"]
+      }[outcome];
+      $("#pairTitle").textContent = content[0];
+      $("#pairLead").textContent = content[1];
+      $("#pairCodeBox").hidden = true;
+      $("#pairTarget").hidden = true;
+      $("#pairPermissions").hidden = true;
+      $("#pairExpiry").textContent = "未连接";
+      $("#pairDemoButton").textContent = "原型演示：查看新的待确认状态";
+      $("#pairDemoButton").dataset.action = "pair-reset";
+    }
+    function renderTaskList() {
+      const timeline = state.listView === "timeline";
+      $("#tasksTimeline").hidden = !timeline;
+      $("#tasksCrownLabel").hidden = $("#tasksCrown").hidden = timeline || state.workspace === "docs";
+      $("#tasksDocsLabel").hidden = $("#tasksDocs").hidden = timeline || state.workspace === "crown";
+      $$("#tasksTimeline [data-ws]").forEach(row => row.hidden = state.workspace !== "all" && row.dataset.ws !== state.workspace);
+      const count = state.workspace === "docs" ? 1 : state.workspace === "crown" ? 2 : 3;
+      $("#taskCountPill").innerHTML = `<span class="dot"></span>${count} 个任务`;
+    }
+    function renderApprovalView() {
+      const hasVisibleRequest = ["pending", "submitting"].includes(state.approval) && state.workspace !== "docs" && state.role !== "viewer";
+      $("#approvalCard").hidden = !hasVisibleRequest;
+      $("#approvalEmpty").hidden = hasVisibleRequest;
+      $("#homeAttention").hidden = !hasVisibleRequest;
+      $("#navBadge").hidden = !hasVisibleRequest;
+      $("#approvalCount").innerHTML = `<span class="dot"></span>${hasVisibleRequest ? state.approval === "submitting" ? "1 项处理中" : "1 项待处理" : "暂无待办"}`;
+      $("#approvalCard .status").textContent = state.approval === "submitting" ? "处理中" : "待确认";
+    }
+    function renderRunStatus() {
+      const stopping = state.run === "stopping";
+      for (const element of [$("#runStatus"), $("#detailStatus")]) {
+        element.className = `status ${stopping ? "stopping" : "running"}`;
+        element.innerHTML = `<span class="dot"></span>${stopping ? "停止中" : "运行中"}`;
+      }
+      $("#runSubtitle").textContent = stopping ? "已提交停止请求，等待服务端确认" : "正在执行前端检查与样式调整";
+      $$("[data-task=run] .task-row-copy small").forEach(element => {
+        element.textContent = stopping ? "停止中 · 等待服务端确认" : "运行中 · 正在验证 · 刚刚更新";
+      });
+    }
+    function selectWorkspace(value) {
+      state.workspace = value;
+      $("#scopeLabel").textContent = value === "crown" ? "CrownForge / ai-ide" : value === "docs" ? "文档站" : "全部工作区";
+      $("#homeCrown").hidden = value === "docs";
+      $("#homeDocs").hidden = value !== "docs";
+      renderTaskList();
+      renderApprovalView();
+      if (value === "docs" && state.screen === "approval") go("approvals");
+      closeSheet();
+      toast("演示：已切换工作区范围");
+    }
+    function openTask(id) {
+      const tasks = {
+        run: ["优化 AI 对话工作流", "CrownForge / ai-ide", "运行中", "刚刚更新"],
+        done: ["修复终端重连逻辑", "CrownForge / ai-ide", "已完成", "今天 09:42"],
+        docs: ["整理接入说明与部署步骤", "文档站", "待继续", "昨天 18:20"]
+      };
+      state.task = id;
+      const task = tasks[id];
+      $("#detailTitle").textContent = task[0];
+      $("#detailWorkspace").textContent = task[1];
+      $("#detailUpdated").textContent = task[3];
+      $("#detailStatus").textContent = task[2];
+      $("#detailStatus").className = `status ${id === "run" ? "running" : "done"}`;
+      if (id === "run") renderRunStatus();
+      if (id !== "run") {
+        const content = id === "done"
+          ? ["终端断线后已能安全重连，会话输出和当前目录会恢复到正确状态。", "修复已经完成，相关检查通过。你可以继续提出后续调整。", "基于结果继续提问"]
+          : ["接入说明已整理到部署章节，当前等待补充内网 HTTPS 与手机访问范围。", "下一步需要明确移动端的访问网络，再完善扫码连接说明。", "继续这项任务"];
+        $("#otherSummary").textContent = content[0];
+        $("#otherMessage").textContent = content[1];
+        $("#otherAction").textContent = content[2];
+      }
+      $("#runDetailContent").hidden = id !== "run";
+      $("#otherTaskContent").hidden = id === "run";
+      go("task");
+    }
+    function detailTab(tab) {
+      state.detailTab = tab;
+      setActive("[data-detail-tab]", "data-detail-tab", tab);
+      $$("[data-tab-panel]").forEach(node => node.hidden = node.dataset.tabPanel !== tab);
+    }
+    function resolveApproval(decision) {
+      state.approval = "submitting";
+      state.pendingDecision = decision;
+      $("#approvalStatus").textContent = "提交中 · 等待服务端回执";
+      $("#approvalStatus").className = "status waiting";
+      $("#approvalDemoControls").hidden = false;
+      renderApprovalView();
+      updateActionAvailability();
+      toast(`原型演示：${decision === "allow" ? "允许一次" : "拒绝"}正在提交，等待服务端回执`);
+    }
+    function approvalOutcome(outcome) {
+      $("#approvalDemoControls").hidden = true;
+      if (outcome === "failed") {
+        state.approval = "pending";
+        $("#approvalStatus").textContent = "提交失败 · 可重试";
+        $("#approvalStatus").className = "status stopping";
+        toast("原型演示：提交失败，请检查连接后重试");
+      } else {
+        state.approval = outcome === "conflict" ? "conflict" : "resolved";
+        $("#approvalStatus").textContent = outcome === "conflict" ? "已由网页端处理" : "已处理 · 服务端已确认";
+        $("#approvalStatus").className = "status done";
+        toast(outcome === "conflict" ? "原型演示：请求已由网页端处理" : "原型演示：服务端确认成功");
+      }
+      renderApprovalView();
+      updateActionAvailability();
+    }
+    const diffSamples = {
+      chat: { title: "ChatPanel.tsx", code: `<span class="del">- {isStreaming && &lt;Spinner /&gt;}</span>\n<span class="add">+ &lt;TaskState status={run.status} /&gt;</span>\n<span class="add">+ &lt;ConversationStream messages={messages} /&gt;</span>` },
+      tools: { title: "ToolCallStep.tsx", code: `<span class="del">- &lt;pre&gt;{rawOutput}&lt;/pre&gt;</span>\n<span class="add">+ &lt;ProcessSummary step={step} /&gt;</span>` },
+      css: { title: "App.css", code: `<span class="del">- .task-panel { padding: 24px; }</span>\n<span class="add">+ .task-panel { padding: 16px; }</span>` }
+    };
+    document.addEventListener("click", event => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      if (button.dataset.go) return go(button.dataset.go);
+      if (button.dataset.mode) return setMode(button.dataset.mode);
+      if (button.dataset.pairOutcome) return pairOutcome(button.dataset.pairOutcome);
+      if (button.dataset.task) return openTask(button.dataset.task);
+      if (button.dataset.detailTab) return detailTab(button.dataset.detailTab);
+      if (button.dataset.workspace) return selectWorkspace(button.dataset.workspace);
+      if (button.dataset.diff) {
+        const item = diffSamples[button.dataset.diff];
+        return openSheet(item.title, "只读变更预览 · 原型示例", `<div class="diff">${item.code}</div>`);
+      }
+      if (button.dataset.listView) {
+        state.listView = button.dataset.listView;
+        setActive("[data-list-view]", "data-list-view", button.dataset.listView);
+        return renderTaskList();
+      }
+      switch (button.dataset.action) {
+        case "scope":
+          return openSheet("选择工作区", "手机仅能访问当前账号有权查看的范围。", `
+            <button class="scope-option" data-workspace="all"><svg><use href="#i-grid"/></svg><span>全部工作区</span><small>2 个</small></button>
+            <button class="scope-option" data-workspace="crown"><svg><use href="#i-folder"/></svg><span>CrownForge / ai-ide</span><small>${state.role === "viewer" ? "只读" : "成员"}</small></button>
+            <button class="scope-option" data-workspace="docs"><svg><use href="#i-folder"/></svg><span>文档站</span><small>${state.role === "viewer" ? "只读" : "成员"}</small></button>`);
+        case "close-sheet": return closeSheet();
+        case "pair-approve": return setMode("online");
+        case "pair-reset": return setMode("pair");
+        case "pair-cancel": return pairOutcome("cancelled");
+        case "allow": return resolveApproval("allow");
+        case "deny": return resolveApproval("deny");
+        case "approval-success": return approvalOutcome("success");
+        case "approval-conflict": return approvalOutcome("conflict");
+        case "approval-failed": return approvalOutcome("failed");
+        case "resume-history": return toast("原型演示：正式产品会载入该任务的独立会话");
+        case "stop":
+          if (state.mode !== "online") return;
+          return openSheet("请求停止任务", "停止会在当前工具步骤结束后生效。", `<div class="hint"><svg><use href="#i-alert"/></svg>当前任务：优化 AI 对话工作流。确认后等待服务端返回最终状态。</div><div class="decision-row"><button class="secondary-button" data-action="close-sheet">取消</button><button class="primary-button" data-action="confirm-stop">确认停止</button></div>`);
+        case "confirm-stop":
+          state.run = "stopping";
+          renderRunStatus();
+          closeSheet();
+          return toast("原型演示：停止请求已提交，尚未收到服务端结果");
+        case "send": {
+          if (state.mode !== "online") return;
+          const field = $("#chatInput");
+          const value = field.value.trim();
+          if (!value) return toast("先输入要补充的内容");
+          const message = document.createElement("div");
+          message.className = "chat-message mine";
+          const author = document.createElement("div");
+          author.className = "chat-author";
+          author.textContent = "你 · 演示草稿，未发送";
+          const bubble = document.createElement("div");
+          bubble.className = "chat-bubble";
+          bubble.textContent = value;
+          message.append(author, bubble);
+          $("#demoMessages").append(message);
+          field.value = "";
+          toast("原型演示：指令未连接后端，不会真实执行");
+          return;
+        }
+        case "logout": return openSheet("退出这台手机", "正式产品会立即撤销此设备会话和实时连接。", `<div class="decision-row"><button class="secondary-button" data-action="close-sheet">取消</button><button class="primary-button" data-action="confirm-logout">退出本机</button></div>`);
+        case "confirm-logout": closeSheet(); pairOutcome("ended"); return toast("原型演示：移动会话已退出");
+      }
+    });
+    document.addEventListener("keydown", event => {
+      if ($("#sheet").hidden) return;
+      if (event.key === "Escape") return closeSheet();
+      if (event.key !== "Tab") return;
+      const focusables = $$("button:not([disabled]), textarea", $("#sheet"));
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    const initial = new URLSearchParams(location.search).get("screen");
+    if (initial === "pair") setMode("pair");
+    else if (["home", "tasks", "task", "approvals", "approval", "connections"].includes(initial)) go(initial);
+    else go("home");
+  </script>
+</body>
+</html>

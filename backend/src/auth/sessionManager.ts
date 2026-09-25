@@ -8,6 +8,10 @@ import { config } from "../config.js";
 import { setActiveTeamId } from "../team/sessionBridge.js";
 import { reconcileChangeSetReviewRuns } from "../chat/changeSetReviewRun.js";
 import { warmTypeScriptLanguageService } from "../utils/typescriptLanguageService.js";
+import { hashPassword, hashPasswordAsync, isPasswordHash, verifyPassword, verifyPasswordAsync } from "./password.js";
+
+const DESKTOP_SESSION_IDLE_MS = 12 * 60 * 60 * 1000;
+const DESKTOP_SESSION_ABSOLUTE_MS = 24 * 60 * 60 * 1000;
 
 interface UserConfig {
   username: string;
@@ -49,6 +53,9 @@ export interface UserSession {
   taskManager: TaskManager;
   messageBus: MessageBus;
   teammateManager: TeammateManager;
+  createdAt?: number;
+  lastSeenAt?: number;
+  expiresAt?: number;
 }
 
 export interface SessionSummary {
@@ -58,6 +65,7 @@ export interface SessionSummary {
   workspaceRoot: string;
   isAdmin: boolean;
   isolated: boolean;
+  expiresAt?: number;
 }
 
 function createSessionSingletons(workspaceDir: string) {
@@ -88,6 +96,11 @@ export function setCreateSessionSingletonsForTests(
 
 export class SessionManager {
   private sessions = new Map<string, UserSession>();
+  private revokedListeners = new Set<(token: string) => void>();
+  private loadedConfigFromFile = false;
+  private configRevision = 0;
+  private migrationPromise: Promise<boolean> | null = null;
+  private mobileExposureCache: { revision: number; allowed: boolean } | null = null;
   private usersConfig: UsersConfig;
   private configPath: string;
 
@@ -204,14 +217,17 @@ export class SessionManager {
         throw new Error("Desktop users configuration has no valid account");
       }
       console.log(`Loaded users config from ${this.configPath}`);
+      this.loadedConfigFromFile = true;
       return this.normalizeConfig(raw);
     }
     for (const configPath of this.resolveConfigCandidates()) {
       try {
         const raw = fs.readFileSync(configPath, "utf-8");
+        const normalized = this.normalizeConfig(JSON.parse(raw) as Partial<UsersConfig>);
         this.configPath = configPath;
         console.log(`Loaded users config from ${configPath}`);
-        return this.normalizeConfig(JSON.parse(raw) as Partial<UsersConfig>);
+        this.loadedConfigFromFile = true;
+        return normalized;
       } catch {
         // try next
       }
@@ -219,11 +235,22 @@ export class SessionManager {
 
     console.warn("users.json not found, using defaults");
     this.configPath = this.resolveDefaultConfigPath();
+    this.loadedConfigFromFile = false;
     return this.normalizeConfig({});
+  }
+
+  canExposeMobile(): boolean {
+    if (this.mobileExposureCache?.revision === this.configRevision) return this.mobileExposureCache.allowed;
+    const allowed = this.loadedConfigFromFile && !this.usersConfig.users.some((user) =>
+      user.username === "admin" && Boolean(user.isAdmin) && verifyPassword("admin123", user.password)
+    );
+    this.mobileExposureCache = { revision: this.configRevision, allowed };
+    return allowed;
   }
 
   private saveConfig(): void {
     this.writeConfig(this.usersConfig);
+    this.loadedConfigFromFile = true;
   }
 
   private writeConfig(configToSave: UsersConfig): void {
@@ -238,6 +265,7 @@ export class SessionManager {
         fs.closeSync(fd);
       }
       fs.renameSync(tempPath, this.configPath);
+      this.configRevision += 1;
     } finally {
       if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
     }
@@ -272,7 +300,7 @@ export class SessionManager {
     for (const [token, session] of this.sessions.entries()) {
       if (session.username !== username) continue;
       if (!user) {
-        this.sessions.delete(token);
+        this.deleteSession(token);
         continue;
       }
       session.isAdmin = Boolean(user.isAdmin);
@@ -280,14 +308,74 @@ export class SessionManager {
   }
 
   reloadConfig(): void {
+    const previousPasswords = new Map(this.usersConfig.users.map((user) => [user.username, user.password]));
     this.usersConfig = this.loadConfig();
+    this.configRevision += 1;
     for (const [token, session] of this.sessions.entries()) {
       const user = this.getUser(session.username);
-      if (!user) {
-        this.sessions.delete(token);
+      if (!user || previousPasswords.get(session.username) !== user.password) {
+        this.deleteSession(token);
         continue;
       }
       session.isAdmin = Boolean(user.isAdmin);
+    }
+  }
+
+  private deleteSession(token: string): void {
+    if (!this.sessions.delete(token)) return;
+    for (const listener of this.revokedListeners) listener(token);
+  }
+
+  onSessionRevoked(listener: (token: string) => void): () => void {
+    this.revokedListeners.add(listener);
+    return () => this.revokedListeners.delete(listener);
+  }
+
+  private migratePlaintextPasswords(): void {
+    const needsMigration = this.usersConfig.users.some((user) => !isPasswordHash(user.password)) ||
+      this.usersConfig.pendingRegistrations.some((entry) => !isPasswordHash(entry.password));
+    if (!needsMigration) return;
+    const updated = this.cloneUsersConfig();
+    for (const user of updated.users) {
+      if (!isPasswordHash(user.password)) user.password = hashPassword(user.password);
+    }
+    for (const registration of updated.pendingRegistrations) {
+      if (!isPasswordHash(registration.password)) registration.password = hashPassword(registration.password);
+    }
+    this.writeConfig(updated);
+    this.usersConfig = updated;
+    this.loadedConfigFromFile = true;
+  }
+
+  private async migratePlaintextPasswordsAsync(): Promise<boolean> {
+    if (this.migrationPromise) return this.migrationPromise;
+    const work = (async () => {
+      const revision = this.configRevision;
+      const updated = this.cloneUsersConfig();
+      let changed = false;
+      for (const user of updated.users) {
+        if (isPasswordHash(user.password)) continue;
+        user.password = await hashPasswordAsync(user.password);
+        changed = true;
+      }
+      for (const registration of updated.pendingRegistrations) {
+        if (isPasswordHash(registration.password)) continue;
+        registration.password = await hashPasswordAsync(registration.password);
+        changed = true;
+      }
+      if (revision !== this.configRevision) return false;
+      if (changed) {
+        this.writeConfig(updated);
+        this.usersConfig = updated;
+        this.loadedConfigFromFile = true;
+      }
+      return true;
+    })();
+    this.migrationPromise = work;
+    try {
+      return await work;
+    } finally {
+      if (this.migrationPromise === work) this.migrationPromise = null;
     }
   }
 
@@ -318,7 +406,8 @@ export class SessionManager {
         ? "Workspace is not an accessible directory"
         : "Workspace is not an accessible directory within allowed roots");
     }
-    const token = crypto.randomUUID();
+    const token = crypto.randomBytes(32).toString("base64url");
+    const createdAt = Date.now();
     const singletons = createSessionSingletonsForManager(canonicalWorkspace);
     const session: UserSession = {
       token,
@@ -327,6 +416,9 @@ export class SessionManager {
       workspaceRoot: canonicalWorkspace,
       isAdmin,
       isolated,
+      createdAt,
+      lastSeenAt: createdAt,
+      expiresAt: createdAt + DESKTOP_SESSION_ABSOLUTE_MS,
       ...singletons,
     };
     this.sessions.set(token, session);
@@ -337,11 +429,12 @@ export class SessionManager {
       workspaceRoot: canonicalWorkspace,
       isAdmin,
       isolated,
+      expiresAt: session.expiresAt,
     };
   }
 
   createIsolatedSession(parentToken: string, workspaceDir: string): SessionSummary {
-    const parent = this.sessions.get(parentToken);
+    const parent = this.getSession(parentToken);
     if (!parent) throw new Error("Parent session not found");
     if (parent.isolated) throw new Error("Nested isolated sessions are not supported");
     const resolved = path.resolve(workspaceDir);
@@ -357,7 +450,42 @@ export class SessionManager {
     password: string
   ): SessionSummary | null {
     const user = this.getUser(username);
-    if (!user || user.password !== password) return null;
+    if (!user || !verifyPassword(password, user.password)) return null;
+    try {
+      this.migratePlaintextPasswords();
+    } catch {
+      // A successful login must not leave legacy plaintext credentials on disk.
+      return null;
+    }
+    return this.openUserSession(this.getUser(username) || user);
+  }
+
+  async loginAsync(username: string, password: string): Promise<SessionSummary | null> {
+    const original = this.getUser(username);
+    const originalPassword = original?.password;
+    if (!await verifyPasswordAsync(password, originalPassword)) return null;
+    if (!original || typeof originalPassword !== "string") return null;
+    const afterVerification = this.getUser(username);
+    if (!afterVerification) return null;
+    if (afterVerification.password !== originalPassword) {
+      if (!await verifyPasswordAsync(password, afterVerification.password)) return null;
+      if (this.getUser(username)?.password !== afterVerification.password) return null;
+    }
+    try {
+      if (!await this.migratePlaintextPasswordsAsync()) return null;
+    } catch {
+      return null;
+    }
+    const current = this.getUser(username);
+    if (!current) return null;
+    if (current.password !== originalPassword) {
+      if (isPasswordHash(originalPassword) || !await verifyPasswordAsync(password, current.password)) return null;
+      if (this.getUser(username)?.password !== current.password) return null;
+    }
+    return this.openUserSession(current);
+  }
+
+  private openUserSession(user: UserConfig): SessionSummary | null {
     const defaultWorkspace = path.resolve(user.defaultWorkspace);
     const fallbackWorkspace = path.resolve(config.defaultWorkspaceDir);
     const workspaceDir =
@@ -382,13 +510,23 @@ export class SessionManager {
     }
   }
 
-  getSession(token: string | null | undefined): UserSession | null {
+  getSession(token: string | null | undefined, options: { touch?: boolean } = {}): UserSession | null {
     if (!token) return null;
-    return this.sessions.get(token) || null;
+    const session = this.sessions.get(token);
+    if (!session) return null;
+    const now = Date.now();
+    if ((session.expiresAt !== undefined && now >= session.expiresAt) ||
+        (session.lastSeenAt !== undefined && now - session.lastSeenAt >= DESKTOP_SESSION_IDLE_MS) ||
+        !this.getUser(session.username)) {
+      this.deleteSession(token);
+      return null;
+    }
+    if (options.touch !== false) session.lastSeenAt = now;
+    return session;
   }
 
   logout(token: string): void {
-    this.sessions.delete(token);
+    this.deleteSession(token);
   }
 
   listUsers(): SafeUserConfig[] {
@@ -405,7 +543,7 @@ export class SessionManager {
       .map(({ username, requestedAt }) => ({ username, requestedAt }));
   }
 
-  requestRegistration(username: string, password: string): SafeRegistrationRequest {
+  private validateRegistration(username: string, password: string): string {
     const normalizedUsername = username.trim();
     if (!normalizedUsername || !password) {
       throw new Error("Username and password are required");
@@ -426,10 +564,13 @@ export class SessionManager {
     ) {
       throw new Error("Username is already registered or pending approval");
     }
+    return normalizedUsername;
+  }
 
+  private persistRegistration(normalizedUsername: string, passwordHash: string): SafeRegistrationRequest {
     const registration: RegistrationRequest = {
       username: normalizedUsername,
-      password,
+      password: passwordHash,
       requestedAt: Date.now(),
     };
     this.usersConfig.pendingRegistrations.push(registration);
@@ -438,6 +579,19 @@ export class SessionManager {
       username: registration.username,
       requestedAt: registration.requestedAt,
     };
+  }
+
+  requestRegistration(username: string, password: string): SafeRegistrationRequest {
+    const normalizedUsername = this.validateRegistration(username, password);
+    return this.persistRegistration(normalizedUsername, hashPassword(password));
+  }
+
+  async requestRegistrationAsync(username: string, password: string): Promise<SafeRegistrationRequest> {
+    this.validateRegistration(username, password);
+    const passwordHash = await hashPasswordAsync(password);
+    // Another request may have claimed the name while the KDF ran.
+    const normalizedUsername = this.validateRegistration(username, password);
+    return this.persistRegistration(normalizedUsername, passwordHash);
   }
 
   approveRegistration(username: string, defaultWorkspace?: string): SafeUserConfig {
@@ -462,7 +616,7 @@ export class SessionManager {
 
     const user: UserConfig = {
       username: normalizedUsername,
-      password: registration.password,
+      password: isPasswordHash(registration.password) ? registration.password : hashPassword(registration.password),
       defaultWorkspace: workspaceDir,
       isAdmin: false,
     };
@@ -500,6 +654,9 @@ export class SessionManager {
     if (!normalized) {
       throw new Error("Username and password are required");
     }
+    if (input.password.length < 6) {
+      throw new Error("Password must be at least 6 characters");
+    }
     if (this.getUser(normalized.username)) {
       throw new Error("User already exists");
     }
@@ -513,19 +670,28 @@ export class SessionManager {
     if (!this.isAllowedPath(normalized.defaultWorkspace)) {
       throw new Error("Default workspace is not within allowed roots");
     }
+    normalized.password = hashPassword(normalized.password);
     this.usersConfig.users.push(normalized);
     this.saveConfig();
     return this.toSafeUser(normalized);
   }
 
   updateUserPassword(username: string, password: string): SafeUserConfig {
-    const user = this.getUser(username);
-    if (!user) {
+    if (!this.getUser(username)) {
       throw new Error("User not found");
     }
-    user.password = password;
-    this.saveConfig();
-    this.syncSessionsForUser(username);
+    if (password.length < 6) {
+      throw new Error("Password must be at least 6 characters");
+    }
+    const updated = this.cloneUsersConfig();
+    const user = updated.users.find((entry) => entry.username === username)!;
+    user.password = hashPassword(password);
+    this.writeConfig(updated);
+    this.usersConfig = updated;
+    this.loadedConfigFromFile = true;
+    for (const [token, session] of this.sessions.entries()) {
+      if (session.username === username) this.deleteSession(token);
+    }
     return this.toSafeUser(user);
   }
 
@@ -582,7 +748,7 @@ export class SessionManager {
   }
 
   changeWorkspace(token: string, newDir: string): { workspaceDir: string } | null {
-    const session = this.sessions.get(token);
+    const session = this.getSession(token);
     if (!session) return null;
     if (session.isolated) return null;
 
@@ -603,7 +769,7 @@ export class SessionManager {
     token: string,
     newDir: string
   ): { workspaceDir: string } | null {
-    const session = this.sessions.get(token);
+    const session = this.getSession(token);
     if (!session || session.isolated) return null;
 
     const resolved = this.resolveSelectableWorkspaceWithinRoot(
@@ -626,7 +792,7 @@ export class SessionManager {
     token: string,
     newDir: string
   ): { workspaceDir: string; workspaceRoot: string } | null {
-    const session = this.sessions.get(token);
+    const session = this.getSession(token);
     if (!session || session.isolated || process.env.CREWFORGE_DESKTOP !== "1") return null;
 
     let canonicalWorkspace: string;
@@ -674,7 +840,7 @@ export class SessionManager {
     rootPath: string;
     entries: { name: string; path: string }[];
   } | null {
-    const session = this.sessions.get(token);
+    const session = this.getSession(token);
     if (!session) return null;
 
     const requestedPath = dir?.trim() || session.workspaceRoot;

@@ -70,6 +70,7 @@ import {
   Unlink2,
   Play,
   Search,
+  Smartphone,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -98,6 +99,12 @@ const TeamPanel = lazy(() =>
 );
 const DiffEditor = lazy(() =>
   import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
+);
+const MobileApp = lazy(() =>
+  import("./mobile/MobileApp").then((module) => ({ default: module.MobileApp }))
+);
+const DesktopMobilePairing = lazy(() =>
+  import("./mobile/DesktopMobilePairing").then((module) => ({ default: module.DesktopMobilePairing }))
 );
 
 const EDITOR_FONT_OPTIONS = [
@@ -142,6 +149,13 @@ const FILES_ASSISTANT_MIN_WIDTH = 280;
 const FILES_ASSISTANT_MAX_WIDTH = 720;
 
 export default function App() {
+  if (window.location.pathname === "/mobile" || window.location.pathname.startsWith("/mobile/")) {
+    return <Suspense fallback={null}><MobileApp /></Suspense>;
+  }
+  return <DesktopApp />;
+}
+
+function DesktopApp() {
   const { t } = useI18n();
   const auth = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -403,6 +417,7 @@ function AuthenticatedApp({
   const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [mobilePairingVisible, setMobilePairingVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
   const [claimSaveConfirmation, setClaimSaveConfirmation] = useState<{ file: OpenFile; username: string } | null>(null);
   const [claimSaveBusy, setClaimSaveBusy] = useState(false);
@@ -2746,6 +2761,10 @@ function AuthenticatedApp({
                 <Settings size={15} />
                 <span>{t("app.settings")}</span>
               </button>
+              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
+                <Smartphone size={15} />
+                <span>手机控制台</span>
+              </button>}
               <button type="button" onClick={onLogout}>
                 <LogOut size={15} />
                 <span>{t("app.logout")}</span>
@@ -2770,6 +2789,7 @@ function AuthenticatedApp({
           onClose={() => setSettingsVisible(false)}
           onShowToast={showToast}
         />
+        {mobilePairingVisible && !desktopApp && <DesktopMobilePairing token={token} onClose={() => setMobilePairingVisible(false)} />}
       </Suspense>
 
       {/* Main Layout */}
@@ -2931,6 +2951,16 @@ function AuthenticatedApp({
             <TerminalSquare size={18} />
           </button>
           <span className="activity-rail-spacer" />
+          {!desktopApp && <button
+            type="button"
+            className={`activity-rail-btn${mobilePairingVisible ? " active" : ""}`}
+            onClick={() => setMobilePairingVisible(true)}
+            title="手机控制台"
+            aria-label="手机控制台"
+            aria-pressed={mobilePairingVisible}
+          >
+            <Smartphone size={18} />
+          </button>}
           <button
             type="button"
             className="activity-rail-btn"
@@ -2959,6 +2989,9 @@ function AuthenticatedApp({
               <button type="button" onClick={() => setSettingsVisible(true)}>
                 <Settings size={14} /> {t("app.settings")}
               </button>
+              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
+                <Smartphone size={14} /> 手机控制台
+              </button>}
               <button type="button" onClick={onLogout}>
                 <LogOut size={14} /> {t("app.logout")}
               </button>

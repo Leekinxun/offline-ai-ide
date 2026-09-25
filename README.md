@@ -230,6 +230,7 @@ All browser projections apply secret redaction, absolute-path replacement, sensi
 - **File Explorer** — Tree-view file browser with create, rename, copy path, copy/paste, drag-to-move, file/folder upload, download, batch delete, folder-as-zip download, combined name/content search, auto refresh, and session-isolated "Open Folder" switching rooted at the current user's own workspace
 - **Admin Settings Panel** — Manage users, reset passwords, update the LLM URL / API key / model / max agent iterations / system prompt / upload size limit / MCP endpoints from the UI, automatically detect the model output-token limit, and switch interface language between English and Simplified Chinese
 - **Multi-User Auth** — Local username/password login backed by `users.json`, with self-service registration and administrator approval; every approved login gets an isolated session, workspace, terminal, and AI context
+- **Web mobile console** — A signed-in Web user can pair a phone through a short-lived QR code and matching confirmation code, then monitor and control authorized tasks in a mobile browser; see the [deployment and security guide](docs/mobile-web-control.md)
 - **Team Collaboration** — Create/join teams on a shared workspace, invite members with owner/admin/member/viewer roles, see presence and active-file status, claim files, review activity, and coordinate conflict-safe saves through a clearer collaboration panel
 - **Multi-Agent Collaboration** — Spawn autonomous AI teammates that can claim tasks, communicate via message bus, work in parallel, and expose their hierarchy, blockers, artifacts, and lifecycle through the Agent Board
 - **Durable Multi-Agent Control Plane** — Agent runs, tasks, leases, lineage, messages, traces, findings, budgets, graph cursors, and recovery state survive restarts; parent completion recursively waits for terminal descendants, ChangeSet decisions, and independent review evidence
@@ -504,6 +505,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 | `PYTHON_EXECUTABLE` | `python3` (`python` on Windows) | Fallback Python interpreter for debugging when the workspace has no `.venv` or `venv` interpreter |
 | `DEBUGPY_PYTHON_EXECUTABLE` | `PYTHON_EXECUTABLE` | Python interpreter where `debugpy==1.8.21` is installed; the Docker image configures this automatically |
 | `PORT` | `3000` | Server port |
+| `MOBILE_PUBLIC_BASE_URL` | *(unset; pairing disabled)* | HTTPS origin reachable from the phone, such as `https://forge.example.com` (HTTP loopback is development-only) |
 | `MAX_AGENT_ITERATIONS` | `30` | Max tool-use rounds per AI response |
 | `AGENT_MAX_TOKENS` | `8192` | Legacy fallback only; output-token limits are detected automatically from model metadata when available |
 | `AGENT_CONTEXT_COMPACT_THRESHOLD` | `60000` | Estimated context-token threshold that triggers automatic compaction |
@@ -522,7 +524,7 @@ The IDE now includes a practical shared-team workflow focused on low-friction co
 
 | File | Purpose |
 |------|---------|
-| `users.json` | Stores users, passwords, admin flags, and allowed workspace roots |
+| `users.json` | Stores users, scrypt password hashes, admin flags, and allowed workspace roots; legacy plaintext entries migrate after a successful login |
 | `app-settings.json` | Stores admin-managed runtime settings such as LLM configuration, per-agent profiles, MCP servers, plugin overrides, and upload size limits |
 | `<workspace>/.history/*.jsonl` | Stores per-workspace chat conversations, generated titles, and message history |
 | `<workspace>/.codex/USER.md` | Stores durable user preferences and working conventions |

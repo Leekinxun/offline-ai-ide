@@ -436,6 +436,11 @@ export function useChat(
     ws.onopen = () => {
       setConnected(true);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      // A run may have continued after the browser socket disconnected. Attach
+      // this new socket to the currently open conversation before consuming
+      // further events or approvals.
+      const conversationId = currentConversationIdRef.current;
+      if (conversationId) ws.send(JSON.stringify({ type: "subscribe_run", conversationId }));
       if (uncertainAttachmentSendsRef.current.size) void reconcileUncertainAttachmentSends();
     };
 
@@ -787,6 +792,14 @@ export function useChat(
       wsRef.current?.close();
     };
   }, [connect]);
+
+  useEffect(() => {
+    if (!currentConversationId) return;
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "subscribe_run", conversationId: currentConversationId }));
+    }
+  }, [currentConversationId]);
 
   useEffect(() => {
     conversationLoadTokenRef.current += 1;

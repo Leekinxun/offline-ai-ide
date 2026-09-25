@@ -61,7 +61,7 @@ test("chat WS rejects unsupported attachments before accepting and ACKs accepted
   const taskManager = new TaskManager(workspaceDir);
   const messageBus = new MessageBus(workspaceDir);
   const session = { token: "ws", username: "tester", workspaceDir, workspaceRoot: workspaceDir, isAdmin: false, isolated: false, taskManager, messageBus, teammateManager: new TeammateManager(workspaceDir, messageBus, taskManager) } as UserSession;
-  wss.on("connection", (serverSocket) => handleChatWs(serverSocket, session));
+  wss.on("connection", (serverSocket) => handleChatWs(serverSocket, session, { validateSession: () => true }));
   client = new WebSocket(`ws://127.0.0.1:${address.port}`);
   await new Promise<void>((resolve, reject) => { client.once("open", resolve); client.once("error", reject); });
   const [attachment] = storeChatAttachments(workspaceDir, [{ originalname: "image.png", mimetype: "image/png", buffer: PNG }]);

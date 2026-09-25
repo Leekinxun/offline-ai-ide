@@ -1,0 +1,54 @@
+.desktop-mobile-backdrop { position: fixed; inset: 0; z-index: 1500; display: grid; place-items: center; padding: 16px; background: rgba(20,30,45,.52); }
+.desktop-mobile-dialog { width: min(100%, 520px); max-height: min(92dvh, 820px); overflow-y: auto; color: #1b2430; background: #fff; border-radius: 18px; box-shadow: 0 24px 75px rgba(11,24,44,.23); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.desktop-mobile-dialog * { box-sizing: border-box; }
+.desktop-mobile-dialog button { font: inherit; cursor: pointer; }
+.desktop-mobile-dialog button:disabled { cursor: not-allowed; opacity: .55; }
+.desktop-mobile-dialog button:focus-visible, .desktop-mobile-dialog input:focus-visible { outline: 3px solid rgba(49,95,212,.28); outline-offset: 2px; }
+.desktop-mobile-header { display: flex; align-items: center; gap: 12px; padding: 20px 22px; border-bottom: 1px solid #e5e9ee; }
+.desktop-mobile-heading-icon, .desktop-mobile-device-icon { width: 42px; height: 42px; display: grid; place-items: center; flex: none; border-radius: 12px; color: #315fd4; background: #edf2ff; }
+.desktop-mobile-header p { margin: 0; color: #778292; font-size: 11px; }
+.desktop-mobile-header h2 { margin: 1px 0 0; font-size: 18px; letter-spacing: -.03em; }
+.desktop-mobile-icon-button { margin-left: auto; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #778292; }
+.desktop-mobile-icon-button:hover { background: #f4f6f8; }
+.desktop-mobile-body { padding: 18px 22px 23px; }
+.desktop-mobile-lead { margin: 0 0 18px; color: #4c5868; font-size: 13px; line-height: 1.7; }
+.desktop-mobile-alert { padding: 10px 12px; margin: 0 0 12px; border-radius: 9px; background: #eaf7f0; color: #218760; font-size: 12px; }
+.desktop-mobile-alert.error { background: #fff0ee; color: #bd4b4b; }
+.desktop-mobile-start, .desktop-mobile-claimed, .desktop-mobile-qr { min-height: 256px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid #e5e9ee; border-radius: 15px; padding: 22px 16px; }
+.desktop-mobile-start > svg { color: #315fd4; margin-bottom: 11px; }
+.desktop-mobile-start strong, .desktop-mobile-qr strong { font-size: 15px; }
+.desktop-mobile-start span, .desktop-mobile-qr span, .desktop-mobile-claimed span { color: #778292; font-size: 12px; margin-top: 4px; }
+.desktop-mobile-primary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 1px solid #315fd4; border-radius: 9px; padding: 0 15px; color: #fff; background: #315fd4; font-weight: 650 !important; }
+.desktop-mobile-start .desktop-mobile-primary { margin-top: 20px; }
+.desktop-mobile-qr-frame { width: 232px; height: 232px; display: grid; place-items: center; padding: 8px; background: #fff; border: 1px solid #e5e9ee; border-radius: 12px; margin-bottom: 12px; }
+.desktop-mobile-qr-frame img { display: block; }
+.desktop-mobile-qr { padding-block: 18px; }
+.desktop-mobile-qr .desktop-mobile-localhost { max-width: 340px; color: #a26817; background: #fff8e8; border-radius: 8px; padding: 7px 9px; font-size: 11px; }
+.desktop-mobile-copy, .desktop-mobile-text-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: #315fd4; font-weight: 650 !important; font-size: 12px !important; padding: 9px; }
+.desktop-mobile-copy { margin-top: 8px; }
+.desktop-mobile-qr input { max-width: 320px; width: 100%; border: 1px solid #d4dce5; border-radius: 7px; padding: 7px 8px; color: #778292; background: #f8f9fb; font-size: 10px; }
+.desktop-mobile-device-icon { margin-bottom: 10px; }
+.desktop-mobile-claimed p { color: #778292; font-size: 12px; margin: 0; }
+.desktop-mobile-claimed strong { margin-top: 4px; font-size: 15px; }
+.desktop-mobile-code { margin: 14px 0 6px; padding: 11px 18px; border: 1px solid #c4d1f3; border-radius: 10px; color: #244cae; background: #edf2ff; font: 700 30px/1.1 ui-monospace, Menlo, monospace; letter-spacing: .12em; }
+.desktop-mobile-claimed small { color: #778292; font-size: 11px; }
+.desktop-mobile-actions { display: flex; gap: 9px; margin-top: 18px; }
+.desktop-mobile-actions > button:first-child { min-width: 88px; border: 1px solid #d4dce5; border-radius: 9px; color: #4c5868; background: #fff; }
+.desktop-mobile-devices-heading { display: flex; justify-content: space-between; align-items: center; margin: 23px 0 9px; }
+.desktop-mobile-devices-heading h3 { font-size: 13px; margin: 0; }
+.desktop-mobile-devices-heading button { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; color: #778292; background: #f4f6f8; }
+.desktop-mobile-empty { margin: 0; color: #778292; background: #f7f8fa; border-radius: 9px; padding: 14px; font-size: 12px; }
+.desktop-mobile-device-list { list-style: none; padding: 0; margin: 0; border: 1px solid #e5e9ee; border-radius: 10px; overflow: hidden; }
+.desktop-mobile-device-list li { display: flex; align-items: center; gap: 10px; padding: 12px; border-bottom: 1px solid #e5e9ee; }
+.desktop-mobile-device-list li:last-child { border-bottom: 0; }
+.desktop-mobile-device-list li > svg { color: #315fd4; flex: none; }
+.desktop-mobile-device-list li span { flex: 1; min-width: 0; }
+.desktop-mobile-device-list li strong, .desktop-mobile-device-list li small { display: block; }
+.desktop-mobile-device-list li strong { font-size: 12px; }
+.desktop-mobile-device-list li small { color: #778292; font-size: 10px; }
+.desktop-mobile-device-list li button { color: #bd4b4b; background: transparent; border: 0; font-size: 11px; }
+.desktop-mobile-footnote { display: flex; gap: 6px; margin: 17px 0 0; color: #778292; font-size: 11px; align-items: flex-start; }
+.desktop-mobile-footnote svg { flex: none; color: #315fd4; }
+@keyframes desktop-mobile-rotate { to { transform: rotate(360deg); } }
+.desktop-mobile-spin { animation: desktop-mobile-rotate 1s linear infinite; }
+@media (max-width: 560px) { .desktop-mobile-backdrop { align-items: end; padding: 0; } .desktop-mobile-dialog { width: 100%; max-height: 93dvh; border-radius: 18px 18px 0 0; } .desktop-mobile-header, .desktop-mobile-body { padding-inline: 16px; } }
