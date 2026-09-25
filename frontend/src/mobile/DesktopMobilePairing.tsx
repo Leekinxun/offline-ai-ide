@@ -13,6 +13,7 @@ import {
 import { useModalDialogFocus } from "../components/useModalDialogFocus";
 import {
   formatWhen,
+  MobileApiError,
   mobileApi,
   type MobileDevice,
   type PairingTicket,
@@ -22,16 +23,19 @@ import "./DesktopMobilePairing.css";
 interface Props {
   token: string;
   onClose: () => void;
+  onSessionExpired: () => void;
 }
 
 const terminalStatuses = new Set(["rejected", "expired", "used"]);
 
-export function DesktopMobilePairing({ token, onClose }: Props) {
+export function DesktopMobilePairing({ token, onClose, onSessionExpired }: Props) {
   const [pairing, setPairing] = useState<PairingTicket | null>(null);
   const [devices, setDevices] = useState<MobileDevice[]>([]);
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const activeRef = useRef(false);
+  const expiredRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -40,16 +44,31 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
     onClose: () => void close(),
   });
 
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+    };
+  }, []);
+
+  const handleError = useCallback((reason: unknown, fallback: string) => {
+    if (!activeRef.current || expiredRef.current) return;
+    if (reason instanceof MobileApiError && reason.status === 401) {
+      expiredRef.current = true;
+      onSessionExpired();
+      return;
+    }
+    setError(reason instanceof Error ? reason.message : fallback);
+  }, [onSessionExpired]);
+
   const refreshDevices = useCallback(async () => {
     try {
       const result = await mobileApi.listDevices(token);
       setDevices(result.devices);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "无法读取已连接设备。",
-      );
+      handleError(reason, "无法读取已连接设备。");
     }
-  }, [token]);
+  }, [handleError, token]);
 
   useEffect(() => {
     void refreshDevices();
@@ -73,10 +92,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
             previous?.id === next.id ? { ...previous, ...next } : previous,
           );
       } catch (reason) {
-        if (active)
-          setError(
-            reason instanceof Error ? reason.message : "无法更新配对状态。",
-          );
+        if (active) handleError(reason, "无法更新配对状态。");
       }
     };
     const interval = window.setInterval(() => {
@@ -87,7 +103,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
       active = false;
       window.clearInterval(interval);
     };
-  }, [pairing?.id, pairing?.status, token]);
+  }, [handleError, pairing?.id, pairing?.status, token]);
 
   const pairUrl = useMemo(() => pairing?.pairUrl || null, [pairing?.pairUrl]);
 
@@ -129,7 +145,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
       setPairing(await mobileApi.createPairing(token));
       setNow(Date.now());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法创建扫码连接。");
+      handleError(reason, "无法创建扫码连接。");
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -150,11 +166,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
         approve ? "已批准连接，等待手机完成接入。" : "已拒绝本次连接。",
       );
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "操作失败，请刷新状态后重试。",
-      );
+      handleError(reason, "操作失败，请刷新状态后重试。");
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -171,7 +183,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
       setDevices((previous) => previous.filter((device) => device.id !== id));
       setNotice("设备已下线。");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法下线设备。");
+      handleError(reason, "无法下线设备。");
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -198,11 +210,7 @@ export function DesktopMobilePairing({ token, onClose }: Props) {
       try {
         await mobileApi.rejectPairing(token, pairing.id);
       } catch (reason) {
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "无法取消本次配对，请重试。",
-        );
+        handleError(reason, "无法取消本次配对，请重试。");
         return;
       }
     }

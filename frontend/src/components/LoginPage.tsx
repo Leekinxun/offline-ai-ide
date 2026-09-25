@@ -8,6 +8,7 @@ interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<string | null>;
   onRegister: (username: string, password: string) => Promise<string | null>;
   onBack: () => void;
+  initialError?: string;
   theme: "light" | "dark";
   onToggleTheme: () => void;
 }
@@ -16,6 +17,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   onLogin,
   onRegister,
   onBack,
+  initialError,
   theme,
   onToggleTheme,
 }) => {
@@ -25,7 +27,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,9 +47,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!username.trim() || !password.trim() || submitting) return;
+      if (submitting) return;
       setError(null);
       setSuccess(null);
+      if (!username.trim() || !password.trim()) return;
       if (mode === "register") {
         if (password.length < 6) {
           setError(t("login.passwordTooShort"));

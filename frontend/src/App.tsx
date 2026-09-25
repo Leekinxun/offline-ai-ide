@@ -169,6 +169,7 @@ function DesktopApp() {
   const [publicView, setPublicView] = useState<"landing" | "login">(() =>
     window.location.pathname === "/login" ? "login" : "landing"
   );
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -186,7 +187,9 @@ function DesktopApp() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setPublicView(window.location.pathname === "/login" ? "login" : "landing");
+      const view = window.location.pathname === "/login" ? "login" : "landing";
+      setPublicView(view);
+      if (view === "landing") setSessionExpired(false);
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
@@ -196,14 +199,18 @@ function DesktopApp() {
     const path = view === "login" ? "/login" : "/";
     window.history.pushState({}, "", path);
     setPublicView(view);
+    if (view === "landing") setSessionExpired(false);
     window.scrollTo({ top: 0, behavior: "auto" });
   }, []);
 
-  const handleLogout = useCallback(() => {
+  const endSession = useCallback((expired: boolean) => {
+    setSessionExpired(expired);
     auth.logout();
     window.history.replaceState({}, "", "/login");
     setPublicView("login");
-  }, [auth]);
+  }, [auth.logout]);
+  const handleLogout = useCallback(() => endSession(false), [endSession]);
+  const handleSessionExpired = useCallback(() => endSession(true), [endSession]);
 
   // Show loading while validating token
   if (auth.loading && auth.token) {
@@ -235,9 +242,13 @@ function DesktopApp() {
     }
     return (
       <LoginPage
-        onLogin={auth.login}
+        onLogin={async (username, password) => {
+          setSessionExpired(false);
+          return auth.login(username, password);
+        }}
         onRegister={auth.register}
         onBack={() => showPublicView("landing")}
+        initialError={sessionExpired ? t("login.sessionExpired") : undefined}
         theme={theme}
         onToggleTheme={toggleTheme}
       />
@@ -253,6 +264,7 @@ function DesktopApp() {
       isolatedWindow={auth.user.isolated}
       desktopApp={auth.user.desktop}
       onLogout={handleLogout}
+      onSessionExpired={handleSessionExpired}
       onChangeWorkspace={auth.changeWorkspace}
       onPickDesktopWorkspace={auth.pickDesktopWorkspace}
       theme={theme}
@@ -272,6 +284,7 @@ interface AuthenticatedAppProps {
   isolatedWindow: boolean;
   desktopApp: boolean;
   onLogout: () => void;
+  onSessionExpired: () => void;
   onChangeWorkspace: (path: string) => Promise<boolean>;
   onPickDesktopWorkspace: () => Promise<DesktopFolderPickResult>;
   theme: "light" | "dark";
@@ -369,6 +382,7 @@ function AuthenticatedApp({
   isolatedWindow,
   desktopApp,
   onLogout,
+  onSessionExpired,
   onChangeWorkspace,
   onPickDesktopWorkspace,
   theme,
@@ -2789,7 +2803,7 @@ function AuthenticatedApp({
           onClose={() => setSettingsVisible(false)}
           onShowToast={showToast}
         />
-        {mobilePairingVisible && !desktopApp && <DesktopMobilePairing token={token} onClose={() => setMobilePairingVisible(false)} />}
+        {mobilePairingVisible && !desktopApp && <DesktopMobilePairing token={token} onClose={() => setMobilePairingVisible(false)} onSessionExpired={onSessionExpired} />}
       </Suspense>
 
       {/* Main Layout */}
