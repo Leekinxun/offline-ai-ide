@@ -634,7 +634,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // --- Folder browser ---
   const fetchDirectories = useCallback(
-    async (dir: string) => {
+    async (dir: string): Promise<boolean> => {
       setFolderBrowser((prev) => ({
         currentPath: prev?.currentPath || dir,
         rootPath: prev?.rootPath || "",
@@ -669,18 +669,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           error: null,
         });
         setFolderPathInput(data.path || dir);
+        return true;
       } catch (error) {
         setFolderBrowser((prev) =>
           prev
             ? {
                 ...prev,
                 loading: false,
+                selectable: false,
                 error: error instanceof Error
                   ? error.message
                   : t("sidebar.failedToListDirectories"),
               }
             : null
         );
+        return false;
       }
     },
     [t, token]
@@ -709,6 +712,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const changed = await onChangeWorkspace(path);
       if (changed) {
         setFolderBrowser(null);
+        void onRefreshTree();
         return;
       }
       setFolderBrowser((current) => current
@@ -719,8 +723,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }
         : current);
     },
-    [onChangeWorkspace, t]
+    [onChangeWorkspace, onRefreshTree, t]
   );
+
+  // 确认打开文件夹：自动处理用户手动输入路径未先点“前往”的情况
+  const handleConfirmOpenFolder = useCallback(async () => {
+    if (!folderBrowser) return;
+    const trimmedInput = folderPathInput.trim();
+    if (trimmedInput && trimmedInput !== folderBrowser.currentPath) {
+      const ok = await fetchDirectories(trimmedInput);
+      if (!ok) return;
+      await handleFolderSelect(trimmedInput);
+    } else {
+      if (!folderBrowser.selectable || folderBrowser.error) return;
+      await handleFolderSelect(folderBrowser.currentPath);
+    }
+  }, [fetchDirectories, folderBrowser, folderPathInput, handleFolderSelect]);
 
   const handleFolderNavigate = useCallback(
     (path: string) => {
@@ -1327,7 +1345,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="folder-browser-path"
                 value={folderPathInput}
                 aria-label={t("sidebar.workspacePath")}
-                onChange={(event) => setFolderPathInput(event.target.value)}
+                onChange={(event) => {
+                  setFolderPathInput(event.target.value);
+                  if (folderBrowser.error) {
+                    setFolderBrowser((prev) => (prev ? { ...prev, error: null } : null));
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && folderPathInput.trim()) {
                     void fetchDirectories(folderPathInput.trim());
@@ -1375,8 +1398,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               <button
                 className="dialog-btn primary"
-                onClick={() => handleFolderSelect(folderBrowser.currentPath)}
-                disabled={!folderBrowser.selectable || folderBrowser.loading || folderBrowser.switching}
+                onClick={() => void handleConfirmOpenFolder()}
+                disabled={
+                  folderBrowser.loading ||
+                  folderBrowser.switching ||
+                  Boolean(folderBrowser.error) ||
+                  (!folderBrowser.selectable && folderPathInput.trim() === folderBrowser.currentPath)
+                }
               >
                 {folderBrowser.switching ? t("sidebar.switchingWorkspace") : t("sidebar.openThisFolder")}
               </button>

@@ -2279,19 +2279,269 @@ select:focus-visible,
   color: #fff;
 }
 
-.tabbar {
-  height: var(--tabbar-height);
+.tabbar-container {
   display: flex;
   align-items: stretch;
+  height: var(--tabbar-height);
   background: var(--surface-workbench);
   border-bottom: 1px solid var(--border-light);
-  box-shadow: none;
-  overflow-x: auto;
   flex-shrink: 0;
+  position: relative;
+}
+
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border-bottom: 0;
+  scrollbar-width: none;
+  order: 1;
 }
 
 .tabbar::-webkit-scrollbar {
+  display: none;
   height: 0;
+}
+
+.tabbar-actions {
+  display: flex;
+  align-items: center;
+  padding: 0 4px 0 2px;
+  background: var(--surface-workbench);
+  border-left: 1px solid var(--border-light);
+  position: relative;
+  flex-shrink: 0;
+  z-index: 10;
+  order: 2;
+}
+
+.tabbar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all var(--transition);
+}
+
+.tabbar-action-btn:hover,
+.tabbar-action-btn.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.tabbar-action-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  opacity: 0.85;
+}
+
+.tabbar-chevron {
+  transition: transform 0.15s ease;
+}
+
+.tabbar-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* 更多已打开文件下拉清单浮层 */
+.tabbar-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 4px;
+  width: min(320px, calc(100vw - 32px));
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(420px, 60vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--elevated-surface);
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  overflow: hidden;
+  animation: dropdown-fade-in 140ms ease-out;
+}
+
+.tabbar-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tabbar-dropdown-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-secondary);
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 6px;
+  margin-right: auto;
+}
+
+.tabbar-dropdown-close-all {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all var(--transition);
+}
+
+.tabbar-dropdown-close-all:hover {
+  background: var(--status-danger-bg, rgba(239, 68, 68, 0.1));
+  color: var(--status-danger-fg, #ef4444);
+}
+
+.tabbar-dropdown-list {
+  overflow-y: auto;
+  max-height: 360px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tabbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+
+.tabbar-dropdown-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tabbar-dropdown-item.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tabbar-dropdown-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.tabbar-dropdown-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabbar-dropdown-path {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tabbar-dropdown-item-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.tabbar-dropdown-item:hover .tabbar-dropdown-item-close {
+  opacity: 1;
+}
+
+.tabbar-dropdown-item-close:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/* 标签右键菜单 */
+.tab-context-menu {
+  width: 196px;
+  padding: 5px;
+  background: var(--elevated-surface);
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+  animation: dropdown-fade-in 120ms ease-out;
+}
+
+.tab-context-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.tab-context-item:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tab-context-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tab-context-divider {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+@keyframes dropdown-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .editor-context-bar {
@@ -13339,11 +13589,16 @@ body {
   display: none;
 }
 
-.workbench-view-files .tabbar {
+.workbench-view-files .tabbar-container {
   order: 2;
   height: 39px;
   min-height: 39px;
   background: var(--surface-workbench);
+}
+
+.workbench-view-files .tabbar {
+  order: 1;
+  height: 100%;
 }
 
 .workbench-view-files .tab {

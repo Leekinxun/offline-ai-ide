@@ -333,6 +333,29 @@ interface EditorHighlightTarget extends FileSelectionRange {
   requestId: number;
 }
 
+/**
+ * 规范化工作区相对路径：
+ * 1. 统一正反斜杠；
+ * 2. 若误传工作区绝对路径，自动剥离工作区前缀；
+ * 3. 剔除前导 `./` 和多余的正斜杠 `/`，保证全局使用纯净唯一的相对路径。
+ */
+function normalizeWorkspaceRelativePath(rawPath: string, workspaceDir?: string): string {
+  if (!rawPath) return "";
+  let normalized = rawPath.replace(/\\/g, "/").trim();
+  if (workspaceDir) {
+    const wsNormalized = workspaceDir.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normalized.toLowerCase().startsWith(wsNormalized.toLowerCase() + "/")) {
+      normalized = normalized.slice(wsNormalized.length + 1);
+    }
+  }
+  return normalized.replace(/^\.\//, "").replace(/^\/+/, "");
+}
+
+function isSameWorkspacePath(left: string | null | undefined, right: string | null | undefined, workspaceDir?: string): boolean {
+  if (!left || !right) return left === right;
+  return normalizeWorkspaceRelativePath(left, workspaceDir) === normalizeWorkspaceRelativePath(right, workspaceDir);
+}
+
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
 }
@@ -494,6 +517,7 @@ function AuthenticatedApp({
   const [toast, setToast] = useState<string | null>(null);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const pickingWorkspaceRef = useRef(false);
+  const openingPathsRef = useRef<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(286);
   const [assistantWidth, setAssistantWidth] = useState(400);
@@ -1222,9 +1246,10 @@ function AuthenticatedApp({
 
   const applyFileUpdateToTabs = useCallback(
     (update: FileUpdate, ensureOpen: boolean) => {
-      const name = update.path.split("/").pop() || update.path;
+      const canonicalPath = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      const name = canonicalPath.split("/").pop() || canonicalPath;
       const nextFile: OpenFile = {
-        path: update.path,
+        path: canonicalPath,
         name,
         content: update.content,
         language: getLanguage(name),
@@ -1235,14 +1260,14 @@ function AuthenticatedApp({
       };
 
       setOpenFiles((prev) => {
-        const existingIndex = prev.findIndex((file) => file.path === update.path);
+        const existingIndex = prev.findIndex((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
         if (existingIndex >= 0) {
-          return prev.map((file) => (file.path === update.path ? nextFile : file));
+          return prev.map((file, idx) => (idx === existingIndex ? nextFile : file));
         }
         return ensureOpen ? [...prev, nextFile] : prev;
       });
     },
-    []
+    [workspaceDir]
   );
 
   const handleAiFileUpdate = useCallback(
@@ -1746,21 +1771,31 @@ function AuthenticatedApp({
 
   // --- File operations ---
   const openFile = useCallback(
-    async (path: string) => {
+    async (rawPath: string) => {
       setWorkspaceView("files");
       if (window.innerWidth > 1180) setEditorAssistantVisible(true);
-      const existing = openFiles.find((f) => f.path === path);
+      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
+      if (!canonicalPath) return;
+
+      // 1. 若文件已在打开列表中，直接激活并聚焦
+      const existing = openFiles.find((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
       if (existing) {
-        setActiveFilePath(path);
+        setActiveFilePath(existing.path);
         return;
       }
 
+      // 2. 检查是否有针对该文件的网络拉取正在进行中（防并发双击/多重触发）
+      if (openingPathsRef.current.has(canonicalPath)) {
+        return;
+      }
+
+      openingPathsRef.current.add(canonicalPath);
       try {
-        const next = await fs.readFileWithMeta(path);
-        const name = path.split("/").pop() || path;
+        const next = await fs.readFileWithMeta(canonicalPath);
+        const name = canonicalPath.split("/").pop() || canonicalPath;
         const language = getLanguage(name);
         const newFile: OpenFile = {
-          path,
+          path: canonicalPath,
           name,
           content: next.content,
           language,
@@ -1769,13 +1804,23 @@ function AuthenticatedApp({
           updatedAt: next.updatedAt,
           ...buildClearedRemoteState(),
         };
-        setOpenFiles((prev) => [...prev, newFile]);
-        setActiveFilePath(path);
+
+        // 3. 终极防线：原子更新二次去重，坚决杜绝重复标签与僵尸 DOM 节点
+        setOpenFiles((prev) => {
+          const alreadyOpen = prev.some((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
+          if (alreadyOpen) {
+            return prev;
+          }
+          return [...prev, newFile];
+        });
+        setActiveFilePath(canonicalPath);
       } catch {
         showToast(t("app.failedToOpenFile"));
+      } finally {
+        openingPathsRef.current.delete(canonicalPath);
       }
     },
-    [openFiles, fs, showToast, t]
+    [fs, openFiles, showToast, t, workspaceDir]
   );
 
   const handleNavigateToLocation = useCallback(
@@ -1821,31 +1866,72 @@ function AuthenticatedApp({
   }, []);
 
   const closeTab = useCallback(
-    (path: string) => {
+    (rawPath: string) => {
+      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
       setOpenFiles((prev) => {
-        const filtered = prev.filter((f) => f.path !== path);
+        const filtered = prev.filter((f) => !isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
         setPreviewModes((current) => {
-          if (!Object.prototype.hasOwnProperty.call(current, path)) {
-            return current;
-          }
-
           const next = { ...current };
-          delete next[path];
+          for (const key of Object.keys(next)) {
+            if (isSameWorkspacePath(key, canonicalPath, workspaceDir)) {
+              delete next[key];
+            }
+          }
           return next;
         });
-        if (activeFilePath === path) {
+        if (isSameWorkspacePath(activeFilePath, canonicalPath, workspaceDir)) {
           setActiveFilePath(
             filtered.length > 0 ? filtered[filtered.length - 1].path : null
           );
         }
-        if (compareFilePath === path) {
+        if (isSameWorkspacePath(compareFilePath, canonicalPath, workspaceDir)) {
           setCompareFilePath(null);
         }
         return filtered;
       });
     },
-    [activeFilePath, compareFilePath]
+    [activeFilePath, compareFilePath, workspaceDir]
   );
+
+  const closeOtherTabs = useCallback(
+    (keepPath: string) => {
+      const canonicalKeep = normalizeWorkspaceRelativePath(keepPath, workspaceDir);
+      setOpenFiles((prev) => {
+        const filtered = prev.filter((f) => isSameWorkspacePath(f.path, canonicalKeep, workspaceDir));
+        setActiveFilePath(canonicalKeep);
+        if (compareFilePath && !isSameWorkspacePath(compareFilePath, canonicalKeep, workspaceDir)) {
+          setCompareFilePath(null);
+        }
+        return filtered;
+      });
+    },
+    [compareFilePath, workspaceDir]
+  );
+
+  const closeTabsToTheRight = useCallback(
+    (targetPath: string) => {
+      const canonicalTarget = normalizeWorkspaceRelativePath(targetPath, workspaceDir);
+      setOpenFiles((prev) => {
+        const targetIndex = prev.findIndex((f) => isSameWorkspacePath(f.path, canonicalTarget, workspaceDir));
+        if (targetIndex === -1) return prev;
+        const filtered = prev.slice(0, targetIndex + 1);
+        if (!filtered.some((f) => isSameWorkspacePath(f.path, activeFilePath, workspaceDir))) {
+          setActiveFilePath(canonicalTarget);
+        }
+        if (compareFilePath && !filtered.some((f) => isSameWorkspacePath(f.path, compareFilePath, workspaceDir))) {
+          setCompareFilePath(null);
+        }
+        return filtered;
+      });
+    },
+    [activeFilePath, compareFilePath, workspaceDir]
+  );
+
+  const closeAllTabs = useCallback(() => {
+    setOpenFiles([]);
+    setActiveFilePath(null);
+    setCompareFilePath(null);
+  }, []);
 
   const handleEditorChange = useCallback(
     (value: string) => {
@@ -2394,12 +2480,13 @@ function AuthenticatedApp({
       const ok = await onChangeWorkspace(path);
       if (ok) {
         showToast(t("app.workspaceChanged"));
+        void loadTree();
       } else {
         showToast(t("app.failedToChangeWorkspace"));
       }
       return ok;
     },
-    [onChangeWorkspace, showToast, t]
+    [loadTree, onChangeWorkspace, showToast, t]
   );
 
   const handlePickDesktopWorkspace = useCallback(async () => {
@@ -2642,12 +2729,13 @@ function AuthenticatedApp({
 
   const handleSelectTab = useCallback(
     (path: string) => {
-      if (path === compareFilePath && activeFilePath) {
+      const canonicalPath = normalizeWorkspaceRelativePath(path, workspaceDir);
+      if (isSameWorkspacePath(canonicalPath, compareFilePath, workspaceDir) && activeFilePath) {
         setCompareFilePath(activeFilePath);
       }
-      setActiveFilePath(path);
+      setActiveFilePath(canonicalPath);
     },
-    [activeFilePath, compareFilePath]
+    [activeFilePath, compareFilePath, workspaceDir]
   );
   const activePreviewRenderer = activeFile
     ? getMatchingFilePreviewRenderer({
@@ -3199,8 +3287,13 @@ function AuthenticatedApp({
           <TabBar
             openFiles={openFiles}
             activeFilePath={activeFilePath}
+            workspaceDir={workspaceDir}
             onSelectTab={handleSelectTab}
             onCloseTab={closeTab}
+            onCloseOtherTabs={closeOtherTabs}
+            onCloseTabsToTheRight={closeTabsToTheRight}
+            onCloseAllTabs={closeAllTabs}
+            onShowToast={showToast}
           />
           {activeFile && (
             <div className="editor-context-bar">

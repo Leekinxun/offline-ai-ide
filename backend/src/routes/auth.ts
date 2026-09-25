@@ -122,7 +122,9 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   if (session.isolated) {
     return res.status(403).json({ error: "Isolated Vibe windows are locked to their worktree" });
   }
-  const result = sessionManager.changeWorkspaceWithinUserRoot(session.token, newPath);
+  const result = session.isAdmin
+    ? sessionManager.changeWorkspace(session.token, newPath)
+    : sessionManager.changeWorkspaceWithinUserRoot(session.token, newPath);
   if (!result) {
     return res.status(403).json({ error: "Path not allowed" });
   }
