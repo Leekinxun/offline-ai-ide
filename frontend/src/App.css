@@ -1625,6 +1625,85 @@ select:focus-visible,
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+.sidebar-upload-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 12px 10px;
+  border-bottom: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--accent-light) 72%, var(--surface-panel));
+}
+
+.sidebar-upload-progress-header,
+.sidebar-upload-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-upload-progress-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-upload-progress-header span {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sidebar-upload-progress-track {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 68%, transparent);
+}
+
+.sidebar-upload-progress-track span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-crown));
+  transition: width 160ms ease;
+}
+
+.sidebar-upload-progress.is-processing .sidebar-upload-progress-track span {
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 62%, var(--accent-crown)));
+}
+
+.sidebar-upload-progress.is-awaiting-confirmation .sidebar-upload-progress-track span {
+  background: color-mix(in srgb, var(--warning) 78%, var(--accent));
+}
+
+.sidebar-upload-progress.is-failed .sidebar-upload-progress-track span,
+.sidebar-upload-progress.is-cancelled .sidebar-upload-progress-track span {
+  background: color-mix(in srgb, var(--danger) 78%, var(--warning));
+}
+
+.sidebar-upload-progress.is-complete .sidebar-upload-progress-track span {
+  background: var(--success);
+}
+
+.sidebar-upload-progress-meta {
+  flex-wrap: wrap;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.sidebar-upload-progress-meta span:first-child {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .sidebar-selection-text {
   font-size: 13px;
   font-weight: 600;

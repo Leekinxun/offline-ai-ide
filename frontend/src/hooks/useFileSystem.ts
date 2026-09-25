@@ -17,6 +17,22 @@ export interface UploadEntriesError extends Error {
   batchMayHaveUploaded: boolean;
 }
 
+export interface UploadProgress {
+  uploadedBytes: number;
+  totalBytes: number;
+  completedFiles: number;
+  totalFiles: number;
+  phase: "uploading" | "processing" | "complete";
+}
+
+export interface UploadEntriesOptions {
+  targetPath?: string;
+  overwrite?: boolean;
+  overwriteFirstBatchOnly?: boolean;
+  expectedWorkspaceDir?: string;
+  onProgress?: (progress: UploadProgress) => void;
+}
+
 const UPLOAD_BATCH_BYTES = 8 * 1024 * 1024;
 const UPLOAD_BATCH_FILES = 50;
 
@@ -45,15 +61,117 @@ function makeUploadBatches(files: UploadFilePayload[]): UploadBatch[] {
   return batches;
 }
 
+function parseUploadError(payload: unknown): Error & { code?: string; conflicts?: string[] } {
+  const data = payload && typeof payload === "object"
+    ? payload as Record<string, unknown> : {};
+  const message = typeof data.detail === "string" && data.detail.trim() ? data.detail
+    : typeof data.error === "string" && data.error.trim() ? data.error
+    : "Failed to upload";
+  const error = new Error(message) as Error & {
+    code?: string;
+    conflicts?: string[];
+  };
+  if (typeof data.code === "string") error.code = data.code;
+  if (Array.isArray(data.conflicts)) {
+    error.conflicts = data.conflicts.filter(
+      (item: unknown): item is string => typeof item === "string"
+    );
+  }
+  return error;
+}
+
+async function uploadFormData(
+  url: string,
+  headers: Record<string, string>,
+  body: FormData,
+  expectedUploaded: number,
+  onUploadProgress: (loaded: number, total: number | undefined) => void,
+  onUploadComplete: () => void
+): Promise<{ data: { uploaded: number; overwritten: number } }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      onUploadProgress(event.loaded, event.lengthComputable ? event.total : undefined);
+    };
+    xhr.upload.onload = () => {
+      onUploadComplete();
+    };
+    xhr.onload = () => {
+      let payload: unknown;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+      } catch {
+        payload = undefined;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject({ error: parseUploadError(payload), status: xhr.status });
+        return;
+      }
+      const data = payload && typeof payload === "object"
+        ? payload as Record<string, unknown> : {};
+      if (
+        typeof data.uploaded !== "number"
+        || typeof data.overwritten !== "number"
+        || data.uploaded !== expectedUploaded
+      ) {
+        reject(new Error("Upload result could not be confirmed"));
+        return;
+      }
+      resolve({
+        data: {
+          uploaded: data.uploaded,
+          overwritten: data.overwritten,
+        },
+      });
+    };
+    xhr.onerror = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.ontimeout = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.onabort = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.send(body);
+  });
+}
+
 export async function uploadEntriesInBatches(
   files: UploadFilePayload[],
-  options: { targetPath?: string; overwrite?: boolean; overwriteFirstBatchOnly?: boolean; expectedWorkspaceDir?: string } | undefined,
+  options: UploadEntriesOptions | undefined,
   headers: Record<string, string>
 ): Promise<{ uploaded: number; overwritten: number }> {
   let uploaded = 0;
   let overwritten = 0;
+  let uploadedBytes = 0;
+  const totalBytes = files.reduce((total, entry) => total + entry.file.size, 0);
 
-  for (const [batchIndex, batch] of makeUploadBatches(files).entries()) {
+  const reportProgress = (progress: UploadProgress) => {
+    options?.onProgress?.({
+      ...progress,
+      uploadedBytes: Math.min(progress.uploadedBytes, totalBytes),
+    });
+  };
+
+  if (files.length === 0) {
+    reportProgress({
+      uploadedBytes: 0,
+      totalBytes,
+      completedFiles: 0,
+      totalFiles: 0,
+      phase: "complete",
+    });
+  }
+
+  const batches = makeUploadBatches(files);
+  for (const [batchIndex, batch] of batches.entries()) {
+    const batchBytes = batch.files.reduce((total, entry) => total + entry.file.size, 0);
+    const confirmedBytesBeforeBatch = uploadedBytes;
     const formData = new FormData();
     formData.append("targetPath", options?.targetPath || "");
     formData.append("expectedWorkspaceDir", options?.expectedWorkspaceDir ?? "");
@@ -65,36 +183,59 @@ export async function uploadEntriesInBatches(
 
     let batchMayHaveUploaded = true;
     try {
-      const res = await fetch(`${API}/upload`, {
-        method: "POST",
-        headers,
-        body: formData,
+      reportProgress({
+        uploadedBytes,
+        totalBytes,
+        completedFiles: uploaded,
+        totalFiles: files.length,
+        phase: "uploading",
       });
-      if (!res.ok) {
-        const payload: unknown = await res.json().catch(() => ({}));
-        const data = payload && typeof payload === "object"
-          ? payload as Record<string, unknown> : {};
-        const message = typeof data.detail === "string" && data.detail.trim() ? data.detail
-          : typeof data.error === "string" && data.error.trim() ? data.error
-          : "Failed to upload";
-        const error = new Error(message) as Error & {
-          code?: string;
-          conflicts?: string[];
-        };
-        if (typeof data.code === "string") error.code = data.code;
-        if (Array.isArray(data.conflicts)) {
-          error.conflicts = data.conflicts.filter(
-            (item: unknown): item is string => typeof item === "string"
-          );
+      const { data } = await uploadFormData(`${API}/upload`,
+        headers,
+        formData,
+        batch.files.length,
+        (loaded, requestTotal) => {
+          const batchUploadedBytes = requestTotal && requestTotal > 0
+            ? Math.round(batchBytes * Math.min(loaded / requestTotal, 1))
+            : Math.min(loaded, batchBytes);
+          reportProgress({
+            uploadedBytes: confirmedBytesBeforeBatch + batchUploadedBytes,
+            totalBytes,
+            completedFiles: uploaded,
+            totalFiles: files.length,
+            phase: "uploading",
+          });
+        },
+        () => {
+          reportProgress({
+            uploadedBytes: confirmedBytesBeforeBatch + batchBytes,
+            totalBytes,
+            completedFiles: uploaded,
+            totalFiles: files.length,
+            phase: "processing",
+          });
         }
-        // Conflict and request-validation responses happen before files are written.
-        batchMayHaveUploaded = res.status >= 500 || res.status === 408 || res.status === 429;
-        throw error;
-      }
-
-      const data = await res.json();
+      ).catch((cause) => {
+        if (cause && typeof cause === "object" && "status" in cause && "error" in cause) {
+          const status = (cause as { status: number }).status;
+          // Conflict and request-validation responses happen before files are written.
+          batchMayHaveUploaded = status >= 500 || status === 408 || status === 429;
+          throw (cause as { error: Error }).error;
+        }
+        throw cause;
+      });
       uploaded += data.uploaded;
       overwritten += data.overwritten;
+      uploadedBytes = confirmedBytesBeforeBatch + batchBytes;
+      if (batchIndex === batches.length - 1) {
+        reportProgress({
+          uploadedBytes: totalBytes,
+          totalBytes,
+          completedFiles: uploaded,
+          totalFiles: files.length,
+          phase: "complete",
+        });
+      }
     } catch (cause) {
       const error = (cause instanceof Error ? cause : new Error(String(cause))) as UploadEntriesError;
       error.completedUploaded = uploaded;
@@ -517,7 +658,7 @@ export function useFileSystem(token: string) {
   const uploadEntries = useCallback(
     async (
       files: UploadFilePayload[],
-      options?: { targetPath?: string; overwrite?: boolean; overwriteFirstBatchOnly?: boolean; expectedWorkspaceDir?: string }
+      options?: UploadEntriesOptions
     ): Promise<{ uploaded: number; overwritten: number }> => {
       return uploadEntriesInBatches(files, options, authHeaders());
     },

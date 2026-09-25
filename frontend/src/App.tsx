@@ -30,7 +30,7 @@ import { ReferencePanel } from "./components/ReferencePanel";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
-import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
+import type { UploadEntriesOptions, WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
@@ -2098,7 +2098,7 @@ function AuthenticatedApp({
   const handleUploadEntries = useCallback(
     async (
       files: { path: string; file: File }[],
-      options?: { overwrite?: boolean; overwriteFirstBatchOnly?: boolean; targetPath?: string; expectedWorkspaceDir?: string }
+      options?: UploadEntriesOptions
     ) => {
       const result = await fs.uploadEntries(files, options);
       showToast(t("app.uploaded", { count: result.uploaded }));
