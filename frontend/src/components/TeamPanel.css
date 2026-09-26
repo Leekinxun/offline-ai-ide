@@ -1,0 +1,439 @@
+/* ==========================================================================
+   TeamPanel.css - 团队协作面板专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 纯色阶体系 (Level 0~2)
+   - 微卡片与圆角梯阶 (8px 卡片，6px 胶囊/按钮)
+   - 消除碎裂切片，统一空间感与分组卡片
+   - 沉浸式空状态与微光晕环
+   ========================================================================== */
+
+.team-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface-panel);
+}
+
+.team-panel-header,
+.team-panel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.team-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.team-panel-header {
+  min-height: var(--panel-header-height);
+  padding: 0 12px;
+  background: var(--surface-panel-strong);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+}
+
+.team-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* 顶部协作指标栏 - 微胶囊对称对齐 */
+.collaboration-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  box-sizing: border-box;
+}
+
+.collaboration-summary > span {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-light) 55%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.collaboration-summary strong {
+  display: inline-block;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 3px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.collaboration-summary .is-read-only strong {
+  color: var(--status-warning-fg);
+}
+
+/* 滚动主体区 */
+.team-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-panel-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.team-panel-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-light) 80%, transparent);
+  border-radius: 2px;
+}
+
+/* 团队管理与操作聚合卡片 (避免碎片化切割) */
+.team-management-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 65%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.team-actions-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--border-light) 50%, transparent);
+}
+
+.team-panel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.team-panel-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.team-panel-status,
+.team-member-main,
+.team-panel-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-panel-input,
+.team-panel-inline .dialog-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 11px var(--font-sans);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.team-panel-input:focus,
+.team-panel-inline .dialog-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.team-panel-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.team-panel-select .workbench-select-trigger {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+/* 按钮规范 - 精确对齐 32px 高度 */
+.team-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 85%, var(--bg-primary));
+  color: var(--text-secondary);
+  font: 600 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  box-sizing: border-box;
+  line-height: 30px;
+}
+
+.team-panel-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-light));
+}
+
+.team-panel-btn.primary {
+  background: color-mix(in srgb, var(--accent) 88%, #1d4ed8);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.team-panel-btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.team-panel-btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border-light));
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, transparent);
+}
+
+.team-panel-btn.danger:hover:not(:disabled) {
+  background: var(--status-danger-bg);
+}
+
+.team-panel-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 独立板块微卡片化 */
+.team-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 65%, var(--bg-primary));
+}
+
+.team-panel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-primary) 85%, var(--surface-panel));
+  padding: 10px 12px;
+}
+
+.team-panel-teamname {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.team-panel-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.team-panel-meta.mono,
+.team-member-file,
+.team-activity-time {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+.team-panel-hint,
+.team-panel-empty,
+.team-panel-loading {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.team-panel-error {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.team-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--border-light) 80%, transparent);
+  flex-shrink: 0;
+}
+
+.team-dot.online {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.team-member-list,
+.team-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-member-row,
+.team-activity-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-primary) 50%, transparent);
+}
+
+.team-member-main-wrap {
+  flex: 1;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.team-member-identity,
+.team-member-controls,
+.team-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.team-member-controls .workbench-select {
+  flex: 0 1 128px;
+  min-width: 96px;
+  max-width: 160px;
+}
+
+.team-member-side {
+  min-width: 0;
+  text-align: right;
+}
+
+.team-member-file {
+  color: var(--text-tertiary);
+}
+
+.team-role-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.team-self-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--status-success-fg);
+  background: color-mix(in srgb, var(--status-success-bg) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-success-fg) 30%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.team-member-role-select .workbench-select-trigger {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 5px;
+  font-size: 11px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.team-activity-main {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+/* 空状态卡片定制 */
+.team-panel .panel-state {
+  margin: 18px 12px;
+  padding: 24px 16px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--border-light) 75%, transparent);
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.team-panel .panel-state-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+  margin-bottom: 2px;
+}
+
+.team-panel .panel-state strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.team-panel .panel-state span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  max-width: 230px;
+}

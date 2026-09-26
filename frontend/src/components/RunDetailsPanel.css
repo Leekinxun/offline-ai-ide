@@ -99,23 +99,25 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-/* 分段微卡 Tab 栏（Segmented Pill Tabs） */
+/* 分段微卡 Tab 栏（Segmented Pill Tabs） - 统一优雅滑轨微卡 */
 .run-details-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line-subtle);
-  background: var(--surface-panel);
+  gap: 3px;
+  margin: 6px 10px 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 70%, var(--surface-workbench));
+  border: 1px solid color-mix(in srgb, var(--line-subtle) 40%, transparent);
   flex-shrink: 0;
 }
 
 .run-details-tabs button {
-  min-height: 28px;
-  height: 28px;
+  min-height: 26px;
+  height: 26px;
   padding: 0 4px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--ink-muted);
   cursor: pointer;
@@ -127,16 +129,21 @@
 }
 
 .run-details-tabs button:hover:not(.active) {
-  background: var(--surface-quiet);
+  background: color-mix(in srgb, var(--surface-quiet) 80%, transparent);
   color: var(--ink);
 }
 
 .run-details-tabs button.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
   color: var(--accent);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
   border-color: transparent;
+}
+
+.run-details-tabs button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
 }
 
 /* 内容主体与微轨道滚动条 */

@@ -19,6 +19,7 @@ import { useOfflineBundles } from "../hooks/useOfflineBundles";
 import { OfflineBundlePanel } from "./OfflineBundlePanel";
 import { TaskStateStrip } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import "./CheckpointPanel.css";
 import { changeSetReviewRevision, isCurrentChangeSet } from "../hooks/changeSetContract";
 import {
   changeSetDecisionAllowed,
@@ -227,7 +228,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
         runningTone={recoveryBusy ? "running" : error || worktreeState.error ? "danger" : "success"}
         evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")}
         evidenceTone={evidenceCount ? "success" : "neutral"}
-        action={t("recovery.refresh")}
+        action={t("common.refresh")}
         onAction={() => void (activeTab === "worktrees" ? worktreeState.refresh() : refresh())}
         actionDisabled={loading || worktreeState.loading}
         actionDisabledReason={loading || worktreeState.loading ? t("common.loading") : undefined}
@@ -251,7 +252,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
       {readOnly && <div className="checkpoint-notice" role="note">{t("recovery.readOnly")}</div>}
 
       {activeTab === "snapshots" ? (
-        <div id="recovery-panel-snapshots" role="tabpanel" aria-labelledby="recovery-tab-snapshots">
+        <div id="recovery-panel-snapshots" role="tabpanel" aria-labelledby="recovery-tab-snapshots" className="recovery-panel-body">
           <div className="checkpoint-create">
             <input
               className="dialog-input"
@@ -266,7 +267,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
             </button>
           </div>
           <div className="checkpoint-notice">{t("checkpoint.notice")}</div>
-          {storage && <div className="checkpoint-notice">{t("recovery.storage", { size: formatSize(storage.blobBytes), count: storage.checkpointCount })}<label className="retention-control">{t("recovery.retention")}<input type="number" min="4" max="100" defaultValue={storage.retention.maxCheckpoints} disabled={readOnly || busyId !== null} onBlur={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value !== storage.retention.maxCheckpoints) void setRetention(value).catch((nextError) => onNotify(nextError instanceof Error ? nextError.message : t("recovery.retentionFailed"))); }} /></label></div>}
+          {storage && <div className="checkpoint-storage-bar"><span className="checkpoint-storage-info">{t("recovery.storage", { size: formatSize(storage.blobBytes), count: storage.checkpointCount })}</span><label className="retention-control">{t("recovery.retention")}<input type="number" min="4" max="100" defaultValue={storage.retention.maxCheckpoints} disabled={readOnly || busyId !== null} onBlur={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value !== storage.retention.maxCheckpoints) void setRetention(value).catch((nextError) => onNotify(nextError instanceof Error ? nextError.message : t("recovery.retentionFailed"))); }} /></label></div>}
           {error && <div className="workbench-panel-error" role="alert">{error}</div>}
           {!loading && sorted.length === 0 && (
             <div className="workbench-panel-empty"><ArchiveRestore size={24} /><strong>{t("checkpoint.emptyTitle")}</strong><span>{t("checkpoint.emptyHint")}</span></div>
@@ -292,7 +293,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
           </div>
         </div>
       ) : activeTab === "mutations" ? (
-        <div id="recovery-panel-mutations" aria-labelledby="recovery-tab-mutations" className="checkpoint-list" role="tabpanel">
+        <div id="recovery-panel-mutations" aria-labelledby="recovery-tab-mutations" className="recovery-panel-body" role="tabpanel">
           <div className="checkpoint-notice">{t("recovery.mutationsHint")}</div>
           {mutations.length === 0 && <div className="workbench-panel-empty"><RefreshCw size={24} /><strong>{t("recovery.mutationsEmpty")}</strong></div>}
           {mutations.map((mutation) => <article className="checkpoint-card" key={mutation.id}>
@@ -303,7 +304,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
           </article>)}
         </div>
       ) : activeTab === "changeSets" ? (
-        <div id="recovery-panel-changeSets" aria-labelledby="recovery-tab-changeSets" className="checkpoint-list" role="tabpanel">
+        <div id="recovery-panel-changeSets" aria-labelledby="recovery-tab-changeSets" className="recovery-panel-body" role="tabpanel">
           <div className="checkpoint-notice">{t("recovery.changeSetsHint")}</div>
           <OfflineBundlePanel controller={bundleState} changeSets={changeSets} readOnly={readOnly} />
           {changeSets.length === 0 && <div className="workbench-panel-empty"><GitBranch size={24} /><strong>{t("recovery.changeSetsEmpty")}</strong></div>}
@@ -336,7 +337,7 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
           })}
         </div>
       ) : (
-        <div id="recovery-panel-worktrees" role="tabpanel" aria-labelledby="recovery-tab-worktrees">
+        <div id="recovery-panel-worktrees" role="tabpanel" aria-labelledby="recovery-tab-worktrees" className="recovery-panel-body">
           <div className="worktree-create">
             <label>
               <span>{t("worktree.name")}</span>
@@ -346,9 +347,11 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
               <span>{t("worktree.revision")}</span>
               <input className="dialog-input" value={worktreeRevision} onChange={(event) => setWorktreeRevision(event.target.value)} placeholder="HEAD" />
             </label>
-            <button type="button" className="dialog-btn primary" onClick={() => void handleCreateWorktree()} disabled={readOnly || worktreeState.busyId !== null} title={readOnly ? t("recovery.readOnly") : undefined}>
-              <Plus size={13} /> {worktreeState.busyId === "create" ? t("worktree.creating") : t("worktree.create")}
-            </button>
+            <div className="worktree-create-actions">
+              <button type="button" className="dialog-btn primary" onClick={() => void handleCreateWorktree()} disabled={readOnly || worktreeState.busyId !== null} title={readOnly ? t("recovery.readOnly") : undefined}>
+                <Plus size={13} /> {worktreeState.busyId === "create" ? t("worktree.creating") : t("worktree.create")}
+              </button>
+            </div>
           </div>
           <div className="checkpoint-notice">{t("worktree.notice")}</div>
           {worktreeState.error && <div className="workbench-panel-error" role="alert">{worktreeState.error}</div>}

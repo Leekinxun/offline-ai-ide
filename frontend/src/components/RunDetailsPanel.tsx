@@ -153,7 +153,7 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
 
       {activeTab === "checks" && (
         <div id="run-details-checks" role="tabpanel" aria-labelledby="run-details-tab-checks" className="run-details-body run-check-page">
-          <div className={`run-outcome-card tone-${evidenceOutcome === "completed" ? "success" : evidenceOutcome === "failed" ? "danger" : "warning"}`} role={evidenceOutcome === "completed" ? undefined : "alert"}>
+          <div className={`run-outcome-card ${evidenceOutcome === "completed" ? "" : "warning"} tone-${evidenceOutcome === "completed" ? "success" : evidenceOutcome === "failed" ? "danger" : "warning"}`} role={evidenceOutcome === "completed" ? undefined : "alert"}>
             <div className="run-outcome-icon">
               {evidenceOutcome === "completed" ? <Check size={18} /> : <AlertCircle size={18} />}
             </div>

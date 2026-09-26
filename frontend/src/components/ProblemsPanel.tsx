@@ -4,6 +4,7 @@ import type { EditorProblem } from "../hooks/useEditorProblems";
 import { useDiagnostics, type WorkspaceDiagnostic } from "../hooks/useDiagnostics";
 import { useI18n } from "../i18n";
 import { TaskStateStrip } from "./TaskStateStrip";
+import "./ProblemsPanel.css";
 
 type Problem = WorkspaceDiagnostic & { id: string };
 
@@ -62,9 +63,14 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({ visible, token, ed
         <button className="sidebar-action-btn" type="button" onClick={onClose} title={t("problems.close")} aria-label={t("problems.close")}><X size={14} /></button>
       </div>
     </div>
-    <TaskStateStrip requested={t("problems.validationRequest")} running={t(`problems.session.${diagnostics.session.status}`)} runningTone={diagnostics.running ? "running" : diagnostics.error ? "danger" : "neutral"} evidence={allProblems.length ? t("taskState.evidenceCount", { count: allProblems.length }) : t("taskState.noEvidence")} evidenceTone={counts("error") ? "danger" : allProblems.length ? "warning" : "success"} action={t(diagnostics.session.status === "stopped" ? "problems.startWatching" : "problems.stopWatching")} actionTone={diagnostics.session.status === "stopped" ? "neutral" : "warning"} onAction={() => void (diagnostics.session.status === "stopped" ? diagnostics.startWatching() : diagnostics.stopWatching())} compact />
+    <TaskStateStrip requested={t("problems.validationRequest")} running={t(`problems.session.${diagnostics.session.status}`)} runningTone={diagnostics.running ? "running" : diagnostics.error ? "danger" : "neutral"} evidence={allProblems.length ? t("taskState.evidenceCount", { count: allProblems.length }) : t("taskState.noEvidence")} evidenceTone={counts("error") ? "danger" : allProblems.length ? "warning" : "success"} action={t(diagnostics.session.status === "stopped" ? "problems.actionStart" : "problems.actionStop")} actionTone={diagnostics.session.status === "stopped" ? "neutral" : "warning"} onAction={() => void (diagnostics.session.status === "stopped" ? diagnostics.startWatching() : diagnostics.stopWatching())} compact />
     <div className="problems-toolbar" role="group" aria-label={t("problems.filter")}> 
-      {(["all", "error", "warning", "info"] as const).map((value) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{t(`problems.${value}`)}{value !== "all" ? ` ${counts(value)}` : ""}</button>)}
+      {(["all", "error", "warning", "info"] as const).map((value) => (
+        <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>
+          <span>{t(`problems.${value}`)}</span>
+          <span className={`problems-count-chip count-${value}`}>{value === "all" ? allProblems.length : counts(value)}</span>
+        </button>
+      ))}
     </div>
     <div className={`problems-watch-state status-${diagnostics.session.status}`}><span className="chat-run-status-dot" />{t(`problems.session.${diagnostics.session.status}`)}{diagnostics.session.generation > 0 ? ` · #${diagnostics.session.generation}` : ""}</div>
     {diagnostics.tools.length > 0 && <div className="problems-sources">{t("problems.checkedBy", { tools: diagnostics.tools.join(" · "), duration: diagnostics.durationMs })}</div>}

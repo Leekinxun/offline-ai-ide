@@ -6,6 +6,7 @@ import { useAgents } from "../hooks/useAgents";
 import { PanelHeader, PanelState } from "./PanelChrome";
 import { TaskStateStrip } from "./TaskStateStrip";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import "./AgentBoard.css";
 
 interface AgentBoardProps { visible: boolean; token: string; onClose: () => void; drawerMode?: boolean; }
 const formatTime = (value?: number) => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
@@ -63,7 +64,7 @@ export const AgentBoard: React.FC<AgentBoardProps> = ({ visible, token, onClose,
 
   const controls = (agent: AgentSnapshot) => {
     const key = keyFor(agent), pending = pendingById[key], canPause = agent.status === "working", canResume = agent.status === "paused" || agent.status === "blocked";
-    if (agent.canManageBudget !== true) return null;
+    if (agent.canManageBudget !== true || !(agent.canManageBudget === true)) return null;
     return <div className="agent-card-detail">
       {agent.budget && <p><b>{t("agents.budget")}</b>{[agent.budget.maxConcurrentAgents ? t("agents.budgetAgents", { count: agent.budget.maxConcurrentAgents }) : "", agent.budget.maxTokens ? t("agents.budgetTokens", { count: agent.budget.maxTokens }) : "", agent.budget.maxCostUsd !== undefined ? t("agents.budgetCost", { value: agent.budget.maxCostUsd }) : "", agent.budget.maxDurationMs ? t("agents.budgetDuration", { value: Math.round(agent.budget.maxDurationMs / 60000) }) : ""].filter(Boolean).join(" · ")}</p>}
       {canUpdateAgentBudget(agent) && <fieldset className="agent-budget-editor"><legend>{t("agents.editBudget")}</legend>{(["maxConcurrentAgents", "maxTokens", "maxCostUsd", "maxDurationMs"] as const).map((field) => <label key={field}>{t(`agents.budgetField.${field}`)}<input type="number" min="0" step={field === "maxCostUsd" ? "0.01" : "1"} value={budgetDrafts[key]?.[field] ?? agent.budget?.[field] ?? ""} onChange={(event) => setBudgetDrafts((current) => ({ ...current, [key]: { ...current[key], [field]: event.target.value } }))} /></label>)}<button type="button" disabled={Boolean(pending)} onClick={() => { const draft = budgetDrafts[key] || {}; void saveBudget(agent, Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== "").map(([field, value]) => [field, Number(value)]))); }}>{t("common.save")}</button></fieldset>}
@@ -95,7 +96,7 @@ export const AgentBoard: React.FC<AgentBoardProps> = ({ visible, token, onClose,
   const hasContent = graph.nodes.length > 0 || agents.length > 0;
   return <aside ref={panelRef} className="agent-board panel-shell workspace-drawer" role={drawerMode ? "dialog" : "complementary"} aria-modal={drawerMode || undefined} aria-labelledby="agent-board-title" tabIndex={-1} data-workspace-drawer="agents">
     <PanelHeader titleId="agent-board-title" icon={<Bot size={16} />} title={t("agents.title")} status={loading && !hasContent ? t("common.loading") : socketConnected ? t("agents.live") : t("agents.fallback")} statusTone={socketConnected ? "working" : error ? "danger" : "neutral"} refreshing={loading} refreshLabel={t("common.refresh")} closeLabel={t("common.close")} onRefresh={() => void refresh()} onClose={onClose} />
-    <div className="agent-board-summary" aria-live="polite"><span className="agent-summary-item working"><i aria-hidden="true" /><strong>{workingCount}</strong>{t("agents.working")}</span><span className="agent-summary-item"><strong>{graph.nodes.filter((node) => node.kind === "agent").length || agents.length}</strong>{t("agents.total")}</span><span className="agent-summary-item blockers"><strong>{blockers.length}</strong>{t("agents.blockers")}</span></div>
+    <div className="agent-board-summary" aria-live="polite"><span className={`agent-summary-item working${workingCount > 0 ? " is-active" : ""}`}><i aria-hidden="true" /><strong>{workingCount}</strong>{t("agents.working")}</span><span className="agent-summary-item"><strong>{graph.nodes.filter((node) => node.kind === "agent").length || agents.length}</strong>{t("agents.total")}</span><span className={`agent-summary-item blockers${blockers.length > 0 ? " has-blockers" : ""}`}><strong>{blockers.length}</strong>{t("agents.blockers")}</span></div>
     <TaskStateStrip requested={t("agents.requestedState", { count: graph.nodes.length || agents.length })} running={workingCount ? t("chat.taskStatus.running") : t("taskState.ready")} runningTone={workingCount ? "running" : "neutral"} evidence={recentEvents.length ? t("taskState.evidenceCount", { count: recentEvents.length }) : t("taskState.noEvidence")} evidenceTone={recentEvents.length ? "success" : "neutral"} action={hasContent ? t("agents.inspectAgent") : t("common.refresh")} onAction={() => { const first = model.roots[0]; if (first) setExpanded(first.id); else void refresh(); }} compact />
     {loading && !hasContent && !error && <PanelState tone="loading" icon={<Sparkles size={24} />} title={t("agents.loadingTitle")} detail={t("agents.loadingHint")} />}
     {error && !hasContent && <PanelState tone="error" icon={<Bot size={24} />} title={t("agents.failed")} detail={error} actionLabel={t("common.refresh")} onAction={() => void refresh()} />}

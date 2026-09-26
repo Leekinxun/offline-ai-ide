@@ -1,0 +1,262 @@
+/* ==========================================================================
+   RunCenterPanel.css - 运行与测试中心专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 纯色阶体系 (Level 0~2)
+   - 任务列表触感微卡片 (Tactile Task Cards)
+   - 统一 12px 左右边界
+   - 磨砂蓝漫反射聚焦与沉浸式终端输出
+   ========================================================================== */
+
+.run-center-panel {
+  width: 340px;
+  min-width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
+  background: var(--surface-panel);
+}
+
+.run-center-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* 任务列表容器与行微卡片 */
+.run-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.run-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  border: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.run-task-row:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.run-task-row > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-task-row strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-task-row small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.run-task-row .dialog-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-subtle);
+  background: var(--surface-quiet);
+  color: var(--ink-muted);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+}
+
+.run-task-row .dialog-btn:hover:not(:disabled) {
+  background: var(--surface-panel);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-subtle));
+}
+
+.run-task-row .dialog-btn.danger {
+  color: var(--status-danger-fg, #ef4444);
+  border-color: color-mix(in srgb, var(--status-danger-fg, #ef4444) 30%, transparent);
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, transparent);
+}
+
+.run-task-row .dialog-btn.danger:hover:not(:disabled) {
+  background: var(--status-danger-bg);
+}
+
+.run-task-row .dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 运行结果面板 */
+.run-result {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.run-result-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  background: var(--surface-panel-strong);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.run-result-summary:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+}
+
+.run-result-summary strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.run-result-summary span {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font: 10px var(--font-mono);
+}
+
+.run-result-summary.status-passed svg { color: var(--status-success-fg, #10b981); }
+.run-result-summary.status-failed svg,
+.run-result-summary.status-timed_out svg { color: var(--status-danger-fg, #ef4444); }
+.run-result-summary svg.spin { animation: spin 1s linear infinite; }
+
+/* 失败记录列表 */
+.run-failures {
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.run-failures button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--status-danger-fg, #ef4444) 25%, transparent);
+  background: color-mix(in srgb, var(--status-danger-bg) 40%, var(--surface-panel));
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.run-failures button:hover {
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, var(--surface-panel));
+}
+
+.run-failures code {
+  color: var(--status-danger-fg, #ef4444);
+  font: 600 10px var(--font-mono);
+}
+
+.run-failures span {
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* 运行输出终端区 */
+.run-output {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-workbench, #0d0f12) 80%, black);
+  border: 1px solid color-mix(in srgb, var(--border-light) 40%, transparent);
+  color: var(--text-primary);
+  font: 11px/1.5 var(--font-mono);
+  overflow: auto;
+  max-height: 220px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 空状态卡片定制 */
+.run-center-panel .workbench-panel-empty {
+  margin: 18px 0;
+  padding: 28px 16px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--border-light) 75%, transparent);
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.run-center-panel .workbench-panel-empty svg {
+  color: var(--accent);
+  padding: 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.run-center-panel .workbench-panel-empty strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.run-center-panel .workbench-panel-empty span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  max-width: 230px;
+}

@@ -1,0 +1,697 @@
+/* ==========================================================================
+   AgentBoard.css - 智能体看板专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 纯色阶体系 (Level 0~2)
+   - 微卡片与圆角梯阶 (8px 卡片，6px pill，5px 按钮)
+   - 微光束与状态呼吸高亮
+   - 沉浸式空状态卡片
+   ========================================================================== */
+
+.agent-board {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
+  background: var(--surface-panel);
+}
+
+.agent-board-header,
+.agent-board-title,
+.agent-board-actions,
+.agent-card-head,
+.agent-card-name {
+  display: flex;
+  align-items: center;
+}
+
+.agent-board-header {
+  justify-content: space-between;
+  min-height: var(--panel-header-height);
+  padding: 0 12px;
+  background: var(--surface-panel-strong);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+}
+
+.agent-board-title {
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-board-actions {
+  gap: 3px;
+}
+
+/* 顶部度量概览栏 - 微胶囊分段风格 (工业级对齐与对称) */
+.agent-board-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  box-sizing: border-box;
+}
+
+.agent-summary-item {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-light) 55%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.agent-summary-item strong {
+  display: inline-block;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 3px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-summary-item.working {
+  color: var(--accent);
+}
+
+.agent-summary-item.working i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+  margin-right: 4px;
+  animation: chat-run-pulse 1.8s infinite ease-in-out;
+}
+
+.agent-summary-item.working.is-active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.agent-summary-item.blockers {
+  color: var(--text-tertiary);
+}
+
+.agent-summary-item.blockers.has-blockers {
+  color: var(--status-danger-fg);
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, transparent);
+  border-color: color-mix(in srgb, var(--status-danger-fg) 25%, transparent);
+}
+
+/* 列表容器与微滚动条 */
+.agent-board-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-board-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.agent-board-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-light) 80%, transparent);
+  border-radius: 2px;
+}
+
+/* 空状态 / 加载状态 / 错误状态沉浸式卡片 */
+.agent-board .panel-state {
+  margin: 18px 12px;
+  padding: 24px 16px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--border-light) 75%, transparent);
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.agent-board .panel-state-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+  margin-bottom: 2px;
+}
+
+.agent-board .panel-state.tone-error .panel-state-icon {
+  background: color-mix(in srgb, var(--status-danger-bg) 80%, var(--surface-panel));
+  border-color: color-mix(in srgb, var(--status-danger-fg) 30%, transparent);
+  color: var(--status-danger-fg);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--status-danger-fg) 15%, transparent);
+}
+
+.agent-board .panel-state strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.agent-board .panel-state span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  max-width: 230px;
+}
+
+.agent-board .panel-state-action {
+  margin-top: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-panel-strong));
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.agent-board .panel-state-action:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.agent-board-empty,
+.agent-board-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 36px 18px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
+}
+
+.agent-board-empty strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.agent-board-error {
+  color: var(--danger);
+}
+
+/* 树形层级 */
+.agent-tree,
+.agent-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-tree ul {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 1px dashed color-mix(in srgb, var(--border-light) 60%, transparent);
+}
+
+.agent-tree-item {
+  position: relative;
+}
+
+.agent-tree-item > ul > .agent-tree-item::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  left: -10px;
+  width: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--border-light) 60%, transparent);
+}
+
+/* Agent 微卡片与状态 */
+.agent-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-primary) 85%, var(--surface-panel));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.agent-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.agent-card.status-working,
+.agent-card.status-running {
+  border-left: 3px solid var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-primary));
+}
+
+.agent-card.status-blocked,
+.agent-card.status-failed {
+  border-left: 3px solid var(--status-danger-fg);
+  border-color: color-mix(in srgb, var(--status-danger-fg) 35%, var(--border-light));
+}
+
+.agent-card-head {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-card-disclosure {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-card-name {
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-card-name strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-status-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.agent-card.status-working .agent-status-icon,
+.agent-card.status-running .agent-status-icon {
+  color: var(--accent);
+  animation: chat-run-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-status-label {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-tertiary) 80%, transparent);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-card.status-working .agent-status-label,
+.agent-card.status-running .agent-status-label {
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.agent-card.status-blocked .agent-status-label,
+.agent-card.status-failed .agent-status-label {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.agent-card-role {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.agent-card-task {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-card-time {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+}
+
+/* 产物与安全状态徽标 */
+.agent-artifact-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-safe-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 80%, transparent);
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.agent-safe-badge.status-applied,
+.agent-safe-badge.status-approved,
+.agent-safe-badge.status-completed {
+  color: var(--status-success-fg);
+  background: color-mix(in srgb, var(--status-success-bg) 80%, transparent);
+  border-color: color-mix(in srgb, var(--status-success-fg) 30%, transparent);
+}
+
+.agent-safe-badge.status-failed,
+.agent-safe-badge.status-rejected,
+.agent-safe-badge.status-conflicted,
+.agent-safe-badge.status-blocked {
+  color: var(--status-danger-fg);
+  background: color-mix(in srgb, var(--status-danger-bg) 80%, transparent);
+  border-color: color-mix(in srgb, var(--status-danger-fg) 30%, transparent);
+}
+
+.agent-parent-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 80%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 9px var(--font-sans);
+  transition: all 0.12s ease;
+}
+
+.agent-parent-nav:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-light));
+}
+
+/* 卡片展开详情与管控交互 */
+.agent-card-detail {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  margin-top: 2px;
+}
+
+.agent-card-detail p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.agent-card-detail p b {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.agent-blocker {
+  color: var(--status-danger-fg) !important;
+}
+
+.agent-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.agent-control-row button,
+.agent-steer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 85%, var(--bg-primary));
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 10px var(--font-sans);
+  font-weight: 500;
+  transition: all 0.12s ease;
+}
+
+.agent-control-row button:hover:not(:disabled),
+.agent-steer button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-light));
+}
+
+.agent-control-row button:disabled,
+.agent-steer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.agent-steer {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-steer textarea {
+  width: 100%;
+  min-height: 50px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 10px/1.4 var(--font-sans);
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agent-steer textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-assignment {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+}
+
+.agent-assignment legend {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.agent-assignment label {
+  display: grid;
+  gap: 3px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.agent-assignment textarea,
+.agent-assignment input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 5px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 10px var(--font-sans);
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agent-assignment textarea:focus,
+.agent-assignment input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-assignment textarea {
+  min-height: 44px;
+  resize: vertical;
+}
+
+.agent-budget-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+}
+
+.agent-budget-editor legend {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.agent-budget-editor label {
+  display: grid;
+  gap: 2px;
+  color: var(--text-tertiary);
+  font-size: 8px;
+}
+
+.agent-budget-editor input {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 10px var(--font-mono, monospace);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.agent-budget-editor input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-budget-editor button {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-light));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-panel-strong));
+  color: var(--accent);
+  font: 10px var(--font-sans);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.agent-budget-editor button:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 阻塞项与时间线小部件 */
+.agent-blocker-summary,
+.agent-timeline {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 60%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 75%, var(--bg-primary));
+}
+
+.agent-blocker-summary h3,
+.agent-timeline h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-blocker-summary ul,
+.agent-timeline ol {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.agent-blocker-summary {
+  color: var(--status-danger-fg);
+  border-color: color-mix(in srgb, var(--status-danger-fg) 25%, transparent);
+  background: color-mix(in srgb, var(--status-danger-bg) 50%, var(--surface-panel));
+}
+
+.agent-timeline {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.agent-timeline li {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.agent-timeline time {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+}
+
+.agent-timeline span {
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}

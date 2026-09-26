@@ -19,6 +19,7 @@ import {
 } from "../types";
 import { useI18n } from "../i18n";
 import { WorkbenchSelect } from "./WorkbenchSelect";
+import "./ContextInspector.css";
 
 type ContextFilter = "all" | ContextSourceDecision | "pinned";
 

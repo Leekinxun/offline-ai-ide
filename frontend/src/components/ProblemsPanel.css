@@ -1,0 +1,261 @@
+/* ==========================================================================
+   ProblemsPanel.css - 问题面板专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 纯色阶体系 (Level 0~2)
+   - 一体化分段过滤选项卡 (Segmented Filter Pill Tabs)
+   - 磨砂蓝微光聚焦规范 (Frosted Blue Halo)
+   - 触感问题条目微卡片 (Tactile Problem Cards)
+   - 严格统一 12px 左右基准边界
+   ========================================================================== */
+
+.problems-panel {
+  width: 340px;
+  min-width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
+  background: var(--surface-panel);
+}
+
+/* 分段微胶囊过滤选项卡栏 (Segmented Filter Tabs) */
+.problems-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  margin: 8px 12px 6px;
+  padding: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 70%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--border-light) 40%, transparent);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.problems-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  min-height: 26px;
+  max-height: 26px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.problems-toolbar button:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  color: var(--text-primary);
+}
+
+.problems-toolbar button.active {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-primary));
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.problems-toolbar button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+/* 数量胶囊 Chips */
+.problems-count-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font: 700 9px var(--font-mono);
+  line-height: 1;
+}
+
+.problems-count-chip.count-all {
+  background: color-mix(in srgb, var(--text-tertiary) 22%, transparent);
+  color: var(--text-secondary);
+}
+
+.problems-count-chip.count-error {
+  background: color-mix(in srgb, var(--status-danger-fg, #ef4444) 18%, transparent);
+  color: var(--status-danger-fg, #ef4444);
+}
+
+.problems-count-chip.count-warning {
+  background: color-mix(in srgb, var(--status-warning-fg, #f59e0b) 18%, transparent);
+  color: var(--status-warning-fg, #f59e0b);
+}
+
+.problems-count-chip.count-info {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+/* 监听状态单行微条 */
+.problems-watch-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 12px 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 65%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--border-light) 45%, transparent);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.problems-watch-state .chat-run-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.problems-watch-state.status-watching .chat-run-status-dot {
+  background: var(--status-success-fg, #10b981);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-success-fg, #10b981) 60%, transparent);
+}
+
+.problems-watch-state.status-error .chat-run-status-dot {
+  background: var(--status-danger-fg, #ef4444);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-danger-fg, #ef4444) 60%, transparent);
+}
+
+/* 检查耗时与工具来源信息 */
+.problems-sources {
+  margin: 0 12px 6px;
+  padding: 0 2px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+
+/* 问题列表与触感微卡片 */
+.problems-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+}
+
+.problem-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  border: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.problem-row:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.problem-row:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+.problem-icon {
+  display: flex;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.problem-row.severity-error .problem-icon { color: var(--status-danger-fg, #ef4444); }
+.problem-row.severity-warning .problem-icon { color: var(--status-warning-fg, #f59e0b); }
+.problem-row.severity-info .problem-icon { color: var(--accent); }
+
+.problem-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.problem-copy strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.problem-copy small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 空状态卡片 */
+.problems-panel .workbench-panel-empty {
+  margin: 18px 12px;
+  padding: 28px 16px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--border-light) 75%, transparent);
+  background: color-mix(in srgb, var(--surface-panel-strong) 60%, var(--bg-primary));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.problems-panel .workbench-panel-empty svg {
+  color: var(--accent);
+  padding: 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.problems-panel .workbench-panel-empty strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.problems-panel .workbench-panel-empty span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  max-width: 230px;
+}
