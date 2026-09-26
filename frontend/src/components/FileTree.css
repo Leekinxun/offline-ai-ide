@@ -1,0 +1,226 @@
+/* ==========================================================================
+   FileTree.css - 文件树组件独立隔离样式
+   契约：纯色阶划分、沉浸式微卡片、无硬边框、精细微导光激活态
+   ========================================================================== */
+
+.file-tree {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 6px 12px;
+  background: transparent;
+  user-select: none;
+}
+
+/* 遵循全局微轨道滚动条契约 (图 1 标杆规范) */
+.file-tree::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.file-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-tree::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.file-tree::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-tertiary) 50%, var(--border));
+}
+
+/* 拖拽放置指示 */
+.file-tree.drop-target {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 4px;
+}
+
+.sidebar-drop-hint {
+  position: sticky;
+  top: 2px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 2px 6px;
+  padding: 5px 8px;
+  color: var(--accent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-workbench));
+  font-size: 11px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+/* 树行条目微卡规范 */
+.tree-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 6px;
+  margin-bottom: 1px;
+  border: none !important;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease;
+  box-sizing: border-box;
+}
+
+.tree-item:hover {
+  background: var(--bg-hover);
+}
+
+/* 多选选择状态：柔和微卡胶囊，剥除生硬粗框 */
+.tree-item.selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+
+.tree-item.selected:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* 激活状态（当前正在编辑的文件）：柔和高亮 + 左边缘 2px 微导光条 */
+.tree-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+}
+
+.tree-item.active::before {
+  position: absolute;
+  left: 2px;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
+  content: "";
+}
+
+.tree-item.active.selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+
+/* 拖拽悬停目录 */
+.tree-item.drop-target {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* 折叠展开箭头 */
+.tree-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.tree-chevron.open {
+  transform: rotate(90deg);
+}
+
+/* 多选复选框微胶囊 */
+.tree-item-checkbox {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.9);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.tree-item:hover .tree-item-checkbox,
+.tree-item.selected .tree-item-checkbox,
+.tree-item-checkbox.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+/* 节点图标 */
+.tree-item-icon {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  color: var(--text-secondary);
+}
+
+.tree-item-icon.folder {
+  color: var(--accent);
+}
+
+/* 节点名称 */
+.tree-item-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 20px;
+}
+
+/* 协作标签微徽标 */
+.tree-item-collab {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border-radius: 999px;
+  padding: 1px 5px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 悬停快捷动作按钮（如下载/重命名） */
+.tree-item-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+  flex-shrink: 0;
+}
+
+.tree-item:hover .tree-item-action,
+.tree-item.active .tree-item-action,
+.tree-item-action:focus-visible {
+  opacity: 1;
+}
+
+.tree-item-action:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+/* 子节点缩进 */
+.tree-children {
+  padding-left: 12px;
+}

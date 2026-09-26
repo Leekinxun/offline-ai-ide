@@ -8,7 +8,7 @@ import {
 import type { FileNode } from "../types";
 import { useI18n } from "../i18n";
 import { useModalDialogFocus } from "./useModalDialogFocus";
-import "./CommandPalette.css";
+import "./WorkspaceSearchPanel.css";
 
 interface WorkspaceSearchPanelProps {
   visible: boolean;
@@ -220,18 +220,18 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="command-palette-overlay" onMouseDown={onClose}>
+    <div className="workspace-search-overlay" onMouseDown={onClose}>
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="workspace-search-panel command-palette"
+        className="workspace-search-panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="workspace-search-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="command-palette-input-row workspace-search-input-row">
-          <Search size={17} />
+        <div className="workspace-search-input-row">
+          <Search size={16} />
           <span id="workspace-search-title" className="sr-only">{t("search.title")}</span>
           <input
             ref={inputRef}
@@ -266,12 +266,17 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
           </div>
           <button
             type="button"
-            className="workspace-search-details-toggle"
+            className={`workspace-search-details-toggle${showDetails ? " active" : ""}`}
             onClick={() => setShowDetails((current) => !current)}
             title={t("search.toggleDetails")}
             aria-expanded={showDetails}
           >…</button>
-          <button type="button" className="command-palette-close" onClick={onClose} title={t("common.cancel")}>
+          <button
+            type="button"
+            className="workspace-search-close-btn"
+            onClick={onClose}
+            title={t("common.cancel")}
+          >
             <X size={15} />
           </button>
         </div>
@@ -290,11 +295,19 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
           <div className="workspace-search-details">
             <label>
               <span>{t("search.include")}</span>
-              <input value={include} onChange={(event) => setInclude(event.target.value)} placeholder="src/**, *.{ts,tsx}" />
+              <input
+                value={include}
+                onChange={(event) => setInclude(event.target.value)}
+                placeholder="src/**, *.{ts,tsx}"
+              />
             </label>
             <label>
               <span>{t("search.exclude")}</span>
-              <input value={exclude} onChange={(event) => setExclude(event.target.value)} placeholder="dist/**, coverage/**" />
+              <input
+                value={exclude}
+                onChange={(event) => setExclude(event.target.value)}
+                placeholder="dist/**, coverage/**"
+              />
             </label>
             <label className="workspace-search-ignore">
               <input
@@ -311,9 +324,9 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
           {loading && <div className="workspace-search-progress">{t("search.searching")}</div>}
           {!loading && error && <div className="workspace-search-error">{error}</div>}
           {!loading && !error && query.trim() && displayResults.length === 0 && (
-            <div className="command-palette-empty">{t("search.noResults")}</div>
+            <div className="workspace-search-empty">{t("search.noResults")}</div>
           )}
-          {!loading && !query.trim() && <div className="command-palette-empty">{t("search.hint")}</div>}
+          {!loading && !query.trim() && <div className="workspace-search-empty">{t("search.hint")}</div>}
           {!error && groupedResults.map(([resultPath, matches]) => (
             <section className="workspace-search-group" key={resultPath}>
               <div className="workspace-search-group-header">
@@ -341,7 +354,7 @@ export const WorkspaceSearchPanel: React.FC<WorkspaceSearchPanelProps> = ({
             </section>
           ))}
         </div>
-        <div className="command-palette-footer">
+        <div className="workspace-search-footer">
           <span>{truncated ? t("search.resultsTruncated", { count: displayResults.length }) : t("search.resultCount", { count: displayResults.length })}</span>
           <span>Esc {t("command.close")}</span>
         </div>

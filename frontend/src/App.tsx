@@ -17,6 +17,8 @@ import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
 import { TitleBar } from "./components/TitleBar";
 import "./components/UserPopover.css";
+import "./components/ActivityRail.css";
+import "./components/Sidebar.css";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
@@ -592,12 +594,10 @@ function AuthenticatedApp({
   // Media-query thresholds follow the viewport; panel budgets use the actual
   // content width, which can be smaller with classic Windows scrollbars.
   const layoutAvailableWidth = Math.min(viewportWidth, document.documentElement.clientWidth || viewportWidth);
-  const utilityDockWidth = compactWorkspace ? 0
-    : teamVisible ? 320
-      : gitVisible ? 300
-        : agentsVisible ? 320
-          : checkpointsVisible || problemsVisible || runCenterVisible || debugVisible ? 340
-            : 0;
+  const isLeftDockOpen = workspaceView === "chat"
+    ? sidebarVisible
+    : Boolean(sidebarVisible || gitVisible || agentsVisible || teamVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible);
+
   const isLaptopOrCompact = viewportWidth < 1440;
   const responsiveDefaultSidebarWidth = isLaptopOrCompact ? Math.min(sidebarWidth, 240) : sidebarWidth;
   const responsiveDefaultAssistantWidth = isLaptopOrCompact ? Math.min(assistantWidth, 340) : assistantWidth;
@@ -615,14 +615,14 @@ function AuthenticatedApp({
       - (dockedRightWidth ? dockedRightWidth + FILES_HANDLE_WIDTH : 0)
       - reservedEditorBudget
   ));
-  const effectiveSidebarWidth = sidebarVisible ? Math.min(responsiveDefaultSidebarWidth, sidebarMaxWidth) : 0;
-  const fileDockWidth = sidebarVisible ? effectiveSidebarWidth : utilityDockWidth;
-  const chatDockWidth = sidebarVisible ? (isLaptopOrCompact ? 250 : 286) : utilityDockWidth;
+  const effectiveSidebarWidth = isLeftDockOpen ? Math.min(responsiveDefaultSidebarWidth, sidebarMaxWidth) : 0;
+  const fileDockWidth = effectiveSidebarWidth;
+  const chatDockWidth = isLeftDockOpen ? (isLaptopOrCompact ? 250 : effectiveSidebarWidth) : 0;
   const assistantMaxWidth = viewportWidth > 1180
     ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
         FILES_ASSISTANT_MAX_WIDTH,
         layoutAvailableWidth - FILES_ACTIVITY_WIDTH
-          - fileDockWidth - (sidebarVisible ? FILES_HANDLE_WIDTH : 0)
+          - fileDockWidth - (isLeftDockOpen ? FILES_HANDLE_WIDTH : 0)
           - FILES_HANDLE_WIDTH - reservedEditorBudget
       ))
     : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, layoutAvailableWidth - FILES_ACTIVITY_WIDTH));
@@ -3048,7 +3048,7 @@ function AuthenticatedApp({
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,
-          "--files-sidebar-handle-width": sidebarVisible && workspaceView === "files" ? `${FILES_HANDLE_WIDTH}px` : "0px",
+          "--files-sidebar-handle-width": isLeftDockOpen ? `${FILES_HANDLE_WIDTH}px` : "0px",
           "--files-assistant-width": `${effectiveAssistantWidth}px`,
         } as React.CSSProperties}
       >
@@ -3282,65 +3282,280 @@ function AuthenticatedApp({
             </div>
           </details>
         </nav>
-        {workspaceView === "chat" && sidebarVisible && (
-          <TaskSidebar
-            workspaceLabel={workspaceLabel}
-            workspaceDir={workspaceDir}
-            conversations={chat.conversations}
-            currentConversationId={chat.currentConversationId}
-            contextState={chat.contextState}
-            loading={chat.historyLoading}
-            loadingId={chat.historyLoadingId}
-            isStreaming={chat.isStreaming}
-            onNewTask={() => {
-              setNewConversationRequest((value) => value + 1);
-              setChatFocusNonce((value) => value + 1);
-            }}
-            onLoadConversation={loadChatConversation}
-            onDeleteConversation={chat.deleteConversation}
-            onRefresh={chat.refreshConversations}
-          />
+        {isLeftDockOpen && (
+          <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
+            {workspaceView === "chat" ? (
+              <TaskSidebar
+                workspaceLabel={workspaceLabel}
+                workspaceDir={workspaceDir}
+                conversations={chat.conversations}
+                currentConversationId={chat.currentConversationId}
+                contextState={chat.contextState}
+                loading={chat.historyLoading}
+                loadingId={chat.historyLoadingId}
+                isStreaming={chat.isStreaming}
+                onNewTask={() => {
+                  setNewConversationRequest((value) => value + 1);
+                  setChatFocusNonce((value) => value + 1);
+                }}
+                onLoadConversation={loadChatConversation}
+                onDeleteConversation={chat.deleteConversation}
+                onRefresh={chat.refreshConversations}
+              />
+            ) : gitVisible ? (
+              <GitPanel
+                key={`git:${workspaceDir}`}
+                visible={true}
+                token={token}
+                workspaceDir={workspaceDir}
+                theme={theme}
+                drawerMode={compactWorkspace}
+                readOnly={readOnlyWorkspace}
+                conversationId={chat.currentConversationId}
+                runId={chat.runState?.runId || null}
+                requestedDiffPath={gitDiffRequest?.path}
+                requestedDiffId={gitDiffRequest?.id}
+                onOpenFile={openFile}
+                onAskReview={handleGitReview}
+                onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
+                onOpenFollowUpRun={async (followUpRunId) => {
+                  await chat.loadRun(followUpRunId);
+                  setRunDetailsTab("delivery");
+                  setRunDetailsVisible(true);
+                  if (compactWorkspace) setGitVisible(false);
+                }}
+                onClose={() => setGitVisible(false)}
+              />
+            ) : agentsVisible ? (
+              <AgentBoard
+                key={`agents:${workspaceDir}`}
+                visible={true}
+                token={token}
+                drawerMode={compactWorkspace}
+                onClose={() => setAgentsVisible(false)}
+              />
+            ) : teamVisible ? (
+              <div className="team-sidebar workspace-drawer-host" style={{ height: "100%", width: "100%" }}>
+                <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+                  <TeamPanel
+                    teams={team.teams}
+                    activeTeam={team.activeTeam}
+                    currentUsername={username}
+                    connected={team.connected}
+                    loading={team.loading}
+                    error={team.error}
+                    activeFilePath={activeFilePath}
+                    collaboration={team.collaboration}
+                    drawerMode={compactWorkspace}
+                    onClose={() => setTeamVisible(false)}
+                    onRefresh={team.refresh}
+                    onCreateTeam={async (name) => {
+                      try {
+                        await team.createTeam(name);
+                        showToast(t("team.createdToast", { name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onJoinTeam={async (code) => {
+                      try {
+                        const joined = await team.joinTeam(code);
+                        showToast(t("team.joinedToast", { name: joined.name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onSwitchTeam={async (teamId) => {
+                      try {
+                        const switched = await team.switchTeam(teamId);
+                        showToast(t("team.switchedToast", { name: switched.name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onCreateInvite={async (teamId, role: TeamRole) => {
+                      try {
+                        const invite = await team.createInvite(teamId, role);
+                        showToast(t("team.inviteCreatedToast", { code: invite.code }));
+                        return invite.code;
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onUpdateMemberRole={async (memberUsername, role) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
+                        showToast(
+                          t("team.roleUpdatedToast", {
+                            username: memberUsername,
+                            role,
+                          })
+                        );
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onTransferOwnership={async (memberUsername) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.transferOwnership(team.activeTeam.id, memberUsername);
+                        showToast(t("team.ownerTransferredToast", { username: memberUsername }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onRemoveMember={async (memberUsername) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.removeMember(team.activeTeam.id, memberUsername);
+                        showToast(t("team.memberRemovedToast", { username: memberUsername }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onLeaveTeam={async () => {
+                      if (!team.activeTeam) return;
+                      const leavingTeamName = team.activeTeam.name;
+                      try {
+                        await team.leaveTeam(team.activeTeam.id);
+                        showToast(t("team.leftTeamToast", { name: leavingTeamName }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onToggleClaim={async (path, claimed) => {
+                      if (!team.activeTeam) return;
+                      await team.setClaim(team.activeTeam.id, path, claimed);
+                      showToast(
+                        claimed
+                          ? t("team.claimedToast", { path })
+                          : t("team.releasedToast", { path })
+                      );
+                    }}
+                    onAddComment={team.addCollaborationComment}
+                    onCreateReview={team.createCollaborationReview}
+                    onCreateMergePreview={team.createMergePreview}
+                    onDecideMerge={team.decideMerge}
+                  />
+                </Suspense>
+              </div>
+            ) : checkpointsVisible ? (
+              <CheckpointPanel
+                key={`checkpoints:${workspaceDir}`}
+                visible={true}
+                token={token}
+                workspaceDir={workspaceDir}
+                conversationId={chat.currentConversationId}
+                runId={chat.runState?.runId || null}
+                readOnly={readOnlyWorkspace}
+                onClose={() => setCheckpointsVisible(false)}
+                onRestored={handleWorkspaceRestored}
+                onOpenWorktree={async (path) => {
+                  await handleChangeWorkspace(path);
+                }}
+                onNotify={showToast}
+              />
+            ) : problemsVisible ? (
+              <ProblemsPanel
+                key={`problems:${workspaceDir}`}
+                visible={true}
+                token={token}
+                editorProblems={editorProblems.problems}
+                onCountsChange={setProblemCounts}
+                onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
+                  startLine: problem.line,
+                  startColumn: problem.column,
+                  endLine: problem.line,
+                  endColumn: problem.column + 1,
+                })}
+                onClose={() => setProblemsVisible(false)}
+              />
+            ) : runCenterVisible ? (
+              <RunCenterPanel
+                key={`run:${workspaceDir}`}
+                visible={true}
+                token={token}
+                onRunningChange={setActiveRunLabel}
+                onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
+                  startLine: failure.line,
+                  startColumn: failure.column,
+                  endLine: failure.line,
+                  endColumn: failure.column + 1,
+                })}
+                onClose={() => setRunCenterVisible(false)}
+              />
+            ) : debugVisible ? (
+              <DebugPanel
+                key={`debug:${workspaceDir}`}
+                visible={true}
+                token={token}
+                activeFilePath={activeFilePath}
+                cursorLine={cursorPos.line}
+                breakpointsByPath={breakpointsByPath}
+                onToggleBreakpoint={toggleBreakpoint}
+                startRequest={debugStartRequest}
+                onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
+                  startLine: frame.line,
+                  startColumn: frame.column,
+                  endLine: frame.line,
+                  endColumn: frame.column + 1,
+                })}
+                onActiveFrameChange={setDebugActiveFrame}
+                onClose={() => setDebugVisible(false)}
+              />
+            ) : (
+              <Sidebar
+                tree={fileTree}
+                activeFilePath={activeFilePath}
+                visible={true}
+                onFileSelect={openFile}
+                onCreateEntry={handleCreateEntry}
+                onCopyEntry={handleCopyEntry}
+                onMoveEntry={handleMoveEntry}
+                onDeleteEntry={handleDeleteEntry}
+                onDeleteEntries={handleDeleteEntries}
+                onRenameEntry={handleRenameEntry}
+                onDownloadEntry={handleDownloadEntry}
+                onUploadEntries={handleUploadEntries}
+                onRefreshTree={loadTree}
+                workspaceDir={workspaceDir}
+                workspaceLocked={isolatedWindow}
+                desktopApp={desktopApp}
+                folderPickerBusy={pickingWorkspace}
+                onPickDesktopWorkspace={handlePickDesktopWorkspace}
+                folderOpenRequestId={folderOpenRequestId}
+                onChangeWorkspace={handleChangeWorkspace}
+                onSearchInPath={(path) => {
+                  setWorkspaceSearchScope(path);
+                  setWorkspaceSearchVisible(true);
+                }}
+                onSearchContent={fs.searchWorkspace}
+                onCancelContentSearch={fs.cancelWorkspaceSearch}
+                token={token}
+                activeTeam={team.activeTeam}
+              />
+            )}
+          </aside>
         )}
-        <Sidebar
-          tree={fileTree}
-          activeFilePath={activeFilePath}
-          visible={sidebarVisible && workspaceView === "files"}
-          onFileSelect={openFile}
-          onCreateEntry={handleCreateEntry}
-          onCopyEntry={handleCopyEntry}
-          onMoveEntry={handleMoveEntry}
-          onDeleteEntry={handleDeleteEntry}
-          onDeleteEntries={handleDeleteEntries}
-          onRenameEntry={handleRenameEntry}
-          onDownloadEntry={handleDownloadEntry}
-          onUploadEntries={handleUploadEntries}
-          onRefreshTree={loadTree}
-          workspaceDir={workspaceDir}
-          workspaceLocked={isolatedWindow}
-          desktopApp={desktopApp}
-          folderPickerBusy={pickingWorkspace}
-          onPickDesktopWorkspace={handlePickDesktopWorkspace}
-          folderOpenRequestId={folderOpenRequestId}
-          onChangeWorkspace={handleChangeWorkspace}
-          onSearchInPath={(path) => {
-            setWorkspaceSearchScope(path);
-            setWorkspaceSearchVisible(true);
-          }}
-          onSearchContent={fs.searchWorkspace}
-          onCancelContentSearch={fs.cancelWorkspaceSearch}
-          token={token}
-          activeTeam={team.activeTeam}
-        />
 
         <div
-          className={`resize-handle sidebar-resize-handle${!sidebarVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "sidebar" ? " dragging" : ""}`}
+          className={`resize-handle sidebar-resize-handle${!isLeftDockOpen ? " hidden" : ""}${draggingPanel === "sidebar" ? " dragging" : ""}`}
           role="separator"
           aria-orientation="vertical"
           aria-label={t("sidebar.resize")}
           aria-valuemin={FILES_SIDEBAR_MIN_WIDTH}
           aria-valuemax={sidebarMaxWidth}
           aria-valuenow={effectiveSidebarWidth}
-          tabIndex={sidebarVisible && workspaceView === "files" && viewportWidth > 780 ? 0 : -1}
+          tabIndex={isLeftDockOpen && viewportWidth > 780 ? 0 : -1}
           onMouseDown={(e) => handleResizeStart("sidebar", e)}
           onKeyDown={(e) => handlePanelResizeKeyDown("sidebar", e)}
         />
@@ -3700,213 +3915,6 @@ function AuthenticatedApp({
             onClose={() => setTerminalVisible(false)}
           />
         </div>
-
-        {teamVisible && (
-          <div className="team-sidebar workspace-drawer-host">
-            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-              <TeamPanel
-              teams={team.teams}
-              activeTeam={team.activeTeam}
-              currentUsername={username}
-              connected={team.connected}
-              loading={team.loading}
-              error={team.error}
-              activeFilePath={activeFilePath}
-              collaboration={team.collaboration}
-              drawerMode={compactWorkspace}
-              onClose={() => setTeamVisible(false)}
-              onRefresh={team.refresh}
-              onCreateTeam={async (name) => {
-                try {
-                  await team.createTeam(name);
-                  showToast(t("team.createdToast", { name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onJoinTeam={async (code) => {
-                try {
-                  const joined = await team.joinTeam(code);
-                  showToast(t("team.joinedToast", { name: joined.name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onSwitchTeam={async (teamId) => {
-                try {
-                  const switched = await team.switchTeam(teamId);
-                  showToast(t("team.switchedToast", { name: switched.name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onCreateInvite={async (teamId, role: TeamRole) => {
-                try {
-                  const invite = await team.createInvite(teamId, role);
-                  showToast(t("team.inviteCreatedToast", { code: invite.code }));
-                  return invite.code;
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onUpdateMemberRole={async (memberUsername, role) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
-                  showToast(
-                    t("team.roleUpdatedToast", {
-                      username: memberUsername,
-                      role,
-                    })
-                  );
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onTransferOwnership={async (memberUsername) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.transferOwnership(team.activeTeam.id, memberUsername);
-                  showToast(t("team.ownerTransferredToast", { username: memberUsername }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onRemoveMember={async (memberUsername) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.removeMember(team.activeTeam.id, memberUsername);
-                  showToast(t("team.memberRemovedToast", { username: memberUsername }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onLeaveTeam={async () => {
-                if (!team.activeTeam) return;
-                const leavingTeamName = team.activeTeam.name;
-                try {
-                  await team.leaveTeam(team.activeTeam.id);
-                  showToast(t("team.leftTeamToast", { name: leavingTeamName }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onToggleClaim={async (path, claimed) => {
-                if (!team.activeTeam) return;
-                await team.setClaim(team.activeTeam.id, path, claimed);
-                showToast(
-                  claimed
-                    ? t("team.claimedToast", { path })
-                    : t("team.releasedToast", { path })
-                );
-              }}
-              onAddComment={team.addCollaborationComment}
-              onCreateReview={team.createCollaborationReview}
-              onCreateMergePreview={team.createMergePreview}
-              onDecideMerge={team.decideMerge}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        <GitPanel
-          key={`git:${workspaceDir}`}
-          visible={gitVisible}
-          token={token}
-          workspaceDir={workspaceDir}
-          theme={theme}
-          drawerMode={compactWorkspace}
-          readOnly={readOnlyWorkspace}
-          conversationId={chat.currentConversationId}
-          runId={chat.runState?.runId || null}
-          requestedDiffPath={gitDiffRequest?.path}
-          requestedDiffId={gitDiffRequest?.id}
-          onOpenFile={openFile}
-          onAskReview={handleGitReview}
-          onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
-          onOpenFollowUpRun={async (followUpRunId) => {
-            await chat.loadRun(followUpRunId);
-            setRunDetailsTab("delivery");
-            setRunDetailsVisible(true);
-            if (compactWorkspace) setGitVisible(false);
-          }}
-          onClose={() => setGitVisible(false)}
-        />
-        <AgentBoard
-          key={`agents:${workspaceDir}`}
-          visible={agentsVisible}
-          token={token}
-          drawerMode={compactWorkspace}
-          onClose={() => setAgentsVisible(false)}
-        />
-        <CheckpointPanel
-          key={`checkpoints:${workspaceDir}`}
-          visible={checkpointsVisible}
-          token={token}
-          workspaceDir={workspaceDir}
-          conversationId={chat.currentConversationId}
-          runId={chat.runState?.runId || null}
-          readOnly={readOnlyWorkspace}
-          onClose={() => setCheckpointsVisible(false)}
-          onRestored={handleWorkspaceRestored}
-          onOpenWorktree={async (path) => {
-            await handleChangeWorkspace(path);
-          }}
-          onNotify={showToast}
-        />
-        <ProblemsPanel
-          key={`problems:${workspaceDir}`}
-          visible={problemsVisible}
-          token={token}
-          editorProblems={editorProblems.problems}
-          onCountsChange={setProblemCounts}
-          onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
-            startLine: problem.line,
-            startColumn: problem.column,
-            endLine: problem.line,
-            endColumn: problem.column + 1,
-          })}
-          onClose={() => setProblemsVisible(false)}
-        />
-        <RunCenterPanel
-          key={`run:${workspaceDir}`}
-          visible={runCenterVisible}
-          token={token}
-          onRunningChange={setActiveRunLabel}
-          onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
-            startLine: failure.line,
-            startColumn: failure.column,
-            endLine: failure.line,
-            endColumn: failure.column + 1,
-          })}
-          onClose={() => setRunCenterVisible(false)}
-        />
-        <DebugPanel
-          key={`debug:${workspaceDir}`}
-          visible={debugVisible}
-          token={token}
-          activeFilePath={activeFilePath}
-          cursorLine={cursorPos.line}
-          breakpointsByPath={breakpointsByPath}
-          onToggleBreakpoint={toggleBreakpoint}
-          startRequest={debugStartRequest}
-          onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
-            startLine: frame.line,
-            startColumn: frame.column,
-            endLine: frame.line,
-            endColumn: frame.column + 1,
-          })}
-          onActiveFrameChange={setDebugActiveFrame}
-          onClose={() => setDebugVisible(false)}
-        />
 
         <div
           className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "chat" ? " dragging" : ""}`}

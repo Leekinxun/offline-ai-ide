@@ -1,0 +1,335 @@
+/* ==========================================================================
+   Sidebar.css - 左侧独立宿主与文件资源管理器物理隔离样式
+   契约：纯色阶划分、无边框微圆角容器、内容平滑插槽与拖拽光束联动
+   ========================================================================== */
+
+/* 统一左侧宿主独立容器 (Column 2) */
+.workbench-left-dock {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  border: none !important;
+  border-radius: 5px;
+  background: var(--surface-workbench);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-sizing: border-box;
+}
+
+/* 宿主内部插槽通用重置：填满宿主、抹平旧有写死宽度与直角硬边框 */
+.workbench-left-dock > .sidebar,
+.workbench-left-dock > .task-sidebar,
+.workbench-left-dock > .git-panel,
+.workbench-left-dock > .agent-board,
+.workbench-left-dock > .checkpoint-panel,
+.workbench-left-dock > .problems-panel,
+.workbench-left-dock > .run-center-panel,
+.workbench-left-dock > .debug-panel,
+.workbench-left-dock > .team-sidebar {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  flex: 1 1 100% !important;
+  border: none !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
+}
+
+/* 保证 chat 模式下 Column 3 手柄与 Column 4 聊天区对齐 */
+.workbench-view-chat > .sidebar-resize-handle:not(.hidden) {
+  display: block !important;
+  width: 6px;
+  grid-column: 3;
+  grid-row: 1;
+  z-index: 12;
+  background: transparent !important;
+  cursor: col-resize;
+}
+
+.workbench-view-chat > .sidebar-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 16px;
+  content: "";
+}
+
+.workbench-view-chat > .sidebar-resize-handle::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.workbench-view-chat > .sidebar-resize-handle:hover::before,
+.workbench-view-chat > .sidebar-resize-handle:focus-visible::before,
+.workbench-view-chat > .sidebar-resize-handle.dragging::before {
+  left: 2px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* 侧边栏文件资源管理器核心容器 */
+.sidebar.workspace-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* 紧凑单行整合顶栏 */
+.sidebar-compact-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 50%, var(--surface-workbench));
+  user-select: none;
+}
+
+.sidebar-compact-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-compact-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.sidebar-compact-workspace-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sidebar-compact-workspace-name:hover {
+  color: var(--accent);
+}
+
+.sidebar-compact-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.sidebar-compact-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-compact-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-compact-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sidebar-compact-btn.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+/* 紧凑微型过滤胶囊栏 */
+.sidebar-compact-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 25%, transparent);
+}
+
+.sidebar-compact-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sidebar-compact-search-box:focus-within {
+  border-color: var(--accent);
+}
+
+.sidebar-compact-search-box svg {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.sidebar-compact-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.sidebar-compact-search-input::placeholder {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.sidebar-compact-meta-pill {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  background: var(--surface-panel);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* ==================== 多选操作栏 (图 1 精细化微胶囊规范) ==================== */
+.sidebar-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-bottom: none;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-workbench));
+  box-sizing: border-box;
+}
+
+.sidebar-selection-text {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.2px;
+}
+
+.sidebar-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-selection-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--text-secondary);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-selection-btn:hover {
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.sidebar-selection-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sidebar-selection-btn.danger {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.sidebar-selection-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+  color: #fff;
+}
+
+/* 剪贴板提示条 */
+.sidebar-clipboard-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-workbench));
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.sidebar-clipboard-bar > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-clipboard-bar > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-clipboard-bar > button:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
+import "./FileTree.css";
 import { FileNode, TeamClaim, TeamPresence } from "../types";
 import { ChevronRight, Download, File, Folder } from "lucide-react";
 import { useI18n } from "../i18n";
