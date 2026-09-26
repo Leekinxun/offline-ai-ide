@@ -3609,17 +3609,7 @@ select:focus-visible,
   margin: 4px 0;
 }
 
-/* ==================== Terminal Panel ==================== */
-.terminal-panel {
-  height: 260px;
-  border-top: none;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  overflow: hidden;
-  background: var(--surface-panel);
-}
-
+/* ==================== Terminal Resize Handle ==================== */
 .terminal-resize-handle {
   position: relative;
   z-index: 12;
@@ -3656,111 +3646,6 @@ select:focus-visible,
   background: var(--accent);
 }
 
-.terminal-disabled {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  color: var(--text-secondary);
-  background: var(--bg-primary);
-  text-align: center;
-}
-
-.terminal-header {
-  height: var(--panel-header-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  background: var(--surface-panel-strong);
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0;
-}
-
-.terminal-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terminal-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: background var(--transition), color var(--transition);
-}
-
-.terminal-close:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.terminal-header-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-}
-
-.terminal-header-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: -0.12em;
-}
-
-.terminal-header-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.terminal-header-status span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-
-.terminal-header-status.connected {
-  color: var(--status-success-fg);
-}
-
-.terminal-header-status.connected span {
-  background: var(--success);
-}
-
-.terminal-body {
-  flex: 1;
-  background: #101722;
-  overflow: hidden;
-  padding: 4px;
-}
-
-.terminal-body .xterm {
-  height: 100%;
-}
 
 /* ==================== Selection Badge ==================== */
 
