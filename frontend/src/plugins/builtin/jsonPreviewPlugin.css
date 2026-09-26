@@ -1,0 +1,707 @@
+/* ==================== Built-in JSON Visualizer Styles ==================== */
+
+.json-preview,
+.file-preview-surface.json-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  box-sizing: border-box;
+  container-type: inline-size;
+  container-name: json-preview;
+}
+
+/* 动作工具栏：纯色阶无边框无缝吸顶，分栏自适应弹性布局 */
+.json-preview-toolbar {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-bottom: none;
+  background: color-mix(in srgb, var(--surface-panel-strong) 92%, var(--bg-primary));
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.json-preview-search {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  width: 150px;
+  min-width: 80px;
+  flex: 0 1 150px;
+  gap: 5px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 5px;
+  background: var(--surface-quiet);
+  color: var(--text-tertiary);
+  transition: box-shadow var(--transition);
+  flex-shrink: 1;
+}
+
+.json-preview-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text-primary);
+}
+
+.json-preview-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.json-preview-search button,
+.json-preview-row-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.json-preview-search button {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+}
+
+.json-preview-search button:hover,
+.json-preview-row-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.json-preview-match-count {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-quiet);
+  white-space: nowrap;
+}
+
+.json-preview-match-count.empty {
+  color: var(--status-warning-fg);
+  background: var(--status-warning-bg);
+}
+
+/* 整合进工具栏的精炼统计胶囊 */
+.json-preview-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--surface-quiet);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.json-preview-stat-item strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.json-preview-stat-sep {
+  opacity: 0.35;
+  color: var(--text-tertiary);
+}
+
+.json-preview-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: none;
+  background: var(--surface-quiet);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+/* 右侧操作按钮组：保持完全统一的微透明幽灵按钮 */
+.json-preview-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.json-preview-toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.json-preview-toolbar-actions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.json-preview-toolbar-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+/* 容器自适应：分栏或窄屏时隐藏文字转纯图标，绝不溢出截断 */
+@container json-preview (max-width: 780px) {
+  .json-preview-toolbar-actions button span {
+    display: none;
+  }
+  .json-preview-toolbar-actions button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+  }
+}
+
+@container json-preview (max-width: 560px) {
+  .json-preview-stats {
+    display: none;
+  }
+}
+
+@media (max-width: 780px) {
+  .json-preview-toolbar-actions button span {
+    display: none;
+  }
+  .json-preview-toolbar-actions button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .json-preview-stats {
+    display: none;
+  }
+}
+
+/* 数据树主体：优雅字号与代码高亮，深度对齐 Monaco 体验 */
+.json-preview-tree {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  min-width: 0;
+  padding: 6px 14px 28px;
+  background: var(--bg-primary);
+  font-family: var(--editor-font-family, var(--font-mono));
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.json-preview-node {
+  min-width: 0;
+}
+
+.json-preview-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 24px;
+  height: 24px;
+  padding-right: 8px;
+  border-radius: 4px;
+  transition: background 0.08s ease;
+  position: relative;
+}
+
+.json-preview-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.json-preview-node.matched > .json-preview-row {
+  background: var(--accent-light);
+}
+
+.json-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.json-preview-toggle:hover {
+  color: var(--accent);
+}
+
+.json-preview-toggle-spacer {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-right: 2px;
+}
+
+.json-preview-key,
+.json-preview-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 键名样式：对齐 Monaco / VS Code 代码风格 */
+.json-preview-key {
+  flex: 0 0 auto;
+  max-width: min(340px, 38vw);
+  color: #0451a5;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .json-preview-key {
+  color: #9cdcfe;
+}
+
+/* 根节点：纯净文本微高亮，无任何外圈阴影与胶囊背景 */
+.json-preview-key.root {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.json-preview-key.index {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.json-preview-separator {
+  flex: 0 0 auto;
+  margin: 0 6px 0 2px;
+  color: var(--text-tertiary);
+  opacity: 0.75;
+  user-select: none;
+}
+
+/* 容器摘要：精细括号与微标签 */
+.json-preview-container-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.json-preview-bracket-summary {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+[data-theme="dark"] .json-preview-bracket-summary {
+  color: #c7d0dd;
+}
+
+.json-preview-type-badge {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  background: var(--surface-quiet);
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 17px;
+}
+
+/* 语法高亮值颜色体系（100% 对齐 VS Code / Monaco） */
+.json-preview-value {
+  flex: 0 1 auto;
+}
+
+.json-preview-value.type-string {
+  color: #a31515;
+}
+
+[data-theme="dark"] .json-preview-value.type-string {
+  color: #ce9178;
+}
+
+.json-preview-value.type-number {
+  color: #098658;
+}
+
+[data-theme="dark"] .json-preview-value.type-number {
+  color: #b5cea8;
+}
+
+.json-preview-value.type-boolean {
+  color: #0000ff;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .json-preview-value.type-boolean {
+  color: #569cd6;
+}
+
+.json-preview-value.type-null {
+  color: #0000ff;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+[data-theme="dark"] .json-preview-value.type-null {
+  color: #569cd6;
+}
+
+/* 悬停快捷动作组：行尾一体化微浮层 */
+.json-preview-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  flex: 0 0 auto;
+}
+
+.json-preview-row:hover .json-preview-row-actions,
+.json-preview-row:focus-within .json-preview-row-actions,
+.json-preview-node.matched > .json-preview-row .json-preview-row-actions {
+  opacity: 1;
+}
+
+.json-preview-row-actions button {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  transition: all 0.12s ease;
+}
+
+.json-preview-row-actions button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.json-preview-row-actions button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+/* 弹窗与对话框微质感 */
+.json-preview-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(6px);
+}
+
+.json-preview-dialog {
+  display: flex;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 40px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 12px;
+  background: var(--surface-panel-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+.json-preview-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.json-preview-dialog > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.json-preview-dialog > header span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.json-preview-dialog.danger > header span {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.json-preview-dialog > header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.json-preview-dialog > header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.json-preview-dialog > header button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.json-preview-dialog-path {
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--surface-quiet);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.json-preview-dialog-fields {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  overflow-y: auto;
+}
+
+.json-preview-dialog-fields label,
+.json-preview-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.json-preview-dialog-fields label > span,
+.json-preview-dialog-field > span {
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-secondary);
+}
+
+.json-preview-dialog-fields input,
+.json-preview-dialog-fields select,
+.json-preview-dialog-field .workbench-select-trigger {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--input-surface);
+  color: var(--text-primary);
+  font: 11.5px var(--font-mono);
+  outline: 0;
+  transition: border-color var(--transition);
+}
+
+.json-preview-dialog-fields input:focus,
+.json-preview-dialog-fields select:focus,
+.json-preview-dialog-field .workbench-select-trigger:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.json-preview-value-hint,
+.json-preview-delete-warning {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.json-preview-delete-warning {
+  padding: 12px 16px;
+  color: var(--status-danger-fg, var(--danger));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.json-preview-dialog-error {
+  margin: 0 16px 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.json-preview-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+
+.json-preview-dialog > footer button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.json-preview-dialog > footer button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.json-preview-dialog > footer button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.json-preview-dialog > footer button.primary:hover {
+  background: var(--accent-hover, var(--accent));
+}
+
+.json-preview-dialog > footer button.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #ffffff;
+}
+
+/* 空态与无效 JSON 提示 */
+.json-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  color: var(--text-tertiary);
+  text-align: center;
+  gap: 8px;
+}
+
+.json-preview-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.json-preview-empty span {
+  font-size: 11px;
+}
+
+.json-preview-invalid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  text-align: center;
+  gap: 12px;
+}
+
+.json-preview-error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.json-preview-invalid span {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.json-preview-invalid h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.json-preview-invalid p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.json-preview-invalid code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}

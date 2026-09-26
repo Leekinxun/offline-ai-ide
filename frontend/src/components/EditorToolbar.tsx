@@ -10,6 +10,7 @@ import {
   Link2,
   Unlink2,
   X,
+  XCircle,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchSelect } from "./WorkbenchSelect";
@@ -209,17 +210,35 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
         {/* 双文件比对选择器 */}
         {openFiles.length > 1 && onSelectCompareFile && (
           <div className="editor-toolbar-compare-picker">
-            <Columns2 size={13} aria-hidden="true" />
             <WorkbenchSelect
               label={t("editor.compareWith")}
               className="editor-toolbar-compare-select"
               value={compareFilePath || ""}
               onChange={(value) => onSelectCompareFile(value || null)}
+              showStatusMark={false}
+              icon={<Columns2 size={12} />}
+              active={Boolean(compareFileActive)}
+              placeholder={t("editor.comparePlaceholder")}
               options={[
-                { value: "", label: t("editor.compareNone") },
+                {
+                  value: "",
+                  label: t("editor.compareNone"),
+                  icon: <XCircle size={13} className="compare-option-none-icon" />,
+                },
                 ...openFiles
                   .filter((file) => file.path !== activeFile.path)
-                  .map((file) => ({ value: file.path, label: file.name })),
+                  .map((file) => {
+                    const normPath = file.path.replace(/\\/g, "/");
+                    const parentDir = normPath.includes("/")
+                      ? normPath.split("/").slice(0, -1).pop()
+                      : undefined;
+                    return {
+                      value: file.path,
+                      label: file.name,
+                      meta: parentDir ? `…/${parentDir}` : undefined,
+                      icon: <FileCode2 size={13} />,
+                    };
+                  }),
               ]}
             />
           </div>

@@ -7,6 +7,7 @@ export interface WorkbenchSelectOption {
   label: string;
   meta?: string;
   disabled?: boolean;
+  icon?: React.ReactNode;
 }
 
 export interface WorkbenchSelectProps {
@@ -17,6 +18,10 @@ export interface WorkbenchSelectProps {
   disabled?: boolean;
   className?: string;
   title?: string;
+  placeholder?: string;
+  showStatusMark?: boolean;
+  icon?: React.ReactNode;
+  active?: boolean;
 }
 
 interface MenuPosition {
@@ -59,6 +64,10 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
   disabled = false,
   className,
   title,
+  placeholder,
+  showStatusMark = true,
+  icon,
+  active = false,
 }, forwardedRef) => {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -216,25 +225,30 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
   };
 
   const selectedLabel = selectedOption?.label || "";
+  const displayLabel = value ? selectedLabel : (placeholder || selectedLabel);
 
   return (
     <div className={["workbench-select", className].filter(Boolean).join(" ")}>
       <button
         ref={mergeRefs(triggerRef, forwardedRef)}
         type="button"
-        className="workbench-select-trigger"
+        className={`workbench-select-trigger${active ? " active" : ""}`}
         disabled={isDisabled}
-        aria-label={`${label}: ${selectedLabel}`}
+        aria-label={`${label}: ${displayLabel}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={`${id}-menu`}
-        title={title || `${label}: ${selectedLabel}`}
+        title={title || `${label}: ${displayLabel}`}
         onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span className={`workbench-select-status${selectedOption?.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
-        <span className="workbench-select-value">{selectedLabel}</span>
-        <ChevronDown size={14} aria-hidden="true" />
+        {icon ? (
+          <span className="workbench-select-icon">{icon}</span>
+        ) : showStatusMark ? (
+          <span className={`workbench-select-status${selectedOption?.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+        ) : null}
+        <span className="workbench-select-value">{displayLabel}</span>
+        <ChevronDown size={13} className="workbench-select-arrow" aria-hidden="true" />
       </button>
       {open && position && createPortal(
         <div
@@ -272,12 +286,16 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
               onMouseMove={() => !option.disabled && setActiveIndex(index)}
               onClick={() => chooseOption(option)}
             >
-              <span className={`workbench-select-mark${option.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+              {option.icon ? (
+                <span className="workbench-select-option-icon" aria-hidden="true">{option.icon}</span>
+              ) : showStatusMark ? (
+                <span className={`workbench-select-mark${option.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+              ) : null}
               <span className="workbench-select-option-copy">
                 <strong>{option.label}</strong>
                 {option.meta && <small>{option.meta}</small>}
               </span>
-              <span className="workbench-select-check" aria-hidden="true">{option.value === value && <Check size={15} />}</span>
+              <span className="workbench-select-check" aria-hidden="true">{option.value === value && <Check size={14} />}</span>
             </button>
           ))}
         </div>,

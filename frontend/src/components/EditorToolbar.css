@@ -5,9 +5,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0 12px;
+  height: 27px;
+  min-height: 27px;
+  padding: 0 10px;
   background: var(--surface-panel);
   border: none;
   user-select: none;
@@ -19,13 +19,13 @@
 .editor-toolbar-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   max-width: min(360px, 38vw);
   flex: 0 1 auto;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 11.5px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -37,7 +37,7 @@
 
 .editor-toolbar-breadcrumb-workspace {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
 .editor-toolbar-breadcrumb-sep {
@@ -62,10 +62,10 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
+  padding: 1px;
+  border-radius: 5px;
   background: var(--surface-quiet);
-  height: 24px;
+  height: 21px;
   flex-shrink: 0;
 }
 
@@ -74,9 +74,9 @@
   background: transparent;
   color: var(--text-secondary);
   border-radius: 4px;
-  padding: 0 8px;
-  height: 20px;
-  font-size: 11px;
+  padding: 0 7px;
+  height: 19px;
+  font-size: 10.5px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -97,7 +97,7 @@
 .editor-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
   margin-left: auto;
 }
@@ -106,24 +106,24 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
+  padding: 1px;
+  border-radius: 5px;
   background: var(--surface-quiet);
-  height: 24px;
+  height: 21px;
 }
 
 .editor-toolbar-btn {
   display: inline-flex;
-  height: 20px;
+  height: 19px;
   align-items: center;
   gap: 4px;
-  padding: 0 7px;
+  padding: 0 6px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10.5px;
   transition: all var(--transition);
 }
 
@@ -147,13 +147,13 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
-  padding: 0 8px;
+  height: 21px;
+  padding: 0 7px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
-  font-size: 11px;
+  font-size: 10.5px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -171,33 +171,70 @@
 .editor-toolbar-compare-picker {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
 }
 
 .editor-toolbar-compare-select {
-  width: 120px;
+  display: inline-flex;
   min-width: 0;
-  max-width: 120px;
 }
 
-.editor-toolbar-compare-picker .workbench-select-trigger {
-  height: 24px;
-  min-height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: var(--surface-quiet);
-  font-family: var(--font-mono);
-  font-size: 10px;
+.editor-toolbar-compare-select .workbench-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  min-height: 21px;
+  padding: 0 8px;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger.active,
+.editor-toolbar-compare-select .workbench-select-trigger[aria-expanded="true"] {
+  background: var(--accent-light) !important;
+  color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  border: none !important;
+  font-weight: 550;
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger.active svg,
+.editor-toolbar-compare-select .workbench-select-trigger[aria-expanded="true"] svg {
+  color: var(--accent) !important;
+}
+
+.editor-toolbar-compare-select .workbench-select-value {
+  max-width: 140px;
+}
+
+.compare-option-none-icon {
+  color: var(--text-tertiary);
+  opacity: 0.6;
 }
 
 .editor-toolbar-icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 21px;
+  height: 21px;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   background: var(--surface-quiet);
   color: var(--text-secondary);
   cursor: pointer;
@@ -214,8 +251,8 @@
 }
 
 .editor-toolbar-status {
-  font-size: 10px;
-  padding: 2px 6px;
+  font-size: 9.5px;
+  padding: 1px 5px;
   border-radius: 4px;
   font-weight: 500;
 }

@@ -3,13 +3,15 @@
 .tabbar-container {
   display: flex;
   align-items: center;
-  height: var(--tabbar-height, 38px);
+  height: var(--tabbar-height, 33px);
   background: var(--surface-workbench);
   border-bottom: none;
   flex-shrink: 0;
   position: relative;
   user-select: none;
   padding: 0 6px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  z-index: 50;
 }
 
 /* 标签横向滑动区域 */
@@ -23,8 +25,8 @@
   height: 100%;
   scrollbar-width: none;
   order: 1;
-  gap: 4px;
-  padding: 4px 0;
+  gap: 3px;
+  padding: 3px 0;
   background: transparent;
 }
 
@@ -37,16 +39,16 @@
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  min-width: 124px;
-  max-width: 220px;
-  height: 30px;
-  padding: 0 8px 0 10px;
-  border-radius: 6px;
+  gap: 6px;
+  min-width: 110px;
+  max-width: 200px;
+  height: 25px;
+  padding: 0 7px 0 9px;
+  border-radius: 5px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
   white-space: nowrap;
   position: relative;
@@ -68,7 +70,7 @@
   color: var(--text-primary);
   font-weight: 500;
   border: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
   z-index: 2;
 }
 
@@ -217,14 +219,14 @@
   order: 2;
 }
 
-/* 下拉触发按钮：严格对齐全系统标题栏按钮的 28x28 正方微磨砂质感 */
+/* 下拉触发按钮：正方微磨砂质感 */
 .tabbar-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   border: none;
   background: transparent;
   color: var(--text-secondary);

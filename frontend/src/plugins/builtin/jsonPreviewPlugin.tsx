@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  FileJson,
   FoldVertical,
   KeyRound,
   LockKeyhole,
@@ -34,6 +33,7 @@ import {
   type JsonPrimitive,
   type JsonValue,
 } from "./jsonTree";
+import "./jsonPreviewPlugin.css";
 
 interface JsonStats {
   arrays: number;
@@ -495,7 +495,10 @@ const JsonNode: React.FC<JsonNodeProps> = ({
   const showDescendants = ancestorMatched || matched;
   const isCollapsed = collapsed.has(path) && !queryActive;
   const entries = container ? entriesOf(value) : [];
-  const label = nodeKey === undefined ? t("jsonPreview.root") : String(nodeKey);
+  const isRoot = nodeKey === undefined;
+  const isIndex = typeof nodeKey === "number";
+  const label = isRoot ? t("jsonPreview.root") : String(nodeKey);
+  const displayKey = isRoot ? label : isIndex ? label : `"${nodeKey}"`;
   const valueTarget = `value:${path}`;
   const pathTarget = `path:${path}`;
 
@@ -506,7 +509,7 @@ const JsonNode: React.FC<JsonNodeProps> = ({
       aria-expanded={container ? !isCollapsed : undefined}
       data-json-path={path}
     >
-      <div className="json-preview-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
+      <div className="json-preview-row" style={{ paddingLeft: `${depth * 16 + 8}px` }}>
         {container ? (
           <button
             type="button"
@@ -514,21 +517,26 @@ const JsonNode: React.FC<JsonNodeProps> = ({
             onClick={() => onToggle(path)}
             aria-label={isCollapsed ? t("jsonPreview.expandNode") : t("jsonPreview.collapseNode")}
           >
-            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
           </button>
         ) : (
           <span className="json-preview-toggle-spacer" />
         )}
 
-        <span className={`json-preview-key${nodeKey === undefined ? " root" : ""}`} title={label}>
-          {label}
+        <span
+          className={`json-preview-key${isRoot ? " root" : isIndex ? " index" : ""}`}
+          title={label}
+        >
+          {displayKey}
         </span>
         <span className="json-preview-separator">:</span>
 
         {container ? (
           <span className="json-preview-container-summary">
-            {summarizeContainer(value)}
-            <small>{Array.isArray(value) ? t("jsonPreview.array") : t("jsonPreview.object")}</small>
+            <span className="json-preview-bracket-summary">{summarizeContainer(value)}</span>
+            <span className="json-preview-type-badge">
+              {Array.isArray(value) ? t("jsonPreview.array") : t("jsonPreview.object")}
+            </span>
           </span>
         ) : (
           <span
@@ -825,26 +833,9 @@ const JsonPreview: React.FC<{
 
   return (
     <div className="file-preview-surface json-preview">
-      <header className="json-preview-header">
-        <div className="json-preview-title">
-          <span className="json-preview-file-icon"><FileJson size={17} /></span>
-          <div>
-            <span className="json-preview-product-label">{t("jsonPreview.parser")}</span>
-            <strong>{path.split("/").pop() || path}</strong>
-            <code>{path}</code>
-          </div>
-        </div>
-        <div className="json-preview-stats" aria-label={t("jsonPreview.statistics")}>
-          <span><strong>{stats.total}</strong>{t("jsonPreview.nodes")}</span>
-          <span><strong>{stats.objects}</strong>{t("jsonPreview.objects")}</span>
-          <span><strong>{stats.arrays}</strong>{t("jsonPreview.arrays")}</span>
-          <span><strong>{stats.primitives}</strong>{t("jsonPreview.values")}</span>
-        </div>
-      </header>
-
       <div className="json-preview-toolbar">
         <label className="json-preview-search">
-          <Search size={14} />
+          <Search size={13} />
           <input
             type="search"
             value={query}
@@ -854,21 +845,40 @@ const JsonPreview: React.FC<{
           />
           {query && (
             <button type="button" onClick={() => setQuery("")} aria-label={t("common.clear")}>
-              <X size={13} />
+              <X size={12} />
             </button>
           )}
         </label>
-        <span className={`json-preview-match-count${queryActive && searchState.matchedPaths.size === 0 ? " empty" : ""}`} aria-live="polite">
-          {queryActive
-            ? t("jsonPreview.matches", { count: searchState.matchedPaths.size })
-            : t("jsonPreview.ready")}
-        </span>
-        {!canModify && (
-          <span className="json-preview-readonly" title={t("jsonPreview.readOnlyHint")}>
-            <LockKeyhole size={12} />{t("jsonPreview.readOnly")}
+        {queryActive && (
+          <span className={`json-preview-match-count${searchState.matchedPaths.size === 0 ? " empty" : ""}`} aria-live="polite">
+            {t("jsonPreview.matches", { count: searchState.matchedPaths.size })}
           </span>
         )}
+
+        <div className="json-preview-stats" aria-label={t("jsonPreview.statistics")}>
+          <span className="json-preview-stat-item">
+            <strong>{stats.total}</strong> {t("jsonPreview.nodes")}
+          </span>
+          <span className="json-preview-stat-sep">·</span>
+          <span className="json-preview-stat-item">
+            <strong>{stats.objects}</strong> {t("jsonPreview.objects")}
+          </span>
+          <span className="json-preview-stat-sep">·</span>
+          <span className="json-preview-stat-item">
+            <strong>{stats.arrays}</strong> {t("jsonPreview.arrays")}
+          </span>
+          <span className="json-preview-stat-sep">·</span>
+          <span className="json-preview-stat-item">
+            <strong>{stats.primitives}</strong> {t("jsonPreview.values")}
+          </span>
+        </div>
+
         <div className="json-preview-toolbar-actions">
+          {!canModify && (
+            <span className="json-preview-readonly" title={t("jsonPreview.readOnlyHint")}>
+              <LockKeyhole size={11} />{t("jsonPreview.readOnly")}
+            </span>
+          )}
           {canModify && (
             <>
               <button
@@ -878,7 +888,7 @@ const JsonPreview: React.FC<{
                 title={t("jsonPreview.undo")}
                 aria-label={t("jsonPreview.undo")}
               >
-                <Undo2 size={14} /><span>{t("jsonPreview.undo")}</span>
+                <Undo2 size={13} /><span>{t("jsonPreview.undo")}</span>
               </button>
               <button
                 type="button"
@@ -887,19 +897,34 @@ const JsonPreview: React.FC<{
                 title={t("jsonPreview.redo")}
                 aria-label={t("jsonPreview.redo")}
               >
-                <Redo2 size={14} /><span>{t("jsonPreview.redo")}</span>
+                <Redo2 size={13} /><span>{t("jsonPreview.redo")}</span>
               </button>
             </>
           )}
-          <button type="button" onClick={() => setCollapsed(new Set())}>
-            <UnfoldVertical size={14} />{t("jsonPreview.expandAll")}
+          <button
+            type="button"
+            onClick={() => setCollapsed(new Set())}
+            title={t("jsonPreview.expandAll")}
+            aria-label={t("jsonPreview.expandAll")}
+          >
+            <UnfoldVertical size={13} /><span>{t("jsonPreview.expandAll")}</span>
           </button>
-          <button type="button" onClick={() => setCollapsed(new Set(allContainerPaths))}>
-            <FoldVertical size={14} />{t("jsonPreview.collapseAll")}
+          <button
+            type="button"
+            onClick={() => setCollapsed(new Set(allContainerPaths))}
+            title={t("jsonPreview.collapseAll")}
+            aria-label={t("jsonPreview.collapseAll")}
+          >
+            <FoldVertical size={13} /><span>{t("jsonPreview.collapseAll")}</span>
           </button>
-          <button type="button" onClick={() => handleCopy("document", JSON.stringify(parsed.value, null, 2))}>
-            {copiedTarget === "document" ? <Check size={14} /> : <Copy size={14} />}
-            {copiedTarget === "document" ? t("jsonPreview.copied") : t("jsonPreview.copyDocument")}
+          <button
+            type="button"
+            onClick={() => handleCopy("document", JSON.stringify(parsed.value, null, 2))}
+            title={t("jsonPreview.copyDocument")}
+            aria-label={t("jsonPreview.copyDocument")}
+          >
+            {copiedTarget === "document" ? <Check size={13} /> : <Copy size={13} />}
+            <span>{copiedTarget === "document" ? t("jsonPreview.copied") : t("jsonPreview.copyDocument")}</span>
           </button>
         </div>
       </div>
