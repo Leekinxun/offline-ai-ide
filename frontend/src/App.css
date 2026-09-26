@@ -3244,6 +3244,11 @@ select:focus-visible,
   background: var(--success);
 }
 
+.task-header-status-dot.warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
 .task-header-status-dot.running {
   background: var(--accent-crown);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-crown) 16%, transparent);
@@ -10780,7 +10785,19 @@ body {
   width: 5px;
   height: 5px;
   border-radius: 50%;
+  background: var(--danger);
+}
+
+.workbench-task-state.ready i {
   background: var(--success);
+}
+
+.workbench-task-state.warning i {
+  background: var(--warning);
+}
+
+.workbench-task-state.offline i {
+  background: var(--danger);
 }
 
 .workbench-task-state.running i {

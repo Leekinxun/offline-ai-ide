@@ -1,10 +1,12 @@
 import React from "react";
 import { useI18n } from "../i18n";
+import type { AiHealthInfo } from "../hooks/useChat";
 
 interface StatusBarProps {
   activeFile: { path: string; language: string } | null;
   cursorPosition: { line: number; column: number };
   connected: boolean;
+  aiHealth?: AiHealthInfo;
   teamName?: string | null;
   teamOnlineCount?: number;
   teamRole?: string | null;
@@ -21,6 +23,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   activeFile,
   cursorPosition,
   connected,
+  aiHealth,
   teamName,
   teamOnlineCount,
   teamRole,
@@ -70,16 +73,29 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         {readOnlyWorkspace && <span>{t("team.readOnlyBadge")}</span>}
         {activeFile && <span>{activeFile.language.toUpperCase()}</span>}
         <span>UTF-8</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5, cursor: "default" }}>
           <span
-          style={{
+            style={{
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: connected ? "var(--success)" : "var(--danger)",
+              background: !connected
+                ? "var(--danger)"
+                : aiHealth?.status === "ready"
+                  ? "var(--success)"
+                  : "var(--warning)",
+              boxShadow: !connected
+                ? undefined
+                : aiHealth?.status === "ready"
+                  ? "0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent)"
+                  : "0 0 0 2px color-mix(in srgb, var(--warning) 25%, transparent)",
             }}
           />
-          {connected ? t("statusBar.aiConnected") : t("statusBar.aiOffline")}
+          {!connected
+            ? t("status.serverDisconnected")
+            : aiHealth?.status === "ready"
+              ? t("status.aiOnline")
+              : t("status.serverConnected")}
         </span>
       </div>
     </div>

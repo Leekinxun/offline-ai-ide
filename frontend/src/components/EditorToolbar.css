@@ -15,13 +15,14 @@
   order: 1;
 }
 
-/* 左侧：文件面包屑导航 */
+/* 左侧：文件面包屑导航 (精炼紧凑，限宽防挤占) */
 .editor-toolbar-breadcrumb {
   display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  flex: 1 1 auto;
+  max-width: min(360px, 38vw);
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11.5px;
@@ -80,15 +81,16 @@
   transition: all 0.15s ease;
 }
 
-.editor-toolbar-preview-btn:hover {
+.editor-toolbar-preview-btn:hover:not(.active) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--text-primary);
 }
 
 .editor-toolbar-preview-btn.active {
-  background: var(--surface-panel-strong);
+  background: var(--accent-light);
   color: var(--accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  font-weight: 500;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  font-weight: 550;
 }
 
 /* 右侧：动作工具组 */
@@ -100,30 +102,10 @@
   margin-left: auto;
 }
 
-.editor-toolbar-online {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.editor-toolbar-online i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--danger);
-}
-
-.editor-toolbar-online i.connected {
-  background: var(--success);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent);
-}
-
 .editor-toolbar-primary-actions {
   display: flex;
   align-items: center;
+  gap: 2px;
   padding: 2px;
   border-radius: 6px;
   background: var(--surface-quiet);
@@ -142,18 +124,23 @@
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
-  transition: all 0.15s ease;
+  transition: all var(--transition);
 }
 
-.editor-toolbar-btn:hover {
+.editor-toolbar-btn:hover:not(.active) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--text-primary);
 }
 
 .editor-toolbar-btn.active {
-  background: var(--surface-panel-strong);
+  background: var(--accent-light);
   color: var(--accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  font-weight: 500;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  font-weight: 550;
+}
+
+.editor-toolbar-btn.active:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .editor-toolbar-run-btn {

@@ -2890,9 +2890,15 @@ function AuthenticatedApp({
           <span className="workbench-task-title">
             {workbenchTaskTitle}
           </span>
-          <span className={`workbench-task-state${chat.isStreaming ? " running" : ""}`}>
+          <span className={`workbench-task-state${chat.isStreaming ? " running" : !chat.connected ? " offline" : chat.aiHealth?.status === "ready" ? " ready" : " warning"}`}>
             <i />
-            {chat.isStreaming ? t("chat.runPreparing") : chat.connected ? t("chat.online") : t("chat.offline")}
+            {chat.isStreaming
+              ? t("chat.runPreparing")
+              : !chat.connected
+                ? t("status.serverDisconnected")
+                : chat.aiHealth?.status === "ready"
+                  ? t("status.aiOnline")
+                  : t("status.serverConnected")}
           </span>
         </div>
         <div className="titlebar-command-bar">
@@ -3300,7 +3306,6 @@ function AuthenticatedApp({
               hasPreview={Boolean(activePreviewRenderer)}
               activePreviewMode={activePreviewMode}
               onSelectPreviewMode={setActivePreviewMode}
-              chatConnected={chat.connected}
               editorAssistantVisible={editorAssistantVisible}
               onToggleEditorAssistant={() => {
                 setRunDetailsVisible(false);
@@ -3856,6 +3861,7 @@ function AuthenticatedApp({
           isStreaming={chat.isStreaming}
           activeRequestIds={chat.activeRequestIds}
           connected={chat.connected}
+          aiHealth={chat.aiHealth}
           visible={chatVisible && workspaceView === "chat"}
           focusRequest={chatFocusNonce}
           agentMode={chat.agentMode}
@@ -4019,6 +4025,7 @@ function AuthenticatedApp({
         }
         cursorPosition={cursorPos}
         connected={chat.connected}
+        aiHealth={chat.aiHealth}
         teamName={team.activeTeam?.name || null}
         teamOnlineCount={team.activeTeam?.onlineCount}
         teamRole={team.activeTeam?.role || null}

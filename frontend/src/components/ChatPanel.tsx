@@ -51,7 +51,7 @@ import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftContr
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { ModelSelector } from "./ModelSelector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
-import type { ChatRuntimeOptions } from "../hooks/useChat";
+import type { ChatRuntimeOptions, AiHealthInfo } from "../hooks/useChat";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 
 type ChatConfirmAction =
@@ -96,6 +96,7 @@ interface ChatPanelProps {
   isStreaming: boolean;
   activeRequestIds?: string[];
   connected: boolean;
+  aiHealth?: AiHealthInfo;
   visible: boolean;
   focusRequest?: number;
   agentMode: AgentMode;
@@ -166,6 +167,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isStreaming,
   activeRequestIds,
   connected,
+  aiHealth,
   visible,
   focusRequest,
   agentMode,
@@ -546,6 +548,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <TaskHeader
         taskTitle={taskTitle}
         connected={connected}
+        aiHealth={aiHealth}
         currentConversationId={currentConversationId}
         isStreaming={isStreaming}
         activeToolName={activeTool?.name}

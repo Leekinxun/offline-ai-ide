@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   FileCode2,
   ChevronRight,
@@ -86,19 +86,35 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
 }) => {
   const { t } = useI18n();
 
+  // 精炼路径导航：超过 2 层目录时折叠中间冗余祖先，保持单行精简
+  const visibleBreadcrumbParts = useMemo(() => {
+    const parts = activeFile.path.split("/");
+    if (parts.length <= 2) {
+      return parts.map((part, index) => ({
+        label: part,
+        isCurrent: index === parts.length - 1,
+      }));
+    }
+    return [
+      { label: "…", isCurrent: false },
+      { label: parts[parts.length - 2], isCurrent: false },
+      { label: parts[parts.length - 1], isCurrent: true },
+    ];
+  }, [activeFile.path]);
+
   return (
     <div className="editor-toolbar" role="toolbar" aria-label={t("workbench.editorActions")}>
-      {/* 1. 左侧：紧凑文件面包屑路径导航 */}
+      {/* 1. 左侧：精炼文件面包屑路径导航 */}
       <div className="editor-toolbar-breadcrumb" title={activeFile.path} aria-label={t("workbench.fileBreadcrumb")}>
         <FileCode2 size={13} className="editor-toolbar-breadcrumb-icon" />
         {workspaceLabel && <span className="editor-toolbar-breadcrumb-workspace">{workspaceLabel}</span>}
         {workspaceLabel && <ChevronRight size={11} className="editor-toolbar-breadcrumb-sep" />}
-        {activeFile.path.split("/").map((part, index, parts) => (
-          <React.Fragment key={`${part}-${index}`}>
-            <span className={`editor-toolbar-breadcrumb-part${index === parts.length - 1 ? " current" : ""}`}>
-              {part}
+        {visibleBreadcrumbParts.map((item, index) => (
+          <React.Fragment key={`${item.label}-${index}`}>
+            <span className={`editor-toolbar-breadcrumb-part${item.isCurrent ? " current" : ""}`}>
+              {item.label}
             </span>
-            {index < parts.length - 1 && <ChevronRight size={11} className="editor-toolbar-breadcrumb-sep" />}
+            {index < visibleBreadcrumbParts.length - 1 && <ChevronRight size={11} className="editor-toolbar-breadcrumb-sep" />}
           </React.Fragment>
         ))}
       </div>
@@ -136,14 +152,8 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
         </div>
       )}
 
-      {/* 3. 右侧：操作按钮与状态群 */}
+      {/* 3. 右侧：操作按钮与状态群 (已移除多余的重复在线指示器) */}
       <div className="editor-toolbar-actions">
-        {/* 在线连通状态 */}
-        <span className="editor-toolbar-online">
-          <i className={chatConnected ? "connected" : ""} />
-          {chatConnected ? t("chat.online") : t("chat.offline")}
-        </span>
-
         {/* 助手 / 终端 / 变更 快捷动作组 */}
         <div className="editor-toolbar-primary-actions" role="group">
           {onToggleEditorAssistant && (

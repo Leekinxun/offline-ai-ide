@@ -10,10 +10,12 @@ import {
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { CompletionEvidence, ExecutionContract } from "../types";
+import type { AiHealthInfo } from "../hooks/useChat";
 
 interface TaskHeaderProps {
   taskTitle: string;
   connected: boolean;
+  aiHealth?: AiHealthInfo;
   currentConversationId: string | null;
   isStreaming: boolean;
   activeToolName?: string;
@@ -35,6 +37,7 @@ interface TaskHeaderProps {
 export const TaskHeader: React.FC<TaskHeaderProps> = ({
   taskTitle,
   connected,
+  aiHealth,
   currentConversationId,
   isStreaming,
   activeToolName,
@@ -57,9 +60,19 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
     ? activeToolName
       ? t("chat.runCurrentTool", { tool: activeToolName })
       : t("chat.runPreparing")
-    : connected
-      ? t("chat.online")
-      : t("chat.offline");
+    : !connected
+      ? t("status.serverDisconnected")
+      : aiHealth?.status === "ready"
+        ? t("status.aiOnline")
+        : t("status.serverConnected");
+
+  const dotState = isStreaming
+    ? " running"
+    : !connected
+      ? ""
+      : aiHealth?.status === "ready"
+        ? " connected"
+        : " warning";
 
   return (
     <header
@@ -75,12 +88,13 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             {executionContract && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`} title={executionContract.planId || undefined}>{t(`chat.contract.${executionContract.kind}`)}</span>}
           </div>
         </div>
-        <div className="task-header-status" role="status" aria-live="polite" aria-atomic="true">
-          <span
-            className={`task-header-status-dot${
-              isStreaming ? " running" : connected ? " connected" : ""
-            }`}
-          />
+        <div
+          className="task-header-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span className={`task-header-status-dot${dotState}`} />
           <span>{statusLabel}</span>
           {currentConversationId && !isStreaming && (
             <span className="task-header-continuing">

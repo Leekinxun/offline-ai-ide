@@ -30,7 +30,7 @@ import {
   listManagedWorktrees,
   removeManagedWorktree,
 } from "../chat/worktrees.js";
-import { config, resolveModelInputCapabilities } from "../config.js";
+import { config, resolveModelEndpoint, resolveModelInputCapabilities } from "../config.js";
 import {
   listSelectableModelNames,
   resolveSelectableModelName,
@@ -151,6 +151,40 @@ chatRouter.get("/runtime-options", (_req, res) => {
       ])
     ),
   });
+});
+
+chatRouter.get("/model-health", async (req, res) => {
+  const modelName = typeof req.query.model === "string" && req.query.model.trim()
+    ? req.query.model.trim()
+    : config.modelName;
+  const endpoint = resolveModelEndpoint(modelName);
+  try {
+    const probeUrl = endpoint.apiUrl.replace(/\/+$/, "") + "/models";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const headers: Record<string, string> = {};
+    if (endpoint.apiKey) headers["Authorization"] = `Bearer ${endpoint.apiKey}`;
+    const response = await fetch(probeUrl, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (response.ok) {
+      return res.json({ status: "ready", modelName, apiUrl: endpoint.apiUrl });
+    }
+    if (response.status === 401 || response.status === 403) {
+      return res.json({ status: "auth_error", error: "Authentication failed", modelName, apiUrl: endpoint.apiUrl });
+    }
+    return res.json({ status: "model_error", error: `HTTP ${response.status}`, modelName, apiUrl: endpoint.apiUrl });
+  } catch (err: any) {
+    return res.json({
+      status: "unreachable",
+      error: err.name === "AbortError" ? "Connection timeout" : err.message || "Connection refused",
+      modelName,
+      apiUrl: endpoint.apiUrl,
+    });
+  }
 });
 
 chatRouter.get("/request-status/:requestId", (req, res) => {
