@@ -891,10 +891,16 @@ export const Editor: React.FC<EditorProps> = ({
           roundedSelection: true,
           renderWhitespace: "selection",
           overviewRulerBorder: false,
+          overviewRulerLanes: 0,
           hideCursorInOverviewRuler: true,
           scrollbar: {
-            verticalScrollbarSize: 8,
-            horizontalScrollbarSize: 8,
+            vertical: "visible",
+            horizontal: "auto",
+            verticalScrollbarSize: 6,
+            horizontalScrollbarSize: 6,
+            verticalSliderSize: 6,
+            horizontalSliderSize: 6,
+            useShadows: false,
           },
         }}
       />

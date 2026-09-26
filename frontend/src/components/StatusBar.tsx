@@ -55,7 +55,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <div className="statusbar-left">
         <button
           type="button"
-          className="statusbar-item statusbar-problems"
+          className={`statusbar-item statusbar-problems${errorCount > 0 ? " has-errors" : warningCount > 0 ? " has-warnings" : ""}`}
           onClick={onOpenProblems}
           disabled={!onOpenProblems}
           title={t("statusBar.openProblems")}

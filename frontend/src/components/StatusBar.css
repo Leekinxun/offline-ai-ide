@@ -84,23 +84,40 @@ button.statusbar-item:disabled {
   flex-shrink: 0;
 }
 
-/* 问题诊断微胶囊（错误/警告精致微状态，实体质感） */
+/* 问题诊断微胶囊：遵循无边框纯色阶与统一微悬停胶囊设计，杜绝生硬线框描边假高亮 */
 .statusbar-problems {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 5px;
-  background: var(--surface-quiet);
-  border: 1px solid var(--line-subtle);
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  outline: none;
+  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
   transition: all var(--transition);
 }
 
 .statusbar-problems:hover {
   background: var(--bg-hover);
-  border-color: var(--border-medium);
+}
+
+/* 发生错误/警告时呈现呼吸感微着色卡片（纯色阶轻透注入，无需生硬实线描边） */
+.statusbar-problems.has-errors {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.statusbar-problems.has-errors:hover {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.statusbar-problems.has-warnings:not(.has-errors) {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.statusbar-problems.has-warnings:not(.has-errors):hover {
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
 }
 
 .statusbar-problem {

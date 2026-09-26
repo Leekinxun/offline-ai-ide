@@ -5,12 +5,14 @@
   align-items: center;
   height: var(--tabbar-height, 33px);
   background: var(--surface-workbench);
+  border: none;
   border-bottom: none;
+  outline: none;
   flex-shrink: 0;
   position: relative;
   user-select: none;
   padding: 0 6px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  box-shadow: none;
   z-index: 50;
 }
 

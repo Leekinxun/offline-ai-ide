@@ -183,15 +183,15 @@ body {
   line-height: 1.45;
 }
 
-/* 全平台统一覆写细窄悬浮滚动条，避免 Linux 原生粗滚动条挤占视口 */
+/* 全平台统一覆写细窄悬浮滚动条，参考左侧侧边栏微轨道规范（无生硬箭头与外框） */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
 }
 
 *::-webkit-scrollbar-track {
@@ -199,22 +199,52 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 3px;
   background: var(--border);
-  background-clip: padding-box;
   transition: background-color 0.2s ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
   background: var(--text-tertiary);
-  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* 保护 Monaco Editor 与 Xterm 原生滚动渲染不受全局覆盖干扰 */
 .monaco-editor .monaco-scrollable-element > .scrollbar,
 .xterm .xterm-viewport {
   scrollbar-width: auto;
+}
+
+/* 对齐 Monaco Editor 代码编辑区滚动条至左侧侧边栏微轨道规范 */
+.monaco-editor .monaco-scrollable-element > .scrollbar.vertical,
+.monaco-editor .monaco-scrollable-element > .scrollbar.horizontal {
+  background: transparent !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
+  border-radius: 3px !important;
+  background: var(--border) !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--text-tertiary) !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar.vertical > .slider {
+  width: 6px !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar.horizontal > .slider {
+  height: 6px !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar.vertical .shadow,
+.monaco-editor .monaco-scrollable-element > .scrollbar.horizontal .shadow {
+  display: none !important;
 }
 
 /* Monaco 编辑器光标呼吸闪动频率调低一半（默认 0.5s 周期翻倍至 1.0s，更平缓温和） */
@@ -2569,26 +2599,7 @@ select:focus-visible,
 }
 
 /* ==================== Command Palette & Search ==================== */
-.command-palette-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: min(15vh, 130px);
-  background: var(--overlay-scrim-strong);
-  backdrop-filter: blur(6px);
-}
-
-.command-palette {
-  width: min(680px, calc(100vw - 32px));
-  overflow: hidden;
-  border: 1px solid var(--elevated-stroke);
-  border-radius: 14px;
-  background: var(--elevated-surface);
-  box-shadow: var(--shadow-lg);
-}
+/* Command Palette 基础外壳与项列表样式已迁移至 components/CommandPalette.css 模块化管理 */
 
 .workspace-search-panel {
   width: min(820px, calc(100vw - 32px));
@@ -2742,7 +2753,6 @@ select:focus-visible,
   padding: 8px;
 }
 
-.command-palette-item,
 .workspace-search-result {
   display: flex;
   align-items: center;
@@ -2799,59 +2809,8 @@ select:focus-visible,
   color: var(--text-tertiary);
 }
 
-.command-palette-item:hover,
-.command-palette-item.active,
 .workspace-search-result:hover {
   background: var(--accent-light);
-}
-
-.command-palette-item-icon {
-  display: flex;
-  color: var(--accent);
-}
-
-.command-palette-item-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-
-.command-palette-item-copy strong {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.command-palette-item-copy small {
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-palette-enter {
-  color: var(--accent);
-  font-size: 16px;
-}
-
-.command-palette-empty {
-  padding: 34px 16px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  text-align: center;
-}
-
-.command-palette-footer {
-  display: flex;
-  gap: 16px;
-  padding: 9px 14px;
-  border-top: 1px solid var(--border-light);
-  color: var(--text-tertiary);
-  font-size: 10px;
 }
 
 .workspace-search-result {
@@ -7729,7 +7688,8 @@ select:focus-visible,
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border-right: 1px solid var(--line-subtle);
+  border-right: none;
+  border-radius: 5px;
   background: var(--surface-panel);
 }
 
@@ -8479,7 +8439,8 @@ select:focus-visible,
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--line-subtle);
+  border-left: none;
+  border-radius: 5px;
   background: var(--surface-panel);
 }
 
@@ -10699,12 +10660,12 @@ body {
 }
 
 .resize-handle {
-  width: 1px;
+  background: transparent;
 }
 
 .resize-handle:hover,
 .resize-handle.dragging {
-  background: var(--accent);
+  background: transparent;
 }
 
 .editor-area {
@@ -11599,8 +11560,13 @@ body {
   grid-row: 1;
   width: auto !important;
   min-width: 0;
-  border-right-color: var(--line-subtle);
+  border: none !important;
+  border-right: none !important;
+  box-shadow: none !important;
+  outline: none !important;
   background: var(--surface-workbench);
+  border-radius: 5px;
+  overflow: hidden;
 }
 
 .workbench-view-files > .resize-handle {
@@ -11613,6 +11579,7 @@ body {
   width: 6px;
   grid-row: 1;
   z-index: 12;
+  background: transparent !important;
 }
 
 .workbench-view-files > .sidebar-resize-handle {
@@ -11638,15 +11605,13 @@ body {
   width: 2px;
   background: transparent;
   content: "";
-  transition: background var(--transition);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .workbench-view-files > .sidebar-resize-handle:hover::before,
 .workbench-view-files > .sidebar-resize-handle:focus-visible::before,
-.workbench-view-files > .sidebar-resize-handle.dragging::before,
 .workbench-view-files > .assistant-resize-handle:hover::before,
-.workbench-view-files > .assistant-resize-handle:focus-visible::before,
-.workbench-view-files > .assistant-resize-handle.dragging::before {
+.workbench-view-files > .assistant-resize-handle:focus-visible::before {
   left: 2px;
   width: 2px;
   border-radius: 999px;
@@ -11654,20 +11619,44 @@ body {
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+.workbench-view-files > .sidebar-resize-handle.dragging::before,
+.workbench-view-files > .assistant-resize-handle.dragging::before {
+  left: 2px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 80%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .workbench-view-files > .editor-area {
   grid-column: 4;
   grid-row: 1;
   min-width: 0;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  border-radius: 5px;
+  overflow: hidden;
 }
 
 .workbench-view-files > .editor-assistant-panel {
   grid-column: 6;
   grid-row: 1;
+  border: none !important;
+  border-left: none !important;
+  box-shadow: none !important;
+  border-radius: 5px;
+  overflow: hidden;
 }
 
 .workbench-view-files > .run-details-panel {
   grid-column: 5;
   grid-row: 1;
+  border: none !important;
+  border-left: none !important;
+  box-shadow: none !important;
+  border-radius: 5px;
+  overflow: hidden;
 }
 
 .workbench-view-files > .chat-panel {
@@ -11683,8 +11672,9 @@ body {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    border-right: 1px solid var(--line-subtle);
-    border-left: 0;
+    border: none;
+    box-shadow: none;
+    border-radius: 5px;
   }
 }
 
@@ -11758,6 +11748,7 @@ body {
   height: 32px;
   padding: 0 12px;
   border-bottom: none;
+  border: none;
   background: var(--surface-panel);
 }
 
@@ -11941,8 +11932,11 @@ body {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  border: none;
   border-left: none;
+  box-shadow: none;
   background: var(--surface-panel);
+  border-radius: 5px;
 }
 
 .editor-assistant-header {

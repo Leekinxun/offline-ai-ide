@@ -107,15 +107,15 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
     <div className="editor-toolbar" role="toolbar" aria-label={t("workbench.editorActions")}>
       {/* 1. 左侧：精炼文件面包屑路径导航 */}
       <div className="editor-toolbar-breadcrumb" title={activeFile.path} aria-label={t("workbench.fileBreadcrumb")}>
-        <FileCode2 size={13} className="editor-toolbar-breadcrumb-icon" />
+        <FileCode2 size={14} className="editor-toolbar-breadcrumb-icon" />
         {workspaceLabel && <span className="editor-toolbar-breadcrumb-workspace">{workspaceLabel}</span>}
-        {workspaceLabel && <ChevronRight size={11} className="editor-toolbar-breadcrumb-sep" />}
+        {workspaceLabel && <ChevronRight size={12} className="editor-toolbar-breadcrumb-sep" />}
         {visibleBreadcrumbParts.map((item, index) => (
           <React.Fragment key={`${item.label}-${index}`}>
             <span className={`editor-toolbar-breadcrumb-part${item.isCurrent ? " current" : ""}`}>
               {item.label}
             </span>
-            {index < visibleBreadcrumbParts.length - 1 && <ChevronRight size={11} className="editor-toolbar-breadcrumb-sep" />}
+            {index < visibleBreadcrumbParts.length - 1 && <ChevronRight size={12} className="editor-toolbar-breadcrumb-sep" />}
           </React.Fragment>
         ))}
       </div>
@@ -164,7 +164,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               onClick={onToggleEditorAssistant}
               title={t("workbench.editorAssistant")}
             >
-              <Bot size={13} />
+              <Bot size={14} />
               <span>{t("workbench.editorAssistant")}</span>
             </button>
           )}
@@ -175,7 +175,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               onClick={onToggleTerminal}
               title={t("workbench.details.terminal")}
             >
-              <TerminalSquare size={13} />
+              <TerminalSquare size={14} />
               <span>{t("workbench.details.terminal")}</span>
             </button>
           )}
@@ -186,7 +186,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               onClick={onOpenChanges}
               title={t("chat.changes")}
             >
-              <GitBranch size={13} />
+              <GitBranch size={14} />
               <span>{t("chat.changes")}</span>
             </button>
           )}
@@ -202,7 +202,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             title={t("debug.runCurrentFile")}
             aria-label={t("debug.runCurrentFile")}
           >
-            <Play size={12} />
+            <Play size={13} />
             <span>{t("debug.run")}</span>
           </button>
         )}
@@ -216,14 +216,14 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
               value={compareFilePath || ""}
               onChange={(value) => onSelectCompareFile(value || null)}
               showStatusMark={false}
-              icon={<Columns2 size={12} />}
+              icon={<Columns2 size={13} />}
               active={Boolean(compareFileActive)}
               placeholder={t("editor.comparePlaceholder")}
               options={[
                 {
                   value: "",
                   label: t("editor.compareNone"),
-                  icon: <XCircle size={13} className="compare-option-none-icon" />,
+                  icon: <XCircle size={14} className="compare-option-none-icon" />,
                 },
                 ...openFiles
                   .filter((file) => file.path !== activeFile.path)
@@ -236,7 +236,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
                       value: file.path,
                       label: file.name,
                       meta: parentDir ? `…/${parentDir}` : undefined,
-                      icon: <FileCode2 size={13} />,
+                      icon: <FileCode2 size={14} />,
                     };
                   }),
               ]}
@@ -253,7 +253,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             aria-pressed={compareScrollLinked}
             title={compareScrollLinked ? t("editor.disableSyncScroll") : t("editor.enableSyncScroll")}
           >
-            {compareScrollLinked ? <Link2 size={13} /> : <Unlink2 size={13} />}
+            {compareScrollLinked ? <Link2 size={14} /> : <Unlink2 size={14} />}
           </button>
         )}
 
@@ -266,7 +266,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             title={t("editor.stopCompare")}
             aria-label={t("editor.stopCompare")}
           >
-            <X size={13} />
+            <X size={14} />
           </button>
         )}
 

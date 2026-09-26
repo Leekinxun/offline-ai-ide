@@ -8,6 +8,7 @@ import {
 import type { FileNode } from "../types";
 import { useI18n } from "../i18n";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import "./CommandPalette.css";
 
 interface WorkspaceSearchPanelProps {
   visible: boolean;
