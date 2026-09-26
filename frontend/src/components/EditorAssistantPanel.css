@@ -1,0 +1,889 @@
+/* ==========================================================================
+   EditorAssistantPanel Component Styles - Physical Isolation
+   ========================================================================== */
+
+.editor-assistant-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: none;
+  background: var(--surface-panel);
+  border-radius: 5px;
+}
+
+/* 顶部标题栏 */
+.editor-assistant-header {
+  display: flex;
+  min-height: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-panel-strong);
+  flex-shrink: 0;
+}
+
+.editor-assistant-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.editor-assistant-title-group .assistant-brand-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.editor-assistant-header strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.editor-assistant-header .editor-assistant-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 140px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-workbench);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-header .editor-assistant-file-chip svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.editor-assistant-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.editor-assistant-header button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-assistant-header button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-assistant-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+/* 折叠/紧凑概览 */
+.editor-assistant-compact-summary {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+  flex-shrink: 0;
+}
+
+.editor-assistant-compact-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.editor-assistant-compact-copy strong,
+.editor-assistant-compact-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-compact-copy strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.editor-assistant-compact-copy small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.editor-assistant-compact-summary > button {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-panel-strong);
+  color: var(--text-primary);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-assistant-compact-summary > button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+/* 详情抽屉 */
+.editor-assistant-details {
+  min-height: 0;
+  max-height: min(48vh, 420px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.editor-assistant-context {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+}
+
+.editor-assistant-panel > .editor-assistant-context {
+  min-height: 0;
+  max-height: min(28vh, 240px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+
+.editor-assistant-context > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.editor-assistant-context button {
+  display: grid;
+  width: 100%;
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-assistant-context button:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-strong));
+}
+
+.editor-assistant-context button strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-context button small {
+  color: var(--success);
+  font-size: 10px;
+}
+
+.editor-assistant-context button.editor-assistant-recovery {
+  margin-top: 8px;
+  border-color: color-mix(in srgb, var(--warning) 32%, var(--line-strong));
+  cursor: pointer;
+}
+
+.editor-assistant-context button.editor-assistant-recovery.status-failed {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line-strong));
+}
+
+.editor-assistant-recovery > span:nth-child(2) {
+  min-width: 0;
+}
+
+.editor-assistant-recovery > span:nth-child(2) strong,
+.editor-assistant-recovery > span:nth-child(2) small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-recovery > span:nth-child(2) small {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.editor-assistant-recovery .editor-assistant-recovery-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-primary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* 消息流区域 */
+.editor-assistant-messages {
+  min-height: 0;
+  flex: 1;
+  padding: 14px 12px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 空状态欢迎与快捷引导 */
+.editor-assistant-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px 16px;
+  margin: auto 0;
+  text-align: center;
+  user-select: none;
+}
+
+.editor-assistant-empty-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
+  margin-bottom: 12px;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.editor-assistant-empty-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.editor-assistant-empty-desc {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 280px;
+  margin-bottom: 20px;
+}
+
+.editor-assistant-quick-prompts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  max-width: 340px;
+}
+
+.editor-assistant-quick-prompt-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-panel-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--transition);
+}
+
+.editor-assistant-quick-prompt-btn:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.editor-assistant-quick-prompt-btn svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* 消息气泡 */
+.editor-assistant-message {
+  display: flex;
+  width: min(92%, 100%);
+  max-width: 640px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.editor-assistant-message.user {
+  align-self: flex-end;
+  align-items: flex-end;
+  width: min(88%, 520px);
+}
+
+.editor-assistant-message > p {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+  border-radius: 12px 12px 3px 12px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-panel-strong));
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.editor-assistant-message > small {
+  max-width: 100%;
+  color: var(--text-tertiary);
+  font: 10px var(--font-mono);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.editor-assistant-message:not(.user) .editor-assistant-message-content {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px 12px 12px 3px;
+  background: var(--surface-panel-strong);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.editor-assistant-message-content .chat-markdown {
+  line-height: 1.58;
+}
+
+.editor-assistant-message-content .chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.editor-assistant-message-content .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.editor-assistant-message-content .chat-markdown pre {
+  margin: 7px 0;
+  max-width: 100%;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #0d1117;
+}
+
+.editor-assistant-message-content .chat-markdown pre code {
+  color: #c9d1d9;
+  font: 11px var(--font-mono);
+  white-space: pre;
+}
+
+/* 运行卡片 */
+.editor-agent-run-card {
+  margin: 8px 0 14px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-panel-strong);
+}
+
+.editor-agent-run-head {
+  display: grid;
+  min-height: 40px;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--surface-workbench);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.editor-agent-run-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.editor-agent-run-pulse.active {
+  background: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 15%, transparent);
+  animation: editor-agent-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes editor-agent-pulse {
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent); }
+}
+
+.editor-agent-run-head strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.editor-agent-run-head small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.editor-agent-run-head code {
+  color: var(--text-secondary);
+  font: 9px var(--font-mono);
+}
+
+.editor-agent-run-head > button {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-panel-strong);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 10px;
+  transition: all var(--transition);
+}
+
+.editor-agent-run-head > button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.editor-agent-run-steps {
+  padding: 3px 0;
+}
+
+.editor-agent-run-step {
+  border-top: 1px solid var(--border-light);
+}
+
+.editor-agent-run-step:first-child {
+  border-top: 0;
+}
+
+.editor-agent-run-step > button {
+  display: grid;
+  width: 100%;
+  min-height: 36px;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-agent-run-step > button:hover {
+  background: var(--bg-hover);
+}
+
+.editor-agent-run-step > button > span {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-agent-run-step > button > small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.editor-agent-run-step.done > button > small {
+  color: var(--success);
+}
+
+.editor-agent-run-step.running > button > small {
+  color: var(--warning);
+}
+
+.editor-agent-run-step.failed > button > small {
+  color: var(--danger);
+}
+
+.editor-agent-run-chevron {
+  transition: transform 160ms ease;
+}
+
+.editor-agent-run-step.open .editor-agent-run-chevron {
+  transform: rotate(90deg);
+}
+
+.editor-agent-run-step pre {
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  background: #0d1117;
+  color: var(--text-secondary);
+  font: 9px/1.6 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.editor-agent-run-empty {
+  color: var(--text-tertiary);
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  display: grid;
+  padding: 8px 10px;
+}
+
+/* 审批浮层 */
+.editor-assistant-approvals {
+  max-height: min(46%, 380px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+  border-top-color: color-mix(in srgb, var(--warning) 32%, var(--line-strong));
+  background: color-mix(in srgb, var(--warning) 4%, var(--surface-workbench));
+}
+
+.editor-assistant-approvals + .editor-assistant-composer {
+  margin-top: 10px;
+}
+
+/* ==========================================================================
+   底部输入框 Composer（参考现代 IDE：无中间分割线、大文本区、轻量集成工具栏）
+   ========================================================================== */
+
+.editor-assistant-composer {
+  flex: 0 0 auto;
+  margin: 0 10px 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface-panel-strong);
+  transition: border-color 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+/* 优雅克制的聚焦态：无大蓝环，仅极简微光边框 */
+.editor-assistant-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+}
+
+/* 上方输入框加大，提供充裕呼吸感；强制抹平所有默认边框、聚焦光晕与分割线 */
+.editor-assistant-composer textarea,
+.editor-assistant-composer textarea:focus,
+.editor-assistant-composer textarea:focus-visible,
+[data-theme="dark"] .editor-assistant-composer textarea:focus,
+[data-theme="dark"] .editor-assistant-composer textarea:focus-visible {
+  display: block;
+  width: 100%;
+  min-height: 80px;
+  max-height: 180px;
+  padding: 12px 14px 4px;
+  resize: none;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: var(--text-primary);
+  font: 12px/1.55 var(--font-sans);
+  box-sizing: border-box;
+}
+
+.editor-assistant-composer textarea::placeholder {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* 附件草稿（仅在有附加文件时以极轻量胶囊呈现） */
+.editor-assistant-attachment-drafts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 12px 6px;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.editor-assistant-draft-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  padding: 2px 6px 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-workbench);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.editor-assistant-draft-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-draft-chip button {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 3px;
+}
+
+.editor-assistant-draft-chip button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-assistant-attachment-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 12px 5px;
+  font-size: 10px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 6%, transparent);
+  border: none !important;
+}
+
+.editor-assistant-recheck-btn {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* 底部一体化扁平单行操作栏（完全消除内部多道分割线，紧凑精炼） */
+.editor-assistant-composer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 10px 8px;
+  background: transparent !important;
+  border: none !important;
+  border-top: none !important;
+  box-shadow: none !important;
+}
+
+.editor-assistant-composer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.editor-assistant-composer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 左侧加号按钮：极简统一 26px 高度 */
+.editor-assistant-plus-btn {
+  display: grid;
+  width: 24px;
+  height: 26px;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.editor-assistant-plus-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-assistant-plus-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 模式与思考级别选择器：沉浸式极简下拉 */
+.editor-assistant-composer-mode {
+  min-width: 0;
+}
+
+.editor-assistant-composer-thinking {
+  min-width: 0;
+}
+
+.editor-assistant-thinking-icon {
+  color: var(--text-tertiary) !important;
+  flex-shrink: 0;
+}
+
+.editor-assistant-composer .workbench-select-trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 4px !important;
+  border: none !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+  gap: 4px !important;
+  line-height: 1 !important;
+}
+
+.editor-assistant-composer .workbench-select-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+}
+
+.editor-assistant-composer .workbench-select-icon svg {
+  display: block !important;
+  transform: none !important;
+}
+
+.editor-assistant-composer .workbench-select-value {
+  display: inline-flex !important;
+  align-items: center !important;
+  line-height: 1 !important;
+}
+
+.editor-assistant-composer .workbench-select-trigger:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 模型选择器：无外框沉浸式文字下拉 */
+.editor-assistant-composer-model {
+  min-width: 80px;
+  max-width: 180px;
+}
+
+.editor-assistant-composer-model .model-selector-trigger {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 4px !important;
+  border: none !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+.editor-assistant-composer-model .model-selector-trigger:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 当前上下文跟随文件微胶囊 */
+.editor-assistant-inline-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  height: 26px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.editor-assistant-inline-context:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.editor-assistant-inline-context svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* 发送按钮：参考图片的 26px 高亮圆角按钮 */
+.editor-assistant-send-btn {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: #d8dde4;
+  color: #121316;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.editor-assistant-send-btn:hover:not(:disabled) {
+  background: #ffffff;
+  color: #000000;
+  transform: translateY(-1px);
+}
+
+.editor-assistant-send-btn:disabled {
+  cursor: default;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.25);
+  transform: none;
+}
+

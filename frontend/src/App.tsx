@@ -594,9 +594,7 @@ function AuthenticatedApp({
   // Media-query thresholds follow the viewport; panel budgets use the actual
   // content width, which can be smaller with classic Windows scrollbars.
   const layoutAvailableWidth = Math.min(viewportWidth, document.documentElement.clientWidth || viewportWidth);
-  const isLeftDockOpen = workspaceView === "chat"
-    ? sidebarVisible
-    : Boolean(sidebarVisible || gitVisible || agentsVisible || teamVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible);
+  const isLeftDockOpen = Boolean(sidebarVisible || gitVisible || agentsVisible || teamVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible);
 
   const isLaptopOrCompact = viewportWidth < 1440;
   const responsiveDefaultSidebarWidth = isLaptopOrCompact ? Math.min(sidebarWidth, 240) : sidebarWidth;
@@ -704,9 +702,24 @@ function AuthenticatedApp({
   }, []);
 
   const focusChat = useCallback(() => {
+    const switchingToChat = workspaceView !== "chat";
     setWorkspaceView("chat");
     setEditorAssistantVisible(false);
     setRunDetailsVisible(false);
+    setChatVisible(true);
+    const utilityOpen =
+      gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible || teamVisible;
+    if (switchingToChat) {
+      closeUtilityPanels();
+      setTeamVisible(false);
+      setSidebarVisible(true);
+    } else if (utilityOpen) {
+      closeUtilityPanels();
+      setTeamVisible(false);
+      setSidebarVisible(true);
+    } else {
+      setSidebarVisible((prev) => !prev);
+    }
     if (window.innerWidth <= 860) {
       captureDrawerTrigger();
       setSidebarVisible(false);
@@ -714,9 +727,8 @@ function AuthenticatedApp({
       setTerminalVisible(false);
       closeUtilityPanels();
     }
-    setChatVisible(true);
     setChatFocusNonce((value) => value + 1);
-  }, [captureDrawerTrigger, closeUtilityPanels]);
+  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, teamVisible, workspaceView]);
 
   const toggleChatPanel = useCallback(() => {
     const nextOpen = !chatVisible;
@@ -3061,15 +3073,6 @@ function AuthenticatedApp({
         <nav className="activity-rail" data-compact-modal-background inert={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-hidden={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-label={t("app.workspace")}>
           <button
             type="button"
-            className="activity-rail-brand"
-            onClick={focusChat}
-            title={PRODUCT_NAME}
-            aria-label={PRODUCT_NAME}
-          >
-            <BrandMark size={28} title={PRODUCT_NAME} />
-          </button>
-          <button
-            type="button"
             className={`activity-rail-btn${workspaceView === "chat" ? " active" : ""}`}
             onClick={focusChat}
             title={t("workbench.aiTasks")}
@@ -3282,25 +3285,7 @@ function AuthenticatedApp({
         </nav>
         {isLeftDockOpen && (
           <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
-            {workspaceView === "chat" ? (
-              <TaskSidebar
-                workspaceLabel={workspaceLabel}
-                workspaceDir={workspaceDir}
-                conversations={chat.conversations}
-                currentConversationId={chat.currentConversationId}
-                contextState={chat.contextState}
-                loading={chat.historyLoading}
-                loadingId={chat.historyLoadingId}
-                isStreaming={chat.isStreaming}
-                onNewTask={() => {
-                  setNewConversationRequest((value) => value + 1);
-                  setChatFocusNonce((value) => value + 1);
-                }}
-                onLoadConversation={loadChatConversation}
-                onDeleteConversation={chat.deleteConversation}
-                onRefresh={chat.refreshConversations}
-              />
-            ) : gitVisible ? (
+            {gitVisible ? (
               <GitPanel
                 key={`git:${workspaceDir}`}
                 visible={true}
@@ -3509,6 +3494,24 @@ function AuthenticatedApp({
                 })}
                 onActiveFrameChange={setDebugActiveFrame}
                 onClose={() => setDebugVisible(false)}
+              />
+            ) : workspaceView === "chat" ? (
+              <TaskSidebar
+                workspaceLabel={workspaceLabel}
+                workspaceDir={workspaceDir}
+                conversations={chat.conversations}
+                currentConversationId={chat.currentConversationId}
+                contextState={chat.contextState}
+                loading={chat.historyLoading}
+                loadingId={chat.historyLoadingId}
+                isStreaming={chat.isStreaming}
+                onNewTask={() => {
+                  setNewConversationRequest((value) => value + 1);
+                  setChatFocusNonce((value) => value + 1);
+                }}
+                onLoadConversation={loadChatConversation}
+                onDeleteConversation={chat.deleteConversation}
+                onRefresh={chat.refreshConversations}
               />
             ) : (
               <Sidebar

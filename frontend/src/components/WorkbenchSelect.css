@@ -64,13 +64,35 @@
   opacity: 0.45;
 }
 
+.workbench-select-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.workbench-select-icon svg {
+  display: block;
+  transform: none !important;
+}
+
+.workbench-select-trigger[aria-expanded="true"] .workbench-select-icon svg {
+  transform: none !important;
+}
+
 .workbench-select-trigger svg {
+  flex: 0 0 auto;
+  color: var(--ink-muted, var(--text-tertiary));
+}
+
+.workbench-select-arrow {
   flex: 0 0 auto;
   color: var(--ink-muted, var(--text-tertiary));
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), color 0.15s ease;
 }
 
-.workbench-select-trigger[aria-expanded="true"] svg {
+.workbench-select-trigger[aria-expanded="true"] .workbench-select-arrow {
   color: var(--accent);
   transform: rotate(180deg);
 }

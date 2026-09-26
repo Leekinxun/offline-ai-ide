@@ -2,19 +2,28 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
+  ArrowUp,
+  Bug,
   Check,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   Circle,
+  Code2,
   FileCode2,
+  Paperclip,
   Pause,
   Play,
   Plus,
+  RotateCcw,
   Send,
+  Brain,
+  Sparkles,
   TerminalSquare,
+  TestTube2,
   X,
 } from "lucide-react";
+import "./EditorAssistantPanel.css";
 import {
   AgentMode,
   AgentRunEvent,
@@ -133,6 +142,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const input = draftText;
   const setInput = onDraftTextChange;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
@@ -141,6 +151,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
   const [detailsCollapsed, setDetailsCollapsed] = useState(() =>
     localStorage.getItem("editorAssistantDetailsCollapsed") !== "0"
+  );
+  const [thinkingLevel, setThinkingLevel] = useState<"auto" | "off" | "low" | "medium" | "high">(() =>
+    (localStorage.getItem("editorAssistantThinkingLevel") as "auto" | "off" | "low" | "medium" | "high") || "auto"
   );
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
@@ -271,7 +284,16 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   return (
     <aside className="editor-assistant-panel" aria-label={t("workbench.editorAssistant")}>
       <header className="editor-assistant-header">
-        <strong>{t("workbench.editorAssistant")}</strong>
+        <div className="editor-assistant-title-group">
+          <Sparkles className="assistant-brand-icon" size={15} aria-hidden="true" />
+          <strong>{t("workbench.editorAssistant")}</strong>
+          {fileName && (
+            <span className="editor-assistant-file-chip" title={activeFilePath || ""}>
+              <FileCode2 size={11} aria-hidden="true" />
+              {fileName}
+            </span>
+          )}
+        </div>
         {showAssistantSummary && (runState?.executionContract || runState?.executionContractKind) && <span className={`chat-summary-status${completionEvidence?.outcome === "completed" ? " completed" : completionEvidence ? " failed" : ""}`}>{t(`chat.contract.${runState.executionContract?.kind || runState.executionContractKind}`)}</span>}
         <div className="editor-assistant-header-actions">
           {showAssistantSummary && <button
@@ -394,6 +416,67 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             container.scrollHeight - container.scrollTop - container.clientHeight < 48;
         }}
       >
+        {visibleMessages.length === 0 && !isStreaming && (
+          <div className="editor-assistant-empty-state">
+            <div className="editor-assistant-empty-icon" aria-hidden="true">
+              <Sparkles size={22} />
+            </div>
+            <div className="editor-assistant-empty-title">
+              {t("workbench.editorAssistant")}
+            </div>
+            <div className="editor-assistant-empty-desc">
+              {t("workbench.editorAssistantIntro")}
+            </div>
+            <div className="editor-assistant-quick-prompts">
+              <button
+                type="button"
+                className="editor-assistant-quick-prompt-btn"
+                onClick={() => {
+                  onDraftTextChange(t("workbench.quickPrompt.explainText"));
+                  textareaRef.current?.focus();
+                }}
+              >
+                <FileCode2 size={13} aria-hidden="true" />
+                <span>{t("workbench.quickPrompt.explain")}</span>
+              </button>
+              <button
+                type="button"
+                className="editor-assistant-quick-prompt-btn"
+                onClick={() => {
+                  onAgentModeChange("code");
+                  onDraftTextChange(t("workbench.quickPrompt.testsText"));
+                  textareaRef.current?.focus();
+                }}
+              >
+                <TestTube2 size={13} aria-hidden="true" />
+                <span>{t("workbench.quickPrompt.tests")}</span>
+              </button>
+              <button
+                type="button"
+                className="editor-assistant-quick-prompt-btn"
+                onClick={() => {
+                  onDraftTextChange(t("workbench.quickPrompt.refactorText"));
+                  textareaRef.current?.focus();
+                }}
+              >
+                <Code2 size={13} aria-hidden="true" />
+                <span>{t("workbench.quickPrompt.refactor")}</span>
+              </button>
+              <button
+                type="button"
+                className="editor-assistant-quick-prompt-btn"
+                onClick={() => {
+                  onDraftTextChange(t("workbench.quickPrompt.bugsText"));
+                  textareaRef.current?.focus();
+                }}
+              >
+                <Bug size={13} aria-hidden="true" />
+                <span>{t("workbench.quickPrompt.bugs")}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {visibleMessages.map((message, index) => (
             <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`} aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
               {message.role === "assistant" ? (
@@ -504,58 +587,144 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           placeholder={t(`workbench.assistantPlaceholder.${agentMode}`)}
           aria-label={t("workbench.askAboutCurrentFile")}
         />
-        <ChatAttachmentPicker
-          attachments={attachmentDraft.attachments}
-          onAdd={attachmentDraft.add}
-          onRemove={attachmentDraft.remove}
-          onRetry={attachmentDraft.retry}
-          disabled={isStreaming || !connected}
-          warning={attachmentWarning || attachmentSubmissionError}
-          notice={attachmentSubmissionNotice}
-          checkingDelivery={attachmentDeliveryChecking}
-          onRecheckDelivery={onRecheckAttachmentDelivery}
-          recheckDisabled={!connected}
+
+        <input
+          ref={fileInputRef}
+          className="sr-only"
+          type="file"
+          accept="image/*,application/pdf,text/*,.txt,.md,.py,.js,.jsx,.ts,.tsx,.json,.yaml,.yml,.toml,.css,.html,.sh,.rs,.go,.java,.c,.cpp"
+          multiple
+          aria-label={t("chat.attachFiles")}
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files || []);
+            if (files.length) attachmentDraft.add(files);
+            event.currentTarget.value = "";
+          }}
         />
+
+        {attachmentDraft.attachments.length > 0 && (
+          <div className="editor-assistant-attachment-drafts" aria-label={t("chat.attachments")}>
+            {attachmentDraft.attachments.map((attachment) => (
+              <div className={`editor-assistant-draft-chip status-${attachment.status}`} key={attachment.localId}>
+                <span title={attachment.name}>{attachment.name}</span>
+                {attachment.status === "error" && (
+                  <button
+                    type="button"
+                    disabled={isStreaming || !connected}
+                    onClick={() => attachmentDraft.retry(attachment.localId)}
+                    title={t("chat.attachmentRetry")}
+                  >
+                    <RotateCcw size={10} aria-hidden="true" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => attachmentDraft.remove(attachment.localId)}
+                  title={t("chat.attachmentRemove")}
+                >
+                  <X size={10} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(attachmentWarning || attachmentSubmissionError || attachmentSubmissionNotice) && (
+          <div className="editor-assistant-attachment-notice" role="alert">
+            <span>{attachmentWarning || attachmentSubmissionError || attachmentSubmissionNotice}</span>
+            {attachmentDeliveryChecking && onRecheckAttachmentDelivery && (
+              <button
+                type="button"
+                className="editor-assistant-recheck-btn"
+                onClick={onRecheckAttachmentDelivery}
+                disabled={!connected}
+              >
+                <RotateCcw size={10} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="editor-assistant-composer-controls">
-          <div className="editor-assistant-composer-mode">
-            <span className="sr-only">{t("workbench.workMode")}</span>
-            <WorkbenchSelect
-              label={t("workbench.workMode")}
-              value={agentMode}
-              onChange={(value) => onAgentModeChange(value as AgentMode)}
-              disabled={isStreaming}
-              title={t("workbench.workMode")}
-              options={(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => ({
-                value: mode,
-                label: t(`chat.mode.${mode}.label`),
-              }))}
-            />
+          <div className="editor-assistant-composer-left">
+            <button
+              type="button"
+              className="editor-assistant-plus-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming || !connected}
+              title={t("chat.attachFiles")}
+              aria-label={t("chat.attachFiles")}
+            >
+              <Plus size={14} aria-hidden="true" />
+            </button>
+            <div className="editor-assistant-composer-mode">
+              <span className="sr-only">{t("workbench.workMode")}</span>
+              <WorkbenchSelect
+                label={t("workbench.workMode")}
+                value={agentMode}
+                onChange={(value) => onAgentModeChange(value as AgentMode)}
+                disabled={isStreaming}
+                title={t("workbench.workMode")}
+                options={(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => ({
+                  value: mode,
+                  label: t(`chat.mode.${mode}.label`),
+                }))}
+              />
+            </div>
           </div>
-          <div className="editor-assistant-composer-model">
-            <span className="sr-only">{t("workbench.model")}</span>
-            <ModelSelector
-              value={selectedModelName}
-              onChange={onModelNameChange}
-              disabled={isStreaming || runtimeOptions.models.length === 0}
-              models={runtimeOptions.models}
-              automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
-              label={t("workbench.model")}
-            />
+          <div className="editor-assistant-composer-right">
+            <div className="editor-assistant-composer-model">
+              <span className="sr-only">{t("workbench.model")}</span>
+              <ModelSelector
+                value={selectedModelName}
+                onChange={onModelNameChange}
+                disabled={isStreaming || runtimeOptions.models.length === 0}
+                models={runtimeOptions.models}
+                automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+                label={t("workbench.model")}
+              />
+            </div>
+            <div className="editor-assistant-composer-thinking">
+              <span className="sr-only">{t("workbench.thinkingLevel")}</span>
+              <WorkbenchSelect
+                label={t("workbench.thinkingLevel")}
+                value={thinkingLevel}
+                onChange={(val) => {
+                  const level = val as "auto" | "off" | "low" | "medium" | "high";
+                  setThinkingLevel(level);
+                  localStorage.setItem("editorAssistantThinkingLevel", level);
+                }}
+                disabled={isStreaming}
+                title={t("workbench.thinkingLevel")}
+                icon={<Brain size={12} className="editor-assistant-thinking-icon" aria-hidden="true" />}
+                options={[
+                  { value: "auto", label: t("workbench.thinkingLevel.auto") },
+                  { value: "high", label: t("workbench.thinkingLevel.high") },
+                  { value: "medium", label: t("workbench.thinkingLevel.medium") },
+                  { value: "low", label: t("workbench.thinkingLevel.low") },
+                  { value: "off", label: t("workbench.thinkingLevel.off") },
+                ]}
+              />
+            </div>
+            {fileName && (
+              <span className="editor-assistant-inline-context" title={activeFilePath || ""}>
+                <FileCode2 size={11} aria-hidden="true" />
+                <span>{fileName}</span>
+              </span>
+            )}
+            <button
+              type="button"
+              className="editor-assistant-send-btn"
+              onClick={handleSubmit}
+              disabled={!connected || (isStreaming
+                ? !input.trim() || attachmentDeliveryChecking
+                : ((!input.trim() && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || !!attachmentWarning))}
+              title={isStreaming ? t("chat.correct") : t("chat.send")}
+              aria-label={isStreaming ? t("chat.correct") : t("chat.send")}
+            >
+              <ArrowUp size={14} aria-hidden="true" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!connected || (isStreaming
-              ? !input.trim() || attachmentDeliveryChecking
-              : ((!input.trim() && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || !!attachmentWarning))}
-            title={isStreaming ? t("chat.correct") : t("chat.send")}
-            aria-label={isStreaming ? t("chat.correct") : t("chat.send")}
-          >
-            <Send size={14} />
-          </button>
-        </div>
-        <div className="editor-assistant-composer-attachment">
-          <span title={activeFilePath || t("workbench.noContextAttached")}><FileCode2 size={13} /> {fileName ? t("workbench.fileAttached", { file: fileName }) : t("workbench.noContextAttached")}</span>
         </div>
       </div>
     </aside>
