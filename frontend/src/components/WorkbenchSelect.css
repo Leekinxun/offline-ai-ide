@@ -1,0 +1,270 @@
+/* ==========================================================================
+   WorkbenchSelect.css - 现代高级微卡下拉框独立物理隔离样式
+   契约：对齐 UserPopover 微卡拟态质感、磨砂蓝微光束聚焦态、暗色模式蓝色漫反射渐变阴影
+   规范：选项无突兀底色块内嵌、消灭外边框视觉假象、紧随触发器舒展布局
+   ========================================================================== */
+
+.workbench-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 下拉触发器（36px 舒展高度，8px 微圆角） */
+.workbench-select-trigger {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line-subtle, rgba(125, 125, 125, 0.16));
+  border-radius: 8px;
+  outline: 0;
+  background: color-mix(in srgb, var(--surface-quiet, #181b20) 65%, transparent);
+  color: var(--ink, var(--text-primary));
+  box-shadow: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  text-align: left;
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+  box-sizing: border-box;
+}
+
+.workbench-select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-subtle));
+  background: color-mix(in srgb, var(--surface-quiet, #181b20) 85%, transparent);
+}
+
+/* 展开态与聚焦态：统一使用磨砂蓝微光束（Frosted Blue Halo），绝无生硬厚描边 */
+.workbench-select-trigger:focus-visible,
+.workbench-select-trigger[aria-expanded="true"] {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-subtle));
+  background: color-mix(in srgb, var(--surface-quiet, #181b20) 85%, var(--accent) 4%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 2px 10px 0 color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+[data-theme="dark"] .workbench-select-trigger:focus-visible,
+[data-theme="dark"] .workbench-select-trigger[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, 0.12));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 0 14px 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.workbench-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.workbench-select-trigger svg {
+  flex: 0 0 auto;
+  color: var(--ink-muted, var(--text-tertiary));
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), color 0.15s ease;
+}
+
+.workbench-select-trigger[aria-expanded="true"] svg {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.workbench-select-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 下拉菜单浮层容器（10px 优雅微圆角、双主题高级漫反射阴影） */
+.workbench-select-menu {
+  position: fixed;
+  z-index: 1400;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  padding: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--elevated-stroke, rgba(125, 125, 125, 0.16));
+  border-radius: 10px;
+  outline: 0;
+  backdrop-filter: blur(20px) saturate(1.2);
+  background: color-mix(in srgb, var(--surface-panel-strong, #ffffff) 96%, transparent);
+  box-shadow:
+    0 12px 28px -4px rgba(0, 0, 0, 0.16),
+    0 3px 10px -2px rgba(0, 0, 0, 0.06);
+  animation: workbench-select-bloom 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-subtle, rgba(125, 125, 125, 0.2)) transparent;
+}
+
+/* 暗色模式下：全面呈现深邃通透的蓝色渐变漫反射环境阴影 */
+[data-theme="dark"] .workbench-select-menu {
+  background: color-mix(in srgb, var(--surface-panel-strong, #1b1e23) 98%, transparent);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 16px -2px rgba(0, 0, 0, 0.4),
+    0 12px 36px -6px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 24px 70px -12px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@keyframes workbench-select-bloom {
+  from {
+    opacity: 0;
+    transform: translateY(var(--select-bloom-offset, 4px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.workbench-select-menu.opens-above {
+  --select-bloom-offset: -4px;
+}
+
+.workbench-select-menu::-webkit-scrollbar {
+  width: 5px;
+}
+
+.workbench-select-menu::-webkit-scrollbar-thumb {
+  background: var(--line-subtle, rgba(125, 125, 125, 0.2));
+  border-radius: 3px;
+}
+
+/* 头部可选计数栏（如有） */
+.workbench-select-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--line-subtle, rgba(125, 125, 125, 0.12));
+  margin-bottom: 2px;
+  color: var(--ink-muted, var(--text-tertiary));
+  font-size: 11px;
+}
+
+.workbench-select-menu-head strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--bg-hover, rgba(125, 125, 125, 0.1));
+  font-size: 10px;
+}
+
+/* 选项条目微卡（舒适 32px 步长，对齐 UserPopover 规范） */
+.workbench-select-option {
+  display: flex;
+  position: relative;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink, var(--text-primary));
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+  box-sizing: border-box;
+}
+
+.workbench-select-option:hover,
+.workbench-select-option.active {
+  background: var(--bg-hover, rgba(125, 125, 125, 0.08));
+  color: var(--ink, var(--text-primary));
+}
+
+/* 选中项：底色保持透明，文字以强调色加粗，右侧蓝勾，彻底杜绝白框包裹假象 */
+.workbench-select-option.selected {
+  color: var(--accent);
+  font-weight: 600;
+  background: transparent;
+}
+
+.workbench-select-option.selected:hover,
+.workbench-select-option.selected.active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+}
+
+.workbench-select-option.selected::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.workbench-select-option-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.workbench-select-option-copy strong {
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-select-option-copy small {
+  color: var(--ink-muted, var(--text-tertiary));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.workbench-select-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--accent);
+}
+
+.workbench-select-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.workbench-select-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}

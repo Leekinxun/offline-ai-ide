@@ -18,10 +18,17 @@
   animation: user-popover-appear 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+[data-theme="dark"] .user-popover-shell {
+  box-shadow:
+    0 4px 16px -2px rgba(0, 0, 0, 0.4),
+    0 12px 36px -6px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 24px 70px -12px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 @keyframes user-popover-appear {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -29,18 +36,57 @@
   }
 }
 
-/* 顶栏用户弹窗定位 */
+/* 顶栏用户弹窗定位与归属导向微尖角 */
 .titlebar-user-popover {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
+  transform-origin: top right;
 }
 
-/* 侧边活动栏用户弹窗定位 */
+.titlebar-user-popover::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: var(--surface-panel-strong);
+  border-left: 1px solid var(--elevated-stroke);
+  border-top: 1px solid var(--elevated-stroke);
+  border-top-left-radius: 2px;
+  z-index: 1;
+}
+
+/* 侧边活动栏用户弹窗定位与归属导向微尖角 */
 .activity-user-popover {
   position: absolute;
   bottom: 0;
   left: calc(100% + 10px);
+  transform-origin: bottom left;
+}
+
+.activity-user-popover::before {
+  content: "";
+  position: absolute;
+  bottom: 12px;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: var(--surface-panel-strong);
+  border-left: 1px solid var(--elevated-stroke);
+  border-bottom: 1px solid var(--elevated-stroke);
+  border-bottom-left-radius: 2px;
+  z-index: 1;
+}
+
+/* 触发源联动状态：展开弹窗时，触发按钮呈现磨砂蓝呼应光圈 */
+.titlebar-user-menu[open] > .titlebar-user-btn .user-avatar,
+.activity-user-menu[open] > summary .activity-user-avatar {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: scale(1.05);
 }
 
 /* 头部微名片 */
