@@ -1155,11 +1155,9 @@ function AuthenticatedApp({
       if (draggingRef.current === "sidebar") {
         const layout = mainLayoutRef.current;
         const width = layout?.clientWidth || window.innerWidth;
-        const rightWidth = window.innerWidth > 1180 && layout?.classList.contains("with-run-details")
-          ? 400
-          : window.innerWidth > 1180 && layout?.classList.contains("with-editor-assistant")
-            ? panelWidthsRef.current.assistant
-            : 0;
+        const rightWidth = window.innerWidth > 1180 && (layout?.classList.contains("with-run-details") || layout?.classList.contains("with-editor-assistant"))
+          ? panelWidthsRef.current.assistant
+          : 0;
         const maxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
           FILES_SIDEBAR_MAX_WIDTH,
           width - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
@@ -4015,25 +4013,7 @@ function AuthenticatedApp({
           onPlanAmendmentDecision={chat.decidePlanAmendment}
           style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
         />
-        <RunDetailsPanel
-          token={token}
-          workspaceDir={workspaceDir}
-          visible={runDetailsVisible}
-          summary={chat.currentRunSummary}
-          runState={chat.runState}
-          errorCount={problemCounts.errors}
-          warningCount={problemCounts.warnings}
-          contextManifest={chat.contextManifest}
-          activeTab={runDetailsTab}
-          onTabChange={setRunDetailsTab}
-          onOpenFile={openFile}
-          onOpenDiff={handleOpenGitDiff}
-          onClose={() => {
-            setRunDetailsVisible(false);
-            if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
-          }}
-        />
-        {workspaceView === "files" && editorAssistantVisible && !runDetailsVisible && (
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
             role="separator"
@@ -4047,42 +4027,87 @@ function AuthenticatedApp({
             onKeyDown={(e) => handlePanelResizeKeyDown("assistant", e)}
           />
         )}
-        <EditorAssistantPanel
-          token={token}
-          visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
-          activeFilePath={activeFilePath}
-          activeFileDirty={Boolean(activeFile?.modified)}
-          messages={chat.messages}
-          connected={chat.connected}
-          isStreaming={chat.isStreaming}
-          agentMode={chat.agentMode}
-          runtimeOptions={chat.runtimeOptions}
-          selectedModelName={chat.selectedModelName}
-          draftText={chatDraftText}
-          onDraftTextChange={setChatDraftText}
-          attachmentDraft={chatAttachmentDraft}
-          attachmentWarning={attachmentWarning}
-          attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
-          onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
-          attachmentSubmissionError={attachmentSubmissionError}
-          attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-          runState={chat.runState}
-          currentRunSummary={chat.currentRunSummary}
-          contextManifest={chat.contextManifest}
-          contextReadOnly={readOnlyWorkspace}
-          pendingApprovals={chat.pendingApprovals}
-          onAgentModeChange={chat.setAgentMode}
-          onModelNameChange={chat.setSelectedModelName}
-          onSend={handleChatSend}
-          onSteer={handleChatSteer}
-          onStop={chat.stopCurrentRun}
-          onResume={chat.resumeConversation}
-          onNewConversation={clearChatConversation}
-          onToolApproval={chat.respondToToolApproval}
-          onApproveConversationTools={chat.approveConversationTools}
-          onPlanAmendmentDecision={chat.decidePlanAmendment}
-          onClose={() => setEditorAssistantVisible(false)}
-        />
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+          <aside
+            className="workbench-right-dock"
+            aria-label={runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
+          >
+            {runDetailsVisible ? (
+              <RunDetailsPanel
+                token={token}
+                workspaceDir={workspaceDir}
+                visible={runDetailsVisible}
+                summary={chat.currentRunSummary}
+                runState={chat.runState}
+                errorCount={problemCounts.errors}
+                warningCount={problemCounts.warnings}
+                contextManifest={chat.contextManifest}
+                activeTab={runDetailsTab}
+                onTabChange={setRunDetailsTab}
+                onOpenFile={openFile}
+                onOpenDiff={handleOpenGitDiff}
+                onClose={() => {
+                  setRunDetailsVisible(false);
+                  if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
+                }}
+              />
+            ) : (
+              <EditorAssistantPanel
+                token={token}
+                visible={true}
+                activeFilePath={activeFilePath}
+                activeFileDirty={Boolean(activeFile?.modified)}
+                messages={chat.messages}
+                connected={chat.connected}
+                isStreaming={chat.isStreaming}
+                agentMode={chat.agentMode}
+                runtimeOptions={chat.runtimeOptions}
+                selectedModelName={chat.selectedModelName}
+                draftText={chatDraftText}
+                onDraftTextChange={setChatDraftText}
+                attachmentDraft={chatAttachmentDraft}
+                attachmentWarning={attachmentWarning}
+                attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+                onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+                attachmentSubmissionError={attachmentSubmissionError}
+                attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
+                runState={chat.runState}
+                currentRunSummary={chat.currentRunSummary}
+                contextManifest={chat.contextManifest}
+                contextReadOnly={readOnlyWorkspace}
+                pendingApprovals={chat.pendingApprovals}
+                onAgentModeChange={chat.setAgentMode}
+                onModelNameChange={chat.setSelectedModelName}
+                onSend={handleChatSend}
+                onSteer={handleChatSteer}
+                onStop={chat.stopCurrentRun}
+                onResume={chat.resumeConversation}
+                onNewConversation={clearChatConversation}
+                onToolApproval={chat.respondToToolApproval}
+                onApproveConversationTools={chat.approveConversationTools}
+                onPlanAmendmentDecision={chat.decidePlanAmendment}
+                onClose={() => setEditorAssistantVisible(false)}
+              />
+            )}
+          </aside>
+        )}
+        {workspaceView === "chat" && runDetailsVisible && (
+          <RunDetailsPanel
+            token={token}
+            workspaceDir={workspaceDir}
+            visible={runDetailsVisible}
+            summary={chat.currentRunSummary}
+            runState={chat.runState}
+            errorCount={problemCounts.errors}
+            warningCount={problemCounts.warnings}
+            contextManifest={chat.contextManifest}
+            activeTab={runDetailsTab}
+            onTabChange={setRunDetailsTab}
+            onOpenFile={openFile}
+            onOpenDiff={handleOpenGitDiff}
+            onClose={() => setRunDetailsVisible(false)}
+          />
+        )}
       </div>
 
       {/* Status Bar */}

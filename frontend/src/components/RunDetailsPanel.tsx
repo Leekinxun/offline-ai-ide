@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Check, ChevronRight, Download, ExternalLink, FileCode2, GitPullRequest, Network, TerminalSquare, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Download, ExternalLink, FileCode2, GitPullRequest, Network, TerminalSquare, Trash2, X } from "lucide-react";
 import { AgentRunState, CausalTraceEvent, ConversationRunSummary } from "../types";
 import { useI18n } from "../i18n";
 import { useTrace } from "../hooks/useTrace";
@@ -11,6 +11,7 @@ import { DeliveryOperationCard } from "./DeliveryOperationCard";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { SafeExternalLink } from "./SafeExternalLink";
+import "./RunDetailsPanel.css";
 
 interface RunDetailsPanelProps {
   token: string;
@@ -79,11 +80,13 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
   return (
     <aside className="run-details-panel" aria-label={t("workbench.runDetails")}> 
       <header className="run-details-header">
-        <div>
+        <div className="run-details-header-title">
           <strong>{t("workbench.runDetails")}</strong>
-          <span>{runState ? t(`chat.taskStatus.${runState.status}`) : t("workbench.ready")}</span>
+          <span className={`run-details-status-badge tone-${runTone}`}>
+            {runState ? t(`chat.taskStatus.${runState.status}`) : t("workbench.ready")}
+          </span>
         </div>
-        <button type="button" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
+        <button type="button" className="run-details-close-btn" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
           <X size={15} />
         </button>
       </header>
@@ -110,52 +113,131 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
 
       {activeTab === "changes" && (
         <div id="run-details-changes" role="tabpanel" aria-labelledby="run-details-tab-changes" className="run-details-body">
-          <section className="run-details-summary">
-            <span>{t("workbench.filesChanged")}</span>
-            <strong>{changedFiles.length}</strong>
-          </section>
-          <div className="run-details-section-title">
-            <span>{t("workbench.changedFiles")}</span>
-            <span>{changedFiles.length}</span>
+          <div className="run-details-section-bar">
+            <span className="run-details-section-title">
+              <FileCode2 size={13} />
+              {t("workbench.changedFiles")}
+            </span>
+            <span className="run-details-count-chip">{changedFiles.length}</span>
           </div>
           {changedFiles.length === 0 ? (
             <div className="run-details-empty">{t("chat.noChanges")}</div>
           ) : (
             <div className="run-details-file-list">
               {changedFiles.map((path) => (
-                <button type="button" key={path} onClick={() => onOpenDiff(path)}>
-                  <FileCode2 size={14} />
-                  <span><strong>{path.split("/").pop()}</strong><small>{path}</small></span>
-                  <span className="run-details-file-state">M</span>
-                  <ChevronRight size={13} />
+                <button type="button" key={path} className="run-details-file-item" onClick={() => onOpenDiff(path)}>
+                  <FileCode2 size={14} className="file-icon" />
+                  <span className="file-info">
+                    <strong>{path.split("/").pop()}</strong>
+                    <small>{path}</small>
+                  </span>
+                  <span className="file-badge state-m">M</span>
+                  <ChevronRight size={13} className="file-chevron" />
                 </button>
               ))}
             </div>
           )}
-          <button
-            type="button"
-            className="run-details-open-file"
-            disabled={changedFiles.length === 0}
-            onClick={() => changedFiles[0] && onOpenFile(changedFiles[0])}
-          >
-            {t("workbench.openFirstChange")}
-          </button>
+          {changedFiles.length > 0 && (
+            <div className="run-details-action-group">
+              <button
+                type="button"
+                className="run-details-open-file"
+                onClick={() => changedFiles[0] && onOpenFile(changedFiles[0])}
+              >
+                {t("workbench.openFirstChange")}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
       {activeTab === "checks" && (
-        <div id="run-details-checks" role="tabpanel" aria-labelledby="run-details-tab-checks" className="run-details-body run-check-list">
-          {evidence && <>
-            <div className={evidenceOutcome === "completed" ? "" : "warning"} role={evidenceOutcome === "completed" ? undefined : "alert"}>{evidenceOutcome === "completed" ? <Check size={14} /> : <X size={14} />}<span>{t("chat.outcome")}</span><strong>{t(`chat.outcome.${evidenceOutcome}`)}</strong></div>
-            {evidence.ledger.verification.map((check, index) => <div className={check.status === "passed" ? "" : "warning"} key={`${check.command}-${index}`}><Check size={14} /><span><code>{check.command}</code><small>{check.toolCallId || "—"} · {check.outputDigest || "—"}</small></span><strong>{t(`chat.verification.${check.status}`)} {check.exitCode !== undefined ? check.exitCode : ""}</strong></div>)}
-            {evidence.ledger.criteria.map((criterion, index) => <div className={criterion.state === "passed" ? "" : "warning"} key={`${criterion.criterion}-${index}`}><Check size={14} /><span>{criterion.criterion}<small>{criterion.evidenceRefs.join(", ") || "—"}</small></span><strong>{t(`chat.criterion.${criterion.state}`)}</strong></div>)}
-            {evidence.ledger.blockers.map((blocker) => <div className="warning" key={blocker}><X size={14} /><span>{t("chat.blocker")}</span><strong>{blocker}</strong></div>)}
-          </>}
-          {qualityGate && <div className={qualityGate.status === "blocked" ? "warning" : ""} role={qualityGate.status === "blocked" ? "alert" : undefined}>{qualityGate.status === "blocked" ? <X size={14} /> : <Check size={14} />}<span>{t("chat.qualityGate")}{qualityGate.error && <small>{qualityGate.error}</small>}</span><strong>{t(`chat.qualityGate.${qualityGate.status}`)}</strong></div>}
-          <div><Check size={14} /><span>{t("workbench.toolCalls")}</span><strong>{summary?.toolCallCount || 0}</strong></div>
-          <div><Check size={14} /><span>{t("workbench.commands")}</span><strong>{summary?.commandCount || 0}</strong></div>
-          <div className={errorCount ? "warning" : ""}><Check size={14} /><span>{t("problems.error")}</span><strong>{errorCount}</strong></div>
-          <div className={warningCount ? "warning" : ""}><Check size={14} /><span>{t("problems.warning")}</span><strong>{warningCount}</strong></div>
+        <div id="run-details-checks" role="tabpanel" aria-labelledby="run-details-tab-checks" className="run-details-body run-check-page">
+          <div className={`run-outcome-card tone-${evidenceOutcome === "completed" ? "success" : evidenceOutcome === "failed" ? "danger" : "warning"}`} role={evidenceOutcome === "completed" ? undefined : "alert"}>
+            <div className="run-outcome-icon">
+              {evidenceOutcome === "completed" ? <Check size={18} /> : <AlertCircle size={18} />}
+            </div>
+            <div className="run-outcome-info">
+              <strong>{evidenceOutcome ? t(`chat.outcome.${evidenceOutcome}`) : t("workbench.ready")}</strong>
+              <span>
+                {qualityGate ? `${t("chat.qualityGate")}: ${t(`chat.qualityGate.${qualityGate.status}`)}` : t("chat.outcome")}
+                {qualityGate?.error && ` · ${qualityGate.error}`}
+              </span>
+            </div>
+          </div>
+
+          <div className="run-metrics-grid">
+            <div className="run-metric-card">
+              <span>{t("workbench.toolCalls")}</span>
+              <strong>{summary?.toolCallCount || 0}</strong>
+            </div>
+            <div className="run-metric-card">
+              <span>{t("workbench.commands")}</span>
+              <strong>{summary?.commandCount || 0}</strong>
+            </div>
+            <div className={`run-metric-card ${errorCount ? "tone-danger" : ""}`}>
+              <span>{t("problems.error")}</span>
+              <strong>{errorCount}</strong>
+            </div>
+            <div className={`run-metric-card ${warningCount ? "tone-warning" : ""}`}>
+              <span>{t("problems.warning")}</span>
+              <strong>{warningCount}</strong>
+            </div>
+          </div>
+
+          {evidence?.ledger.blockers.map((blocker) => (
+            <div className="run-check-item tone-danger" key={blocker}>
+              <span className="run-check-item-icon"><X size={14} /></span>
+              <div className="run-check-item-content">
+                <strong>{t("chat.blocker")}</strong>
+                <small>{blocker}</small>
+              </div>
+            </div>
+          ))}
+
+          {evidence && evidence.ledger.verification.length > 0 && (
+            <div className="run-check-section">
+              <div className="run-details-section-bar">
+                <span className="run-details-section-title">{t("taskState.evidence")}</span>
+                <span className="run-details-count-chip">{evidence.ledger.verification.length}</span>
+              </div>
+              {evidence.ledger.verification.map((check, index) => (
+                <div className={`run-check-item ${check.status === "passed" ? "tone-success" : "tone-warning"}`} key={`${check.command}-${index}`}>
+                  <span className="run-check-item-icon">
+                    {check.status === "passed" ? <Check size={14} /> : <AlertCircle size={14} />}
+                  </span>
+                  <div className="run-check-item-content">
+                    <code>{check.command}</code>
+                    <small>{check.toolCallId || "—"} · {check.outputDigest || "—"}</small>
+                  </div>
+                  <span className="run-check-item-badge">
+                    {t(`chat.verification.${check.status}`)} {check.exitCode !== undefined ? check.exitCode : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {evidence && evidence.ledger.criteria.length > 0 && (
+            <div className="run-check-section">
+              <div className="run-details-section-bar">
+                <span className="run-details-section-title">{t("chat.criterion")}</span>
+                <span className="run-details-count-chip">{evidence.ledger.criteria.length}</span>
+              </div>
+              {evidence.ledger.criteria.map((criterion, index) => (
+                <div className={`run-check-item ${criterion.state === "passed" ? "tone-success" : "tone-warning"}`} key={`${criterion.criterion}-${index}`}>
+                  <span className="run-check-item-icon">
+                    {criterion.state === "passed" ? <Check size={14} /> : <AlertCircle size={14} />}
+                  </span>
+                  <div className="run-check-item-content">
+                    <strong>{criterion.criterion}</strong>
+                    <small>{criterion.evidenceRefs.join(", ") || "—"}</small>
+                  </div>
+                  <span className="run-check-item-badge">{t(`chat.criterion.${criterion.state}`)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -175,7 +257,10 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
       )}
 
       {activeTab === "delivery" && <div id="run-details-delivery" role="tabpanel" aria-labelledby="run-details-tab-delivery" className="run-details-body run-delivery-evidence">
-        <section className="run-details-summary"><span>{t("delivery.operations")}</span><strong>{gitDelivery.operations.length}</strong></section>
+        <div className="run-details-section-bar">
+          <span className="run-details-section-title">{t("delivery.operations")}</span>
+          <span className="run-details-count-chip">{gitDelivery.operations.length}</span>
+        </div>
         {gitDelivery.error && <div className="run-details-empty" role="alert">{gitDelivery.error}</div>}
         {gitDelivery.operations.filter((operation) => !runState?.runId || operation.provenance.runId === runState.runId || operation.preflight.evidenceSummary?.runId === runState.runId).map((operation) => <DeliveryOperationCard key={operation.id} operation={operation} />)}
         {providerDelivery.deliveries.filter((delivery) => !runState?.runId || delivery.originRunId === runState.runId || delivery.parentRunId === runState.runId).map((delivery) => <article className="run-delivery-card" key={delivery.id}><GitPullRequest size={15} /><div><strong>{delivery.remote.title}</strong><span>{t(`delivery.status.${delivery.remote.state}`)} · {t(`delivery.merge.${delivery.remote.mergeReadiness}`)}</span><code>{delivery.headSha.slice(0, 12)} · {delivery.evidenceLedgerDigest.slice(0, 12)}</code></div><SafeExternalLink href={delivery.remote.url} aria-label={t("delivery.openProvider")}><ExternalLink size={13} /></SafeExternalLink></article>)}
@@ -183,16 +268,40 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
       </div>}
 
       {activeTab === "terminal" && (
-        <div id="run-details-terminal" role="tabpanel" aria-labelledby="run-details-tab-terminal" className="run-details-terminal">
-          <TerminalSquare size={15} />
-          <div>
-            <strong>{runState?.event?.label || t("workbench.terminalIdle")}</strong>
-            <pre>{runState?.event?.detail || t("workbench.terminalHint")}</pre>
+        <div id="run-details-terminal" role="tabpanel" aria-labelledby="run-details-tab-terminal" className="run-details-body run-terminal-page">
+          <div className="run-details-terminal-window">
+            <div className="run-details-terminal-titlebar">
+              <div className="terminal-dots" aria-hidden="true">
+                <span className="dot dot-close" />
+                <span className="dot dot-minimize" />
+                <span className="dot dot-expand" />
+              </div>
+              <div className="run-details-terminal-title">
+                <TerminalSquare size={13} />
+                <span>{runState?.event?.label || t("workbench.terminalIdle")}</span>
+              </div>
+              <span className={`terminal-status-badge ${runState?.status === "running" ? "running" : "idle"}`}>
+                {runState?.status === "running" ? t("chat.taskStatus.running") : t("workbench.ready")}
+              </span>
+            </div>
+            <div className="run-details-terminal-screen">
+              <div className="terminal-prompt-line">
+                <span className="terminal-prompt-char">❯</span>
+                <span className="terminal-prompt-cmd">ide.run</span>
+              </div>
+              <pre>{runState?.event?.detail || t("workbench.terminalHint")}</pre>
+            </div>
           </div>
         </div>
       )}
       {activeTab === "trace" && <div id="run-details-trace" role="tabpanel" aria-labelledby="run-details-tab-trace" className="run-details-body trace-panel">
-        <div className="trace-toolbar"><span>{trace.metrics ? t("trace.metrics", { count: trace.metrics.eventCount, bytes: Math.round(trace.metrics.totalBytes / 1024) }) : t("trace.retentionHint")}</span><button type="button" onClick={() => void trace.exportTrace()} disabled={!events.length || !trace.available}><Download size={12} />{t("trace.export")}</button><button type="button" onClick={() => { setTraceActionError(null); setConfirmIntent({ id: "trace-delete", title: t("trace.deleteTitle"), description: t("trace.deleteConfirm"), confirmLabel: t("common.delete"), tone: "danger" }); }} disabled={!events.length || !trace.available}><Trash2 size={12} />{t("common.delete")}</button></div>
+        <div className="trace-toolbar">
+          <span>{trace.metrics ? t("trace.metrics", { count: trace.metrics.eventCount, bytes: Math.round(trace.metrics.totalBytes / 1024) }) : t("trace.retentionHint")}</span>
+          <div className="trace-actions">
+            <button type="button" onClick={() => void trace.exportTrace()} disabled={!events.length || !trace.available}><Download size={12} />{t("trace.export")}</button>
+            <button type="button" className="btn-danger" onClick={() => { setTraceActionError(null); setConfirmIntent({ id: "trace-delete", title: t("trace.deleteTitle"), description: t("trace.deleteConfirm"), confirmLabel: t("common.delete"), tone: "danger" }); }} disabled={!events.length || !trace.available}><Trash2 size={12} />{t("common.delete")}</button>
+          </div>
+        </div>
         {trace.retention && <details className="trace-retention"><summary>{t("trace.retention")}</summary><span>{t("trace.retentionPreview", { archive: trace.preview?.wouldArchive || 0, delete: trace.preview?.wouldDelete || 0 })}</span><button type="button" onClick={() => void trace.updateRetention({}, true)}>{t("trace.applyRetention")}</button></details>}
         {trace.error && <div className="run-details-empty" role="status">{trace.error}</div>}
         {!events.length ? <div className="run-details-empty">{t("trace.empty")}</div> : <ol className="trace-timeline" aria-label={t("trace.title")}>{events.map((event, index) => <li key={event.eventId} className={traceEventFailed(event) ? "failed" : ""}><span className="trace-node"><Network size={12} /></span><details><summary><strong>{event.action}</strong><small>{new Date(event.timestamp).toLocaleTimeString()} · {t(`trace.kind.${event.kind}`)}</small></summary>{event.evidence && <pre>{event.evidence}</pre>}{event.toolCallId && <code>{event.toolCallId}</code>}{(event.agentId || event.metadata) && <small>{[event.agentId, event.metadata?.path as string, event.metadata?.validation as string].filter(Boolean).join(" · ")}</small>}</details><span>{index + 1}</span></li>)}</ol>}
@@ -201,3 +310,4 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
     </aside>
   );
 };
+
