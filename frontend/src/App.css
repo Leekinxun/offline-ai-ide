@@ -217,6 +217,15 @@ body {
   scrollbar-width: auto;
 }
 
+/* Monaco 编辑器光标呼吸闪动频率调低一半（默认 0.5s 周期翻倍至 1.0s，更平缓温和） */
+.monaco-editor .cursor-phase,
+.monaco-editor .cursor-smooth,
+.monaco-editor .cursors-layer.cursor-phase > .cursor,
+.monaco-editor .cursors-layer.cursor-smooth > .cursor,
+.monaco-editor .cursors-layer > .cursor {
+  animation-duration: 1s !important;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -321,107 +330,7 @@ body {
   color: var(--text-primary);
 }
 
-.titlebar-command-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-}
 
-.titlebar-command-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 142px;
-  height: var(--control-height);
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-panel);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  transition: all var(--transition);
-}
-
-.titlebar-command-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--border);
-  background: var(--bg-hover);
-}
-
-.titlebar-mobile-command {
-  display: none;
-}
-
-.titlebar-command-btn span {
-  flex: 1;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.titlebar-command-btn kbd {
-  padding: 2px 5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-secondary);
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.titlebar-brand {
-  gap: 8px;
-}
-
-.titlebar-brand .brand-mark-image {
-  box-shadow: 0 4px 12px rgba(11, 87, 208, 0.14);
-}
-
-.titlebar-brand .brand-lockup-title {
-  font-size: 15px;
-}
-
-.titlebar-brand .brand-lockup-subtitle {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.titlebar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.titlebar-context-actions,
-.titlebar-panel-actions,
-.titlebar-session-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.titlebar-context-actions,
-.titlebar-session-actions {
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
-}
-
-.titlebar-panel-actions {
-  padding: 2px;
-  border: 1px solid var(--border-light);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--bg-primary) 68%, transparent);
-  box-shadow: var(--shadow-sm);
-}
 
 .team-sidebar {
   width: 320px;
@@ -2577,13 +2486,24 @@ select:focus-visible,
 
 .editor-preview-pane {
   background: var(--bg-primary);
-  overflow: hidden;
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 0;
 }
 
 .file-preview-surface {
   min-height: 100%;
   padding: 0;
   color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+.file-preview-surface.external-markdown-preview,
+.file-preview-surface.chat-markdown {
+  box-sizing: border-box;
+  padding: 24px 28px;
+  overflow-y: auto;
+  height: 100%;
 }
 
 .editor-navigation-highlight-line {
@@ -4845,68 +4765,6 @@ select:focus-visible,
   display: none;
 }
 
-/* ==================== Status Bar ==================== */
-.statusbar {
-  height: var(--statusbar-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  background: var(--surface-panel-strong);
-  border-top: none;
-  box-shadow: none;
-  font-size: 11px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.statusbar-left,
-.statusbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.statusbar-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 20px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.statusbar-action:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.statusbar-action:disabled {
-  cursor: default;
-}
-
-.statusbar-problem.error {
-  color: var(--status-danger-fg);
-}
-
-.statusbar-problem.warning {
-  color: var(--status-warning-fg);
-}
-
-.statusbar-action.running i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-forge);
-  animation: chat-run-pulse 1.5s ease-in-out infinite;
-}
-
 /* ==================== Create Dialog ==================== */
 .dialog-overlay {
   position: fixed;
@@ -5828,7 +5686,7 @@ select:focus-visible,
 
 .streaming-cursor::after {
   content: "▍";
-  animation: blink 1s step-end infinite;
+  animation: blink 1.8s step-end infinite;
   color: var(--accent);
 }
 
@@ -7861,43 +7719,8 @@ select:focus-visible,
 .activity-user-popover {
   position: absolute;
   bottom: 0;
-  left: 40px;
-  z-index: 80;
-  display: grid;
-  width: 176px;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 10px;
-  background: var(--surface-panel-strong);
-  box-shadow: var(--shadow-md);
-}
-
-.activity-user-popover strong {
-  overflow: hidden;
-  padding: 5px 7px 7px;
-  color: var(--ink);
-  font-size: 11px;
-  text-overflow: ellipsis;
-}
-
-.activity-user-popover button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-}
-
-.activity-user-popover button:hover {
-  background: var(--surface-quiet);
+  left: calc(100% + 10px);
+  z-index: 100;
 }
 
 .task-sidebar {
@@ -10692,242 +10515,6 @@ body {
 /* Workbench shell */
 .app {
   background: var(--surface-workbench);
-}
-
-.titlebar {
-  display: grid;
-  grid-template-columns: auto minmax(220px, 360px) minmax(180px, 1fr) auto;
-  gap: 12px;
-  padding: 0 14px;
-  border: none;
-  background: color-mix(in srgb, var(--surface-panel-strong) 88%, transparent);
-  backdrop-filter: blur(18px) saturate(1.2);
-  box-shadow: none;
-  z-index: 30;
-}
-
-.titlebar-left {
-  width: 192px;
-  flex: 0 0 192px;
-  padding-right: 12px;
-  border-right: 1px solid var(--border-light);
-}
-
-.workspace-breadcrumb-label {
-  display: none;
-}
-
-.workspace-breadcrumb strong {
-  max-width: 160px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.titlebar-brand .brand-lockup-subtitle {
-  display: block;
-  overflow: hidden;
-  max-width: 168px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  text-transform: none;
-  white-space: nowrap;
-}
-
-.titlebar-brand .brand-lockup-title {
-  font-size: 13px;
-}
-
-.workbench-task-pill {
-  display: flex;
-  align-items: center;
-  justify-self: start;
-  min-width: 0;
-  max-width: 360px;
-  height: 32px;
-  padding: 0 10px 0 7px;
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  background: var(--surface-panel-strong);
-}
-
-.workbench-task-mode {
-  flex: 0 0 auto;
-  padding: 3px 7px;
-  border-radius: 5px;
-  background: var(--accent-light);
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.workbench-task-title {
-  overflow: hidden;
-  margin: 0 9px;
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workbench-task-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  padding-left: 9px;
-  border-left: 1px solid var(--border-light);
-  color: var(--text-tertiary);
-  font-size: 9px;
-}
-
-.workbench-task-state i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--danger);
-}
-
-.workbench-task-state.ready i {
-  background: var(--success);
-}
-
-.workbench-task-state.warning i {
-  background: var(--warning);
-}
-
-.workbench-task-state.offline i {
-  background: var(--danger);
-}
-
-.workbench-task-state.running i {
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-light);
-  animation: chat-run-pulse 1.5s ease-in-out infinite;
-}
-
-.titlebar-command-bar {
-  position: static;
-  transform: none;
-  justify-self: end;
-  width: min(188px, 100%);
-  white-space: nowrap;
-}
-
-.titlebar-command-btn {
-  display: inline-flex;
-  width: 100%;
-  min-width: 0;
-  border-color: var(--border-light);
-  border-radius: 9px;
-  background: var(--surface-panel-strong);
-  box-shadow: var(--shadow-sm);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.titlebar-right {
-  position: relative;
-  gap: 6px;
-}
-
-.titlebar-panel-actions {
-  display: none;
-}
-
-.titlebar-context-actions,
-.titlebar-session-actions {
-  padding-left: 4px;
-  border-left: 0;
-}
-
-.titlebar-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-}
-
-.titlebar .titlebar-mobile-command {
-  display: none;
-}
-
-.user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 10px 0 4px;
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  background: var(--surface-panel-strong);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-  list-style: none;
-  box-shadow: var(--shadow-sm);
-}
-
-.user-chip::-webkit-details-marker {
-  display: none;
-}
-
-.user-avatar {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: 50%;
-  background: linear-gradient(145deg, var(--bg-secondary), var(--bg-tertiary));
-  color: var(--text-primary);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.titlebar-user-menu {
-  position: relative;
-}
-
-.titlebar-user-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 60;
-  display: grid;
-  width: 190px;
-  gap: 3px;
-  padding: 6px;
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-  background: var(--elevated-surface);
-  box-shadow: var(--shadow-md);
-}
-
-.titlebar-user-popover button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 34px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.titlebar-user-popover button:hover {
-  background: var(--bg-hover);
 }
 
 .activity-rail {

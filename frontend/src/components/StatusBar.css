@@ -1,0 +1,209 @@
+/* ==================== StatusBar Modular Styles ==================== */
+
+.statusbar {
+  height: var(--statusbar-height, 26px);
+  min-height: var(--statusbar-height, 26px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: var(--surface-panel-strong);
+  border-top: none;
+  box-shadow: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  user-select: none;
+  z-index: 20;
+  box-sizing: border-box;
+}
+
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 状态栏原子项：统一微悬停胶囊 */
+.statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: default;
+  white-space: nowrap;
+  transition: all var(--transition);
+}
+
+button.statusbar-item {
+  cursor: pointer;
+}
+
+button.statusbar-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+button.statusbar-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* 左侧：文件路径（与右侧指示文本风格统一，无悬停弹出） */
+.statusbar-filepath {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: min(320px, 32vw);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  user-select: none;
+}
+
+.statusbar-filepath-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-icon-dim {
+  color: var(--text-secondary);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+/* 问题诊断微胶囊（错误/警告精致微状态，实体质感） */
+.statusbar-problems {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--surface-quiet);
+  border: 1px solid var(--line-subtle);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.statusbar-problems:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-medium);
+}
+
+.statusbar-problem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.statusbar-problem svg {
+  flex-shrink: 0;
+}
+
+.statusbar-problem.error {
+  color: var(--status-danger-fg);
+}
+
+.statusbar-problem.error.zero {
+  color: var(--text-secondary);
+  opacity: 0.92;
+}
+
+.statusbar-problem.warning {
+  color: var(--status-warning-fg);
+}
+
+.statusbar-problem.warning.zero {
+  color: var(--text-secondary);
+  opacity: 0.92;
+}
+
+/* 光标行列指示（等宽字体防抖动） */
+.statusbar-cursor {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 只读模式微标签 */
+.statusbar-readonly-badge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* 运行任务脉冲灯 */
+.statusbar-run i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chat-run-pulse 1.5s ease-in-out infinite;
+}
+
+/* 全系统唯一三态微光连接灯 */
+.statusbar-connection {
+  gap: 6px;
+  cursor: default;
+}
+
+.statusbar-conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.statusbar-conn-dot.ready {
+  background: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent);
+}
+
+.statusbar-conn-dot.warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
+.statusbar-conn-dot.danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.statusbar-conn-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* 响应式空间折叠（当空间紧凑时优雅降级） */
+@media (max-width: 860px) {
+  .statusbar-filepath {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .statusbar-lang,
+  .statusbar-encoding {
+    display: none;
+  }
+}

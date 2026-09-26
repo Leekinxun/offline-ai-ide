@@ -877,7 +877,7 @@ export const Editor: React.FC<EditorProps> = ({
           glyphMargin: Boolean(onToggleBreakpoint || collaboration),
           scrollBeyondLastLine: false,
           renderLineHighlight: "line",
-          cursorBlinking: "smooth",
+          cursorBlinking: "phase",
           cursorSmoothCaretAnimation: "on",
           smoothScrolling: true,
           padding: { top: 12 },

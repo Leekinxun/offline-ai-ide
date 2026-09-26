@@ -1,0 +1,180 @@
+/* ==================== 统一现代用户弹窗微卡片规范 ==================== */
+.user-popover-shell {
+  min-width: 220px;
+  width: max-content;
+  max-width: 280px;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--elevated-stroke);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 92%, transparent);
+  box-shadow: 0 16px 36px -6px rgba(0, 0, 0, 0.2), 0 3px 12px -2px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(20px) saturate(1.2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1000;
+  user-select: none;
+  animation: user-popover-appear 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes user-popover-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 顶栏用户弹窗定位 */
+.titlebar-user-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+}
+
+/* 侧边活动栏用户弹窗定位 */
+.activity-user-popover {
+  position: absolute;
+  bottom: 0;
+  left: calc(100% + 10px);
+}
+
+/* 头部微名片 */
+.user-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 8px;
+}
+
+.user-popover-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.user-popover-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.user-popover-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.user-popover-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-popover-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.user-popover-sub {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-popover-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--line-subtle);
+}
+
+/* 按钮项统一步长与交互微光 */
+.user-popover-shell button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: all var(--transition);
+}
+
+.user-popover-shell button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.user-popover-shell button svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: color var(--transition);
+}
+
+.user-popover-shell button:hover svg {
+  color: var(--text-primary);
+}
+
+.user-popover-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.user-popover-kbd {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-tertiary);
+}
+
+/* 危险/退出动作悬停微警示 */
+.user-popover-shell button.user-popover-logout:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.user-popover-shell button.user-popover-logout:hover svg {
+  color: var(--danger);
+}

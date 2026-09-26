@@ -15,6 +15,8 @@ import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
+import { TitleBar } from "./components/TitleBar";
+import "./components/UserPopover.css";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
@@ -540,6 +542,9 @@ function AuthenticatedApp({
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const previewPaneRef = useRef<HTMLDivElement | null>(null);
+  const isSyncingScrollRef = useRef<"editor" | "preview" | null>(null);
+  const syncScrollTimerRef = useRef<number | null>(null);
   const draggingRef = useRef<"sidebar" | "assistant" | "chat" | "terminal" | null>(null);
   const panelWidthsRef = useRef({ sidebar: sidebarWidth, assistant: assistantWidth });
   const navigationRequestRef = useRef(0);
@@ -2772,6 +2777,119 @@ function AuthenticatedApp({
           onChange: handleEditorChange,
         })
       : null;
+
+  // 预览分栏模式双向同步滚动（支持 Markdown 与 JSON 视觉解析器）
+  useEffect(() => {
+    if (activePreviewMode !== "split" || !activeFile) {
+      return;
+    }
+
+    const editor = editorRef.current;
+    const previewContainer = previewPaneRef.current;
+    if (!editor || !previewContainer) {
+      return;
+    }
+
+    const findScrollableElement = (): HTMLElement | null => {
+      if (!previewContainer) return null;
+      const candidates = [
+        previewContainer.querySelector<HTMLElement>(".json-preview-tree"),
+        previewContainer.querySelector<HTMLElement>(".external-markdown-preview"),
+        previewContainer.querySelector<HTMLElement>(".file-preview-surface"),
+        previewContainer.querySelector<HTMLElement>("[data-scroll-container]"),
+      ];
+      for (const el of candidates) {
+        if (el && el.scrollHeight > el.clientHeight) return el;
+      }
+      const all = previewContainer.querySelectorAll<HTMLElement>("*");
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (el.scrollHeight > el.clientHeight + 2) {
+          const style = window.getComputedStyle(el);
+          if (style.overflowY === "auto" || style.overflowY === "scroll") {
+            return el;
+          }
+        }
+      }
+      if (previewContainer.scrollHeight > previewContainer.clientHeight) {
+        return previewContainer;
+      }
+      return candidates.find(Boolean) || (previewContainer.firstElementChild as HTMLElement) || previewContainer;
+    };
+
+    let scrollEl = findScrollableElement();
+
+    const clearSyncTimer = () => {
+      if (syncScrollTimerRef.current !== null) {
+        window.cancelAnimationFrame(syncScrollTimerRef.current);
+        syncScrollTimerRef.current = null;
+      }
+    };
+
+    // 1. Monaco 编辑器滚动 -> 驱动预览侧滚动
+    const handleEditorScroll = editor.onDidScrollChange((event) => {
+      if (!event.scrollTopChanged) return;
+      if (isSyncingScrollRef.current === "preview") return;
+
+      if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) {
+        scrollEl = findScrollableElement();
+      }
+      if (!scrollEl) return;
+
+      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      const previewScrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
+      if (editorScrollable <= 0 || previewScrollable <= 0) return;
+
+      const ratio = editor.getScrollTop() / editorScrollable;
+      const targetScrollTop = ratio * previewScrollable;
+
+      if (Math.abs(scrollEl.scrollTop - targetScrollTop) > 1) {
+        isSyncingScrollRef.current = "editor";
+        scrollEl.scrollTop = targetScrollTop;
+        clearSyncTimer();
+        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+          isSyncingScrollRef.current = null;
+        });
+      }
+    });
+
+    // 2. 预览侧滚动 -> 驱动 Monaco 编辑器滚动 (使用 capture 监听捕获子元素滚动)
+    const handlePreviewScroll = (e: Event) => {
+      if (isSyncingScrollRef.current === "editor") return;
+      const target = (e.target as HTMLElement) || scrollEl;
+      if (!target || target === editor.getDomNode()?.parentElement) return;
+
+      const previewScrollable = target.scrollHeight - target.clientHeight;
+      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      if (previewScrollable <= 0 || editorScrollable <= 0) return;
+
+      const ratio = target.scrollTop / previewScrollable;
+      const targetScrollTop = ratio * editorScrollable;
+
+      if (Math.abs(editor.getScrollTop() - targetScrollTop) > 1) {
+        isSyncingScrollRef.current = "preview";
+        editor.setScrollTop(targetScrollTop);
+        clearSyncTimer();
+        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+          isSyncingScrollRef.current = null;
+        });
+      }
+    };
+
+    previewContainer.addEventListener("scroll", handlePreviewScroll, {
+      capture: true,
+      passive: true,
+    });
+
+    return () => {
+      handleEditorScroll.dispose();
+      previewContainer.removeEventListener("scroll", handlePreviewScroll, {
+        capture: true,
+      });
+      clearSyncTimer();
+      isSyncingScrollRef.current = null;
+    };
+  }, [activeFile?.path, activeFile?.content, activePreviewMode, editorRef]);
   const activeConflictFile =
     activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
   const diffViewerFile =
@@ -2864,7 +2982,7 @@ function AuthenticatedApp({
     : null;
   const workbenchTaskTitle = chat.isStreaming
     ? t("chat.runInProgress")
-    : activeConversationTitle || (workspaceView === "files" ? activeFile?.name : t("workbench.newTask")) || t("app.openFileToStart");
+    : activeConversationTitle || (workspaceView === "files" ? (activeFile ? activeFile.name : null) : null);
 
   return (
     <div
@@ -2874,122 +2992,36 @@ function AuthenticatedApp({
       data-density={viewport.recommendedDensity}
     >
       {/* Title Bar */}
-      <div className="titlebar">
-        <div className="titlebar-left">
-          <BrandMark
-            size={26}
-            title={PRODUCT_NAME}
-            subtitle={workspaceDir}
-            className="titlebar-brand"
-          />
-        </div>
-        <div className="workbench-task-pill" aria-live="polite">
-          <span className="workbench-task-mode">
-            {t(`chat.mode.${chat.agentMode}.label`)}
-          </span>
-          <span className="workbench-task-title">
-            {workbenchTaskTitle}
-          </span>
-          <span className={`workbench-task-state${chat.isStreaming ? " running" : !chat.connected ? " offline" : chat.aiHealth?.status === "ready" ? " ready" : " warning"}`}>
-            <i />
-            {chat.isStreaming
-              ? t("chat.runPreparing")
-              : !chat.connected
-                ? t("status.serverDisconnected")
-                : chat.aiHealth?.status === "ready"
-                  ? t("status.aiOnline")
-                  : t("status.serverConnected")}
-          </span>
-        </div>
-        <div className="titlebar-command-bar">
-          <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("commands")}>
-            <Command size={14} />
-            <span>{t("command.commandPalette")}…</span>
-            <kbd>{platform.isMacOS ? "⌘⇧P" : "Ctrl+Shift+P"}</kbd>
-          </button>
-        </div>
-        <div className="titlebar-right">
-          {platform.isWeb && (
-            <button
-              type="button"
-              className={`titlebar-btn${isFullscreen ? " active" : ""}`}
-              onClick={toggleFullscreen}
-              title={isFullscreen ? "退出全屏" : "全屏模式 (F11)"}
-              aria-label={isFullscreen ? "退出全屏" : "全屏模式"}
-            >
-              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
-          )}
-          <button
-            className="titlebar-btn titlebar-mobile-command"
-            onClick={() => openCommandPalette("commands")}
-            title={t("command.commandPalette")}
-            aria-label={t("command.commandPalette")}
-            data-drawer-trigger="command"
-          >
-            <Command size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
-            onClick={toggleExplorerPanel}
-            title={t("app.toggleSidebar")}
-            aria-label={t("app.toggleSidebar")}
-            aria-pressed={workspaceView === "files" && sidebarVisible}
-            data-drawer-trigger="sidebar"
-          >
-            <PanelLeft size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${(workspaceView === "files" ? editorAssistantVisible : chatVisible) ? " active" : ""}`}
-            onClick={handleToggleAiAssistant}
-            title={t("app.toggleAiChat")}
-            aria-label={t("app.toggleAiChat")}
-            aria-pressed={workspaceView === "files" ? editorAssistantVisible : chatVisible}
-            data-drawer-trigger="chat"
-          >
-            <MessageSquare size={17} />
-          </button>
-          <details className="titlebar-user-menu">
-            <summary className="user-chip" title={username}>
-              <span className="user-avatar" aria-hidden="true">
-                {username.slice(0, 1).toUpperCase()}
-              </span>
-              <span>{username}</span>
-            </summary>
-            <div className="titlebar-user-popover">
-              <button type="button" onClick={onToggleTheme}>
-                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
-                <span>
-                  {t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
-                </span>
-              </button>
-              <button type="button" onClick={onToggleDensity}>
-                <LayoutGrid size={15} />
-                <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
-              </button>
-              <button type="button" onClick={() => setSettingsVisible(true)}>
-                <Settings size={15} />
-                <span>{t("app.settings")}</span>
-              </button>
-              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
-                <Smartphone size={15} />
-                <span>手机控制台</span>
-              </button>}
-              {desktopApp ? (
-                <button type="button" onClick={() => void onPickDesktopWorkspace()}>
-                  <FolderOpen size={15} />
-                  <span>打开工作区…</span>
-                </button>
-              ) : (
-                <button type="button" onClick={onLogout}>
-                  <LogOut size={15} />
-                  <span>{t("app.logout")}</span>
-                </button>
-              )}
-            </div>
-          </details>
-        </div>
-      </div>
+      <TitleBar
+        productName={PRODUCT_NAME}
+        workspaceDir={workspaceDir}
+        agentMode={chat.agentMode}
+        workbenchTaskTitle={workbenchTaskTitle}
+        isStreaming={chat.isStreaming}
+        sidebarOffset={sidebarVisible && workspaceView === "files" ? fileDockWidth : 0}
+        platform={platform}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
+        onOpenCommandPalette={openCommandPalette}
+        sidebarVisible={sidebarVisible}
+        onToggleSidebar={toggleExplorerPanel}
+        workspaceView={workspaceView}
+        editorAssistantVisible={editorAssistantVisible}
+        chatVisible={chatVisible}
+        onToggleAiAssistant={handleToggleAiAssistant}
+        username={username}
+        isAdmin={isAdmin}
+        teamRole={team.activeTeam?.role || null}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        density={density}
+        onToggleDensity={onToggleDensity}
+        onOpenSettings={() => setSettingsVisible(true)}
+        desktopApp={desktopApp}
+        onOpenMobilePairing={() => setMobilePairingVisible(true)}
+        onPickDesktopWorkspace={() => void onPickDesktopWorkspace()}
+        onLogout={onLogout}
+      />
 
       <Suspense fallback={null}>
         <SettingsModal
@@ -3201,24 +3233,50 @@ function AuthenticatedApp({
             <summary className="activity-user-avatar" title={username} aria-label={username}>
               {username.slice(0, 1).toUpperCase()}
             </summary>
-            <div className="activity-user-popover">
-              <strong>{username}</strong>
+            <div className="activity-user-popover user-popover-shell">
+              <div className="user-popover-header">
+                <div className="user-popover-avatar">
+                  {username.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="user-popover-info">
+                  <div className="user-popover-name-row">
+                    <span className="user-popover-name">{username}</span>
+                    <span className="user-popover-badge">{isAdmin ? "管理员" : (team.activeTeam?.role || "成员")}</span>
+                  </div>
+                  <span className="user-popover-sub">本地离线编码环境</span>
+                </div>
+              </div>
+              <div className="user-popover-divider" />
+              <button type="button" onClick={onToggleTheme}>
+                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+                <span>{t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}</span>
+                <span className="user-popover-hint">{theme === "light" ? "深色" : "浅色"}</span>
+              </button>
               <button type="button" onClick={onToggleDensity}>
-                <LayoutGrid size={14} /> {density === "compact" ? "标准视图模式" : "紧凑密度模式"}
+                <LayoutGrid size={15} />
+                <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
               </button>
               <button type="button" onClick={() => setSettingsVisible(true)}>
-                <Settings size={14} /> {t("app.settings")}
+                <Settings size={15} />
+                <span>{t("app.settings")}</span>
+                <kbd className="user-popover-kbd">Ctrl+,</kbd>
               </button>
-              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
-                <Smartphone size={14} /> 手机控制台
-              </button>}
+              {!desktopApp && (
+                <button type="button" onClick={() => setMobilePairingVisible(true)}>
+                  <Smartphone size={15} />
+                  <span>手机控制台</span>
+                </button>
+              )}
+              <div className="user-popover-divider" />
               {desktopApp ? (
                 <button type="button" onClick={() => void onPickDesktopWorkspace()}>
-                  <FolderOpen size={14} /> 打开工作区…
+                  <FolderOpen size={15} />
+                  <span>打开工作区…</span>
                 </button>
               ) : (
-                <button type="button" onClick={onLogout}>
-                  <LogOut size={14} /> {t("app.logout")}
+                <button type="button" className="user-popover-logout" onClick={onLogout}>
+                  <LogOut size={15} />
+                  <span>{t("app.logout")}</span>
                 </button>
               )}
             </div>
@@ -3544,7 +3602,10 @@ function AuthenticatedApp({
                       <div className="editor-workbench-divider" />
                     )}
                     {activePreviewMode !== "edit" && (
-                      <div className="editor-workbench-pane editor-preview-pane">
+                      <div
+                        className="editor-workbench-pane editor-preview-pane"
+                        ref={previewPaneRef}
+                      >
                         {activePreviewContent}
                       </div>
                     )}
@@ -3875,7 +3936,7 @@ function AuthenticatedApp({
           onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
           attachmentSubmissionError={attachmentSubmissionError}
           attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-          taskTitle={workbenchTaskTitle}
+          taskTitle={workbenchTaskTitle || t("workbench.newTask")}
           onAgentModeChange={chat.setAgentMode}
           onModelNameChange={chat.setSelectedModelName}
           currentRunSummary={chat.currentRunSummary}
