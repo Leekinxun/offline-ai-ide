@@ -274,6 +274,12 @@ export interface ToolContext {
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
   signal?: AbortSignal;
   authorizeTool?: import("./permissionService.js").PermissionAuthorizer;
+  /** Tool schemas and external adapters available to a delegated child. */
+  delegatedTools?: readonly OpenAIToolDef[];
+  getDelegatedTools?: () => Promise<readonly OpenAIToolDef[]>;
+  executeDelegatedTool?: (name: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<string>;
+  /** Synchronous child delegation is bounded across the entire ancestry. */
+  subagentDepth?: number;
   lineage?: {
     parentRunId: string;
     parentTaskId?: number;

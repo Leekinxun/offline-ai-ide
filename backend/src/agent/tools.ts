@@ -17,10 +17,12 @@ import { recordFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
-import { runWorkspaceCommand } from "./shell.js";
+import { runInspectionCommand, runWorkspaceCommand } from "./shell.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
+import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
+import { SUBAGENT_ROLES } from "./subagentRoles.js";
 
 // ---- Tool handler type ----
 
@@ -42,6 +44,9 @@ export type ToolHandler = (
 // Tool calls may be retried by providers. Keep command responses stable within the
 // process so a retry cannot create a second task/message while a lease is active.
 const COMMAND_RESULTS = new Map<string, string>();
+function collaborationActor(ctx: ToolContext): string {
+  return ctx.subagentDepth ? ctx.actorName || "subagent" : "lead";
+}
 function idempotentCommand(ctx: ToolContext, key: unknown, run: () => string): string {
   const id = typeof key === "string" ? key.trim() : "";
   if (!id) return run();
@@ -158,7 +163,7 @@ function sanitizeReviewFinding(args: Record<string, unknown>, workspaceDir: stri
   };
 }
 
-async function runReadFile(
+export async function runReadFile(
   filePath: string,
   limit: number | undefined,
   cwd: string
@@ -327,7 +332,11 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   },
 
   bash: async (args, ctx) =>
-    runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
+    ctx.mode === "review" || ctx.mode === "plan"
+      ? runInspectionCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
+          readPaths: ctx.filesystemSandbox?.readPaths || [], writePaths: [],
+        })
+      : runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
       compatibilityShellAuthorized: ctx.compatibilityShellAuthorized === true,
       filesystem: {
         workspaceDir: ctx.workspaceDir,
@@ -338,6 +347,10 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 
   read_file: async (args, ctx) =>
     runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir),
+
+  find_files: async (args, ctx) => executeRepositoryInspectionTool("find_files", args, ctx.workspaceDir, ctx.signal),
+  search_files: async (args, ctx) => executeRepositoryInspectionTool("search_files", args, ctx.workspaceDir, ctx.signal),
+  list_directory: async (args, ctx) => executeRepositoryInspectionTool("list_directory", args, ctx.workspaceDir, ctx.signal),
 
   write_file: async (args, ctx) =>
     runWriteFile(
@@ -368,9 +381,10 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 
   task_update: async (args, ctx) => {
     const taskId = args.task_id as number;
+    const coordinationRoot = ctx.taskManager.workspaceRoot;
     const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
-    const attemptToken = args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
-    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    const attemptToken = args.status === "completed" ? beginCompletionAttempt({ workspaceDir: coordinationRoot, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: coordinationRoot, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
     return ctx.taskManager.update(
       taskId,
       args.status as string | undefined,
@@ -384,15 +398,16 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     ctx.taskManager.listAll(),
 
   claim_task: async (args, ctx) =>
-    ctx.taskManager.claim(args.task_id as number, "lead"),
+    ctx.taskManager.claim(args.task_id as number, collaborationActor(ctx)),
 
   /** Structured, lease-aware task adapter. Legacy task_* tools remain supported. */
   task_command: async (args, ctx) => {
     const action = args.action;
     const taskId = Number(args.task_id);
+    const coordinationRoot = ctx.taskManager.workspaceRoot;
     const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
-    const attemptToken = action === "update" && args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
-    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    const attemptToken = action === "update" && args.status === "completed" ? beginCompletionAttempt({ workspaceDir: coordinationRoot, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: coordinationRoot, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
     return idempotentCommand(ctx, args.idempotency_key, () => {
       if (action === "create") return ctx.taskManager.create(String(args.subject || ""), String(args.description || ""));
       if (action === "get") return JSON.stringify(ctx.taskManager.getTask(taskId));
@@ -436,7 +451,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     if (parentTaskId) ctx.taskManager.getTask(parentTaskId);
     return runSubagent(
       args.prompt as string,
-      (args.agent_type as string) || "Explore",
+      args.agent_type === undefined ? "explore" : String(args.agent_type),
       ctx.workspaceDir,
       ctx.vllmApiUrl,
       ctx.modelName,
@@ -446,7 +461,8 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx.lineage && {
         ...ctx.lineage,
         ...(parentTaskId ? { parentTaskId } : {}),
-      }
+      },
+      { tools: ctx.delegatedTools || getAllTools({ mode: ctx.mode }), context: ctx }
     );
   },
 
@@ -472,17 +488,17 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     ctx.teammateManager.listAll(),
 
   send_message: async (args, ctx) =>
-    ctx.messageBus.send("lead", args.to as string, args.content as string, (args.msg_type as string) || "message"),
+    ctx.messageBus.send(collaborationActor(ctx), args.to as string, args.content as string, (args.msg_type as string) || "message"),
 
   read_inbox: async (_args, ctx) =>
-    JSON.stringify(ctx.messageBus.readInbox("lead"), null, 2),
+    JSON.stringify(ctx.messageBus.readInbox(collaborationActor(ctx)), null, 2),
 
   broadcast: async (args, ctx) =>
-    ctx.messageBus.broadcast("lead", args.content as string, ctx.teammateManager.memberNames()),
+    ctx.messageBus.broadcast(collaborationActor(ctx), args.content as string, ctx.teammateManager.memberNames()),
 
   shutdown_request: async (args, ctx) => {
     const teammate = args.teammate as string;
-    ctx.messageBus.send("lead", teammate, "Please shut down.", "shutdown_request");
+    ctx.messageBus.send(collaborationActor(ctx), teammate, "Please shut down.", "shutdown_request");
     return `Shutdown request sent to '${teammate}'`;
   },
 };
@@ -490,6 +506,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 // ---- Tool definitions (OpenAI function-calling format) ----
 
 export const CORE_TOOLS: OpenAIToolDef[] = [
+  ...REPOSITORY_INSPECTION_TOOLS,
   {
     type: "function",
     function: {
@@ -831,12 +848,12 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "task",
-      description: "Spawn a subagent for isolated exploration or work. Returns a summary when done.",
+      description: "Delegate an isolated task and wait for its summary. Choose general for implementation with available tools, explore for read-only repository reconnaissance, review for correctness and regression review, or planner for investigation and an implementation plan. Legacy Explore and general-purpose names remain accepted.",
       parameters: {
         type: "object",
         properties: {
           prompt: { type: "string" },
-          agent_type: { type: "string", enum: ["Explore", "general-purpose"] },
+          agent_type: { type: "string", enum: [...SUBAGENT_ROLES, "Explore", "general-purpose"], default: "explore" },
           parent_task_id: { type: "integer", description: "Optional durable parent task binding." },
         },
         required: ["prompt"],
@@ -951,7 +968,7 @@ export const MCP_CONTROL_TOOLS: OpenAIToolDef[] = [
   },
 ];
 
-const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "TodoWrite"]);
+const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "TodoWrite"]);
 
 export function getAllTools(options?: {
   readOnly?: boolean;
@@ -965,6 +982,9 @@ export function getAllTools(options?: {
       "memory_read",
       "skill_load",
       "read_file",
+      "find_files",
+      "search_files",
+      "list_directory",
       "TodoWrite",
       "bash",
       "write_file",

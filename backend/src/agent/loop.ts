@@ -1148,6 +1148,20 @@ export async function runAgentLoop(
             try {
               const execution = await handler(args, {
                 ...toolCtx,
+                delegatedTools: availableTools,
+                getDelegatedTools: async () => {
+                  const discovery = !readOnlyWorkspace && !control?.executionPlan
+                    ? await mcpClient.discoverTools(false, mcpSelection)
+                    : { tools: [], hasLazyEndpoints: false };
+                  return [...tools, ...discovery.tools, ...(discovery.hasLazyEndpoints ? MCP_CONTROL_TOOLS : [])]
+                    .filter((tool) => effectiveAgentPolicy.explain(tool.function.name).allowed);
+                },
+                executeDelegatedTool: async (name, input, signal) => {
+                  if (name === "search_lazy_mcp_tools") return mcpClient.searchLazyTools(input.query, input.endpoint_key);
+                  if (name === "activate_lazy_mcp_tools") return mcpClient.activateLazyTools(mcpSelection, input.endpoint_key, input.tool_names);
+                  if (name.startsWith("mcp_")) return mcpClient.callTool(name, input, signal);
+                  return `Error: Unknown tool: ${name}`;
+                },
                 requestId: currentRequestId,
                 toolCallId: toolCall.id,
                 // The shell compatibility path is available only after this tool call

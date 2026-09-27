@@ -591,6 +591,8 @@ Administrators can add legacy HTTP endpoints or advanced MCP server JSON from **
 
 **Settings → Agent Profiles** accepts per-agent overrides for `ask`, `code`, `review`, `plan`, `explore`, `subagent`, and `teammate`. Each profile can narrow the model/provider, step/tool/time/token/cost budgets, tool allow/deny patterns, pricing, and workspace step snapshots. Child authorizers can only narrow inherited permissions.
 
+The `task` tool supports four subagent roles: `general`, `explore`, `review`, and `planner`, with role-specific prompts and enforced tool boundaries. See [Subagents](docs/subagents.md) for tools, compatibility names, and configuration.
+
 Code runs now retain a pre-run checkpoint and step checkpoints before side-effecting tools. The chat API supports conversation forks, run rollback, and managed Git worktrees under `/api/chat/conversations/:id/fork`, `/api/chat/runs/:runId/revert`, and `/api/chat/worktrees`.
 
 Authenticated operators can inspect persistence inventory and migration failures at `GET /api/migrations`. Admin-only `POST /api/migrations/run` performs registered workspace migrations; `POST /api/migrations/app-settings/run` explicitly migrates legacy-compatible app settings. `POST /api/migrations/rollback` requires a canonical rollback-capable ID such as `{"formatId":"tasks"}` and rejects missing, blank, or unknown IDs; a valid request restores the exact pre-migration bytes for that format behind a hash fence. These per-file backups do not replace the complete quiesced backup described in the [operator runbook](docs/operations/operator-runbook.md).

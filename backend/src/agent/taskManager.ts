@@ -8,6 +8,7 @@ interface TaskState { schemaVersion: 1; version: number; nextId: number; tasks: 
 const terminal = new Set<TaskStatus>(["completed", "failed", "cancelled", "deleted"]);
 
 export class TaskManager {
+  get workspaceRoot(): string { return this.workspaceDir; }
   private readonly store: OrchestrationStore<TaskState>;
   constructor(private readonly workspaceDir: string) { this.store = new OrchestrationStore(workspaceDir, "tasks", () => ({ schemaVersion: 1, version: 1, nextId: 1, tasks: {} })); }
   private validateStatus(status: string): asserts status is TaskStatus { if (!(["pending", "blocked", "in_progress", "paused", "completed", "failed", "cancelled", "deleted"] as string[]).includes(status)) throw new Error(`Invalid task status: ${status}`); }

@@ -1,5 +1,10 @@
 import { evaluateShellCommand } from "./toolPolicy.js";
 import { ProcessResourceLimits, WorkspaceFilesystemGrant, runWorkspaceProcess } from "./processSandbox.js";
+import { evaluateInspectionCommand, tokenizeInspectionCommand } from "./modeCapabilities.js";
+import fs from "node:fs";
+import path from "node:path";
+import { safePath } from "../utils/safePath.js";
+import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 
 export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
   cpuTimeMs: 60_000,
@@ -13,6 +18,47 @@ export interface WorkspaceCommandOptions {
   resourceLimits?: ProcessResourceLimits;
   /** Effective admin/profile/workspace sandbox grant for this agent run. */
   filesystem?: WorkspaceFilesystemGrant;
+}
+
+/** Read-only commands share the policy parser and never enter a shell. */
+export async function runInspectionCommand(
+  command: string,
+  cwd: string,
+  signal?: AbortSignal,
+  filesystem?: WorkspaceFilesystemGrant
+): Promise<string> {
+  const policy = evaluateInspectionCommand(command, (candidate) => {
+    try {
+      const full = safePath(candidate, cwd);
+      let cursor = path.resolve(cwd);
+      for (const segment of path.relative(cursor, full).split(path.sep).filter(Boolean)) {
+        cursor = path.join(cursor, segment);
+        if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) {
+          return { allowed: false, reason: "Inspection commands cannot traverse symbolic links" };
+        }
+      }
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) readAuthorizedWorkspaceFile(cwd, candidate);
+      return { allowed: true };
+    } catch (error) {
+      return { allowed: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
+  const [executable, ...args] = tokenizeInspectionCommand(command);
+  if (executable === "git" && ["diff", "show", "log"].includes(args[0])) {
+    args.splice(1, 0, "--no-ext-diff", "--no-textconv");
+  }
+  return runWorkspaceProcess({
+    executable,
+    args,
+    cwd,
+    signal,
+    env: { GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
+    limits: { wallTimeMs: 60_000, ...DEFAULT_COMPATIBILITY_SHELL_LIMITS },
+    resourceLimitMode: "posix-shell",
+    networkMode: "deny",
+    filesystem: { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] },
+  });
 }
 
 /**
