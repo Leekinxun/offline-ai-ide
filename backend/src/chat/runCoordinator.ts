@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import type { AgentMode, WsServerMessage } from "../agent/types.js";
 import { sessionManager, type UserSession } from "../auth/sessionManager.js";
-import { ToolApprovalSession, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
+import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
 import type { ChatAttachmentRef } from "./attachments.js";
 import type { ExecutionPlan } from "./executionPlans.js";
 import type { AgentRunRecorder } from "./runHistory.js";

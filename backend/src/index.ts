@@ -3,6 +3,7 @@ import { createServer } from "http";
 import type { Socket } from "net";
 import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
+import fs from "fs";
 import { config } from "./config.js";
 import { filesRouter } from "./routes/files.js";
 import { authRouter } from "./routes/auth.js";
@@ -67,7 +68,23 @@ app.get("/api/health", (_req, res) => {
 });
 
 // Static frontend files
-const staticPath = path.resolve(config.staticDir);
+function resolveStaticDirectory(dir: string): string {
+  const configured = path.resolve(dir);
+  if (fs.existsSync(path.join(configured, "index.html"))) {
+    return configured;
+  }
+  const relativeFrontendDist = path.resolve(process.cwd(), "../frontend/dist");
+  if (fs.existsSync(path.join(relativeFrontendDist, "index.html"))) {
+    return relativeFrontendDist;
+  }
+  const projectFrontendDist = path.resolve(process.cwd(), "frontend/dist");
+  if (fs.existsSync(path.join(projectFrontendDist, "index.html"))) {
+    return projectFrontendDist;
+  }
+  return configured;
+}
+
+const staticPath = resolveStaticDirectory(config.staticDir);
 app.use("/mobile", (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
@@ -75,7 +92,12 @@ app.use("/mobile", (_req, res, next) => {
 });
 app.use(express.static(staticPath));
 app.get("*", (_req, res) => {
-  res.sendFile(path.join(staticPath, "index.html"));
+  const indexPath = path.join(staticPath, "index.html");
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(503).send("CrownForge 静态前端未就绪，请先执行 cd frontend && npm run build");
+  }
 });
 
 // HTTP + WebSocket server
@@ -193,7 +215,8 @@ server.listen(config.port, config.host, () => {
     server.close(() => process.exit(1));
     return;
   }
-  const url = `http://${config.host}:${address.port}`;
-  console.log(`CrewForge running at ${url}`);
+  const displayHost = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
+  const url = `http://${displayHost}:${address.port}`;
+  console.log(`CrewForge running at ${url} (listening on ${config.host}:${address.port})`);
   process.send?.({ type: "ready", url });
 });

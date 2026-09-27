@@ -1,0 +1,235 @@
+/* ==================== TitleBar Modular Styles ==================== */
+
+.titlebar {
+  height: var(--titlebar-height, 42px);
+  min-height: var(--titlebar-height, 42px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  border: none;
+  background: color-mix(in srgb, var(--surface-panel-strong) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: none;
+  z-index: 30;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+[data-platform="desktop"] .titlebar {
+  -webkit-app-region: drag;
+}
+
+[data-platform="desktop"] .titlebar button,
+[data-platform="desktop"] .titlebar input,
+[data-platform="desktop"] .titlebar summary,
+[data-platform="desktop"] .titlebar a,
+[data-platform="desktop"] .titlebar .titlebar-command-btn,
+[data-platform="desktop"] .titlebar .workbench-task-pill,
+[data-platform="desktop"] .titlebar .brand-lockup-subtitle {
+  -webkit-app-region: no-drag;
+}
+
+/* 左侧：品牌与工作区完整路径（完全展开展示，支持选择与复制） */
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 12px;
+}
+
+.titlebar-brand-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.titlebar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.titlebar-brand .brand-lockup-title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.titlebar-brand .brand-lockup-subtitle {
+  display: block;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
+  white-space: nowrap;
+  user-select: text;
+  cursor: text;
+}
+
+/* 任务微胶囊：位置随左侧侧边栏宽度联动对齐，无生硬描边，字阶适度放大 */
+.workbench-task-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 12px 0 5px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  min-width: 0;
+  max-width: 380px;
+  flex: 0 0 auto;
+  box-shadow: none;
+  transition: background-color var(--transition);
+}
+
+.workbench-task-pill:hover {
+  background: var(--bg-hover);
+}
+
+.workbench-task-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.workbench-task-title {
+  display: inline-block;
+  overflow: hidden;
+  margin-left: 9px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+  padding: 2px 0;
+}
+
+.workbench-task-streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.workbench-task-streaming i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chat-run-pulse 2.4s ease-in-out infinite;
+}
+
+/* 右侧：命令面板（靠右排列） + 视口切换 + 用户菜单 */
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+/* 右侧：命令面板、视口切换与用户菜单统一步长 30x30 极简交互 */
+
+.titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.titlebar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.titlebar .titlebar-mobile-command {
+  display: none;
+}
+
+/* 用户头像与下拉菜单 */
+.titlebar-user-menu {
+  position: relative;
+  margin-left: 4px;
+}
+
+.titlebar-user-btn {
+  padding: 0;
+  border-radius: 6px;
+  list-style: none;
+}
+
+.titlebar-user-btn::-webkit-details-marker {
+  display: none;
+}
+
+.user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.titlebar-user-btn:hover .user-avatar {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* 响应式适配 */
+
+/* 响应式适配 */
+@media (max-width: 960px) {
+  .workbench-task-pill {
+    display: none;
+  }
+}

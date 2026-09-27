@@ -1,0 +1,526 @@
+/* ==========================================================================
+   DebugPanel.css - 运行与调试中心专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 纯色阶体系 (Level 0~2)
+   - 调试启动区触感微卡片 (Tactile Launch Card)
+   - 统一 12px 左右基准边界
+   - 磨砂蓝漫反射聚焦与浮动控制条 (Floating Debug Controls)
+   ========================================================================== */
+
+.debug-panel {
+  width: 340px;
+  min-width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
+  background: var(--surface-panel);
+}
+
+.debug-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* 调试目标配置微卡片 */
+.debug-launch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 65%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  box-sizing: border-box;
+}
+
+.debug-launch label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.debug-launch input {
+  width: 100%;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 11px var(--font-mono);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.debug-launch input:focus,
+.debug-launch input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-light)) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 2px 10px -1px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+
+.debug-launch-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.debug-launch-actions .dialog-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  color: var(--text-secondary);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  box-sizing: border-box;
+}
+
+.debug-launch-actions .dialog-btn:hover:not(:disabled) {
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+}
+
+.debug-launch-actions .dialog-btn.primary {
+  flex: 1;
+  background: color-mix(in srgb, var(--accent) 82%, #1d4ed8);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.debug-launch-actions .dialog-btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 92%, #2563eb);
+  border-color: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.debug-launch-actions .dialog-btn.danger {
+  flex: 1;
+  color: var(--status-danger-fg, #ef4444);
+  border-color: color-mix(in srgb, var(--status-danger-fg, #ef4444) 30%, transparent);
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, transparent);
+}
+
+.debug-launch-actions .dialog-btn.danger:hover:not(:disabled) {
+  background: var(--status-danger-bg);
+}
+
+.debug-launch-actions .dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.debug-hint {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning, #f59e0b);
+}
+
+.debug-hint.is-info {
+  color: var(--text-tertiary);
+}
+
+/* 调试会话状态条 */
+.debug-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 65%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--line-subtle) 40%, transparent);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  box-sizing: border-box;
+}
+
+.debug-status .chat-run-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.debug-status.status-running .chat-run-status-dot {
+  background: var(--status-success-fg, #10b981);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-success-fg, #10b981) 60%, transparent);
+}
+
+.debug-status.status-paused .chat-run-status-dot {
+  background: var(--warning, #f59e0b);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warning, #f59e0b) 60%, transparent);
+}
+
+.debug-status.status-failed .chat-run-status-dot {
+  background: var(--status-danger-fg, #ef4444);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-danger-fg, #ef4444) 60%, transparent);
+}
+
+.debug-runtime-badge {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font: 700 10px var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* 调试控制操作栏 (Continue / Step Over / Step Into / Step Out) */
+.debug-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 80%, black);
+  border: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+}
+
+.debug-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.debug-controls button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.debug-controls button:disabled {
+  opacity: 0.4;
+  cursor: wait;
+}
+
+/* 调试折叠块 (Breakpoints, Stack, Variables) */
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  border: 1px solid color-mix(in srgb, var(--border-light) 45%, transparent);
+}
+
+.debug-section > strong {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.debug-breakpoints,
+.debug-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.debug-breakpoints button,
+.debug-stack button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.debug-breakpoints button:hover,
+.debug-stack button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.debug-stack button.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-primary);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.debug-breakpoints svg {
+  color: var(--status-danger-fg, #ef4444);
+  flex-shrink: 0;
+}
+
+.debug-stack button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.debug-stack code,
+.debug-breakpoints code {
+  overflow: hidden;
+  font: 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-variables {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.debug-variables > small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.debug-scope + .debug-scope {
+  margin-top: 4px;
+}
+
+.debug-scope-header,
+.debug-variable-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.debug-scope-header {
+  gap: 4px;
+  padding: 4px 2px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.debug-scope-header strong {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+}
+
+.debug-variable-tree,
+.debug-variable-node ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.debug-variable-node ul {
+  padding-left: 14px;
+}
+
+.debug-variable-row {
+  min-height: 24px;
+  gap: 5px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.debug-variable-row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.debug-variable-chevron {
+  display: grid;
+  width: 12px;
+  flex: 0 0 12px;
+  place-items: center;
+}
+
+.debug-variable-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--accent);
+  font: 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-variable-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-variable-type {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font: 9px var(--font-mono);
+}
+
+.debug-variable-error {
+  padding: 4px 6px 4px 20px;
+  color: var(--status-danger-fg, #ef4444);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+/* 调试控制台与 REPL */
+.debug-console {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  border: 1px solid color-mix(in srgb, var(--border-light) 45%, transparent);
+}
+
+.debug-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.debug-output {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-workbench, #0d0f12) 80%, black);
+  border: 1px solid color-mix(in srgb, var(--border-light) 40%, transparent);
+  color: var(--text-primary);
+  font: 11px/1.5 var(--font-mono);
+  overflow: auto;
+  max-height: 140px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.debug-repl-history {
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.debug-repl-entry {
+  display: grid;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--surface-quiet);
+}
+
+.debug-repl-entry code {
+  color: var(--accent);
+  font: 10px var(--font-mono);
+}
+
+.debug-repl-entry span {
+  color: var(--text-primary);
+  font: 10px var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.debug-repl-entry.is-error span {
+  color: var(--status-danger-fg, #ef4444);
+}
+
+.debug-repl-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.debug-repl-form input {
+  min-width: 0;
+  flex: 1;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 10px var(--font-mono);
+  outline: none;
+}
+
+.debug-repl-form input:focus {
+  border-color: var(--accent);
+}
+
+.debug-repl-form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--surface-quiet);
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.debug-repl-form button:hover:not(:disabled) {
+  background: var(--surface-panel);
+}
+
+.debug-repl-form button:disabled,
+.debug-repl-form input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

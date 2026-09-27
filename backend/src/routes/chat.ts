@@ -30,7 +30,7 @@ import {
   listManagedWorktrees,
   removeManagedWorktree,
 } from "../chat/worktrees.js";
-import { config, resolveModelInputCapabilities } from "../config.js";
+import { config, resolveModelEndpoint, resolveModelInputCapabilities } from "../config.js";
 import {
   listSelectableModelNames,
   resolveSelectableModelName,
@@ -59,6 +59,54 @@ const attachmentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 4, fields: 0, parts: 4 },
 });
+
+type ModelHealthStatus = "ready" | "auth_error" | "model_error" | "unreachable" | "timeout";
+type ModelHealthPayload = {
+  status: ModelHealthStatus;
+  modelName: string;
+  apiUrl: string;
+  error?: string;
+};
+
+export async function probeModelHealth(
+  modelName: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {}
+): Promise<ModelHealthPayload> {
+  const endpoint = resolveModelEndpoint(modelName);
+  const probeUrl = endpoint.apiUrl.replace(/\/+$/, "") + "/models";
+  const fetchImpl = options.fetchImpl || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3500);
+  const headers: Record<string, string> = {};
+  if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`;
+  try {
+    const response = await fetchImpl(probeUrl, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      return { status: "ready", modelName, apiUrl: endpoint.apiUrl };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { status: "auth_error", error: "Authentication failed", modelName, apiUrl: endpoint.apiUrl };
+    }
+    return { status: "model_error", error: `HTTP ${response.status}`, modelName, apiUrl: endpoint.apiUrl };
+  } catch (err: any) {
+    const timedOut = err?.name === "AbortError";
+    return {
+      status: timedOut ? "timeout" : "unreachable",
+      error: timedOut ? "Connection timeout" : err?.message || "Connection refused",
+      modelName,
+      apiUrl: endpoint.apiUrl,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function getSessionWorkspace(req: unknown): string {
   return ((req as any).userSession as UserSession).workspaceDir;
@@ -151,6 +199,13 @@ chatRouter.get("/runtime-options", (_req, res) => {
       ])
     ),
   });
+});
+
+chatRouter.get("/model-health", async (req, res) => {
+  const modelName = typeof req.query.model === "string" && req.query.model.trim()
+    ? req.query.model.trim()
+    : config.modelName;
+  res.json(await probeModelHealth(modelName));
 });
 
 chatRouter.get("/request-status/:requestId", (req, res) => {

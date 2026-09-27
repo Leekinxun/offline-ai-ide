@@ -69,10 +69,20 @@ export const GitLocalPanel: React.FC<GitLocalPanelProps> = ({ controller, change
     {readOnly && <div className="delivery-notice" role="note">{t("delivery.readOnly")}</div>}
     {!controller.capabilities.canPrepare && !readOnly && <div className="delivery-notice" role="note">{t("delivery.prepareUnavailable")}</div>}
     <div className="delivery-form">
-      <label><span>{t("delivery.branchName")}</span><input className="dialog-input" value={branchName} onChange={(event) => setBranchName(event.target.value)} placeholder="crewforge/my-change" disabled={readOnly} /></label>
+      <label className={action === "create_branch" ? "wide" : ""}><span>{t("delivery.branchName")}</span><input className="dialog-input" value={branchName} onChange={(event) => setBranchName(event.target.value)} placeholder="crewforge/my-change" disabled={readOnly} /></label>
       {action === "commit_change_set" && <>
         <div className="delivery-field"><span>{t("delivery.changeSet")}</span><WorkbenchSelect label={t("delivery.changeSet")} value={changeSetId} onChange={setChangeSetId} disabled={readOnly || readyChangeSets.length === 0} options={[{ value: "", label: t("delivery.selectChangeSet") }, ...readyChangeSets.map((item) => ({ value: item.id, label: item.id.slice(0, 12), meta: t("delivery.files", { count: item.changedFiles.length }) }))]} /></div>
-        <label><span>{t("delivery.commitMessage")}</span><input className="dialog-input" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("delivery.commitMessagePlaceholder")} disabled={readOnly} /></label>
+        <label className="wide">
+          <span>{t("delivery.commitMessage")}</span>
+          <textarea
+            className="dialog-input"
+            value={subject}
+            onChange={(event) => setSubject(event.target.value)}
+            placeholder={t("delivery.commitMessagePlaceholder")}
+            disabled={readOnly}
+            rows={3}
+          />
+        </label>
       </>}
     </div>
     {action === "commit_change_set" && readyChangeSets.length === 0 && <div className="delivery-notice">{t("delivery.noReadyChangeSets")}</div>}

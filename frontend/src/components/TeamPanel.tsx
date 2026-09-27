@@ -7,6 +7,7 @@ import { TaskStateStrip } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import "./TeamPanel.css";
 
 interface TeamPanelProps {
   teams: TeamSummary[];
@@ -223,7 +224,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
         runningTone={connected ? "success" : "warning"}
         evidence={teamEvidenceCount ? t("taskState.evidenceCount", { count: teamEvidenceCount }) : t("taskState.noEvidence")}
         evidenceTone={teamEvidenceCount ? "success" : "neutral"}
-        action={t("team.refresh")}
+        action={t("common.refresh")}
         onAction={onRefresh}
         actionDisabled={loading}
         actionDisabledReason={loading ? t("common.loading") : undefined}
@@ -234,78 +235,86 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
       {actionError && <div className="delivery-inline-error" role="alert">{actionError}</div>}
       {loading && teams.length === 0 && !activeTeam && !visibleError && <PanelState tone="loading" title={t("team.loadingTitle")} detail={t("team.loadingHint")} />}
 
-      <div className="team-panel-section">
-        <div className="team-panel-label">{t("team.switcher")}</div>
-        <WorkbenchSelect
-          className="team-panel-select"
-          label={t("team.switcher")}
-          value={activeTeam?.id || ""}
-          onChange={(value) => {
-            if (value) {
-              void onSwitchTeam(value);
-            }
-          }}
-          options={[
-            { value: "", label: t("team.noActiveTeam") },
-            ...teams.map((team) => ({
-              value: team.id,
-              label: `${team.name} · ${team.onlineCount}/${team.memberCount}`,
-            })),
-          ]}
-        />
-      </div>
+      <div className="team-panel-body">
+        <div className="team-management-card">
+          <div className="team-panel-field">
+            <div className="team-panel-label">{t("team.switcher")}</div>
+            <WorkbenchSelect
+              className="team-panel-select"
+              label={t("team.switcher")}
+              value={activeTeam?.id || ""}
+              onChange={(value) => {
+                if (value) {
+                  void onSwitchTeam(value);
+                }
+              }}
+              options={[
+                { value: "", label: t("team.noActiveTeam") },
+                ...teams.map((team) => ({
+                  value: team.id,
+                  label: `${team.name} · ${team.onlineCount}/${team.memberCount}`,
+                })),
+              ]}
+            />
+          </div>
 
-      {currentRole !== "viewer" && <div className="team-panel-section">
-        <label className="team-panel-label" htmlFor="team-create-name">{t("team.create")}</label>
-        <div className="team-panel-inline">
-          <input
-            id="team-create-name"
-            className="dialog-input team-panel-input"
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") void handleCreate(); }}
-            placeholder={t("team.teamNamePlaceholder")}
-          />
-          <button
-            type="button"
-            className="team-panel-btn primary"
-            onClick={handleCreate}
-            disabled={!teamName.trim() || creating}
-            title={t("team.create")}
-            aria-label={t("team.create")}
-          >
-            <Plus size={14} aria-hidden="true" />
-          </button>
+          {currentRole !== "viewer" && (
+            <div className="team-actions-group">
+              <div className="team-panel-field">
+                <label className="team-panel-label" htmlFor="team-create-name">{t("team.create")}</label>
+                <div className="team-panel-inline">
+                  <input
+                    id="team-create-name"
+                    className="dialog-input team-panel-input"
+                    value={teamName}
+                    onChange={(e) => setTeamName(e.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter") void handleCreate(); }}
+                    placeholder={t("team.teamNamePlaceholder")}
+                  />
+                  <button
+                    type="button"
+                    className="team-panel-btn primary"
+                    onClick={handleCreate}
+                    disabled={!teamName.trim() || creating}
+                    title={t("team.create")}
+                    aria-label={t("team.create")}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                    <span>{t("common.create") || t("team.create")}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="team-panel-field">
+                <label className="team-panel-label" htmlFor="team-invite-code">{t("team.joinByInvite")}</label>
+                <div className="team-panel-inline">
+                  <input
+                    id="team-invite-code"
+                    className="dialog-input team-panel-input"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    onKeyDown={(event) => { if (event.key === "Enter") void handleJoin(); }}
+                    placeholder={t("team.inviteCodePlaceholder")}
+                  />
+                  <button
+                    type="button"
+                    className="team-panel-btn"
+                    onClick={handleJoin}
+                    disabled={!inviteCode.trim() || joining}
+                  >
+                    {t("team.join")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>}
 
-      {currentRole !== "viewer" && <div className="team-panel-section">
-        <label className="team-panel-label" htmlFor="team-invite-code">{t("team.joinByInvite")}</label>
-        <div className="team-panel-inline">
-          <input
-            id="team-invite-code"
-            className="dialog-input team-panel-input"
-            value={inviteCode}
-            onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
-            onKeyDown={(event) => { if (event.key === "Enter") void handleJoin(); }}
-            placeholder={t("team.inviteCodePlaceholder")}
-          />
-          <button
-            type="button"
-            className="team-panel-btn"
-            onClick={handleJoin}
-            disabled={!inviteCode.trim() || joining}
-          >
-            {t("team.join")}
-          </button>
-        </div>
-      </div>}
+        {!loading && !visibleError && !activeTeam && (
+          <PanelState icon={<Users size={28} />} title={t("team.emptyTitle")} detail={t("team.emptyHint")} />
+        )}
 
-      {!loading && !visibleError && !activeTeam && (
-        <PanelState title={t("team.emptyTitle")} detail={t("team.emptyHint")} />
-      )}
-
-      {activeTeam && (
+        {activeTeam && (
         <>
           <div className="team-panel-section">
             <div className="team-panel-label">{t("team.activeTeam")}</div>
@@ -480,6 +489,7 @@ export const TeamPanel: React.FC<TeamPanelProps> = ({
           />
         </>
       )}
+      </div>
 
       {loading && (teams.length > 0 || activeTeam) && <div className="team-panel-loading" role="status" aria-live="polite">{t("common.loading")}</div>}
       <ActionConfirmDialog

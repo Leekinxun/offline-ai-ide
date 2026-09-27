@@ -54,6 +54,16 @@ export interface ChatRuntimeOptions {
   modelInputCapabilities: Record<string, { supportsImageInput: boolean; supportsPdfInput: boolean }>;
 }
 
+export type AiHealthStatus = "ready" | "model_offline" | "checking" | "server_offline";
+
+export interface AiHealthInfo {
+  status: AiHealthStatus;
+  error: string | null;
+  apiUrl?: string;
+  modelName?: string;
+  checkedAt: number;
+}
+
 export interface RejectedAttachmentSend {
   requestId: string;
   content: string;
@@ -257,6 +267,70 @@ export function useChat(
       window.removeEventListener("focus", refresh);
     };
   }, [refreshRuntimeOptions]);
+
+  const [aiHealth, setAiHealth] = useState<AiHealthInfo>({
+    status: "checking",
+    error: null,
+    checkedAt: 0,
+  });
+
+  const checkAiHealth = useCallback(async (modelNameOverride?: string) => {
+    if (!token) return;
+    try {
+      const targetModel = modelNameOverride || selectedModelName || runtimeOptions.defaultModelName;
+      const url = targetModel
+        ? `/api/chat/model-health?model=${encodeURIComponent(targetModel)}`
+        : "/api/chat/model-health";
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setAiHealth({
+          status: "model_offline",
+          error: `HTTP ${res.status}`,
+          checkedAt: Date.now(),
+        });
+        return;
+      }
+      const data = await res.json() as { status: string; error?: string; apiUrl?: string; modelName?: string };
+      if (data.status === "ready") {
+        setAiHealth({
+          status: "ready",
+          error: null,
+          apiUrl: data.apiUrl,
+          modelName: data.modelName,
+          checkedAt: Date.now(),
+        });
+      } else {
+        setAiHealth({
+          status: "model_offline",
+          error: data.error || "Model unavailable",
+          apiUrl: data.apiUrl,
+          modelName: data.modelName,
+          checkedAt: Date.now(),
+        });
+      }
+    } catch (err: any) {
+      setAiHealth({
+        status: "model_offline",
+        error: err?.message || "Connection failed",
+        checkedAt: Date.now(),
+      });
+    }
+  }, [token, selectedModelName, runtimeOptions.defaultModelName]);
+
+  useEffect(() => {
+    if (!connected) {
+      setAiHealth((prev) => ({ ...prev, status: "server_offline" }));
+      return;
+    }
+    void checkAiHealth();
+    const interval = setInterval(() => {
+      void checkAiHealth();
+    }, 25000);
+    return () => clearInterval(interval);
+  }, [connected, checkAiHealth]);
 
   const fetchExecutionPlan = useCallback(async (planId?: string): Promise<ExecutionPlan | undefined> => {
     if (!planId) return undefined;
@@ -1253,6 +1327,8 @@ export function useChat(
     isStreaming: activeRequestIds.length > 0,
     activeRequestIds,
     connected,
+    aiHealth,
+    checkAiHealth,
     currentConversationId,
     conversations,
     historyLoading,

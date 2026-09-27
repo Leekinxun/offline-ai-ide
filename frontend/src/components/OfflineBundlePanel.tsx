@@ -5,6 +5,7 @@ import type { useOfflineBundles } from "../hooks/useOfflineBundles";
 import { useI18n } from "../i18n";
 import { changeSetReviewRevision, isCurrentChangeSet } from "../hooks/changeSetContract";
 import { WorkbenchSelect } from "./WorkbenchSelect";
+import "./OfflineBundlePanel.css";
 
 type OfflineBundleController = ReturnType<typeof useOfflineBundles>;
 
@@ -43,9 +44,9 @@ export const OfflineBundlePanel: React.FC<OfflineBundlePanelProps> = ({ controll
     {selected && <div className="bundle-revision-lock"><ShieldAlert size={14} /><span>{t("bundle.revisionLocked")} · {t(`recovery.changeSetStatus.${selected.status}`)}</span><code>{revision.slice(0, 12)}</code></div>}
     {selected && !currentSelection && <div className="delivery-notice" role="status">{t("recovery.legacyChangeSetReadOnly", { version: selected.schemaVersion })}</div>}
     <div className="offline-bundle-actions">
+      <button type="button" className="dialog-btn primary" disabled={!currentSelection || readOnly || controller.busyId !== null} title={readOnly ? t("delivery.readOnly") : undefined} onClick={() => void invoke(() => controller.createExport(selected!.id, revision, { includeTrace, includeTestOutput, requireSignature: signaturePolicy === "required" }))}><FileArchive size={13} />{t("bundle.build")}</button>
       <button type="button" className="dialog-btn" disabled={!currentSelection || controller.busyId !== null} onClick={() => void invoke(() => controller.exportReviewArtifact(selected!.id, revision, "crewforge"))}><Download size={13} />{t("bundle.exportCrewForge")}</button>
       <button type="button" className="dialog-btn" disabled={!currentSelection || controller.busyId !== null} onClick={() => void invoke(() => controller.exportReviewArtifact(selected!.id, revision, "sarif"))}><Download size={13} />SARIF</button>
-      <button type="button" className="dialog-btn primary" disabled={!currentSelection || readOnly || controller.busyId !== null} title={readOnly ? t("delivery.readOnly") : undefined} onClick={() => void invoke(() => controller.createExport(selected!.id, revision, { includeTrace, includeTestOutput, requireSignature: signaturePolicy === "required" }))}><FileArchive size={13} />{t("bundle.build")}</button>
       <input ref={fileRef} className="visually-hidden" type="file" accept=".zip,.tar,.tgz,.crewforge,application/zip,application/gzip" onChange={(event) => { const file = event.target.files?.[0]; if (file) void invoke(() => controller.verify(file)); event.currentTarget.value = ""; }} />
       <button type="button" className="dialog-btn" disabled={controller.busyId !== null} onClick={() => fileRef.current?.click()}><Upload size={13} />{t("bundle.verify")}</button>
     </div>

@@ -4,6 +4,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
+if (process.platform === "win32") {
+  app.disableHardwareAcceleration();
+}
+
 if (process.env.CREWFORGE_DESKTOP_DATA_DIR) {
   const userData = path.resolve(process.env.CREWFORGE_DESKTOP_DATA_DIR);
   fs.mkdirSync(userData, { recursive: true });
@@ -241,7 +245,6 @@ if (isPrimaryInstance) {
   app.whenReady().then(async () => {
     try {
       const data = ensureDesktopData();
-      await showInitialPassword(data.initialPassword);
       backendUrl = await startBackend(data);
       mainWindow = new BrowserWindow({
         width: 1440,
@@ -249,10 +252,13 @@ if (isPrimaryInstance) {
         minWidth: 900,
         minHeight: 640,
         title: "CrownForge",
+        show: true,
         webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
       });
       guardWindow(mainWindow);
       await mainWindow.loadURL(backendUrl);
+      mainWindow.show();
+      mainWindow.focus();
       mainWindow.on("closed", () => {
         mainWindow = undefined;
         app.quit();

@@ -6,6 +6,7 @@ import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../edit
 import { useI18n } from "../i18n";
 import { getLanguage, GitDiffPayload, GitStatusEntry } from "../types";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import "./ChangeDiffDialog.css";
 
 const DiffEditor = lazy(() =>
   import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
@@ -68,7 +69,7 @@ export const ChangeDiffDialog: React.FC<ChangeDiffDialogProps> = ({
     <div className="git-diff-overlay" onMouseDown={onClose}>
       <section
         ref={dialogRef}
-        className="git-diff-dialog panel-shell"
+        className="git-diff-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="git-diff-title"

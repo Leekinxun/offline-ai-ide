@@ -2,18 +2,22 @@ import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRe
 import type * as monaco from "monaco-editor";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
+import { EditorToolbar } from "./components/EditorToolbar";
 import { ChatPanel } from "./components/ChatPanel";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import type { DetailTab } from "./components/RunDetailsPanel";
 import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
-import { WorkbenchSelect } from "./components/WorkbenchSelect";
 import { useChatAttachmentDraft } from "./components/ChatAttachmentPicker";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
+import { TitleBar } from "./components/TitleBar";
+import "./components/UserPopover.css";
+import "./components/ActivityRail.css";
+import "./components/Sidebar.css";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
@@ -34,6 +38,8 @@ import type { UploadEntriesOptions, WorkspaceSearchResult } from "./hooks/useFil
 import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
+import { usePlatformEnvironment } from "./hooks/usePlatformEnvironment";
+import { useViewportBreakpoint } from "./hooks/useViewportBreakpoint";
 import {
   DefinitionLocation,
   FileNode,
@@ -46,31 +52,24 @@ import {
   getLanguage,
 } from "./types";
 import {
-  PanelLeft,
   MessageSquare,
   TerminalSquare,
   LogOut,
   Settings,
   Moon,
   Sun,
-  Command,
   GitBranch,
   Bot,
   CircleAlert,
-  ChevronRight,
-  Columns2,
-  FileCode2,
   Files,
   ShieldCheck,
   TestTube2,
   Bug,
   Users,
-  X,
-  Link2,
-  Unlink2,
-  Play,
   Search,
   Smartphone,
+  FolderOpen,
+  LayoutGrid,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -87,6 +86,16 @@ import {
   countRemoteSelections,
   formatLineRange,
 } from "./utils/conflicts";
+import {
+  chatVisibleAfterToolDrawerClose,
+  getActiveWorkspaceDrawer,
+  isCompactWorkbench,
+  isModalWorkspaceDrawer,
+  isNarrowWorkbench,
+  shouldRestoreChatAfterToolDrawerOpen,
+  terminalUsesDrawerMode,
+  type WorkspaceDrawer,
+} from "./utils/workbenchLayout";
 
 const SettingsModal = lazy(() =>
   import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
@@ -158,6 +167,8 @@ export default function App() {
 function DesktopApp() {
   const { t } = useI18n();
   const auth = useAuth();
+  const platform = usePlatformEnvironment(auth.user?.desktop);
+  const viewport = useViewportBreakpoint();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
     return (saved as "light" | "dark") || "light";
@@ -171,14 +182,30 @@ function DesktopApp() {
   );
   const [sessionExpired, setSessionExpired] = useState(false);
 
+  const [userDensityOverride, setUserDensityOverride] = useState<"normal" | "compact" | null>(() => {
+    return (localStorage.getItem("user-density") as "normal" | "compact" | null) || null;
+  });
+  const currentDensity = userDensityOverride || viewport.recommendedDensity;
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-os", platform.os);
+    document.documentElement.setAttribute("data-platform", platform.host);
+    document.documentElement.setAttribute("data-density", currentDensity);
     localStorage.setItem("theme", theme);
-  }, [theme]);
+  }, [theme, platform.os, platform.host, currentDensity]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
+
+  const toggleDensity = useCallback(() => {
+    setUserDensityOverride((prev) => {
+      const next = (prev || viewport.recommendedDensity) === "compact" ? "normal" : "compact";
+      localStorage.setItem("user-density", next);
+      return next;
+    });
+  }, [viewport.recommendedDensity]);
 
   const changeEditorFont = useCallback((fontFamily: string) => {
     setEditorFont(fontFamily);
@@ -269,6 +296,8 @@ function DesktopApp() {
       onPickDesktopWorkspace={auth.pickDesktopWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
+      density={currentDensity}
+      onToggleDensity={toggleDensity}
       editorFont={editorFont}
       editorFontOptions={EDITOR_FONT_OPTIONS}
       onEditorFontChange={changeEditorFont}
@@ -289,6 +318,8 @@ interface AuthenticatedAppProps {
   onPickDesktopWorkspace: () => Promise<DesktopFolderPickResult>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  density: "normal" | "compact";
+  onToggleDensity: () => void;
   editorFont: string;
   editorFontOptions: typeof EDITOR_FONT_OPTIONS;
   onEditorFontChange: (fontFamily: string) => void;
@@ -302,6 +333,29 @@ interface EditorNavigationTarget extends FileSelectionRange {
 interface EditorHighlightTarget extends FileSelectionRange {
   path: string;
   requestId: number;
+}
+
+/**
+ * 规范化工作区相对路径：
+ * 1. 统一正反斜杠；
+ * 2. 若误传工作区绝对路径，自动剥离工作区前缀；
+ * 3. 剔除前导 `./` 和多余的正斜杠 `/`，保证全局使用纯净唯一的相对路径。
+ */
+function normalizeWorkspaceRelativePath(rawPath: string, workspaceDir?: string): string {
+  if (!rawPath) return "";
+  let normalized = rawPath.replace(/\\/g, "/").trim();
+  if (workspaceDir) {
+    const wsNormalized = workspaceDir.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normalized.toLowerCase().startsWith(wsNormalized.toLowerCase() + "/")) {
+      normalized = normalized.slice(wsNormalized.length + 1);
+    }
+  }
+  return normalized.replace(/^\.\//, "").replace(/^\/+/, "");
+}
+
+function isSameWorkspacePath(left: string | null | undefined, right: string | null | undefined, workspaceDir?: string): boolean {
+  if (!left || !right) return left === right;
+  return normalizeWorkspaceRelativePath(left, workspaceDir) === normalizeWorkspaceRelativePath(right, workspaceDir);
 }
 
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
@@ -387,11 +441,15 @@ function AuthenticatedApp({
   onPickDesktopWorkspace,
   theme,
   onToggleTheme,
+  density,
+  onToggleDensity,
   editorFont,
   editorFontOptions,
   onEditorFontChange,
 }: AuthenticatedAppProps) {
   const { t } = useI18n();
+  const platform = usePlatformEnvironment(desktopApp);
+  const viewport = useViewportBreakpoint();
   const editorProblems = useEditorProblems();
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
@@ -401,6 +459,24 @@ function AuthenticatedApp({
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
   const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(typeof document !== "undefined" && document.fullscreenElement));
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, []);
+
   const [workspaceView, setWorkspaceView] = useState<"chat" | "files">("files");
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
   const [folderOpenRequestId, setFolderOpenRequestId] = useState(0);
@@ -443,6 +519,7 @@ function AuthenticatedApp({
   const [toast, setToast] = useState<string | null>(null);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const pickingWorkspaceRef = useRef(false);
+  const openingPathsRef = useRef<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(286);
   const [assistantWidth, setAssistantWidth] = useState(400);
@@ -464,6 +541,9 @@ function AuthenticatedApp({
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const previewPaneRef = useRef<HTMLDivElement | null>(null);
+  const isSyncingScrollRef = useRef<"editor" | "preview" | null>(null);
+  const syncScrollTimerRef = useRef<number | null>(null);
   const draggingRef = useRef<"sidebar" | "assistant" | "chat" | "terminal" | null>(null);
   const panelWidthsRef = useRef({ sidebar: sidebarWidth, assistant: assistantWidth });
   const navigationRequestRef = useRef(0);
@@ -478,6 +558,7 @@ function AuthenticatedApp({
   const drawerTriggerRef = useRef<HTMLElement | null>(null);
   const mainLayoutRef = useRef<HTMLDivElement>(null);
   const previousDrawerRef = useRef<string | null>(null);
+  const restoreChatAfterDrawerRef = useRef(false);
   const layoutBeforeFocusRef = useRef({
     sidebar: true,
     chat: true,
@@ -506,38 +587,42 @@ function AuthenticatedApp({
     setTimeout(() => setToast(null), 2500);
   }, []);
 
-  const compactWorkspace = viewportWidth <= 1100;
-  const narrowWorkspace = viewportWidth <= 860;
+  const compactWorkspace = isCompactWorkbench(viewportWidth);
+  const narrowWorkspace = isNarrowWorkbench(viewportWidth);
   // Media-query thresholds follow the viewport; panel budgets use the actual
   // content width, which can be smaller with classic Windows scrollbars.
   const layoutAvailableWidth = Math.min(viewportWidth, document.documentElement.clientWidth || viewportWidth);
-  const utilityDockWidth = compactWorkspace ? 0
-    : teamVisible ? 320
-      : gitVisible ? 300
-        : agentsVisible ? 320
-          : checkpointsVisible || problemsVisible || runCenterVisible || debugVisible ? 340
-            : 0;
+  const isLeftDockOpen = Boolean(sidebarVisible || gitVisible || agentsVisible || teamVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible);
+
+  const isLaptopOrCompact = viewportWidth < 1440;
+  const responsiveDefaultSidebarWidth = isLaptopOrCompact ? Math.min(sidebarWidth, 240) : sidebarWidth;
+  const responsiveDefaultAssistantWidth = isLaptopOrCompact ? Math.min(assistantWidth, 340) : assistantWidth;
+
   const dockedRightWidth = viewportWidth > 1180
-    ? runDetailsVisible ? 400 : editorAssistantVisible ? assistantWidth : 0
+    ? runDetailsVisible ? (isLaptopOrCompact ? 340 : 400) : editorAssistantVisible ? responsiveDefaultAssistantWidth : 0
     : 0;
+
+  // 黄金编辑区保底空间：大屏保留 520px，中屏保留 460px，紧凑模式保留至少 360px
+  const reservedEditorBudget = viewportWidth > 1440 ? 520 : viewportWidth > 1180 ? 460 : FILES_EDITOR_MIN_WIDTH;
+
   const sidebarMaxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
     FILES_SIDEBAR_MAX_WIDTH,
     layoutAvailableWidth - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
       - (dockedRightWidth ? dockedRightWidth + FILES_HANDLE_WIDTH : 0)
-      - FILES_EDITOR_MIN_WIDTH
+      - reservedEditorBudget
   ));
-  const effectiveSidebarWidth = sidebarVisible ? Math.min(sidebarWidth, sidebarMaxWidth) : 0;
-  const fileDockWidth = sidebarVisible ? effectiveSidebarWidth : utilityDockWidth;
-  const chatDockWidth = sidebarVisible ? 286 : utilityDockWidth;
+  const effectiveSidebarWidth = isLeftDockOpen ? Math.min(responsiveDefaultSidebarWidth, sidebarMaxWidth) : 0;
+  const fileDockWidth = effectiveSidebarWidth;
+  const chatDockWidth = isLeftDockOpen ? (isLaptopOrCompact ? 250 : effectiveSidebarWidth) : 0;
   const assistantMaxWidth = viewportWidth > 1180
     ? Math.max(FILES_ASSISTANT_MIN_WIDTH, Math.min(
         FILES_ASSISTANT_MAX_WIDTH,
         layoutAvailableWidth - FILES_ACTIVITY_WIDTH
-          - fileDockWidth - (sidebarVisible ? FILES_HANDLE_WIDTH : 0)
-          - FILES_HANDLE_WIDTH - FILES_EDITOR_MIN_WIDTH
+          - fileDockWidth - (isLeftDockOpen ? FILES_HANDLE_WIDTH : 0)
+          - FILES_HANDLE_WIDTH - reservedEditorBudget
       ))
     : Math.min(FILES_ASSISTANT_MAX_WIDTH, Math.max(FILES_ASSISTANT_MIN_WIDTH, layoutAvailableWidth - FILES_ACTIVITY_WIDTH));
-  const effectiveAssistantWidth = Math.min(assistantWidth, assistantMaxWidth);
+  const effectiveAssistantWidth = Math.min(responsiveDefaultAssistantWidth, assistantMaxWidth);
   panelWidthsRef.current = { sidebar: fileDockWidth, assistant: effectiveAssistantWidth };
 
   useEffect(() => {
@@ -560,6 +645,27 @@ function AuthenticatedApp({
     setRunCenterVisible(false);
     setDebugVisible(false);
   }, []);
+
+  const preserveChatForNarrowToolDrawer = useCallback(() => {
+    if (shouldRestoreChatAfterToolDrawerOpen({
+      viewportWidth: window.innerWidth,
+      workspaceView,
+      chatVisible,
+    })) {
+      restoreChatAfterDrawerRef.current = true;
+    }
+    setChatVisible(false);
+  }, [chatVisible, workspaceView]);
+
+  const restoreChatAfterToolDrawerClose = useCallback(() => {
+    const nextChatVisible = chatVisibleAfterToolDrawerClose({
+      viewportWidth: window.innerWidth,
+      workspaceView,
+      restorePending: restoreChatAfterDrawerRef.current,
+    });
+    restoreChatAfterDrawerRef.current = false;
+    if (nextChatVisible !== null) setChatVisible(nextChatVisible);
+  }, [workspaceView]);
 
   const toggleFocusMode = useCallback(() => {
     setFocusMode((current) => {
@@ -615,9 +721,25 @@ function AuthenticatedApp({
   }, []);
 
   const focusChat = useCallback(() => {
+    restoreChatAfterDrawerRef.current = false;
+    const switchingToChat = workspaceView !== "chat";
     setWorkspaceView("chat");
     setEditorAssistantVisible(false);
     setRunDetailsVisible(false);
+    setChatVisible(true);
+    const utilityOpen =
+      gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible || teamVisible;
+    if (switchingToChat) {
+      closeUtilityPanels();
+      setTeamVisible(false);
+      setSidebarVisible(true);
+    } else if (utilityOpen) {
+      closeUtilityPanels();
+      setTeamVisible(false);
+      setSidebarVisible(true);
+    } else {
+      setSidebarVisible((prev) => !prev);
+    }
     if (window.innerWidth <= 860) {
       captureDrawerTrigger();
       setSidebarVisible(false);
@@ -625,12 +747,12 @@ function AuthenticatedApp({
       setTerminalVisible(false);
       closeUtilityPanels();
     }
-    setChatVisible(true);
     setChatFocusNonce((value) => value + 1);
-  }, [captureDrawerTrigger, closeUtilityPanels]);
+  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, teamVisible, workspaceView]);
 
   const toggleChatPanel = useCallback(() => {
     const nextOpen = !chatVisible;
+    restoreChatAfterDrawerRef.current = false;
     if (nextOpen && window.innerWidth <= 860) {
       captureDrawerTrigger();
       setSidebarVisible(false);
@@ -641,8 +763,18 @@ function AuthenticatedApp({
     setChatVisible(nextOpen);
   }, [captureDrawerTrigger, chatVisible, closeUtilityPanels]);
 
+  const handleToggleAiAssistant = useCallback(() => {
+    if (workspaceView === "files") {
+      setRunDetailsVisible(false);
+      setEditorAssistantVisible((prev) => !prev);
+    } else {
+      toggleChatPanel();
+    }
+  }, [workspaceView, toggleChatPanel]);
+
   const toggleExplorerPanel = useCallback(() => {
     const switchingToFiles = workspaceView !== "files";
+    if (switchingToFiles) restoreChatAfterDrawerRef.current = false;
     setWorkspaceView("files");
     if (switchingToFiles && window.innerWidth > 1180) setEditorAssistantVisible(true);
     const utilityOpen =
@@ -683,9 +815,7 @@ function AuthenticatedApp({
           captureDrawerTrigger();
           setTerminalVisible(false);
         }
-        if (window.innerWidth <= 860) {
-          setChatVisible(false);
-        }
+        if (window.innerWidth <= 860) preserveChatForNarrowToolDrawer();
       }
       setGitVisible(panel === "git" && nextOpen);
       setAgentsVisible(panel === "agents" && nextOpen);
@@ -694,7 +824,7 @@ function AuthenticatedApp({
       setRunCenterVisible(panel === "run-center" && nextOpen);
       setDebugVisible(panel === "debug" && nextOpen);
     },
-    [agentsVisible, captureDrawerTrigger, checkpointsVisible, debugVisible, gitVisible, problemsVisible, runCenterVisible]
+    [agentsVisible, captureDrawerTrigger, checkpointsVisible, debugVisible, gitVisible, preserveChatForNarrowToolDrawer, problemsVisible, runCenterVisible]
   );
 
   const toggleTeamPanel = useCallback((forceOpen = false) => {
@@ -706,10 +836,10 @@ function AuthenticatedApp({
     if (nextOpen && window.innerWidth <= 1100) {
       captureDrawerTrigger();
       setTerminalVisible(false);
-      if (window.innerWidth <= 860) setChatVisible(false);
+      if (window.innerWidth <= 860) preserveChatForNarrowToolDrawer();
     }
     setTeamVisible(nextOpen);
-  }, [captureDrawerTrigger, closeUtilityPanels, teamVisible]);
+  }, [captureDrawerTrigger, closeUtilityPanels, preserveChatForNarrowToolDrawer, teamVisible]);
 
   const toggleTerminalPanel = useCallback((forceOpen = false) => {
     const nextOpen = forceOpen || !terminalVisible;
@@ -718,10 +848,10 @@ function AuthenticatedApp({
       setSidebarVisible(false);
       setTeamVisible(false);
       closeUtilityPanels();
-      if (window.innerWidth <= 860) setChatVisible(false);
+      if (window.innerWidth <= 860) preserveChatForNarrowToolDrawer();
     }
     setTerminalVisible(nextOpen);
-  }, [captureDrawerTrigger, closeUtilityPanels, terminalVisible]);
+  }, [captureDrawerTrigger, closeUtilityPanels, preserveChatForNarrowToolDrawer, terminalVisible]);
 
   const runPaletteCommand = useCallback(
     (command: string) => {
@@ -782,41 +912,43 @@ function AuthenticatedApp({
     [toggleChatPanel, toggleExplorerPanel, toggleFocusMode, toggleTeamPanel, toggleTerminalPanel, toggleUtilityPanel]
   );
 
-  const activeWorkspaceDrawer = compactWorkspace
-    ? terminalVisible
-      ? "terminal"
-      : teamVisible
-        ? "team"
-        : agentsVisible
-          ? "agents"
-          : gitVisible
-            ? "git"
-            : checkpointsVisible
-              ? "checkpoints"
-              : problemsVisible
-                ? "problems"
-                : runCenterVisible
-                  ? "run-center"
-                  : debugVisible
-                    ? "debug"
-                    : sidebarVisible
-                      ? "sidebar"
-                      : narrowWorkspace && chatVisible
-                        ? "chat"
-                        : null
-    : null;
+  const isMobileViewport = viewportWidth <= 640;
+  const terminalDrawerMode = terminalUsesDrawerMode({ viewportWidth, workspaceView, terminalVisible });
+  const chatTerminalVisible = workspaceView === "chat" && terminalVisible;
+  const activeWorkspaceDrawer: WorkspaceDrawer | null = getActiveWorkspaceDrawer({
+    viewportWidth,
+    workspaceView,
+    sidebarVisible,
+    chatVisible,
+    terminalVisible,
+    teamVisible,
+    agentsVisible,
+    gitVisible,
+    checkpointsVisible,
+    problemsVisible,
+    runCenterVisible,
+    debugVisible,
+  });
   const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
-  const compactModalDrawerOpen = compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible);
-  const previousCompactWorkspaceRef = useRef(compactWorkspace);
+  const compactModalDrawerOpen = compactWorkspace
+    && (
+      agentsVisible
+      || teamVisible
+      || gitVisible
+      || checkpointsVisible
+      || problemsVisible
+      || runCenterVisible
+      || debugVisible
+      || (terminalVisible && terminalDrawerMode)
+    )
+    && isModalWorkspaceDrawer(viewportWidth, activeWorkspaceDrawer, { terminalDrawerMode });
+  const previousCompactWorkspaceRef = useRef(isMobileViewport);
 
   useEffect(() => {
-    const becameCompact = compactWorkspace && !previousCompactWorkspaceRef.current;
-    previousCompactWorkspaceRef.current = compactWorkspace;
-    if (!becameCompact) return;
-    // Panels may coexist on a wide screen. Keep only the frontmost drawer when
-    // the window narrows, so fixed drawers do not cover one another.
+    const becameMobile = isMobileViewport && !previousCompactWorkspaceRef.current;
+    previousCompactWorkspaceRef.current = isMobileViewport;
+    if (!becameMobile) return;
     setSidebarVisible(activeWorkspaceDrawer === "sidebar");
-    setTerminalVisible(activeWorkspaceDrawer === "terminal");
     setTeamVisible(activeWorkspaceDrawer === "team");
     setAgentsVisible(activeWorkspaceDrawer === "agents");
     setGitVisible(activeWorkspaceDrawer === "git");
@@ -825,15 +957,31 @@ function AuthenticatedApp({
     setRunCenterVisible(activeWorkspaceDrawer === "run-center");
     setDebugVisible(activeWorkspaceDrawer === "debug");
     if (narrowWorkspace) setChatVisible(activeWorkspaceDrawer === "chat");
-  }, [activeWorkspaceDrawer, compactWorkspace, narrowWorkspace]);
+  }, [activeWorkspaceDrawer, isMobileViewport, narrowWorkspace]);
 
   const closeWorkspaceDrawers = useCallback(() => {
-    setSidebarVisible(false);
+    if (isMobileViewport) {
+      setSidebarVisible(false);
+      setChatVisible(false);
+    }
+    if (activeWorkspaceDrawer === "terminal") setTerminalVisible(false);
     setTeamVisible(false);
-    setTerminalVisible(false);
     closeUtilityPanels();
-    if (window.innerWidth <= 860) setChatVisible(false);
-  }, [closeUtilityPanels]);
+    restoreChatAfterToolDrawerClose();
+  }, [activeWorkspaceDrawer, closeUtilityPanels, isMobileViewport, restoreChatAfterToolDrawerClose]);
+
+  const closeWorkspaceDrawer = useCallback((drawer: WorkspaceDrawer) => {
+    if (drawer === "sidebar") setSidebarVisible(false);
+    if (drawer === "terminal") setTerminalVisible(false);
+    if (drawer === "team") setTeamVisible(false);
+    if (drawer === "git") setGitVisible(false);
+    if (drawer === "agents") setAgentsVisible(false);
+    if (drawer === "checkpoints") setCheckpointsVisible(false);
+    if (drawer === "problems") setProblemsVisible(false);
+    if (drawer === "run-center") setRunCenterVisible(false);
+    if (drawer === "debug") setDebugVisible(false);
+    if (drawer !== "sidebar") restoreChatAfterToolDrawerClose();
+  }, [restoreChatAfterToolDrawerClose]);
 
   useEffect(() => {
     const previousDrawer = previousDrawerRef.current;
@@ -922,19 +1070,27 @@ function AuthenticatedApp({
         return;
       }
       if (checkpointsVisible) {
-        setCheckpointsVisible(false);
+        closeWorkspaceDrawer("checkpoints");
         return;
       }
       if (runCenterVisible) {
-        setRunCenterVisible(false);
+        closeWorkspaceDrawer("run-center");
         return;
       }
       if (debugVisible) {
-        setDebugVisible(false);
+        closeWorkspaceDrawer("debug");
         return;
       }
       if (problemsVisible) {
-        setProblemsVisible(false);
+        closeWorkspaceDrawer("problems");
+        return;
+      }
+      if (viewportWidth <= 1180 && editorAssistantVisible) {
+        setEditorAssistantVisible(false);
+        return;
+      }
+      if (viewportWidth <= 1180 && runDetailsVisible) {
+        setRunDetailsVisible(false);
         return;
       }
 
@@ -949,6 +1105,7 @@ function AuthenticatedApp({
     agentsVisible,
     chatVisible,
     checkpointsVisible,
+    closeWorkspaceDrawer,
     problemsVisible,
     runCenterVisible,
     debugVisible,
@@ -961,6 +1118,9 @@ function AuthenticatedApp({
     teamVisible,
     workspaceSearchVisible,
     workspaceDrawerOpen,
+    editorAssistantVisible,
+    runDetailsVisible,
+    viewportWidth,
   ]);
 
 
@@ -1048,11 +1208,9 @@ function AuthenticatedApp({
       if (draggingRef.current === "sidebar") {
         const layout = mainLayoutRef.current;
         const width = layout?.clientWidth || window.innerWidth;
-        const rightWidth = window.innerWidth > 1180 && layout?.classList.contains("with-run-details")
-          ? 400
-          : window.innerWidth > 1180 && layout?.classList.contains("with-editor-assistant")
-            ? panelWidthsRef.current.assistant
-            : 0;
+        const rightWidth = window.innerWidth > 1180 && (layout?.classList.contains("with-run-details") || layout?.classList.contains("with-editor-assistant"))
+          ? panelWidthsRef.current.assistant
+          : 0;
         const maxWidth = Math.max(FILES_SIDEBAR_MIN_WIDTH, Math.min(
           FILES_SIDEBAR_MAX_WIDTH,
           width - FILES_ACTIVITY_WIDTH - FILES_HANDLE_WIDTH
@@ -1145,9 +1303,10 @@ function AuthenticatedApp({
 
   const applyFileUpdateToTabs = useCallback(
     (update: FileUpdate, ensureOpen: boolean) => {
-      const name = update.path.split("/").pop() || update.path;
+      const canonicalPath = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      const name = canonicalPath.split("/").pop() || canonicalPath;
       const nextFile: OpenFile = {
-        path: update.path,
+        path: canonicalPath,
         name,
         content: update.content,
         language: getLanguage(name),
@@ -1158,14 +1317,14 @@ function AuthenticatedApp({
       };
 
       setOpenFiles((prev) => {
-        const existingIndex = prev.findIndex((file) => file.path === update.path);
+        const existingIndex = prev.findIndex((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
         if (existingIndex >= 0) {
-          return prev.map((file) => (file.path === update.path ? nextFile : file));
+          return prev.map((file, idx) => (idx === existingIndex ? nextFile : file));
         }
         return ensureOpen ? [...prev, nextFile] : prev;
       });
     },
-    []
+    [workspaceDir]
   );
 
   const handleAiFileUpdate = useCallback(
@@ -1669,21 +1828,31 @@ function AuthenticatedApp({
 
   // --- File operations ---
   const openFile = useCallback(
-    async (path: string) => {
+    async (rawPath: string) => {
       setWorkspaceView("files");
       if (window.innerWidth > 1180) setEditorAssistantVisible(true);
-      const existing = openFiles.find((f) => f.path === path);
+      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
+      if (!canonicalPath) return;
+
+      // 1. 若文件已在打开列表中，直接激活并聚焦
+      const existing = openFiles.find((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
       if (existing) {
-        setActiveFilePath(path);
+        setActiveFilePath(existing.path);
         return;
       }
 
+      // 2. 检查是否有针对该文件的网络拉取正在进行中（防并发双击/多重触发）
+      if (openingPathsRef.current.has(canonicalPath)) {
+        return;
+      }
+
+      openingPathsRef.current.add(canonicalPath);
       try {
-        const next = await fs.readFileWithMeta(path);
-        const name = path.split("/").pop() || path;
+        const next = await fs.readFileWithMeta(canonicalPath);
+        const name = canonicalPath.split("/").pop() || canonicalPath;
         const language = getLanguage(name);
         const newFile: OpenFile = {
-          path,
+          path: canonicalPath,
           name,
           content: next.content,
           language,
@@ -1692,13 +1861,23 @@ function AuthenticatedApp({
           updatedAt: next.updatedAt,
           ...buildClearedRemoteState(),
         };
-        setOpenFiles((prev) => [...prev, newFile]);
-        setActiveFilePath(path);
+
+        // 3. 终极防线：原子更新二次去重，坚决杜绝重复标签与僵尸 DOM 节点
+        setOpenFiles((prev) => {
+          const alreadyOpen = prev.some((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
+          if (alreadyOpen) {
+            return prev;
+          }
+          return [...prev, newFile];
+        });
+        setActiveFilePath(canonicalPath);
       } catch {
         showToast(t("app.failedToOpenFile"));
+      } finally {
+        openingPathsRef.current.delete(canonicalPath);
       }
     },
-    [openFiles, fs, showToast, t]
+    [fs, openFiles, showToast, t, workspaceDir]
   );
 
   const handleNavigateToLocation = useCallback(
@@ -1744,31 +1923,72 @@ function AuthenticatedApp({
   }, []);
 
   const closeTab = useCallback(
-    (path: string) => {
+    (rawPath: string) => {
+      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
       setOpenFiles((prev) => {
-        const filtered = prev.filter((f) => f.path !== path);
+        const filtered = prev.filter((f) => !isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
         setPreviewModes((current) => {
-          if (!Object.prototype.hasOwnProperty.call(current, path)) {
-            return current;
-          }
-
           const next = { ...current };
-          delete next[path];
+          for (const key of Object.keys(next)) {
+            if (isSameWorkspacePath(key, canonicalPath, workspaceDir)) {
+              delete next[key];
+            }
+          }
           return next;
         });
-        if (activeFilePath === path) {
+        if (isSameWorkspacePath(activeFilePath, canonicalPath, workspaceDir)) {
           setActiveFilePath(
             filtered.length > 0 ? filtered[filtered.length - 1].path : null
           );
         }
-        if (compareFilePath === path) {
+        if (isSameWorkspacePath(compareFilePath, canonicalPath, workspaceDir)) {
           setCompareFilePath(null);
         }
         return filtered;
       });
     },
-    [activeFilePath, compareFilePath]
+    [activeFilePath, compareFilePath, workspaceDir]
   );
+
+  const closeOtherTabs = useCallback(
+    (keepPath: string) => {
+      const canonicalKeep = normalizeWorkspaceRelativePath(keepPath, workspaceDir);
+      setOpenFiles((prev) => {
+        const filtered = prev.filter((f) => isSameWorkspacePath(f.path, canonicalKeep, workspaceDir));
+        setActiveFilePath(canonicalKeep);
+        if (compareFilePath && !isSameWorkspacePath(compareFilePath, canonicalKeep, workspaceDir)) {
+          setCompareFilePath(null);
+        }
+        return filtered;
+      });
+    },
+    [compareFilePath, workspaceDir]
+  );
+
+  const closeTabsToTheRight = useCallback(
+    (targetPath: string) => {
+      const canonicalTarget = normalizeWorkspaceRelativePath(targetPath, workspaceDir);
+      setOpenFiles((prev) => {
+        const targetIndex = prev.findIndex((f) => isSameWorkspacePath(f.path, canonicalTarget, workspaceDir));
+        if (targetIndex === -1) return prev;
+        const filtered = prev.slice(0, targetIndex + 1);
+        if (!filtered.some((f) => isSameWorkspacePath(f.path, activeFilePath, workspaceDir))) {
+          setActiveFilePath(canonicalTarget);
+        }
+        if (compareFilePath && !filtered.some((f) => isSameWorkspacePath(f.path, compareFilePath, workspaceDir))) {
+          setCompareFilePath(null);
+        }
+        return filtered;
+      });
+    },
+    [activeFilePath, compareFilePath, workspaceDir]
+  );
+
+  const closeAllTabs = useCallback(() => {
+    setOpenFiles([]);
+    setActiveFilePath(null);
+    setCompareFilePath(null);
+  }, []);
 
   const handleEditorChange = useCallback(
     (value: string) => {
@@ -1832,7 +2052,6 @@ function AuthenticatedApp({
             : f
         )
       );
-      showToast(t("app.fileSaved"));
       return true;
     } catch (error) {
       const claimError = error as Error & {
@@ -1906,7 +2125,6 @@ function AuthenticatedApp({
     try {
       const result = await fs.writeFile(pending.file.path, pending.file.content, true, pending.file.version);
       setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? { ...file, modified: false, version: result.version, updatedAt: result.updatedAt, ...buildClearedRemoteState() } : file));
-      showToast(t("app.fileSaved"));
       setClaimSaveConfirmation(null);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("app.failedToSaveFile");
@@ -2205,7 +2423,6 @@ function AuthenticatedApp({
       );
       setDiffViewerPath(null);
       setMergeSelections({});
-      showToast(t("app.fileSaved"));
     } catch {
       showToast(t("app.failedToSaveFile"));
     }
@@ -2317,12 +2534,13 @@ function AuthenticatedApp({
       const ok = await onChangeWorkspace(path);
       if (ok) {
         showToast(t("app.workspaceChanged"));
+        void loadTree();
       } else {
         showToast(t("app.failedToChangeWorkspace"));
       }
       return ok;
     },
-    [onChangeWorkspace, showToast, t]
+    [loadTree, onChangeWorkspace, showToast, t]
   );
 
   const handlePickDesktopWorkspace = useCallback(async () => {
@@ -2358,6 +2576,13 @@ function AuthenticatedApp({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isShortcut = e.metaKey || e.ctrlKey;
+      if (isShortcut && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (activeFile && activeFile.modified) {
+          void saveFile();
+        }
+        return;
+      }
       if (isShortcut && e.key.toLowerCase() === "p") {
         e.preventDefault();
         openCommandPalette(e.shiftKey ? "commands" : "files");
@@ -2558,12 +2783,13 @@ function AuthenticatedApp({
 
   const handleSelectTab = useCallback(
     (path: string) => {
-      if (path === compareFilePath && activeFilePath) {
+      const canonicalPath = normalizeWorkspaceRelativePath(path, workspaceDir);
+      if (isSameWorkspacePath(canonicalPath, compareFilePath, workspaceDir) && activeFilePath) {
         setCompareFilePath(activeFilePath);
       }
-      setActiveFilePath(path);
+      setActiveFilePath(canonicalPath);
     },
-    [activeFilePath, compareFilePath]
+    [activeFilePath, compareFilePath, workspaceDir]
   );
   const activePreviewRenderer = activeFile
     ? getMatchingFilePreviewRenderer({
@@ -2602,6 +2828,119 @@ function AuthenticatedApp({
           onChange: handleEditorChange,
         })
       : null;
+
+  // 预览分栏模式双向同步滚动（支持 Markdown 与 JSON 视觉解析器）
+  useEffect(() => {
+    if (activePreviewMode !== "split" || !activeFile) {
+      return;
+    }
+
+    const editor = editorRef.current;
+    const previewContainer = previewPaneRef.current;
+    if (!editor || !previewContainer) {
+      return;
+    }
+
+    const findScrollableElement = (): HTMLElement | null => {
+      if (!previewContainer) return null;
+      const candidates = [
+        previewContainer.querySelector<HTMLElement>(".json-preview-tree"),
+        previewContainer.querySelector<HTMLElement>(".external-markdown-preview"),
+        previewContainer.querySelector<HTMLElement>(".file-preview-surface"),
+        previewContainer.querySelector<HTMLElement>("[data-scroll-container]"),
+      ];
+      for (const el of candidates) {
+        if (el && el.scrollHeight > el.clientHeight) return el;
+      }
+      const all = previewContainer.querySelectorAll<HTMLElement>("*");
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (el.scrollHeight > el.clientHeight + 2) {
+          const style = window.getComputedStyle(el);
+          if (style.overflowY === "auto" || style.overflowY === "scroll") {
+            return el;
+          }
+        }
+      }
+      if (previewContainer.scrollHeight > previewContainer.clientHeight) {
+        return previewContainer;
+      }
+      return candidates.find(Boolean) || (previewContainer.firstElementChild as HTMLElement) || previewContainer;
+    };
+
+    let scrollEl = findScrollableElement();
+
+    const clearSyncTimer = () => {
+      if (syncScrollTimerRef.current !== null) {
+        window.cancelAnimationFrame(syncScrollTimerRef.current);
+        syncScrollTimerRef.current = null;
+      }
+    };
+
+    // 1. Monaco 编辑器滚动 -> 驱动预览侧滚动
+    const handleEditorScroll = editor.onDidScrollChange((event) => {
+      if (!event.scrollTopChanged) return;
+      if (isSyncingScrollRef.current === "preview") return;
+
+      if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) {
+        scrollEl = findScrollableElement();
+      }
+      if (!scrollEl) return;
+
+      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      const previewScrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
+      if (editorScrollable <= 0 || previewScrollable <= 0) return;
+
+      const ratio = editor.getScrollTop() / editorScrollable;
+      const targetScrollTop = ratio * previewScrollable;
+
+      if (Math.abs(scrollEl.scrollTop - targetScrollTop) > 1) {
+        isSyncingScrollRef.current = "editor";
+        scrollEl.scrollTop = targetScrollTop;
+        clearSyncTimer();
+        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+          isSyncingScrollRef.current = null;
+        });
+      }
+    });
+
+    // 2. 预览侧滚动 -> 驱动 Monaco 编辑器滚动 (使用 capture 监听捕获子元素滚动)
+    const handlePreviewScroll = (e: Event) => {
+      if (isSyncingScrollRef.current === "editor") return;
+      const target = (e.target as HTMLElement) || scrollEl;
+      if (!target || target === editor.getDomNode()?.parentElement) return;
+
+      const previewScrollable = target.scrollHeight - target.clientHeight;
+      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      if (previewScrollable <= 0 || editorScrollable <= 0) return;
+
+      const ratio = target.scrollTop / previewScrollable;
+      const targetScrollTop = ratio * editorScrollable;
+
+      if (Math.abs(editor.getScrollTop() - targetScrollTop) > 1) {
+        isSyncingScrollRef.current = "preview";
+        editor.setScrollTop(targetScrollTop);
+        clearSyncTimer();
+        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+          isSyncingScrollRef.current = null;
+        });
+      }
+    };
+
+    previewContainer.addEventListener("scroll", handlePreviewScroll, {
+      capture: true,
+      passive: true,
+    });
+
+    return () => {
+      handleEditorScroll.dispose();
+      previewContainer.removeEventListener("scroll", handlePreviewScroll, {
+        capture: true,
+      });
+      clearSyncTimer();
+      isSyncingScrollRef.current = null;
+    };
+  }, [activeFile?.path, activeFile?.content, activePreviewMode, editorRef]);
   const activeConflictFile =
     activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
   const diffViewerFile =
@@ -2694,99 +3033,46 @@ function AuthenticatedApp({
     : null;
   const workbenchTaskTitle = chat.isStreaming
     ? t("chat.runInProgress")
-    : activeConversationTitle || (workspaceView === "files" ? activeFile?.name : t("workbench.newTask")) || t("app.openFileToStart");
+    : activeConversationTitle || (workspaceView === "files" ? (activeFile ? activeFile.name : null) : null);
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      data-os={platform.os}
+      data-platform={platform.host}
+      data-density={viewport.recommendedDensity}
+    >
       {/* Title Bar */}
-      <div className="titlebar">
-        <div className="titlebar-left">
-          <BrandMark
-            size={26}
-            title={PRODUCT_NAME}
-            subtitle={workspaceDir}
-            className="titlebar-brand"
-          />
-        </div>
-        <div className="workbench-task-pill" aria-live="polite">
-          <span className="workbench-task-mode">
-            {t(`chat.mode.${chat.agentMode}.label`)}
-          </span>
-          <span className="workbench-task-title">
-            {workbenchTaskTitle}
-          </span>
-          <span className={`workbench-task-state${chat.isStreaming ? " running" : ""}`}>
-            <i />
-            {chat.isStreaming ? t("chat.runPreparing") : chat.connected ? t("chat.online") : t("chat.offline")}
-          </span>
-        </div>
-        <div className="titlebar-command-bar">
-          <button type="button" className="titlebar-command-btn" onClick={() => openCommandPalette("commands")}>
-            <Command size={14} />
-            <span>{t("command.commandPalette")}…</span>
-            <kbd>⌘⇧P</kbd>
-          </button>
-        </div>
-        <div className="titlebar-right">
-          <button
-            className="titlebar-btn titlebar-mobile-command"
-            onClick={() => openCommandPalette("commands")}
-            title={t("command.commandPalette")}
-            aria-label={t("command.commandPalette")}
-            data-drawer-trigger="command"
-          >
-            <Command size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${sidebarVisible ? " active" : ""}`}
-            onClick={toggleExplorerPanel}
-            title={t("app.toggleSidebar")}
-            aria-label={t("app.toggleSidebar")}
-            aria-pressed={workspaceView === "files" && sidebarVisible}
-            data-drawer-trigger="sidebar"
-          >
-            <PanelLeft size={17} />
-          </button>
-          <button
-            className={`titlebar-btn${chatVisible ? " active" : ""}`}
-            onClick={toggleChatPanel}
-            title={t("app.toggleAiChat")}
-            aria-label={t("app.toggleAiChat")}
-            aria-pressed={chatVisible}
-            data-drawer-trigger="chat"
-          >
-            <MessageSquare size={17} />
-          </button>
-          <details className="titlebar-user-menu">
-            <summary className="user-chip" title={username}>
-              <span className="user-avatar" aria-hidden="true">
-                {username.slice(0, 1).toUpperCase()}
-              </span>
-              <span>{username}</span>
-            </summary>
-            <div className="titlebar-user-popover">
-              <button type="button" onClick={onToggleTheme}>
-                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
-                <span>
-                  {t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
-                </span>
-              </button>
-              <button type="button" onClick={() => setSettingsVisible(true)}>
-                <Settings size={15} />
-                <span>{t("app.settings")}</span>
-              </button>
-              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
-                <Smartphone size={15} />
-                <span>手机控制台</span>
-              </button>}
-              <button type="button" onClick={onLogout}>
-                <LogOut size={15} />
-                <span>{t("app.logout")}</span>
-              </button>
-            </div>
-          </details>
-        </div>
-      </div>
+      <TitleBar
+        productName={PRODUCT_NAME}
+        workspaceDir={workspaceDir}
+        agentMode={chat.agentMode}
+        workbenchTaskTitle={workbenchTaskTitle}
+        isStreaming={chat.isStreaming}
+        sidebarOffset={sidebarVisible && workspaceView === "files" ? fileDockWidth : 0}
+        platform={platform}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
+        onOpenCommandPalette={openCommandPalette}
+        sidebarVisible={sidebarVisible}
+        onToggleSidebar={toggleExplorerPanel}
+        workspaceView={workspaceView}
+        editorAssistantVisible={editorAssistantVisible}
+        chatVisible={chatVisible}
+        onToggleAiAssistant={handleToggleAiAssistant}
+        username={username}
+        isAdmin={isAdmin}
+        teamRole={team.activeTeam?.role || null}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        density={density}
+        onToggleDensity={onToggleDensity}
+        onOpenSettings={() => setSettingsVisible(true)}
+        desktopApp={desktopApp}
+        onOpenMobilePairing={() => setMobilePairingVisible(true)}
+        onPickDesktopWorkspace={() => void onPickDesktopWorkspace()}
+        onLogout={onLogout}
+      />
 
       <Suspense fallback={null}>
         <SettingsModal
@@ -2813,7 +3099,7 @@ function AuthenticatedApp({
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,
-          "--files-sidebar-handle-width": sidebarVisible && workspaceView === "files" ? `${FILES_HANDLE_WIDTH}px` : "0px",
+          "--files-sidebar-handle-width": isLeftDockOpen ? `${FILES_HANDLE_WIDTH}px` : "0px",
           "--files-assistant-width": `${effectiveAssistantWidth}px`,
         } as React.CSSProperties}
       >
@@ -2825,16 +3111,7 @@ function AuthenticatedApp({
             onClick={closeWorkspaceDrawers}
           />
         )}
-        <nav className="activity-rail" data-compact-modal-background inert={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-hidden={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-label={t("app.workspace")}>
-          <button
-            type="button"
-            className="activity-rail-brand"
-            onClick={focusChat}
-            title={PRODUCT_NAME}
-            aria-label={PRODUCT_NAME}
-          >
-            <BrandMark size={28} title={PRODUCT_NAME} />
-          </button>
+        <nav className="activity-rail" data-compact-modal-background inert={compactModalDrawerOpen ? true : undefined} aria-hidden={compactModalDrawerOpen ? true : undefined} aria-label={t("app.workspace")}>
           <button
             type="button"
             className={`activity-rail-btn${workspaceView === "chat" ? " active" : ""}`}
@@ -2864,7 +3141,7 @@ function AuthenticatedApp({
               setWorkspaceSearchScope("");
               setWorkspaceSearchVisible(true);
             }}
-            title={`${t("search.title")} (⇧⌘F / Ctrl+Shift+F)`}
+            title={`${t("search.title")} (${platform.isMacOS ? "⇧⌘F" : "Ctrl+Shift+F"})`}
             aria-label={t("search.title")}
           >
             <Search size={18} />
@@ -2998,216 +3275,376 @@ function AuthenticatedApp({
             <summary className="activity-user-avatar" title={username} aria-label={username}>
               {username.slice(0, 1).toUpperCase()}
             </summary>
-            <div className="activity-user-popover">
-              <strong>{username}</strong>
+            <div className="activity-user-popover user-popover-shell">
+              <div className="user-popover-header">
+                <div className="user-popover-avatar">
+                  {username.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="user-popover-info">
+                  <div className="user-popover-name-row">
+                    <span className="user-popover-name">{username}</span>
+                    <span className="user-popover-badge">{isAdmin ? "管理员" : (team.activeTeam?.role || "成员")}</span>
+                  </div>
+                  <span className="user-popover-sub">本地离线编码环境</span>
+                </div>
+              </div>
+              <div className="user-popover-divider" />
+              <button type="button" onClick={onToggleTheme}>
+                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+                <span>{t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}</span>
+                <span className="user-popover-hint">{theme === "light" ? "深色" : "浅色"}</span>
+              </button>
+              <button type="button" onClick={onToggleDensity}>
+                <LayoutGrid size={15} />
+                <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
+              </button>
               <button type="button" onClick={() => setSettingsVisible(true)}>
-                <Settings size={14} /> {t("app.settings")}
+                <Settings size={15} />
+                <span>{t("app.settings")}</span>
+                <kbd className="user-popover-kbd">Ctrl+,</kbd>
               </button>
-              {!desktopApp && <button type="button" onClick={() => setMobilePairingVisible(true)}>
-                <Smartphone size={14} /> 手机控制台
-              </button>}
-              <button type="button" onClick={onLogout}>
-                <LogOut size={14} /> {t("app.logout")}
-              </button>
+              {!desktopApp && (
+                <button type="button" onClick={() => setMobilePairingVisible(true)}>
+                  <Smartphone size={15} />
+                  <span>手机控制台</span>
+                </button>
+              )}
+              <div className="user-popover-divider" />
+              {desktopApp ? (
+                <button type="button" onClick={() => void onPickDesktopWorkspace()}>
+                  <FolderOpen size={15} />
+                  <span>打开工作区…</span>
+                </button>
+              ) : (
+                <button type="button" className="user-popover-logout" onClick={onLogout}>
+                  <LogOut size={15} />
+                  <span>{t("app.logout")}</span>
+                </button>
+              )}
             </div>
           </details>
         </nav>
-        {workspaceView === "chat" && sidebarVisible && (
-          <TaskSidebar
-            workspaceLabel={workspaceLabel}
-            workspaceDir={workspaceDir}
-            conversations={chat.conversations}
-            currentConversationId={chat.currentConversationId}
-            contextState={chat.contextState}
-            loading={chat.historyLoading}
-            loadingId={chat.historyLoadingId}
-            isStreaming={chat.isStreaming}
-            onNewTask={() => {
-              setNewConversationRequest((value) => value + 1);
-              setChatFocusNonce((value) => value + 1);
-            }}
-            onLoadConversation={loadChatConversation}
-            onDeleteConversation={chat.deleteConversation}
-            onRefresh={chat.refreshConversations}
-          />
+        {isLeftDockOpen && (
+          <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
+            {gitVisible ? (
+              <GitPanel
+                key={`git:${workspaceDir}`}
+                visible={true}
+                token={token}
+                workspaceDir={workspaceDir}
+                theme={theme}
+                drawerMode={compactWorkspace}
+                readOnly={readOnlyWorkspace}
+                conversationId={chat.currentConversationId}
+                runId={chat.runState?.runId || null}
+                requestedDiffPath={gitDiffRequest?.path}
+                requestedDiffId={gitDiffRequest?.id}
+                onOpenFile={openFile}
+                onAskReview={handleGitReview}
+                onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
+                onOpenFollowUpRun={async (followUpRunId) => {
+                  await chat.loadRun(followUpRunId);
+                  setRunDetailsTab("delivery");
+                  setRunDetailsVisible(true);
+                  if (compactWorkspace) closeWorkspaceDrawer("git");
+                }}
+                onClose={() => closeWorkspaceDrawer("git")}
+              />
+            ) : agentsVisible ? (
+              <AgentBoard
+                key={`agents:${workspaceDir}`}
+                visible={true}
+                token={token}
+                drawerMode={compactWorkspace}
+                onClose={() => closeWorkspaceDrawer("agents")}
+              />
+            ) : teamVisible ? (
+              <div className="team-sidebar workspace-drawer-host" style={{ height: "100%", width: "100%" }}>
+                <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+                  <TeamPanel
+                    teams={team.teams}
+                    activeTeam={team.activeTeam}
+                    currentUsername={username}
+                    connected={team.connected}
+                    loading={team.loading}
+                    error={team.error}
+                    activeFilePath={activeFilePath}
+                    collaboration={team.collaboration}
+                    drawerMode={compactWorkspace}
+                    onClose={() => closeWorkspaceDrawer("team")}
+                    onRefresh={team.refresh}
+                    onCreateTeam={async (name) => {
+                      try {
+                        await team.createTeam(name);
+                        showToast(t("team.createdToast", { name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onJoinTeam={async (code) => {
+                      try {
+                        const joined = await team.joinTeam(code);
+                        showToast(t("team.joinedToast", { name: joined.name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onSwitchTeam={async (teamId) => {
+                      try {
+                        const switched = await team.switchTeam(teamId);
+                        showToast(t("team.switchedToast", { name: switched.name }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onCreateInvite={async (teamId, role: TeamRole) => {
+                      try {
+                        const invite = await team.createInvite(teamId, role);
+                        showToast(t("team.inviteCreatedToast", { code: invite.code }));
+                        return invite.code;
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onUpdateMemberRole={async (memberUsername, role) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
+                        showToast(
+                          t("team.roleUpdatedToast", {
+                            username: memberUsername,
+                            role,
+                          })
+                        );
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onTransferOwnership={async (memberUsername) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.transferOwnership(team.activeTeam.id, memberUsername);
+                        showToast(t("team.ownerTransferredToast", { username: memberUsername }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onRemoveMember={async (memberUsername) => {
+                      if (!team.activeTeam) return;
+                      try {
+                        await team.removeMember(team.activeTeam.id, memberUsername);
+                        showToast(t("team.memberRemovedToast", { username: memberUsername }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onLeaveTeam={async () => {
+                      if (!team.activeTeam) return;
+                      const leavingTeamName = team.activeTeam.name;
+                      try {
+                        await team.leaveTeam(team.activeTeam.id);
+                        showToast(t("team.leftTeamToast", { name: leavingTeamName }));
+                      } catch (error) {
+                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
+                        throw error;
+                      }
+                    }}
+                    onToggleClaim={async (path, claimed) => {
+                      if (!team.activeTeam) return;
+                      await team.setClaim(team.activeTeam.id, path, claimed);
+                      showToast(
+                        claimed
+                          ? t("team.claimedToast", { path })
+                          : t("team.releasedToast", { path })
+                      );
+                    }}
+                    onAddComment={team.addCollaborationComment}
+                    onCreateReview={team.createCollaborationReview}
+                    onCreateMergePreview={team.createMergePreview}
+                    onDecideMerge={team.decideMerge}
+                  />
+                </Suspense>
+              </div>
+            ) : checkpointsVisible ? (
+              <CheckpointPanel
+                key={`checkpoints:${workspaceDir}`}
+                visible={true}
+                token={token}
+                workspaceDir={workspaceDir}
+                conversationId={chat.currentConversationId}
+                runId={chat.runState?.runId || null}
+                readOnly={readOnlyWorkspace}
+                onClose={() => closeWorkspaceDrawer("checkpoints")}
+                onRestored={handleWorkspaceRestored}
+                onOpenWorktree={async (path) => {
+                  await handleChangeWorkspace(path);
+                }}
+                onNotify={showToast}
+              />
+            ) : problemsVisible ? (
+              <ProblemsPanel
+                key={`problems:${workspaceDir}`}
+                visible={true}
+                token={token}
+                editorProblems={editorProblems.problems}
+                onCountsChange={setProblemCounts}
+                onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
+                  startLine: problem.line,
+                  startColumn: problem.column,
+                  endLine: problem.line,
+                  endColumn: problem.column + 1,
+                })}
+                onClose={() => closeWorkspaceDrawer("problems")}
+              />
+            ) : runCenterVisible ? (
+              <RunCenterPanel
+                key={`run:${workspaceDir}`}
+                visible={true}
+                token={token}
+                onRunningChange={setActiveRunLabel}
+                onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
+                  startLine: failure.line,
+                  startColumn: failure.column,
+                  endLine: failure.line,
+                  endColumn: failure.column + 1,
+                })}
+                onClose={() => closeWorkspaceDrawer("run-center")}
+              />
+            ) : debugVisible ? (
+              <DebugPanel
+                key={`debug:${workspaceDir}`}
+                visible={true}
+                token={token}
+                activeFilePath={activeFilePath}
+                cursorLine={cursorPos.line}
+                breakpointsByPath={breakpointsByPath}
+                onToggleBreakpoint={toggleBreakpoint}
+                startRequest={debugStartRequest}
+                onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
+                  startLine: frame.line,
+                  startColumn: frame.column,
+                  endLine: frame.line,
+                  endColumn: frame.column + 1,
+                })}
+                onActiveFrameChange={setDebugActiveFrame}
+                onClose={() => closeWorkspaceDrawer("debug")}
+              />
+            ) : workspaceView === "chat" ? (
+              <TaskSidebar
+                workspaceLabel={workspaceLabel}
+                workspaceDir={workspaceDir}
+                conversations={chat.conversations}
+                currentConversationId={chat.currentConversationId}
+                contextState={chat.contextState}
+                loading={chat.historyLoading}
+                loadingId={chat.historyLoadingId}
+                isStreaming={chat.isStreaming}
+                onNewTask={() => {
+                  setNewConversationRequest((value) => value + 1);
+                  setChatFocusNonce((value) => value + 1);
+                }}
+                onLoadConversation={loadChatConversation}
+                onDeleteConversation={chat.deleteConversation}
+                onRefresh={chat.refreshConversations}
+              />
+            ) : (
+              <Sidebar
+                tree={fileTree}
+                activeFilePath={activeFilePath}
+                visible={true}
+                onFileSelect={openFile}
+                onCreateEntry={handleCreateEntry}
+                onCopyEntry={handleCopyEntry}
+                onMoveEntry={handleMoveEntry}
+                onDeleteEntry={handleDeleteEntry}
+                onDeleteEntries={handleDeleteEntries}
+                onRenameEntry={handleRenameEntry}
+                onDownloadEntry={handleDownloadEntry}
+                onUploadEntries={handleUploadEntries}
+                onRefreshTree={loadTree}
+                workspaceDir={workspaceDir}
+                workspaceLocked={isolatedWindow}
+                desktopApp={desktopApp}
+                folderPickerBusy={pickingWorkspace}
+                onPickDesktopWorkspace={handlePickDesktopWorkspace}
+                folderOpenRequestId={folderOpenRequestId}
+                onChangeWorkspace={handleChangeWorkspace}
+                onSearchInPath={(path) => {
+                  setWorkspaceSearchScope(path);
+                  setWorkspaceSearchVisible(true);
+                }}
+                onSearchContent={fs.searchWorkspace}
+                onCancelContentSearch={fs.cancelWorkspaceSearch}
+                token={token}
+                activeTeam={team.activeTeam}
+              />
+            )}
+          </aside>
         )}
-        <Sidebar
-          tree={fileTree}
-          activeFilePath={activeFilePath}
-          visible={sidebarVisible && workspaceView === "files"}
-          onFileSelect={openFile}
-          onCreateEntry={handleCreateEntry}
-          onCopyEntry={handleCopyEntry}
-          onMoveEntry={handleMoveEntry}
-          onDeleteEntry={handleDeleteEntry}
-          onDeleteEntries={handleDeleteEntries}
-          onRenameEntry={handleRenameEntry}
-          onDownloadEntry={handleDownloadEntry}
-          onUploadEntries={handleUploadEntries}
-          onRefreshTree={loadTree}
-          workspaceDir={workspaceDir}
-          workspaceLocked={isolatedWindow}
-          desktopApp={desktopApp}
-          folderPickerBusy={pickingWorkspace}
-          onPickDesktopWorkspace={handlePickDesktopWorkspace}
-          folderOpenRequestId={folderOpenRequestId}
-          onChangeWorkspace={handleChangeWorkspace}
-          onSearchInPath={(path) => {
-            setWorkspaceSearchScope(path);
-            setWorkspaceSearchVisible(true);
-          }}
-          onSearchContent={fs.searchWorkspace}
-          onCancelContentSearch={fs.cancelWorkspaceSearch}
-          token={token}
-          activeTeam={team.activeTeam}
-        />
 
         <div
-          className={`resize-handle sidebar-resize-handle${!sidebarVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "sidebar" ? " dragging" : ""}`}
+          className={`resize-handle sidebar-resize-handle${!isLeftDockOpen ? " hidden" : ""}${draggingPanel === "sidebar" ? " dragging" : ""}`}
           role="separator"
           aria-orientation="vertical"
           aria-label={t("sidebar.resize")}
           aria-valuemin={FILES_SIDEBAR_MIN_WIDTH}
           aria-valuemax={sidebarMaxWidth}
           aria-valuenow={effectiveSidebarWidth}
-          tabIndex={sidebarVisible && workspaceView === "files" && viewportWidth > 780 ? 0 : -1}
+          tabIndex={isLeftDockOpen && viewportWidth > 780 ? 0 : -1}
           onMouseDown={(e) => handleResizeStart("sidebar", e)}
           onKeyDown={(e) => handlePanelResizeKeyDown("sidebar", e)}
         />
 
-        <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
+        <div className={`editor-area${workspaceView === "chat" && !chatTerminalVisible ? " workbench-surface-hidden" : ""}${chatTerminalVisible ? " terminal-drawer-host" : ""}`}>
           <TabBar
             openFiles={openFiles}
             activeFilePath={activeFilePath}
+            workspaceDir={workspaceDir}
             onSelectTab={handleSelectTab}
             onCloseTab={closeTab}
+            onCloseOtherTabs={closeOtherTabs}
+            onCloseTabsToTheRight={closeTabsToTheRight}
+            onCloseAllTabs={closeAllTabs}
+            onShowToast={showToast}
           />
           {activeFile && (
-            <div className="editor-context-bar">
-              <div className="editor-context-path" title={activeFile.path}>
-                <span className="editor-context-kicker">{t("editor.activeFile")}</span>
-                <FileCode2 size={13} />
-                <strong>{activeFile.name}</strong>
-                <span className="editor-context-workspace">{workspaceLabel}</span>
-                <ChevronRight size={12} />
-                <code>{activeFile.path}</code>
-              </div>
-              <div className="editor-context-actions">
-                <span className="editor-online-state">
-                  <i className={chat.connected ? "connected" : ""} />
-                  {chat.connected ? t("chat.online") : t("chat.offline")}
-                </span>
-                <div className="editor-primary-actions" role="group" aria-label={t("workbench.editorActions")}>
-                  <button
-                    type="button"
-                    className={editorAssistantVisible ? "active" : ""}
-                    onClick={() => {
-                      setRunDetailsVisible(false);
-                      setEditorAssistantVisible(true);
-                    }}
-                  >
-                    <Bot size={13} />
-                    <span>{t("workbench.editorAssistant")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={terminalVisible ? "active" : ""}
-                    onClick={() => toggleTerminalPanel()}
-                  >
-                    <TerminalSquare size={13} />
-                    <span>{t("workbench.details.terminal")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={runDetailsVisible ? "active" : ""}
-                    onClick={() => {
-                      setEditorAssistantVisible(false);
-                      setRunDetailsTab("changes");
-                      setRunDetailsVisible(true);
-                    }}
-                  >
-                    <GitBranch size={13} />
-                    <span>{t("chat.changes")}</span>
-                  </button>
-                </div>
-                {isDebuggablePath(activeFile.path) && (
-                  <button
-                    type="button"
-                    className="editor-run-current"
-                    onClick={() => void runCurrentFile()}
-                    disabled={readOnlyWorkspace}
-                    title={t("debug.runCurrentFile")}
-                    aria-label={t("debug.runCurrentFile")}
-                  >
-                    <Play size={13} />
-                    <span>{t("debug.run")}</span>
-                  </button>
-                )}
-                {openFiles.length > 1 && (
-                  <div className="editor-compare-picker">
-                    <Columns2 size={13} aria-hidden="true" />
-                    <span>{t("editor.compareWith")}</span>
-                    <WorkbenchSelect
-                      label={t("editor.compareWith")}
-                      className="editor-compare-select"
-                      value={compareFilePath || ""}
-                      onChange={(value) => setCompareFilePath(value || null)}
-                      options={[
-                        { value: "", label: t("editor.compareNone") },
-                        ...openFiles
-                        .filter((file) => file.path !== activeFile.path)
-                        .map((file) => ({ value: file.path, label: file.name })),
-                      ]}
-                    />
-                  </div>
-                )}
-                {compareFile && (
-                  <button
-                    type="button"
-                    className={`editor-compare-sync${compareScrollLinked ? " active" : ""}`}
-                    onClick={() => setCompareScrollLinked((linked) => !linked)}
-                    aria-pressed={compareScrollLinked}
-                    title={compareScrollLinked ? t("editor.disableSyncScroll") : t("editor.enableSyncScroll")}
-                  >
-                    {compareScrollLinked ? <Link2 size={13} /> : <Unlink2 size={13} />}
-                    <span>{t("editor.syncScroll")}</span>
-                  </button>
-                )}
-                {compareFile && (
-                  <button
-                    type="button"
-                    className="editor-compare-close"
-                    onClick={() => setCompareFilePath(null)}
-                    title={t("editor.stopCompare")}
-                    aria-label={t("editor.stopCompare")}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-                <div className="editor-context-statuses">
-                  {activeFile.modified && (
-                    <span className="editor-context-status modified">
-                      {t("editor.unsaved")}
-                    </span>
-                  )}
-                  {activeFile.remoteUpdated && (
-                    <span className="editor-context-status remote">
-                      {t("editor.remoteUpdated")}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          {activeFile && (
-            <div className="editor-breadcrumb-bar" aria-label={t("workbench.fileBreadcrumb")}>
-              {activeFile.path.split("/").map((part, index, parts) => (
-                <React.Fragment key={`${part}-${index}`}>
-                  <span className={index === parts.length - 1 ? "current" : ""}>{part}</span>
-                  {index < parts.length - 1 && <ChevronRight size={11} />}
-                </React.Fragment>
-              ))}
-            </div>
+            <EditorToolbar
+              activeFile={activeFile}
+              workspaceLabel={workspaceLabel}
+              hasPreview={Boolean(activePreviewRenderer)}
+              activePreviewMode={activePreviewMode}
+              onSelectPreviewMode={setActivePreviewMode}
+              editorAssistantVisible={editorAssistantVisible}
+              onToggleEditorAssistant={() => {
+                setRunDetailsVisible(false);
+                setEditorAssistantVisible((prev) => !prev);
+              }}
+              terminalVisible={terminalVisible}
+              onToggleTerminal={toggleTerminalPanel}
+              runDetailsVisible={runDetailsVisible}
+              onOpenChanges={() => {
+                setEditorAssistantVisible(false);
+                setRunDetailsTab("changes");
+                setRunDetailsVisible(true);
+              }}
+              canRunCurrent={isDebuggablePath(activeFile.path)}
+              onRunCurrent={() => void runCurrentFile()}
+              readOnlyWorkspace={readOnlyWorkspace}
+              openFiles={openFiles}
+              compareFilePath={compareFilePath}
+              onSelectCompareFile={(value) => setCompareFilePath(value)}
+              compareFileActive={Boolean(compareFile)}
+              compareScrollLinked={compareScrollLinked}
+              onToggleCompareScrollLinked={() => setCompareScrollLinked((linked) => !linked)}
+              onCloseCompare={() => setCompareFilePath(null)}
+            />
           )}
           <div className="editor-main">
             {activeConflictFile && (
@@ -3372,40 +3809,6 @@ function AuthenticatedApp({
                 </div>
               ) : activePreviewRenderer ? (
                 <div className="editor-workbench">
-                  <div className="editor-workbench-toolbar">
-                    <div className="editor-workbench-segmented">
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "edit" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("edit")}
-                        aria-pressed={activePreviewMode === "edit"}
-                      >
-                        {t("editor.modeEdit")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "preview" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("preview")}
-                        aria-pressed={activePreviewMode === "preview"}
-                      >
-                        {t("editor.modePreview")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`editor-workbench-btn${
-                          activePreviewMode === "split" ? " active" : ""
-                        }`}
-                        onClick={() => setActivePreviewMode("split")}
-                        aria-pressed={activePreviewMode === "split"}
-                      >
-                        {t("editor.modeSplit")}
-                      </button>
-                    </div>
-                  </div>
                   <div
                     className={`editor-workbench-body mode-${activePreviewMode}`}
                   >
@@ -3456,7 +3859,10 @@ function AuthenticatedApp({
                       <div className="editor-workbench-divider" />
                     )}
                     {activePreviewMode !== "edit" && (
-                      <div className="editor-workbench-pane editor-preview-pane">
+                      <div
+                        className="editor-workbench-pane editor-preview-pane"
+                        ref={previewPaneRef}
+                      >
                         {activePreviewContent}
                       </div>
                     )}
@@ -3526,13 +3932,13 @@ function AuthenticatedApp({
               />
             )}
           </div>
-          {terminalVisible && !compactWorkspace && (
+          {terminalVisible && !terminalDrawerMode && workspaceView === "files" && (
             <div
               className={`terminal-resize-handle${draggingPanel === "terminal" ? " dragging" : ""}`}
               role="separator"
               aria-orientation="horizontal"
               aria-label={t("terminal.resize")}
-              aria-valuemin={160}
+              aria-valuemin={140}
               aria-valuemax={680}
               aria-valuenow={terminalHeight}
               tabIndex={0}
@@ -3543,221 +3949,14 @@ function AuthenticatedApp({
           <Terminal
             key={workspaceDir}
             visible={terminalVisible}
-            style={compactWorkspace ? undefined : { height: terminalHeight }}
+            style={{ height: terminalHeight }}
             token={token}
             disabled={readOnlyWorkspace}
             disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
-            drawerMode={compactWorkspace}
-            onClose={() => setTerminalVisible(false)}
+            drawerMode={terminalDrawerMode}
+            onClose={() => closeWorkspaceDrawer("terminal")}
           />
         </div>
-
-        {teamVisible && (
-          <div className="team-sidebar workspace-drawer-host">
-            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-              <TeamPanel
-              teams={team.teams}
-              activeTeam={team.activeTeam}
-              currentUsername={username}
-              connected={team.connected}
-              loading={team.loading}
-              error={team.error}
-              activeFilePath={activeFilePath}
-              collaboration={team.collaboration}
-              drawerMode={compactWorkspace}
-              onClose={() => setTeamVisible(false)}
-              onRefresh={team.refresh}
-              onCreateTeam={async (name) => {
-                try {
-                  await team.createTeam(name);
-                  showToast(t("team.createdToast", { name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onJoinTeam={async (code) => {
-                try {
-                  const joined = await team.joinTeam(code);
-                  showToast(t("team.joinedToast", { name: joined.name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onSwitchTeam={async (teamId) => {
-                try {
-                  const switched = await team.switchTeam(teamId);
-                  showToast(t("team.switchedToast", { name: switched.name }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onCreateInvite={async (teamId, role: TeamRole) => {
-                try {
-                  const invite = await team.createInvite(teamId, role);
-                  showToast(t("team.inviteCreatedToast", { code: invite.code }));
-                  return invite.code;
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onUpdateMemberRole={async (memberUsername, role) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
-                  showToast(
-                    t("team.roleUpdatedToast", {
-                      username: memberUsername,
-                      role,
-                    })
-                  );
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onTransferOwnership={async (memberUsername) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.transferOwnership(team.activeTeam.id, memberUsername);
-                  showToast(t("team.ownerTransferredToast", { username: memberUsername }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onRemoveMember={async (memberUsername) => {
-                if (!team.activeTeam) return;
-                try {
-                  await team.removeMember(team.activeTeam.id, memberUsername);
-                  showToast(t("team.memberRemovedToast", { username: memberUsername }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onLeaveTeam={async () => {
-                if (!team.activeTeam) return;
-                const leavingTeamName = team.activeTeam.name;
-                try {
-                  await team.leaveTeam(team.activeTeam.id);
-                  showToast(t("team.leftTeamToast", { name: leavingTeamName }));
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                  throw error;
-                }
-              }}
-              onToggleClaim={async (path, claimed) => {
-                if (!team.activeTeam) return;
-                await team.setClaim(team.activeTeam.id, path, claimed);
-                showToast(
-                  claimed
-                    ? t("team.claimedToast", { path })
-                    : t("team.releasedToast", { path })
-                );
-              }}
-              onAddComment={team.addCollaborationComment}
-              onCreateReview={team.createCollaborationReview}
-              onCreateMergePreview={team.createMergePreview}
-              onDecideMerge={team.decideMerge}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        <GitPanel
-          key={`git:${workspaceDir}`}
-          visible={gitVisible}
-          token={token}
-          workspaceDir={workspaceDir}
-          theme={theme}
-          drawerMode={compactWorkspace}
-          readOnly={readOnlyWorkspace}
-          conversationId={chat.currentConversationId}
-          runId={chat.runState?.runId || null}
-          requestedDiffPath={gitDiffRequest?.path}
-          requestedDiffId={gitDiffRequest?.id}
-          onOpenFile={openFile}
-          onAskReview={handleGitReview}
-          onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
-          onOpenFollowUpRun={async (followUpRunId) => {
-            await chat.loadRun(followUpRunId);
-            setRunDetailsTab("delivery");
-            setRunDetailsVisible(true);
-            if (compactWorkspace) setGitVisible(false);
-          }}
-          onClose={() => setGitVisible(false)}
-        />
-        <AgentBoard
-          key={`agents:${workspaceDir}`}
-          visible={agentsVisible}
-          token={token}
-          drawerMode={compactWorkspace}
-          onClose={() => setAgentsVisible(false)}
-        />
-        <CheckpointPanel
-          key={`checkpoints:${workspaceDir}`}
-          visible={checkpointsVisible}
-          token={token}
-          workspaceDir={workspaceDir}
-          conversationId={chat.currentConversationId}
-          runId={chat.runState?.runId || null}
-          readOnly={readOnlyWorkspace}
-          onClose={() => setCheckpointsVisible(false)}
-          onRestored={handleWorkspaceRestored}
-          onOpenWorktree={async (path) => {
-            await handleChangeWorkspace(path);
-          }}
-          onNotify={showToast}
-        />
-        <ProblemsPanel
-          key={`problems:${workspaceDir}`}
-          visible={problemsVisible}
-          token={token}
-          editorProblems={editorProblems.problems}
-          onCountsChange={setProblemCounts}
-          onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
-            startLine: problem.line,
-            startColumn: problem.column,
-            endLine: problem.line,
-            endColumn: problem.column + 1,
-          })}
-          onClose={() => setProblemsVisible(false)}
-        />
-        <RunCenterPanel
-          key={`run:${workspaceDir}`}
-          visible={runCenterVisible}
-          token={token}
-          onRunningChange={setActiveRunLabel}
-          onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
-            startLine: failure.line,
-            startColumn: failure.column,
-            endLine: failure.line,
-            endColumn: failure.column + 1,
-          })}
-          onClose={() => setRunCenterVisible(false)}
-        />
-        <DebugPanel
-          key={`debug:${workspaceDir}`}
-          visible={debugVisible}
-          token={token}
-          activeFilePath={activeFilePath}
-          cursorLine={cursorPos.line}
-          breakpointsByPath={breakpointsByPath}
-          onToggleBreakpoint={toggleBreakpoint}
-          startRequest={debugStartRequest}
-          onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
-            startLine: frame.line,
-            startColumn: frame.column,
-            endLine: frame.line,
-            endColumn: frame.column + 1,
-          })}
-          onActiveFrameChange={setDebugActiveFrame}
-          onClose={() => setDebugVisible(false)}
-        />
 
         <div
           className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "chat" ? " dragging" : ""}`}
@@ -3773,7 +3972,8 @@ function AuthenticatedApp({
           isStreaming={chat.isStreaming}
           activeRequestIds={chat.activeRequestIds}
           connected={chat.connected}
-          visible={chatVisible && workspaceView === "chat"}
+          aiHealth={chat.aiHealth}
+          visible={chatVisible && workspaceView === "chat" && !chatTerminalVisible}
           focusRequest={chatFocusNonce}
           agentMode={chat.agentMode}
           runtimeOptions={chat.runtimeOptions}
@@ -3786,7 +3986,7 @@ function AuthenticatedApp({
           onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
           attachmentSubmissionError={attachmentSubmissionError}
           attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-          taskTitle={workbenchTaskTitle}
+          taskTitle={workbenchTaskTitle || t("workbench.newTask")}
           onAgentModeChange={chat.setAgentMode}
           onModelNameChange={chat.setSelectedModelName}
           currentRunSummary={chat.currentRunSummary}
@@ -3857,25 +4057,7 @@ function AuthenticatedApp({
           onPlanAmendmentDecision={chat.decidePlanAmendment}
           style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
         />
-        <RunDetailsPanel
-          token={token}
-          workspaceDir={workspaceDir}
-          visible={runDetailsVisible}
-          summary={chat.currentRunSummary}
-          runState={chat.runState}
-          errorCount={problemCounts.errors}
-          warningCount={problemCounts.warnings}
-          contextManifest={chat.contextManifest}
-          activeTab={runDetailsTab}
-          onTabChange={setRunDetailsTab}
-          onOpenFile={openFile}
-          onOpenDiff={handleOpenGitDiff}
-          onClose={() => {
-            setRunDetailsVisible(false);
-            if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
-          }}
-        />
-        {workspaceView === "files" && editorAssistantVisible && !runDetailsVisible && (
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
             role="separator"
@@ -3889,42 +4071,87 @@ function AuthenticatedApp({
             onKeyDown={(e) => handlePanelResizeKeyDown("assistant", e)}
           />
         )}
-        <EditorAssistantPanel
-          token={token}
-          visible={workspaceView === "files" && editorAssistantVisible && !runDetailsVisible}
-          activeFilePath={activeFilePath}
-          activeFileDirty={Boolean(activeFile?.modified)}
-          messages={chat.messages}
-          connected={chat.connected}
-          isStreaming={chat.isStreaming}
-          agentMode={chat.agentMode}
-          runtimeOptions={chat.runtimeOptions}
-          selectedModelName={chat.selectedModelName}
-          draftText={chatDraftText}
-          onDraftTextChange={setChatDraftText}
-          attachmentDraft={chatAttachmentDraft}
-          attachmentWarning={attachmentWarning}
-          attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
-          onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
-          attachmentSubmissionError={attachmentSubmissionError}
-          attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-          runState={chat.runState}
-          currentRunSummary={chat.currentRunSummary}
-          contextManifest={chat.contextManifest}
-          contextReadOnly={readOnlyWorkspace}
-          pendingApprovals={chat.pendingApprovals}
-          onAgentModeChange={chat.setAgentMode}
-          onModelNameChange={chat.setSelectedModelName}
-          onSend={handleChatSend}
-          onSteer={handleChatSteer}
-          onStop={chat.stopCurrentRun}
-          onResume={chat.resumeConversation}
-          onNewConversation={clearChatConversation}
-          onToolApproval={chat.respondToToolApproval}
-          onApproveConversationTools={chat.approveConversationTools}
-          onPlanAmendmentDecision={chat.decidePlanAmendment}
-          onClose={() => setEditorAssistantVisible(false)}
-        />
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+          <aside
+            className="workbench-right-dock"
+            aria-label={runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
+          >
+            {runDetailsVisible ? (
+              <RunDetailsPanel
+                token={token}
+                workspaceDir={workspaceDir}
+                visible={runDetailsVisible}
+                summary={chat.currentRunSummary}
+                runState={chat.runState}
+                errorCount={problemCounts.errors}
+                warningCount={problemCounts.warnings}
+                contextManifest={chat.contextManifest}
+                activeTab={runDetailsTab}
+                onTabChange={setRunDetailsTab}
+                onOpenFile={openFile}
+                onOpenDiff={handleOpenGitDiff}
+                onClose={() => {
+                  setRunDetailsVisible(false);
+                  if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
+                }}
+              />
+            ) : (
+              <EditorAssistantPanel
+                token={token}
+                visible={true}
+                activeFilePath={activeFilePath}
+                activeFileDirty={Boolean(activeFile?.modified)}
+                messages={chat.messages}
+                connected={chat.connected}
+                isStreaming={chat.isStreaming}
+                agentMode={chat.agentMode}
+                runtimeOptions={chat.runtimeOptions}
+                selectedModelName={chat.selectedModelName}
+                draftText={chatDraftText}
+                onDraftTextChange={setChatDraftText}
+                attachmentDraft={chatAttachmentDraft}
+                attachmentWarning={attachmentWarning}
+                attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+                onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+                attachmentSubmissionError={attachmentSubmissionError}
+                attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
+                runState={chat.runState}
+                currentRunSummary={chat.currentRunSummary}
+                contextManifest={chat.contextManifest}
+                contextReadOnly={readOnlyWorkspace}
+                pendingApprovals={chat.pendingApprovals}
+                onAgentModeChange={chat.setAgentMode}
+                onModelNameChange={chat.setSelectedModelName}
+                onSend={handleChatSend}
+                onSteer={handleChatSteer}
+                onStop={chat.stopCurrentRun}
+                onResume={chat.resumeConversation}
+                onNewConversation={clearChatConversation}
+                onToolApproval={chat.respondToToolApproval}
+                onApproveConversationTools={chat.approveConversationTools}
+                onPlanAmendmentDecision={chat.decidePlanAmendment}
+                onClose={() => setEditorAssistantVisible(false)}
+              />
+            )}
+          </aside>
+        )}
+        {workspaceView === "chat" && runDetailsVisible && (
+          <RunDetailsPanel
+            token={token}
+            workspaceDir={workspaceDir}
+            visible={runDetailsVisible}
+            summary={chat.currentRunSummary}
+            runState={chat.runState}
+            errorCount={problemCounts.errors}
+            warningCount={problemCounts.warnings}
+            contextManifest={chat.contextManifest}
+            activeTab={runDetailsTab}
+            onTabChange={setRunDetailsTab}
+            onOpenFile={openFile}
+            onOpenDiff={handleOpenGitDiff}
+            onClose={() => setRunDetailsVisible(false)}
+          />
+        )}
       </div>
 
       {/* Status Bar */}
@@ -3936,6 +4163,7 @@ function AuthenticatedApp({
         }
         cursorPosition={cursorPos}
         connected={chat.connected}
+        aiHealth={chat.aiHealth}
         teamName={team.activeTeam?.name || null}
         teamOnlineCount={team.activeTeam?.onlineCount}
         teamRole={team.activeTeam?.role || null}

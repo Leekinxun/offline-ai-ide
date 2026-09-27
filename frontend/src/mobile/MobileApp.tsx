@@ -29,7 +29,6 @@ import {
   formatWhen,
   MobileApiError,
   mobileApi,
-  type MobileApproval,
   type MobileCommand,
   type MobileScope,
   type MobileSession,

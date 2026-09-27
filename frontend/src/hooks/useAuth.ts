@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
+import { AUTH_TOKEN_KEY, ISOLATED_AUTH_TOKEN_KEY, fetchCurrentAuthSession, persistVerifiedAuthToken } from "./authSession";
 
-const TOKEN_KEY = "ai-ide-token";
-const ISOLATED_TOKEN_KEY = "ai-ide-isolated-token";
+const TOKEN_KEY = AUTH_TOKEN_KEY;
+const ISOLATED_TOKEN_KEY = ISOLATED_AUTH_TOKEN_KEY;
 const VIBE_WINDOW_HANDOFF = "crownforge-vibe-session";
 
 function initialToken(): { token: string | null; isolated: boolean } {
@@ -43,20 +44,16 @@ export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Validate stored token on mount
+  // Validate stored token on mount, or auto-authenticate if in desktop environment
   useEffect(() => {
     const stored = token;
-    if (!stored) {
-      setLoading(false);
-      return;
-    }
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${stored}` } })
-      .then((res) => {
-        if (!res.ok) throw new Error("Invalid token");
-        return res.json();
-      })
+    fetchCurrentAuthSession(stored, initialAuth.isolated)
       .then((data) => {
-        setToken(stored);
+        const effectiveToken = data.token || stored;
+        if (effectiveToken) {
+          persistVerifiedAuthToken(effectiveToken, stored, initialAuth.isolated || data.isolated, localStorage, sessionStorage);
+          setToken(effectiveToken);
+        }
         setUser({
           username: data.username,
           workspaceDir: data.workspaceDir,
@@ -66,8 +63,10 @@ export function useAuth() {
         });
       })
       .catch(() => {
-        if (sessionStorage.getItem(ISOLATED_TOKEN_KEY) === stored) sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
-        else localStorage.removeItem(TOKEN_KEY);
+        if (stored) {
+          if (sessionStorage.getItem(ISOLATED_TOKEN_KEY) === stored) sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
+          else localStorage.removeItem(TOKEN_KEY);
+        }
         setToken(null);
         setUser(null);
       })

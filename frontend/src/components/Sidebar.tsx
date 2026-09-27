@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import "./Sidebar.css";
 import { FileNode, TeamDetails } from "../types";
 import { FILE_TREE_DRAG_TYPE, FileTree } from "./FileTree";
 import {
@@ -6,7 +7,6 @@ import {
   FileUp,
   FolderPlus,
   FolderUp,
-  FolderOpen,
   RefreshCw,
   Trash2,
   Pencil,
@@ -263,6 +263,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
   const [treeQuery, setTreeQuery] = useState("");
+  const [filterOpen, setFilterOpen] = useState(false);
   const [contentMatchPaths, setContentMatchPaths] = useState<Set<string>>(() => new Set());
   const [contentSearchState, setContentSearchState] = useState<"idle" | "loading" | "error">("idle");
   const [rootDropActive, setRootDropActive] = useState(false);
@@ -378,9 +379,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [onCancelContentSearch, onSearchContent, treeQuery, visible]);
 
   useEffect(() => {
-    folderUploadInputRef.current?.setAttribute("webkitdirectory", "");
-    folderUploadInputRef.current?.setAttribute("directory", "");
-  }, []);
+    if (folderUploadInputRef.current) {
+      folderUploadInputRef.current.setAttribute("webkitdirectory", "");
+      folderUploadInputRef.current.setAttribute("directory", "");
+    }
+  }, [visible]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: FileNode) => {
@@ -712,7 +715,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const files = Array.from(fileList).map((file) => ({
             path:
               preserveRelativePath && file.webkitRelativePath
-                ? file.webkitRelativePath
+                ? file.webkitRelativePath.replace(/\\/g, "/")
                 : file.name,
             file,
           }));
@@ -891,7 +894,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // --- Folder browser ---
   const fetchDirectories = useCallback(
-    async (dir: string) => {
+    async (dir: string): Promise<boolean> => {
       setFolderBrowser((prev) => ({
         currentPath: prev?.currentPath || dir,
         rootPath: prev?.rootPath || "",
@@ -926,31 +929,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
           error: null,
         });
         setFolderPathInput(data.path || dir);
+        return true;
       } catch (error) {
         setFolderBrowser((prev) =>
           prev
             ? {
                 ...prev,
                 loading: false,
+                selectable: false,
                 error: error instanceof Error
                   ? error.message
                   : t("sidebar.failedToListDirectories"),
               }
             : null
         );
+        return false;
       }
     },
     [t, token]
   );
 
   const openFolderBrowser = useCallback(() => {
-    if (workspaceLocked) return;
+    if (workspaceLocked || folderPickerBusy) return;
     if (desktopApp) {
       void onPickDesktopWorkspace();
       return;
     }
     fetchDirectories("");
-  }, [desktopApp, fetchDirectories, onPickDesktopWorkspace, workspaceLocked]);
+  }, [desktopApp, fetchDirectories, folderPickerBusy, onPickDesktopWorkspace, workspaceLocked]);
 
   useEffect(() => {
     if (folderOpenRequestId === lastFolderOpenRequestId.current) return;
@@ -966,6 +972,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const changed = await onChangeWorkspace(path);
       if (changed) {
         setFolderBrowser(null);
+        void onRefreshTree();
         return;
       }
       setFolderBrowser((current) => current
@@ -976,8 +983,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }
         : current);
     },
-    [onChangeWorkspace, t]
+    [onChangeWorkspace, onRefreshTree, t]
   );
+
+  // 确认打开文件夹：自动处理用户手动输入路径未先点“前往”的情况
+  const handleConfirmOpenFolder = useCallback(async () => {
+    if (!folderBrowser) return;
+    const trimmedInput = folderPathInput.trim();
+    if (trimmedInput && trimmedInput !== folderBrowser.currentPath) {
+      const ok = await fetchDirectories(trimmedInput);
+      if (!ok) return;
+      await handleFolderSelect(trimmedInput);
+    } else {
+      if (!folderBrowser.selectable || folderBrowser.error) return;
+      await handleFolderSelect(folderBrowser.currentPath);
+    }
+  }, [fetchDirectories, folderBrowser, folderPathInput, handleFolderSelect]);
 
   const handleFolderNavigate = useCallback(
     (path: string) => {
@@ -1027,70 +1048,70 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div className="sidebar workspace-drawer" style={style} tabIndex={-1} data-workspace-drawer="sidebar">
-      <div className="sidebar-header">
-        <div className="sidebar-heading">
-          <span className="sidebar-eyebrow">{t("sidebar.workspaceLabel")}</span>
-          <span className="sidebar-title">CrewForge / {workspaceName}</span>
+      {/* 隐藏上传 input 保持可用 */}
+      <input
+        ref={fileUploadInputRef}
+        className="sidebar-hidden-file-input"
+        type="file"
+        multiple
+        onChange={(e) =>
+          void handleUploadFiles(
+            e.target.files,
+            false,
+            uploadTargetPathRef.current
+          )
+        }
+      />
+      <input
+        ref={folderUploadInputRef}
+        className="sidebar-hidden-file-input"
+        type="file"
+        multiple
+        {...({ webkitdirectory: "", directory: "" } as any)}
+        onChange={(e) =>
+          void handleUploadFiles(
+            e.target.files,
+            true,
+            uploadTargetPathRef.current
+          )
+        }
+      />
+
+      {/* 现代紧凑单行整合顶栏 */}
+      <div className="sidebar-compact-header">
+        <div
+          className="sidebar-compact-title-group"
+          onClick={openFolderBrowser}
+          title={`${t("sidebar.openFolder")}: ${workspaceDir}`}
+        >
+          <span className="sidebar-compact-badge">{t("sidebar.explorer")}</span>
+          <span className="sidebar-compact-workspace-name">{workspaceName}</span>
+          {!workspaceLocked && <ChevronRight size={13} style={{ opacity: 0.5, flexShrink: 0 }} />}
         </div>
-        <div className="sidebar-actions">
-          <input
-            ref={fileUploadInputRef}
-            className="sidebar-hidden-file-input"
-            type="file"
-            multiple
-            onChange={(e) =>
-              void handleUploadFiles(
-                e.target.files,
-                false,
-                uploadTargetPathRef.current
-              )
-            }
-          />
-          <input
-            ref={folderUploadInputRef}
-            className="sidebar-hidden-file-input"
-            type="file"
-            multiple
-            onChange={(e) =>
-              void handleUploadFiles(
-                e.target.files,
-                true,
-                uploadTargetPathRef.current
-              )
-            }
-          />
-          <div className="sidebar-action-group sidebar-action-group-primary">
-            <button
-              className="sidebar-action-btn primary"
-              title={t("sidebar.newFile")}
-              aria-label={t("sidebar.newFile")}
-              onClick={() => handleCreateFile()}
-              disabled={!canEditWorkspace}
-            >
-              <FilePlus size={16} />
-            </button>
-            <button
-              className="sidebar-action-btn primary"
-              title={t("sidebar.newFolder")}
-              aria-label={t("sidebar.newFolder")}
-              onClick={() => handleCreateFolder()}
-              disabled={!canEditWorkspace}
-            >
-              <FolderPlus size={16} />
-            </button>
-          </div>
-          <span className="sidebar-action-divider" aria-hidden="true" />
+        <div className="sidebar-compact-actions">
           <button
-            className="sidebar-action-btn"
-            title={t("sidebar.openFolder")}
-            aria-label={t("sidebar.openFolder")}
-            onClick={openFolderBrowser}
-            disabled={workspaceLocked || folderPickerBusy}
+            type="button"
+            className="sidebar-compact-btn"
+            title={t("sidebar.newFile")}
+            aria-label={t("sidebar.newFile")}
+            onClick={() => handleCreateFile()}
+            disabled={!canEditWorkspace}
           >
-            <FolderOpen size={15} />
+            <FilePlus size={15} />
           </button>
           <button
-            className="sidebar-action-btn"
+            type="button"
+            className="sidebar-compact-btn"
+            title={t("sidebar.newFolder")}
+            aria-label={t("sidebar.newFolder")}
+            onClick={() => handleCreateFolder()}
+            disabled={!canEditWorkspace}
+          >
+            <FolderPlus size={15} />
+          </button>
+          <button
+            type="button"
+            className="sidebar-compact-btn"
             title={t("sidebar.uploadFiles")}
             aria-label={t("sidebar.uploadFiles")}
             onClick={() => openUploadPicker("", false)}
@@ -1099,7 +1120,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <FileUp size={15} />
           </button>
           <button
-            className="sidebar-action-btn"
+            type="button"
+            className="sidebar-compact-btn"
             title={t("sidebar.uploadFolder")}
             aria-label={t("sidebar.uploadFolder")}
             onClick={() => openUploadPicker("", true)}
@@ -1108,133 +1130,91 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <FolderUp size={15} />
           </button>
           <button
-            className="sidebar-action-btn workbench-refresh"
+            type="button"
+            className="sidebar-compact-btn"
             title={t("common.refresh")}
             aria-label={t("common.refresh")}
             onClick={onRefreshTree}
           >
-            <RefreshCw size={15} />
+            <RefreshCw size={14} />
           </button>
           <button
-            className={`sidebar-action-btn${multiSelectEnabled ? " active" : ""}`}
+            type="button"
+            className={`sidebar-compact-btn${filterOpen || treeQuery ? " active" : ""}`}
+            title={t("sidebar.filterPlaceholder")}
+            aria-label={t("sidebar.filterPlaceholder")}
+            onClick={() => {
+              setFilterOpen((prev) => !prev);
+              if (!filterOpen) {
+                setTimeout(() => {
+                  treeSearchInputRef.current?.focus();
+                  treeSearchInputRef.current?.select();
+                }, 50);
+              }
+            }}
+          >
+            <Search size={14} />
+          </button>
+          <button
+            type="button"
+            className={`sidebar-compact-btn${multiSelectEnabled ? " active" : ""}`}
             title={t("sidebar.toggleMultiSelect")}
             aria-label={t("sidebar.toggleMultiSelect")}
             onClick={handleToggleMultiSelect}
           >
-            <CheckSquare size={15} />
+            <CheckSquare size={14} />
           </button>
-          <button
-            className="sidebar-action-btn"
-            title={
-              selectedPaths.length > 0
-                ? t("sidebar.deleteSelectedCount", { count: selectedPaths.length })
-                : t("sidebar.deleteSelected")
-            }
-            aria-label={t("sidebar.deleteSelected")}
-            onClick={() => void handleBatchDelete()}
-            disabled={!canEditWorkspace || selectedPaths.length === 0}
-          >
-            <Trash2 size={15} />
-          </button>
-          <button
-            className="sidebar-action-btn sidebar-workspace-menu"
-            title={t("sidebar.openFolder")}
-            aria-label={t("sidebar.openFolder")}
-            onClick={openFolderBrowser}
-            disabled={workspaceLocked || folderPickerBusy}
-          >
-            <ChevronRight size={15} />
-          </button>
-        </div>
-      </div>
-      <div className="sidebar-file-toolbar">
-        <strong>{t("sidebar.explorer")}</strong>
-        <span />
-        <button
-          type="button"
-          title={t("sidebar.filterPlaceholder")}
-          aria-label={t("sidebar.filterPlaceholder")}
-          onClick={() => {
-            treeSearchInputRef.current?.focus();
-            treeSearchInputRef.current?.select();
-          }}
-        >
-          <Search size={15} />
-        </button>
-        <button
-          type="button"
-          title={t("sidebar.newFile")}
-          aria-label={t("sidebar.newFile")}
-          onClick={() => handleCreateFile()}
-          disabled={!canEditWorkspace}
-        >
-          <FilePlus size={15} />
-        </button>
-        <button
-          type="button"
-          title={t("common.refresh")}
-          aria-label={t("common.refresh")}
-          onClick={onRefreshTree}
-        >
-          <RefreshCw size={15} />
-        </button>
-      </div>
-      <button
-        type="button"
-        className="sidebar-workspace-card"
-        title={t(workspaceLocked ? "sidebar.isolatedWorkspaceLocked" : "sidebar.openFolder")}
-        onClick={openFolderBrowser}
-        disabled={workspaceLocked || folderPickerBusy}
-      >
-        <div className="sidebar-workspace-icon" aria-hidden="true">
-          <FolderOpen size={16} />
-        </div>
-        <div className="sidebar-workspace-copy">
-          <span className="sidebar-workspace-label">{t("sidebar.currentWorkspace")}</span>
-          <strong>{workspaceName}</strong>
-          <span>{workspaceDir}</span>
-        </div>
-        {!workspaceLocked && <ChevronRight size={14} className="sidebar-workspace-open" aria-hidden="true" />}
-      </button>
-      <div className="sidebar-tools">
-        <label className="sidebar-search">
-          <Search size={15} aria-hidden="true" />
-          <input
-            ref={treeSearchInputRef}
-            type="search"
-            value={treeQuery}
-            onChange={(event) => setTreeQuery(event.target.value)}
-            placeholder={t("sidebar.filterPlaceholder")}
-            aria-label={t("sidebar.filterPlaceholder")}
-          />
-          {treeQuery && (
+          {selectedPaths.length > 0 && (
             <button
               type="button"
-              className="sidebar-search-clear"
-              onClick={() => setTreeQuery("")}
-              title={t("common.clear")}
-              aria-label={t("common.clear")}
+              className="sidebar-compact-btn"
+              title={t("sidebar.deleteSelectedCount", { count: selectedPaths.length })}
+              aria-label={t("sidebar.deleteSelected")}
+              onClick={() => void handleBatchDelete()}
+              disabled={!canEditWorkspace}
+              style={{ color: "var(--danger)" }}
             >
-              <X size={14} />
+              <Trash2 size={14} />
             </button>
-          )}
-        </label>
-        <div className="sidebar-tree-meta" aria-live="polite">
-          <span>{treeStats.folders} {t("sidebar.folders")}</span>
-          <span>{treeStats.files} {t("sidebar.files")}</span>
-          {treeQuery && contentSearchState === "loading" && (
-            <span className="sidebar-search-status">{t("sidebar.searchingContents")}</span>
-          )}
-          {treeQuery && contentSearchState === "error" && (
-            <span className="sidebar-search-status error">{t("sidebar.contentSearchFailed")}</span>
-          )}
-          {treeQuery && contentSearchState === "idle" && contentMatchPaths.size > 0 && (
-            <span className="sidebar-search-status">
-              {t("sidebar.contentMatchFiles", { count: contentMatchPaths.size })}
-            </span>
           )}
         </div>
       </div>
+
+      {/* 紧凑微型过滤胶囊栏 */}
+      {(filterOpen || treeQuery) && (
+        <div className="sidebar-compact-filter-bar">
+          <div className="sidebar-compact-search-box">
+            <Search size={13} aria-hidden="true" />
+            <input
+              ref={treeSearchInputRef}
+              className="sidebar-compact-search-input"
+              type="search"
+              value={treeQuery}
+              onChange={(event) => setTreeQuery(event.target.value)}
+              placeholder={t("sidebar.filterPlaceholder")}
+              aria-label={t("sidebar.filterPlaceholder")}
+            />
+            {treeQuery && (
+              <button
+                type="button"
+                className="sidebar-compact-btn"
+                style={{ width: 18, height: 18 }}
+                onClick={() => setTreeQuery("")}
+                title={t("common.clear")}
+                aria-label={t("common.clear")}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <span
+            className="sidebar-compact-meta-pill"
+            title={`${treeStats.folders} ${t("sidebar.folders")}, ${treeStats.files} ${t("sidebar.files")}`}
+          >
+            {treeStats.files}
+          </span>
+        </div>
+      )}
       {notice && (
         <div className={notice.tone === "error" ? "delivery-inline-error" : "checkpoint-notice"} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"}>
           <span>{notice.message}</span>
@@ -1637,7 +1617,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="folder-browser-path"
                 value={folderPathInput}
                 aria-label={t("sidebar.workspacePath")}
-                onChange={(event) => setFolderPathInput(event.target.value)}
+                onChange={(event) => {
+                  setFolderPathInput(event.target.value);
+                  if (folderBrowser.error) {
+                    setFolderBrowser((prev) => (prev ? { ...prev, error: null } : null));
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && folderPathInput.trim()) {
                     void fetchDirectories(folderPathInput.trim());
@@ -1685,8 +1670,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               <button
                 className="dialog-btn primary"
-                onClick={() => handleFolderSelect(folderBrowser.currentPath)}
-                disabled={!folderBrowser.selectable || folderBrowser.loading || folderBrowser.switching}
+                onClick={() => void handleConfirmOpenFolder()}
+                disabled={
+                  folderBrowser.loading ||
+                  folderBrowser.switching ||
+                  Boolean(folderBrowser.error) ||
+                  (!folderBrowser.selectable && folderPathInput.trim() === folderBrowser.currentPath)
+                }
               >
                 {folderBrowser.switching ? t("sidebar.switchingWorkspace") : t("sidebar.openThisFolder")}
               </button>

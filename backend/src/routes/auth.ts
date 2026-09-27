@@ -1,6 +1,6 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import path from "node:path";
-import { sessionManager } from "../auth/sessionManager.js";
+import { isSamePath, sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
 import { loginLimiter } from "../auth/loginLimiter.js";
 import {
@@ -12,6 +12,34 @@ import { getDebugSession, stopDebugSession } from "../debug/service.js";
 import { stopDiagnosticsSession } from "../diagnostics/service.js";
 
 export const authRouter = Router();
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function normalizeHost(value: string | undefined): string {
+  if (!value) return "";
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    return end === -1 ? trimmed : trimmed.slice(0, end + 1);
+  }
+  return trimmed.split(":")[0];
+}
+
+function isLoopbackHost(value: string | undefined): boolean {
+  return LOOPBACK_HOSTS.has(normalizeHost(value));
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  if (!value) return false;
+  const address = value.toLowerCase();
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function isDesktopLocalRequest(req: Request): boolean {
+  return process.env.CREWFORGE_DESKTOP === "1" &&
+    isLoopbackHost(req.headers.host) &&
+    isLoopbackAddress(req.socket.remoteAddress);
+}
 
 // POST /api/auth/register
 authRouter.post("/register", async (req, res) => {
@@ -75,9 +103,27 @@ authRouter.post("/logout", (req, res) => {
 
 // GET /api/auth/me
 authRouter.get("/me", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const authHeader = req.headers["authorization"];
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const session = sessionManager.getSession(token);
+  let session = sessionManager.getSession(token);
+
+  // Desktop shells run on loopback and may bootstrap the local admin session.
+  if (!session && authHeader === undefined && isDesktopLocalRequest(req)) {
+    const desktopSession = sessionManager.getOrCreateDesktopLocalSession();
+    if (desktopSession) {
+      return res.json({
+        username: desktopSession.username,
+        workspaceDir: desktopSession.workspaceDir,
+        workspaceRoot: desktopSession.workspaceRoot,
+        isAdmin: desktopSession.isAdmin,
+        isolated: desktopSession.isolated,
+        desktop: true,
+        token: desktopSession.token,
+      });
+    }
+  }
+
   if (!session) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -88,6 +134,7 @@ authRouter.get("/me", (req, res) => {
     isAdmin: session.isAdmin,
     isolated: session.isolated,
     desktop: process.env.CREWFORGE_DESKTOP === "1",
+    token: session.token,
   });
 });
 
@@ -104,7 +151,9 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   if (session.isolated) {
     return res.status(403).json({ error: "Isolated Vibe windows are locked to their worktree" });
   }
-  const result = sessionManager.changeWorkspaceWithinUserRoot(session.token, newPath);
+  const result = session.isAdmin
+    ? sessionManager.changeWorkspace(session.token, newPath)
+    : sessionManager.changeWorkspaceWithinUserRoot(session.token, newPath);
   if (!result) {
     return res.status(403).json({ error: "Path not allowed" });
   }
@@ -163,10 +212,11 @@ authRouter.get("/workspace/list", authMiddleware, (req, res) => {
   if (!result) {
     return res.status(403).json({ error: "Path is outside the user's workspace root" });
   }
+  const isAtRoot = isSamePath(result.path, result.rootPath);
   res.json({
     ...result,
     selectable: true,
-    canNavigateUp: result.path !== result.rootPath,
-    parentPath: result.path !== result.rootPath ? path.dirname(result.path) : null,
+    canNavigateUp: !isAtRoot,
+    parentPath: !isAtRoot ? path.dirname(result.path) : null,
   });
 });

@@ -1,0 +1,341 @@
+/* ==================== Workspace Welcome ==================== */
+.workspace-welcome {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: clamp(38px, 6.5vh, 80px) 24px clamp(36px, 6vh, 64px);
+  background:
+    radial-gradient(ellipse 900px 480px at 50% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 72%),
+    var(--bg-primary);
+  user-select: none;
+}
+
+/* 顶部品牌与工作区 Hero 区域 */
+.workspace-welcome-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.workspace-welcome-hero .brand-lockup {
+  margin-bottom: 26px;
+}
+
+.workspace-welcome-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.workspace-welcome h1 {
+  max-width: min(740px, 80vw);
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: clamp(26px, 4vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.25;
+}
+
+/* 文件统计描述胶囊徽章 */
+.workspace-welcome-desc {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 600px;
+  margin-top: 14px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-secondary) 65%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-light) 65%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.welcome-desc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--accent);
+  flex-shrink: 0;
+}
+
+/* 核心操作卡片区 (2x2 对称网格，舒展宽度 + 弹性间距) */
+.workspace-welcome-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(290px, 1fr));
+  gap: 15px;
+  width: min(730px, 100%);
+  min-width: 0;
+  margin-top: clamp(36px, 5.5vh, 56px);
+}
+
+/* 单个操作卡片 */
+.welcome-action {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  min-height: 80px;
+  padding: 15px 20px;
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  backdrop-filter: blur(12px);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+/* 悬停 (Hover) 交互动效 */
+.welcome-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-light) 45%, var(--bg-secondary));
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 24px -4px rgba(0, 0, 0, 0.35),
+    0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.welcome-action:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.welcome-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 左侧图标卡槽 (Icon Badge) */
+.welcome-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--bg-primary) 70%, var(--border-light));
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  transition: all 0.18s ease;
+}
+
+.welcome-action:hover:not(:disabled) .welcome-action-icon {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  transform: scale(1.05);
+}
+
+.welcome-action-icon-ai {
+  color: color-mix(in srgb, var(--accent) 85%, #a855f7);
+}
+
+/* 中间文字排版区 */
+.welcome-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3.5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.welcome-action-text strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.welcome-action-text small {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s ease;
+}
+
+.welcome-action:hover:not(:disabled) .welcome-action-text small {
+  color: var(--text-secondary);
+}
+
+/* 右侧操作线索区 (快捷键/跳转箭头) */
+.welcome-action-aside {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* 微立体键帽 */
+.welcome-keycap {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-bottom: 2px solid color-mix(in srgb, var(--border) 80%, #000);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-primary) 85%, transparent);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: all 0.15s ease;
+}
+
+.welcome-action:hover:not(:disabled) .welcome-keycap {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+/* 跳转微箭头 */
+.welcome-action-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  transition: all 0.18s ease;
+}
+
+.welcome-action:hover:not(:disabled) .welcome-action-arrow {
+  color: var(--accent);
+  transform: translate(2px, -2px);
+}
+
+/* 最近打开文件面板 */
+.workspace-welcome-recent {
+  width: min(730px, 100%);
+  min-width: 0;
+  margin-top: clamp(24px, 4vh, 36px);
+  padding: 14px 18px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.workspace-welcome-section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.welcome-recent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.welcome-recent-item:hover {
+  background: color-mix(in srgb, var(--accent-light) 60%, transparent);
+}
+
+.welcome-recent-item span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.welcome-recent-item small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-recent-item:hover span {
+  color: var(--accent);
+}
+
+/* 底部快捷键提示条 (自适应纵向弹性间距) */
+.workspace-welcome-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 24px;
+  margin-top: clamp(38px, 6.5vh, 72px);
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+.workspace-welcome-shortcuts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workspace-welcome-shortcuts kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-bottom: 2px solid color-mix(in srgb, var(--border) 80%, #000);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+/* 移动端与紧凑屏幕适配 */
+@media (max-width: 640px) {
+  .workspace-welcome {
+    padding: 28px 16px 20px;
+  }
+
+  .workspace-welcome-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-welcome-shortcuts {
+    gap: 12px;
+  }
+}

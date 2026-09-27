@@ -4,10 +4,10 @@ const isMac = /Macintosh|Mac OS X/.test(userAgent);
 const isWindows = /Windows/.test(userAgent);
 
 export const DEFAULT_EDITOR_FONT_FAMILY = isMac
-  ? "Menlo, Monaco, 'Courier New', monospace"
+  ? "'SF Mono', Menlo, Monaco, 'Courier New', monospace"
   : isWindows
-    ? "Consolas, 'Courier New', monospace"
-    : "'Droid Sans Mono', monospace";
+    ? "'Cascadia Code', Consolas, 'Segoe UI Mono', 'Courier New', monospace"
+    : "'Fira Code', 'JetBrains Mono', 'Liberation Mono', 'DejaVu Sans Mono', monospace";
 
 export const DEFAULT_EDITOR_FONT_OPTIONS = {
   fontSize: isMac ? 12 : 14,

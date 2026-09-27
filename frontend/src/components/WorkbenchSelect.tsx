@@ -1,12 +1,14 @@
 import React, { forwardRef, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
+import "./WorkbenchSelect.css";
 
 export interface WorkbenchSelectOption {
   value: string;
   label: string;
   meta?: string;
   disabled?: boolean;
+  icon?: React.ReactNode;
 }
 
 export interface WorkbenchSelectProps {
@@ -17,13 +19,20 @@ export interface WorkbenchSelectProps {
   disabled?: boolean;
   className?: string;
   title?: string;
+  placeholder?: string;
+  showStatusMark?: boolean;
+  showHead?: boolean;
+  icon?: React.ReactNode;
+  active?: boolean;
 }
 
 interface MenuPosition {
-  top: number;
+  top?: number;
+  bottom?: number;
   left: number;
   width: number;
   maxHeight: number;
+  opensAbove: boolean;
 }
 
 function mergeRefs<T>(...refs: Array<React.ForwardedRef<T> | React.Ref<T> | undefined>) {
@@ -59,6 +68,11 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
   disabled = false,
   className,
   title,
+  placeholder,
+  showStatusMark = false,
+  showHead = false,
+  icon,
+  active = false,
 }, forwardedRef) => {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,20 +91,25 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
     const gutter = 8;
+    const verticalGap = 4;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const availableWidth = Math.max(160, viewportWidth - gutter * 2);
-    const width = Math.min(Math.max(260, rect.width), availableWidth);
-    const maxMenuHeight = Math.min(320, Math.max(150, viewportHeight - gutter * 2));
-    const spaceBelow = viewportHeight - rect.bottom - gutter;
-    const spaceAbove = rect.top - gutter;
-    const opensAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
-    const maxHeight = Math.max(150, Math.min(maxMenuHeight, opensAbove ? spaceAbove : spaceBelow));
-    const left = Math.min(Math.max(gutter, rect.right - width), viewportWidth - width - gutter);
-    const top = opensAbove
-      ? Math.max(gutter, rect.top - maxHeight - gutter)
-      : Math.min(rect.bottom + gutter, viewportHeight - maxHeight - gutter);
-    setPosition({ top, left, width, maxHeight });
+    // Menu width seamlessly matches trigger width, with a minimum of 200px (or trigger width)
+    const width = Math.min(Math.max(rect.width, 200), availableWidth);
+    const maxMenuHeight = Math.min(320, Math.max(120, viewportHeight - gutter * 2));
+    const spaceBelow = viewportHeight - rect.bottom - verticalGap - gutter;
+    const spaceAbove = rect.top - verticalGap - gutter;
+    const opensAbove = spaceBelow < 180 && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(100, Math.min(maxMenuHeight, opensAbove ? spaceAbove : spaceBelow));
+    // Naturally align with the trigger's left edge
+    let left = rect.left;
+    if (left + width > viewportWidth - gutter) {
+      left = Math.max(gutter, viewportWidth - width - gutter);
+    }
+    const top = opensAbove ? undefined : Math.round(rect.bottom + verticalGap);
+    const bottom = opensAbove ? Math.round(viewportHeight - rect.top + verticalGap) : undefined;
+    setPosition({ top, bottom, left: Math.round(left), width: Math.round(width), maxHeight: Math.round(maxHeight), opensAbove });
   }, []);
 
   const closeMenu = useCallback((restoreFocus = false) => {
@@ -216,48 +235,56 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
   };
 
   const selectedLabel = selectedOption?.label || "";
+  const displayLabel = value ? selectedLabel : (placeholder || selectedLabel);
 
   return (
     <div className={["workbench-select", className].filter(Boolean).join(" ")}>
       <button
         ref={mergeRefs(triggerRef, forwardedRef)}
         type="button"
-        className="workbench-select-trigger"
+        className={`workbench-select-trigger${active ? " active" : ""}`}
         disabled={isDisabled}
-        aria-label={`${label}: ${selectedLabel}`}
+        aria-label={`${label}: ${displayLabel}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={`${id}-menu`}
-        title={title || `${label}: ${selectedLabel}`}
+        title={title || `${label}: ${displayLabel}`}
         onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span className={`workbench-select-status${selectedOption?.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
-        <span className="workbench-select-value">{selectedLabel}</span>
-        <ChevronDown size={14} aria-hidden="true" />
+        {icon ? (
+          <span className="workbench-select-icon">{icon}</span>
+        ) : showStatusMark ? (
+          <span className={`workbench-select-status${selectedOption?.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+        ) : null}
+        <span className="workbench-select-value">{displayLabel}</span>
+        <ChevronDown size={13} className="workbench-select-arrow" aria-hidden="true" />
       </button>
       {open && position && createPortal(
         <div
           ref={menuRef}
           id={`${id}-menu`}
           data-workbench-select-menu
-          className="workbench-select-menu"
+          className={`workbench-select-menu ${position.opensAbove ? "opens-above" : "opens-below"}`}
           role="listbox"
           tabIndex={-1}
           aria-label={label}
           aria-activedescendant={activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
           style={{
             top: position.top,
+            bottom: position.bottom,
             left: position.left,
             width: position.width,
             maxHeight: position.maxHeight,
           }}
           onKeyDown={handleMenuKeyDown}
         >
-          <div className="workbench-select-menu-head" aria-hidden="true">
-            <span>{label}</span>
-            <strong>{options.length}</strong>
-          </div>
+          {showHead && (
+            <div className="workbench-select-menu-head" aria-hidden="true">
+              <span>{label}</span>
+              <strong>{options.length}</strong>
+            </div>
+          )}
           {options.map((option, index) => (
             <button
               type="button"
@@ -272,12 +299,16 @@ export const WorkbenchSelect = forwardRef<HTMLButtonElement, WorkbenchSelectProp
               onMouseMove={() => !option.disabled && setActiveIndex(index)}
               onClick={() => chooseOption(option)}
             >
-              <span className={`workbench-select-mark${option.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+              {option.icon ? (
+                <span className="workbench-select-option-icon" aria-hidden="true">{option.icon}</span>
+              ) : showStatusMark ? (
+                <span className={`workbench-select-mark${option.meta === "AUTO" ? " automatic" : ""}`} aria-hidden="true" />
+              ) : null}
               <span className="workbench-select-option-copy">
                 <strong>{option.label}</strong>
                 {option.meta && <small>{option.meta}</small>}
               </span>
-              <span className="workbench-select-check" aria-hidden="true">{option.value === value && <Check size={15} />}</span>
+              <span className="workbench-select-check" aria-hidden="true">{option.value === value && <Check size={14} />}</span>
             </button>
           ))}
         </div>,

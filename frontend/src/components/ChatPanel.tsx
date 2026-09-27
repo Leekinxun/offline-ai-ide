@@ -23,9 +23,12 @@ import {
   CollaborationState,
 } from "../types";
 import {
-  Send,
   Copy,
   ArrowDownToLine,
+  ArrowUp,
+  Bug,
+  Code2,
+  TestTube2,
   TextSelect,
   ChevronRight,
   Plus,
@@ -38,6 +41,7 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
+import "./ChatPanel.css";
 import { ContextStrip } from "./ContextStrip";
 import { ContextInspector } from "./ContextInspector";
 import { TaskHeader } from "./TaskHeader";
@@ -47,12 +51,14 @@ import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
 import { ChangeSummary } from "./ChangeSummary";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
-import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
+import { MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { ModelSelector } from "./ModelSelector";
+import { WorkbenchSelect } from "./WorkbenchSelect";
 import type { ContextManifestController } from "../hooks/useContextManifest";
-import type { ChatRuntimeOptions } from "../hooks/useChat";
+import type { ChatRuntimeOptions, AiHealthInfo } from "../hooks/useChat";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
+import { CHAT_EMPTY_QUICK_PROMPTS, type WorkbenchQuickPromptId } from "./workbenchQuickPrompts";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -87,6 +93,20 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
+
+function quickPromptIcon(id: WorkbenchQuickPromptId): React.ReactNode {
+  switch (id) {
+    case "inspect":
+      return <Sparkles size={13} aria-hidden="true" />;
+    case "plan":
+      return <Code2 size={13} aria-hidden="true" />;
+    case "fix":
+      return <Bug size={13} aria-hidden="true" />;
+    case "test":
+      return <TestTube2 size={13} aria-hidden="true" />;
+  }
+}
+
 interface ChatPanelProps {
   token: string;
   isolatedWindow: boolean;
@@ -96,6 +116,7 @@ interface ChatPanelProps {
   isStreaming: boolean;
   activeRequestIds?: string[];
   connected: boolean;
+  aiHealth?: AiHealthInfo;
   visible: boolean;
   focusRequest?: number;
   agentMode: AgentMode;
@@ -166,6 +187,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isStreaming,
   activeRequestIds,
   connected,
+  aiHealth,
   visible,
   focusRequest,
   agentMode,
@@ -245,6 +267,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const approvalStackRef = useRef<HTMLElement>(null);
   const contextInspectorTriggerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
@@ -546,6 +569,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <TaskHeader
         taskTitle={taskTitle}
         connected={connected}
+        aiHealth={aiHealth}
         currentConversationId={currentConversationId}
         isStreaming={isStreaming}
         activeToolName={activeTool?.name}
@@ -563,31 +587,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         executionContract={runState?.executionContract || (runState?.executionContractKind ? { kind: runState.executionContractKind, planId: runState.executionPlan?.id || runState.executionPlanId } : currentRunSummary?.executionContract || (currentRunSummary?.executionContractKind ? { kind: currentRunSummary.executionContractKind, planId: currentRunSummary.executionPlan?.id } : undefined))}
         completionEvidence={runState?.completionEvidence || currentRunSummary?.completionEvidence}
       />
-      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+      {(messages.length > 0 || isStreaming || Boolean(runState)) && (
+        <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+      )}
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 
       <div className="chat-details-region" hidden={detailsCollapsed}>
-      <div className="chat-mode-switcher" role="tablist" aria-label={t("chat.modeLabel")}>
-        <div className="chat-mode-switcher-heading">
-          <span>{t("chat.modeLabel")}</span>
-          <small>{t(`chat.mode.${agentMode}.hint`)}</small>
-        </div>
-        {(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => (
-          <button
-            type="button"
-            key={mode}
-            role="tab"
-            aria-selected={agentMode === mode}
-            className={`chat-mode-btn${agentMode === mode ? " active" : ""}`}
-            onClick={() => onAgentModeChange(mode)}
-            disabled={isStreaming}
-            title={t(`chat.mode.${mode}.hint`)}
-          >
-            {t(`chat.mode.${mode}.label`)}
-          </button>
-        ))}
-      </div>
 
       <div ref={contextInspectorTriggerRef} className="chat-context-strip-host">
       <ContextStrip
@@ -903,9 +909,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty-state">
-            <div className="chat-empty-icon"><Sparkles size={18} /></div>
+            <div className="chat-empty-icon"><Sparkles size={20} /></div>
             <strong>{t("chat.emptyPrimary")}</strong>
             <span>{t("chat.emptySecondary")}</span>
+            <div className="chat-empty-quick-prompts">
+              {CHAT_EMPTY_QUICK_PROMPTS.map((prompt) => (
+                <button
+                  type="button"
+                  className="chat-empty-quick-btn"
+                  key={prompt.id}
+                  onClick={() => {
+                    onAgentModeChange(prompt.mode);
+                    onDraftTextChange(t(prompt.promptKey));
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  {quickPromptIcon(prompt.id)}
+                  <span>{t(prompt.labelKey)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((msg, idx) => (
@@ -938,60 +961,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       />
 
       <div className="chat-input-area">
-        <div className="chat-composer-context">
-          <div className="chat-composer-modes" role="tablist" aria-label={t("chat.modeLabel")}>
-            {(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={agentMode === mode}
-                className={agentMode === mode ? "active" : ""}
-                onClick={() => onAgentModeChange(mode)}
-                disabled={isStreaming}
-                key={mode}
-              >
-                {t(`chat.mode.${mode}.label`)}
-              </button>
-            ))}
-          </div>
-          {activeFileName && <code>{activeFileName}</code>}
-          <div className="chat-composer-model">
-            <span>{t("workbench.model")}</span>
-            <ModelSelector
-              value={selectedModelName}
-              onChange={onModelNameChange}
-              disabled={isStreaming || runtimeOptions.models.length === 0}
-              models={runtimeOptions.models}
-              automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
-              label={t("workbench.model")}
-            />
-          </div>
-        </div>
-        {/* Selection indicator */}
-        {selectionInfo && activeFileName && (
-          <div className="chat-selection-badge">
-            <TextSelect size={13} />
-            <span>
-              {activeFileName} : L{selectionInfo.startLine}
-              {selectionInfo.endLine !== selectionInfo.startLine &&
-                `-L${selectionInfo.endLine}`}{" "}
-              ({selectionLineCount} {lineLabel})
-            </span>
-          </div>
-        )}
-        <ChatAttachmentPicker
-          attachments={attachmentDraft.attachments}
-          onAdd={attachmentDraft.add}
-          onRemove={attachmentDraft.remove}
-          onRetry={attachmentDraft.retry}
-          disabled={isStreaming || !connected}
-          warning={attachmentWarning || attachmentSubmissionError}
-          notice={attachmentSubmissionNotice}
-          checkingDelivery={attachmentDeliveryChecking}
-          onRecheckDelivery={onRecheckAttachmentDelivery}
-          recheckDisabled={!connected}
-        />
-        <div className="chat-input-wrapper">
+        <div className="chat-composer-box">
+          {selectionInfo && activeFileName && (
+            <div className="chat-selection-badge">
+              <TextSelect size={13} />
+              <span>
+                {activeFileName} : L{selectionInfo.startLine}
+                {selectionInfo.endLine !== selectionInfo.startLine &&
+                  `-L${selectionInfo.endLine}`}{" "}
+                ({selectionLineCount} {lineLabel})
+              </span>
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             className="chat-input"
@@ -1007,26 +989,132 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onKeyDown={handleKeyDown}
             onCompositionStart={handleCompositionStart}
             onCompositionEnd={handleCompositionEnd}
-            rows={1}
+            rows={2}
           />
-          <button
-            className="chat-send-btn"
-            onClick={handleSend}
-            disabled={!connected || (isStreaming
-              ? !input.trim() || attachmentDeliveryChecking
-              : ((!input.trim() && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || !!attachmentWarning))}
-            title={isStreaming ? t("chat.correct") : t("chat.sendShortcut")}
-          >
-            <Send size={16} />
-          </button>
-          <button
-            className="chat-stop-btn"
-            onClick={onStop}
-            disabled={!isStreaming || !connected}
-            title={t("chat.stop")}
-          >
-            <Square size={14} />
-          </button>
+
+          <input
+            ref={fileInputRef}
+            className="sr-only"
+            type="file"
+            accept="image/*,application/pdf,text/*,.txt,.md,.py,.js,.jsx,.ts,.tsx,.json,.yaml,.yml,.toml,.css,.html,.sh,.rs,.go,.java,.c,.cpp"
+            multiple
+            aria-label={t("chat.attachFiles")}
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files || []);
+              if (files.length) attachmentDraft.add(files);
+              event.currentTarget.value = "";
+            }}
+          />
+
+          {attachmentDraft.attachments.length > 0 && (
+            <div className="chat-composer-attachment-drafts">
+              {attachmentDraft.attachments.map((attachment) => (
+                <div className={`chat-draft-chip status-${attachment.status}`} key={attachment.localId}>
+                  <span title={attachment.name}>{attachment.name}</span>
+                  {attachment.status === "error" && (
+                    <button
+                      type="button"
+                      disabled={isStreaming || !connected}
+                      onClick={() => attachmentDraft.retry(attachment.localId)}
+                      title={t("chat.attachmentRetry")}
+                    >
+                      <RotateCcw size={10} aria-hidden="true" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => attachmentDraft.remove(attachment.localId)}
+                    title={t("chat.attachmentRemove")}
+                  >
+                    <Trash2 size={10} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(attachmentWarning || attachmentSubmissionError || attachmentSubmissionNotice) && (
+            <div className="chat-composer-attachment-notice" role="alert">
+              <span>{attachmentWarning || attachmentSubmissionError || attachmentSubmissionNotice}</span>
+              {attachmentDeliveryChecking && onRecheckAttachmentDelivery && (
+                <button
+                  type="button"
+                  className="chat-recheck-btn"
+                  onClick={onRecheckAttachmentDelivery}
+                  disabled={!connected}
+                >
+                  <RotateCcw size={10} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="chat-composer-controls">
+            <div className="chat-composer-left">
+              <button
+                type="button"
+                className="chat-composer-plus-btn"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isStreaming || !connected}
+                title={t("chat.attachFiles")}
+                aria-label={t("chat.attachFiles")}
+              >
+                <Plus size={15} aria-hidden="true" />
+              </button>
+              <div className="chat-composer-mode-select">
+                <span className="sr-only">{t("workbench.workMode")}</span>
+                <WorkbenchSelect
+                  label={t("workbench.workMode")}
+                  value={agentMode}
+                  onChange={(val) => onAgentModeChange(val as AgentMode)}
+                  disabled={isStreaming}
+                  title={t("workbench.workMode")}
+                  options={(["ask", "plan", "code", "review"] as AgentMode[]).map((mode) => ({
+                    value: mode,
+                    label: t(`chat.mode.${mode}.label`),
+                  }))}
+                />
+              </div>
+            </div>
+
+            <div className="chat-composer-right">
+              <div className="chat-composer-model-select">
+                <span className="sr-only">{t("workbench.model")}</span>
+                <ModelSelector
+                  value={selectedModelName}
+                  onChange={onModelNameChange}
+                  disabled={isStreaming || runtimeOptions.models.length === 0}
+                  models={runtimeOptions.models}
+                  automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+                  label={t("workbench.model")}
+                />
+              </div>
+              {isStreaming ? (
+                <button
+                  type="button"
+                  className="chat-composer-stop-btn"
+                  onClick={onStop}
+                  title={t("chat.stop")}
+                  aria-label={t("chat.stop")}
+                >
+                  <Square size={13} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-composer-send-btn"
+                  onClick={handleSend}
+                  disabled={!connected || (
+                    !input.trim() && attachmentDraft.readyRefs.length === 0
+                  ) || attachmentDraft.blocked || !!attachmentWarning}
+                  title={t("chat.sendShortcut")}
+                  aria-label={t("chat.sendShortcut")}
+                >
+                  <ArrowUp size={15} />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
       <ActionConfirmDialog

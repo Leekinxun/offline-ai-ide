@@ -1,0 +1,273 @@
+/* ==================== Editor Toolbar Component Styles ==================== */
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
+  background: var(--surface-panel);
+  border: none;
+  box-shadow: none;
+  outline: none;
+  user-select: none;
+  flex-shrink: 0;
+  order: 1;
+}
+
+/* 左侧：文件面包屑导航 (精炼舒展，与标签页呼吸感保持一致) */
+.editor-toolbar-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: min(420px, 42vw);
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.editor-toolbar-breadcrumb-icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+  color: var(--accent);
+}
+
+.editor-toolbar-breadcrumb-workspace {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+.editor-toolbar-breadcrumb-sep {
+  flex-shrink: 0;
+  opacity: 0.4;
+  color: var(--text-tertiary);
+}
+
+.editor-toolbar-breadcrumb-part {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.editor-toolbar-breadcrumb-part.current {
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+/* 中间/靠右：可预览文件 (如 Markdown) 专属的模式分段控制器 */
+.editor-toolbar-preview-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  height: 25px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.editor-toolbar-preview-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 0 8px;
+  height: 21px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-preview-btn:hover:not(.active) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.editor-toolbar-preview-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  font-weight: 550;
+}
+
+/* 右侧：动作工具组 */
+.editor-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.editor-toolbar-primary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  height: 25px;
+  box-sizing: border-box;
+}
+
+.editor-toolbar-btn {
+  display: inline-flex;
+  height: 21px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11.5px;
+  transition: all var(--transition);
+}
+
+.editor-toolbar-btn:hover:not(.active) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.editor-toolbar-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  font-weight: 550;
+}
+
+.editor-toolbar-btn.active:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.editor-toolbar-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-run-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.editor-toolbar-run-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-toolbar-compare-picker {
+  display: inline-flex;
+  align-items: center;
+}
+
+.editor-toolbar-compare-select {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  min-height: 25px;
+  padding: 0 9px;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger.active,
+.editor-toolbar-compare-select .workbench-select-trigger[aria-expanded="true"] {
+  background: var(--accent-light) !important;
+  color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  border: none !important;
+  font-weight: 550;
+}
+
+.editor-toolbar-compare-select .workbench-select-trigger.active svg,
+.editor-toolbar-compare-select .workbench-select-trigger[aria-expanded="true"] svg {
+  color: var(--accent) !important;
+}
+
+.editor-toolbar-compare-select .workbench-select-value {
+  max-width: 150px;
+}
+
+.compare-option-none-icon {
+  color: var(--text-tertiary);
+  opacity: 0.6;
+}
+
+.editor-toolbar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-toolbar-icon-btn:hover {
+  color: var(--text-primary);
+}
+
+.editor-toolbar-icon-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.editor-toolbar-status {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.editor-toolbar-status.modified {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.editor-toolbar-status.remote {
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
+}

@@ -1,9 +1,10 @@
 import React from "react";
-import { FilePlus2, FolderOpen, MessageSquareText, Search, TerminalSquare } from "lucide-react";
+import { ArrowUpRight, FilePlus2, FolderOpen, MessageSquareText, Search, TerminalSquare } from "lucide-react";
 import { FileNode, OpenFile } from "../types";
 import { useI18n } from "../i18n";
 import { BrandMark } from "./BrandMark";
 import { PRODUCT_NAME } from "../brand";
+import "./WorkspaceWelcome.css";
 
 interface WorkspaceWelcomeProps {
   workspaceDir: string;
@@ -74,25 +75,65 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
         <BrandMark size={48} title={PRODUCT_NAME} subtitle={t("welcome.privateWorkspace")} stacked />
         <span className="workspace-welcome-eyebrow">{t("welcome.workspace")}</span>
         <h1>{workspaceName(workspaceDir)}</h1>
-        <p>{t("welcome.description", { count: fileCount })}</p>
+        <p className="workspace-welcome-desc">
+          <span className="welcome-desc-dot" />
+          <span>{t("welcome.description", { count: fileCount })}</span>
+        </p>
       </div>
 
       <div className="workspace-welcome-actions">
-        <button type="button" className="welcome-action primary" onClick={onQuickOpen}>
-          <Search size={18} />
-          <span><strong>{t("welcome.quickOpen")}</strong><small>{shortcuts.quickOpen}</small></span>
+        <button type="button" className="welcome-action" onClick={onQuickOpen}>
+          <div className="welcome-action-icon">
+            <Search size={19} />
+          </div>
+          <div className="welcome-action-text">
+            <strong>{t("welcome.quickOpen")}</strong>
+            <small>{t("welcome.quickOpenHint")}</small>
+          </div>
+          <div className="welcome-action-aside">
+            <kbd className="welcome-keycap">{shortcuts.quickOpen}</kbd>
+          </div>
         </button>
+
         <button type="button" className="welcome-action" onClick={onFocusChat}>
-          <MessageSquareText size={18} />
-          <span><strong>{t("welcome.askAi")}</strong><small>{t("welcome.askAiHint")}</small></span>
+          <div className="welcome-action-icon welcome-action-icon-ai">
+            <MessageSquareText size={19} />
+          </div>
+          <div className="welcome-action-text">
+            <strong>{t("welcome.askAi")}</strong>
+            <small>{t("welcome.askAiHint")}</small>
+          </div>
+          <div className="welcome-action-aside">
+            <kbd className="welcome-keycap">{shortcuts.toggleChat}</kbd>
+          </div>
         </button>
+
         <button type="button" className="welcome-action" onClick={onOpenTerminal}>
-          <TerminalSquare size={18} />
-          <span><strong>{t("welcome.openTerminal")}</strong><small>{shortcuts.openTerminal}</small></span>
+          <div className="welcome-action-icon">
+            <TerminalSquare size={19} />
+          </div>
+          <div className="welcome-action-text">
+            <strong>{t("welcome.openTerminal")}</strong>
+            <small>{t("welcome.openTerminalHint")}</small>
+          </div>
+          <div className="welcome-action-aside">
+            <kbd className="welcome-keycap">{shortcuts.openTerminal}</kbd>
+          </div>
         </button>
+
         <button type="button" className="welcome-action" onClick={onOpenFolder} disabled={folderPickerBusy}>
-          <FolderOpen size={18} />
-          <span><strong>{t("welcome.openFolder")}</strong><small>{t("welcome.openFolderHint")}</small></span>
+          <div className="welcome-action-icon">
+            <FolderOpen size={19} />
+          </div>
+          <div className="welcome-action-text">
+            <strong>{t("welcome.openFolder")}</strong>
+            <small>{t("welcome.openFolderHint")}</small>
+          </div>
+          <div className="welcome-action-aside">
+            <span className="welcome-action-arrow">
+              <ArrowUpRight size={17} />
+            </span>
+          </div>
         </button>
       </div>
 

@@ -19,8 +19,65 @@ async function serve(manager: SessionManager) {
   assert(address && typeof address === "object");
   return {
     base: `http://127.0.0.1:${address.port}/api/auth`,
+    port: address.port,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
+}
+
+async function serveWithRemoteAddress(manager: SessionManager, remoteAddress: string) {
+  setSessionManagerForTests(manager);
+  const app = express();
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, "remoteAddress", {
+      value: remoteAddress,
+      configurable: true,
+    });
+    next();
+  });
+  app.use("/api/auth", authRouter);
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address && typeof address === "object");
+  return {
+    base: `http://127.0.0.1:${address.port}/api/auth`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+function getWithHost(port: number, path: string, host: string): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port,
+      path,
+      method: "GET",
+      headers: { Host: host },
+    }, (response) => {
+      response.resume();
+      response.on("end", () => resolve({ status: response.statusCode || 0 }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function desktopManager(t: test.TestContext) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-auth-desktop-"));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  const project = path.join(root, "project");
+  await mkdir(project, { recursive: true });
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [root],
+    users: [
+      { username: "admin", password: "secret", defaultWorkspace: project, isAdmin: true },
+      { username: "alice", password: "secret", defaultWorkspace: project, isAdmin: false },
+    ],
+  }));
+  return { root, project, manager: new SessionManager(configPath) };
 }
 
 test("auth routes expose desktop state and parent path for workspace navigation", async (t) => {
@@ -138,5 +195,102 @@ test("desktop workspace pick route handles cancellation and rejects isolated ses
     assert.equal(rejected.status, 403);
   } finally {
     await server.close();
+  }
+});
+
+test("desktop /me bootstraps a local admin session only for loopback requests without a token", async (t) => {
+  const originalManager = sessionManager;
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  process.env.CREWFORGE_DESKTOP = "1";
+  t.after(() => {
+    setSessionManagerForTests(originalManager);
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+  });
+
+  const { manager } = await desktopManager(t);
+  const server = await serve(manager);
+  try {
+    const bootstrapped = await fetch(`${server.base}/me`);
+    assert.equal(bootstrapped.status, 200);
+    assert.equal(bootstrapped.headers.get("cache-control"), "no-store");
+    const payload = await bootstrapped.json() as { username: string; isAdmin: boolean; desktop: boolean; token: string };
+    assert.equal(payload.username, "admin");
+    assert.equal(payload.isAdmin, true);
+    assert.equal(payload.desktop, true);
+    assert.ok(payload.token);
+
+    const hostileHost = await getWithHost(server.port, "/api/auth/me", "example.test");
+    assert.equal(hostileHost.status, 401);
+
+    const invalidToken = await fetch(`${server.base}/me`, { headers: { Authorization: "Bearer missing" } });
+    assert.equal(invalidToken.status, 401);
+    const invalidScheme = await fetch(`${server.base}/me`, { headers: { Authorization: "Basic invalid" } });
+    assert.equal(invalidScheme.status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+test("desktop /me refuses passwordless bootstrap from a non-loopback socket", async (t) => {
+  const originalManager = sessionManager;
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  process.env.CREWFORGE_DESKTOP = "1";
+  t.after(() => {
+    setSessionManagerForTests(originalManager);
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+  });
+
+  const { manager } = await desktopManager(t);
+  const server = await serveWithRemoteAddress(manager, "192.0.2.10");
+  try {
+    const response = await fetch(`${server.base}/me`);
+    assert.equal(response.status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+test("web /me still requires a token and desktop preserves valid isolated sessions", async (t) => {
+  const originalManager = sessionManager;
+  const priorDesktop = process.env.CREWFORGE_DESKTOP;
+  t.after(() => {
+    setSessionManagerForTests(originalManager);
+    if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = priorDesktop;
+  });
+
+  const { root, manager } = await desktopManager(t);
+  delete process.env.CREWFORGE_DESKTOP;
+  const webServer = await serve(manager);
+  try {
+    const webAnonymous = await fetch(`${webServer.base}/me`);
+    assert.equal(webAnonymous.status, 401);
+    assert.equal(webAnonymous.headers.get("cache-control"), "no-store");
+  } finally {
+    await webServer.close();
+  }
+
+  process.env.CREWFORGE_DESKTOP = "1";
+  const session = manager.login("alice", "secret");
+  assert.ok(session);
+  const worktree = path.join(root, ".crownforge-worktrees", "project", "vibe-2");
+  await mkdir(worktree, { recursive: true });
+  const isolated = manager.createIsolatedSession(session.token, worktree);
+  const desktopServer = await serve(manager);
+  try {
+    const response = await fetch(`${desktopServer.base}/me`, {
+      headers: { Authorization: `Bearer ${isolated.token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { username: string; isAdmin: boolean; isolated: boolean; workspaceDir: string; token: string };
+    assert.equal(payload.username, "alice");
+    assert.equal(payload.isAdmin, false);
+    assert.equal(payload.isolated, true);
+    assert.equal(payload.workspaceDir, await realpath(worktree));
+    assert.equal(payload.token, isolated.token);
+  } finally {
+    await desktopServer.close();
   }
 });

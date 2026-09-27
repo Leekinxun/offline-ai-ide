@@ -1,0 +1,305 @@
+/* ==========================================================================
+   OfflineBundlePanel.css - 离线证据包专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 彻底隐藏原生 input[type="file"]，告别破损原生控件
+   - 磨砂蓝微光聚焦规范 (Frosted Blue Halo)
+   - 严格 30~32px 按钮高度与微圆角
+   - 深邃微卡片与紧凑网格布局
+   ========================================================================== */
+
+/* 屏幕阅读器隐藏类 - 必须彻底隔离原生控件 */
+.offline-bundle-panel .visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.offline-bundle-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-panel-strong);
+}
+
+.offline-bundle-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.offline-bundle-panel > header > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.offline-bundle-panel > header > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.offline-bundle-panel > header strong {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.offline-bundle-panel > header span {
+  font-size: 10px;
+  color: var(--ink-muted);
+  line-height: 1.35;
+}
+
+/* 表单字段网格 */
+.offline-bundle-panel .delivery-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.offline-bundle-panel .delivery-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.offline-bundle-panel .delivery-field > span {
+  color: var(--ink-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.offline-bundle-panel .delivery-field .workbench-select-trigger {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+/* 复选框单行并排紧凑排布 - 修复 40px 高度拉伸与巨型焦点框 */
+.offline-bundle-panel .delivery-checkbox {
+  grid-column: span 1;
+  display: inline-flex !important;
+  align-items: center !important;
+  flex-direction: row !important;
+  gap: 6px !important;
+  min-height: 24px !important;
+  height: 24px !important;
+  padding: 0 !important;
+  margin: 2px 0 0 !important;
+  color: var(--ink-muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.offline-bundle-panel .delivery-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.offline-bundle-panel .delivery-checkbox input[type="checkbox"]:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent) !important;
+}
+
+/* 锁定版本条目 */
+.bundle-revision-lock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  border: 1px solid var(--line-subtle);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.bundle-revision-lock code {
+  margin-left: auto;
+  font: 10px var(--font-mono);
+  color: var(--ink);
+}
+
+/* 操作按钮群 - 结构化规整排版 */
+.offline-bundle-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.offline-bundle-actions .dialog-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  padding: 0 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  color: var(--ink-muted);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.offline-bundle-actions .dialog-btn:hover:not(:disabled) {
+  background: var(--surface-panel);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-subtle));
+}
+
+/* 主操作按钮（构建证据包）拉通横跨或置顶 */
+.offline-bundle-actions .dialog-btn.primary {
+  grid-column: 1 / -1;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  background: color-mix(in srgb, var(--accent) 82%, #1d4ed8);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.offline-bundle-actions .dialog-btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 92%, #2563eb);
+  border-color: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.offline-bundle-actions .dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.offline-bundle-panel button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+/* 导出记录与验证反馈 */
+.bundle-export-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bundle-export-list article {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  font-size: 11px;
+}
+
+.bundle-export-list article > span {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.bundle-export-list article.status-ready > span { color: var(--status-success-fg); }
+.bundle-export-list article.status-failed > span { color: var(--status-danger-fg); }
+
+.bundle-export-list article > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.bundle-export-list article strong {
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.bundle-export-list article code {
+  font: 10px var(--font-mono);
+  color: var(--ink-muted);
+}
+
+.bundle-export-list article .dialog-btn {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+/* 验证完整性结果卡 */
+.bundle-verification {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-subtle);
+  background: var(--surface-quiet);
+}
+
+.bundle-verification.integrity-verified {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line-subtle));
+}
+
+.bundle-verification.integrity-failed {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line-subtle));
+}
+
+.bundle-verification > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.bundle-verification dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.bundle-verification dl > div {
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--surface-panel);
+}
+
+.bundle-verification dt {
+  font-size: 9px;
+  color: var(--ink-muted);
+}
+
+.bundle-verification dd {
+  margin: 2px 0 0;
+  font-size: 10px;
+  color: var(--ink);
+  font-weight: 500;
+}

@@ -1,0 +1,140 @@
+/* ==========================================================================
+   ActivityRail.css - 左侧主活动导航栏样式解耦与微光束契约
+   契约：柔和微卡胶囊、柔和微光导光指示条、精致徽标微胶囊
+   ========================================================================== */
+
+.activity-rail {
+  z-index: 5;
+  width: 56px;
+  flex: 0 0 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px 9px;
+  border-right: none !important;
+  background: var(--surface-workbench);
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.activity-rail-brand {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 8px;
+  padding: 0;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.activity-rail-brand:hover {
+  transform: scale(1.05);
+}
+
+.activity-rail-brand .brand-lockup-text {
+  display: none;
+}
+
+.activity-rail-brand .brand-mark-image {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.activity-rail-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.activity-rail-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 激活状态：微卡胶囊背景 + 柔和微光导光指示条（剥除生硬电光蓝竖杠） */
+.activity-rail-btn.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.activity-rail-btn.active::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: -6px;
+  width: 2.5px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
+  content: "";
+}
+
+.activity-rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border: 1.5px solid var(--surface-workbench);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 11px;
+  text-align: center;
+  font-weight: 600;
+  box-sizing: border-box;
+}
+
+.activity-rail-spacer {
+  flex: 1;
+}
+
+/* 用户头像与菜单微胶囊 */
+.activity-user-menu {
+  position: relative;
+}
+
+.activity-user-menu > summary {
+  list-style: none;
+}
+
+.activity-user-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-user-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.activity-user-avatar:hover {
+  transform: scale(1.06);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent);
+}

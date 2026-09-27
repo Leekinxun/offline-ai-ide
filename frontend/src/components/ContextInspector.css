@@ -1,0 +1,494 @@
+/* ==========================================================================
+   ContextInspector.css - 上下文探查器专属样式 (已从 App.css 物理隔离)
+   遵循 .agents/ui-design-philosophy.md:
+   - 弹性自然流排版 (消灭 CSS Grid 纵向均分拉伸异常)
+   - 磨砂蓝微光聚焦规范 (Frosted Blue Halo)
+   - 控件 28~34px 高度严格控制
+   - 环形微胶囊选项卡栏 (Segmented Filter Pill)
+   ========================================================================== */
+
+.context-inspector {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--ink);
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+/* 顶部信息栏与刷新按钮 */
+.context-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.context-inspector-header > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.context-inspector-header strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.context-inspector-header span {
+  color: var(--ink-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.context-inspector-header button,
+.context-inspector-error button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-panel-strong);
+  color: var(--ink-muted);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.context-inspector-header button:hover:not(:disabled),
+.context-inspector-error button:hover:not(:disabled) {
+  background: var(--surface-quiet);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-subtle));
+}
+
+.context-inspector button:focus-visible,
+.context-inspector select:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+.context-inspector button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* 只读提示 */
+.context-read-only {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
+  color: var(--status-warning-fg, #f59e0b);
+  font-size: 11px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+/* 索引状态单行微卡 */
+.context-index-state {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  height: 34px;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-panel-strong);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.context-index-state > span:first-child {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+.context-index-state.status-ready > span:first-child {
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 60%, transparent);
+}
+
+.context-index-state.status-indexing > span:first-child {
+  background: var(--accent-forge, var(--accent));
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.context-index-state.status-stale > span:first-child {
+  background: var(--warning);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warning) 60%, transparent);
+}
+
+.context-index-state.status-error > span:first-child {
+  background: var(--danger);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 60%, transparent);
+}
+
+.context-index-state strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.context-index-state small {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font: 600 10px var(--font-mono);
+}
+
+.context-index-state time {
+  margin-left: 6px;
+  color: var(--ink-muted);
+  font: 10px var(--font-mono);
+  opacity: 0.85;
+}
+
+/* 模型调用下拉选择 */
+.context-manifest-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.context-manifest-picker span {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.context-manifest-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.context-manifest-summary span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-panel-strong);
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.context-manifest-summary strong {
+  color: var(--ink);
+  font: 600 12px var(--font-mono);
+}
+
+/* 分段微胶囊过滤标签栏 (Segmented Filter Pill Tabs) */
+.context-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 70%, var(--surface-quiet));
+  border: 1px solid color-mix(in srgb, var(--line-subtle) 40%, transparent);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+
+.context-filter-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.context-filter-tabs button {
+  min-height: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-muted);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.context-filter-tabs button:hover:not(.active) {
+  background: color-mix(in srgb, var(--surface-panel) 60%, transparent);
+  color: var(--ink);
+}
+
+.context-filter-tabs button.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: transparent;
+}
+
+.context-filter-tabs button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+
+/* 错误提示 */
+.context-inspector-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--status-danger-bg) 60%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--status-danger-fg) 30%, transparent);
+  color: var(--status-danger-fg);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* 空状态卡片 */
+.context-inspector-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 24px 16px;
+  border: 1px dashed color-mix(in srgb, var(--line-subtle) 60%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 40%, transparent);
+  text-align: center;
+  gap: 6px;
+}
+
+.context-inspector-empty svg {
+  color: var(--ink-muted);
+  opacity: 0.6;
+  margin-bottom: 2px;
+}
+
+.context-inspector-empty strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-inspector-empty span {
+  color: var(--ink-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 260px;
+}
+
+/* 上下文条目列表 */
+.context-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1;
+}
+
+.context-source-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  transition: border-color 0.15s ease;
+}
+
+.context-source-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-subtle));
+}
+
+.context-source-row.decision-redacted,
+.context-source-row.decision-excluded {
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--line-subtle));
+}
+
+.context-source-main {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-source-main > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.context-source-main strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-source-main small {
+  color: var(--ink-muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-source-tokens {
+  flex: 0 0 auto;
+  color: var(--ink-muted);
+  font: 10px var(--font-mono);
+}
+
+.context-source-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.context-source-badges span {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-quiet);
+  color: var(--ink-muted);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.context-source-badges .freshness-dirty,
+.context-source-badges .freshness-stale { color: var(--status-warning-fg); }
+.context-source-badges .trust-high,
+.context-source-badges .decision-included { color: var(--success); }
+.context-source-badges .decision-redacted,
+.context-source-badges .decision-excluded { color: var(--danger); }
+.context-source-badges .context-preference-pending { color: var(--accent-forge, var(--accent)); }
+
+.context-source-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-quiet);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.context-source-details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.context-source-details dt {
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+.context-source-details dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.context-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.context-source-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line-subtle);
+  background: var(--surface-panel);
+  color: var(--ink-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.context-source-actions button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-subtle));
+}
+
+.context-inspector-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+@media (max-width: 1024px) {
+  .context-inspector { padding: 8px 10px; }
+  .context-source-actions button { flex: 1 1 120px; justify-content: center; }
+}
+
+@media (max-width: 780px) {
+  .context-inspector { padding: 8px 10px; }
+  .context-inspector-header { align-items: flex-start; }
+  .context-inspector-header button span { display: none; }
+  .context-manifest-summary { grid-template-columns: 1fr; }
+  .context-source-main { align-items: flex-start; }
+  .context-source-tokens { padding-top: 4px; }
+  .context-source-details dl { grid-template-columns: 1fr; }
+  .context-source-details dd { margin-bottom: 4px; }
+  .context-source-actions { display: grid; grid-template-columns: 1fr; }
+  .context-source-actions button { width: 100%; justify-content: flex-start; }
+}
