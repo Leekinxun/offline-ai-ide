@@ -27,7 +27,7 @@
 
 ## 复现浏览器 smoke
 
-真实浏览器 smoke 是显式检查，不放入默认 unit gate。它使用 Node 内置 `fetch` 和后端已有的 `ws`，通过 Chrome CDP 操作真实页面；不会安装依赖、读取已有标签页或保存截图。
+真实浏览器 smoke 是显式检查，不放入默认 unit gate。它使用 Node 内置 `fetch` 和后端已有的 `ws`，通过 Chrome CDP 操作真实页面；不会安装依赖或读取已有标签页。默认不保存截图，传入 `--artifacts` 时保存本次夹具的截图。
 
 在 `ai-ide` 目录中启动离线 fixture：
 
@@ -74,3 +74,24 @@ node scripts/web-agent-browser-smoke.mjs \
 安全校验失败时不会发送 Agent 请求。脚本额外拦截非 Ask／非 `local-fixture` 请求、`FIXTURE_EDIT` 和文件写入；如果拦截发生，该轮验证也会失败，不能据此宣称产品通过。接受 Inline 结果和撤销均作用于脚本自己的编辑器 buffer；清理只停止该页面创建的预览与命令会话，并注销自己的 fixture 登录。
 
 测试结束后，在 fixture 所在终端按 Ctrl+C，释放它创建的服务和临时工作区。不要把该脚本指向正常用户项目或真实模型配置。
+
+## 编辑审阅与消息显示回归
+
+在新启动的 fixture 上执行：
+
+```sh
+node scripts/web-agent-browser-smoke.mjs \
+  --launch --review \
+  --workspace "<fixture 输出的 workspace 路径>" \
+  --artifacts /tmp/crownforge-review-screenshots
+```
+
+`--review` 只在验证临时目录、账号和本地模型之后，允许固定的 `FIXTURE_REVIEW` Code 请求。该回合修改临时 `review-doc.md`，产生两个独立修改块，并返回延迟的 SSE 思考摘要、工具事件和包含长路径、表格、代码块的 Markdown 回复。其他 Code 请求及直接文件写 API 仍被拦截。每次执行需要新 fixture。
+
+检查包括：首 token 前的等待、模型提供的思考和工具活动是否可见；用 `elementFromPoint` 检查按钮是否被覆盖，再用真实 Chromium 鼠标按下/松开连续保留两块；从服务端重读保留状态，并确认文件字节和编辑器保存状态；在 1440 和 1000 像素窗口中检查消息及输入区的横向溢出。
+
+原始回归已在修复前复现三个失败：活动状态缺失、保留按钮中心命中 Monaco 的透明 `view-lines` 层、长 Markdown 回复撑宽消息。此前直接触发 DOM click 的手工保留检查没有覆盖真实鼠标命中，此回归专门补上该缺口。
+
+修复后结果：本节真实浏览器回归 **7/7**，原浏览器 smoke **7/7**；前端策略与工作台回归 **116/116**；流式解析、活动状态、真实 Agent loop 和重连专项 **34/34**；严格类型检查、生产构建、包体积预算、UI contract 和发布方法检查通过。这轮使用针对性回归，上方 861 项是上一轮功能改造的全量结果。
+
+已检查 400px 侧栏及 1000px 窗口中通过分隔条 Home 键设置的真实 280px 侧栏截图。修复同时覆盖新右侧 dock 在窄窗口下的定位与宽度。模型思考仅在提供方实际返回时展示；没有思考数据时展示等待响应、工具执行或审批状态。

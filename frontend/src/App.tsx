@@ -4151,6 +4151,7 @@ function AuthenticatedApp({
                 messages={chat.messages}
                 connected={chat.connected}
                 isStreaming={chat.isStreaming}
+                activeRequestIds={chat.activeRequestIds}
                 agentMode={chat.agentMode}
                 runtimeOptions={chat.runtimeOptions}
                 selectedModelName={chat.selectedModelName}

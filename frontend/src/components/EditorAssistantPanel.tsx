@@ -48,6 +48,8 @@ import { ModelSelector } from "./ModelSelector";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
+import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
+import { activeAssistantMessage, assistantToolStatus, isAssistantMessageVisible } from "../utils/assistantActivity";
 
 interface EditorAssistantPanelProps {
   token: string;
@@ -62,6 +64,7 @@ interface EditorAssistantPanelProps {
   messages: ChatMessage[];
   connected: boolean;
   isStreaming: boolean;
+  activeRequestIds?: string[];
   agentMode: AgentMode;
   runtimeOptions: ChatRuntimeOptions;
   selectedModelName: string;
@@ -125,6 +128,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   messages,
   connected,
   isStreaming,
+  activeRequestIds,
   agentMode,
   runtimeOptions,
   selectedModelName,
@@ -170,9 +174,10 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   );
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
-    () => messages.filter((message) => getRenderableMessageContent(message.content) || message.attachments?.length),
+    () => messages.filter(isAssistantMessageVisible),
     [messages]
   );
+  const activeMessage = isStreaming ? activeAssistantMessage(messages, activeRequestIds, runState) : undefined;
   const runEvents = useMemo(
     () => runState?.events.filter((event) => !isQuietCompletionEvent(event)).slice(-6) || [],
     [runState]
@@ -494,9 +499,19 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         {visibleMessages.map((message, index) => (
             <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`} aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
               {message.role === "assistant" ? (
-                <div className="editor-assistant-message-content">
-                  {renderChatTextPart(getRenderableMessageContent(message.content), message)}
-                </div>
+                <>
+                  {message.thinking && <AssistantReasoning content={message.thinking} active={message === activeMessage} variant="editor" />}
+                  {Boolean(message.toolCalls?.length) && <div className="editor-assistant-tools">
+                    {message.toolCalls!.map((step) => {
+                      const status = assistantToolStatus(step, message === activeMessage, pendingApprovals);
+                      return <details className="editor-assistant-tool" data-assistant-tool-call-id={step.toolCallId} data-status={status} key={step.toolCallId}>
+                        <summary><FileCode2 size={13} aria-hidden="true" /><span>{step.name}{typeof step.input.path === "string" ? ` · ${step.input.path}` : ""}</span><small>{t(`assistantActivity.toolStatus.${status}`)}</small></summary>
+                        <pre>{JSON.stringify(step.input, null, 2).slice(0, 3000)}{step.result !== undefined ? `\n\n${step.result.slice(0, 5000)}` : ""}</pre>
+                      </details>;
+                    })}
+                  </div>}
+                  {getRenderableMessageContent(message.content) && <div className="editor-assistant-message-content">{renderChatTextPart(getRenderableMessageContent(message.content), message)}</div>}
+                </>
               ) : getRenderableMessageContent(message.content) ? (
                 <p>{inlineInstructionLabel(message.content) || getRenderableMessageContent(message.content)}</p>
               ) : null}
@@ -512,7 +527,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             </article>
           ))}
 
-        {isStreaming && (!runState || runState.status === "running" || runState.status === "queued") && (
+        <AssistantActivity messages={messages} isStreaming={isStreaming} connected={connected} runState={runState} activeRequestIds={activeRequestIds} pendingApprovals={pendingApprovals} />
+
+        {isStreaming && (runState?.status === "running" || runState?.status === "queued") && (
           <section className={`editor-agent-run-card status-${runState?.status || "idle"}`}>
             <div className="editor-agent-run-head">
               <span className={`editor-agent-run-pulse${isStreaming ? " active" : ""}`} />

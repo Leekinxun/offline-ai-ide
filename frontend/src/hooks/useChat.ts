@@ -24,6 +24,7 @@ import {
 } from "../types";
 import { useI18n } from "../i18n";
 import { useContextManifest } from "./useContextManifest";
+import { updateAssistantMessage } from "../utils/assistantActivity";
 import { acceptsConversationEvent, canBindAcceptedRequest, type ChatRequestScope, type ConversationActivity } from "../utils/chatScope";
 
 interface ConversationsResponse {
@@ -392,23 +393,7 @@ export function useChat(
       requestId: string | undefined,
       updater: (msg: ChatMessage) => ChatMessage
     ) => {
-      setMessages((prev) => {
-        const updated = [...prev];
-        if (requestId) {
-          for (let index = updated.length - 1; index >= 0; index -= 1) {
-            const candidate = updated[index];
-            if (
-              candidate.role === "assistant" &&
-              candidate.requestId === requestId
-            ) {
-              updated[index] = updater(candidate);
-              return updated;
-            }
-          }
-          return prev;
-        }
-        return prev;
-      });
+      setMessages((prev) => updateAssistantMessage(prev, requestId, updater));
     },
     []
   );
@@ -689,6 +674,9 @@ export function useChat(
         case "run_state": {
           currentRunIdRef.current = data.runId;
           const event = data.event as AgentRunEvent | undefined;
+          if (data.status === "running" && event?.kind === "model_call") {
+            updateAssistantByRequestId(data.requestId || event.requestId, (message) => ({ ...message, activity: { phase: "waiting", waitingFor: "model", updatedAt: Date.now() } }));
+          }
           if (data.mode && !preserveComposerModeRef.current) setAgentMode(data.mode);
           if (data.requestId && data.status === "running") {
             setMessages((previous) => {
@@ -797,6 +785,7 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             content: msg.content + data.content,
+            activity: { phase: "responding", updatedAt: Date.now() },
           }));
           break;
 
@@ -804,6 +793,7 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             thinking: (msg.thinking || "") + data.content,
+            activity: { phase: "reasoning", updatedAt: Date.now() },
           }));
           break;
 
@@ -811,13 +801,14 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             toolCalls: [
-              ...(msg.toolCalls || []),
+              ...(msg.toolCalls || []).filter((step) => step.toolCallId !== data.toolCallId),
               {
                 toolCallId: data.toolCallId,
                 name: data.name,
                 input: data.input,
               },
             ],
+            activity: { phase: "tool", toolCallId: data.toolCallId, updatedAt: Date.now() },
           }));
           break;
 
@@ -834,16 +825,11 @@ export function useChat(
           );
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
-            toolCalls: (msg.toolCalls || []).map((tc) =>
-              tc.toolCallId === data.toolCallId
-                ? {
-                    ...tc,
-                    result: data.result,
-                    isError: data.isError,
-                    fileUpdate: data.fileUpdate,
-                  }
-                : tc
-            ),
+            toolCalls: [
+              ...(msg.toolCalls || []).filter((step) => step.toolCallId !== data.toolCallId),
+              { ...(msg.toolCalls || []).find((step) => step.toolCallId === data.toolCallId), toolCallId: data.toolCallId, name: data.name, input: (msg.toolCalls || []).find((step) => step.toolCallId === data.toolCallId)?.input || {}, result: data.result, isError: data.isError, fileUpdate: data.fileUpdate },
+            ],
+            activity: { phase: "tool", toolCallId: data.toolCallId, updatedAt: Date.now() },
           }));
           if (data.fileUpdate && !data.isError) {
             onFileUpdateRef.current?.(data.fileUpdate);
@@ -995,6 +981,7 @@ export function useChat(
         role: "assistant",
         content: "",
         timestamp: Date.now(),
+        activity: { phase: "waiting", waitingFor: "acceptance", updatedAt: Date.now() },
       };
 
       const history = messages.slice(-10).map((m) => ({
@@ -1052,6 +1039,7 @@ export function useChat(
         role: "assistant",
         content: "",
         timestamp: Date.now(),
+        activity: { phase: "waiting", waitingFor: "acceptance", updatedAt: Date.now() },
       };
 
       try {

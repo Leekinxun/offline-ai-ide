@@ -176,6 +176,7 @@ interface ChatCompletionStreamChunk {
     };
     message?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: OpenAIToolCall[];
     };
     finish_reason?: "stop" | "tool_calls" | "length" | null;
@@ -192,7 +193,10 @@ export async function readChatCompletionResponse(
   signal?.throwIfAborted();
   const contentType = response.headers.get("content-type")?.toLowerCase() || "";
   if (!contentType.includes("text/event-stream")) {
-    return (await response.json()) as OpenAIResponse;
+    const result = (await response.json()) as OpenAIResponse;
+    const message = result.choices?.[0]?.message as (OpenAIMessage & { reasoning_content?: unknown }) | undefined;
+    if (typeof message?.reasoning_content === "string" && message.reasoning_content) callbacks.onReasoningDelta?.(message.reasoning_content);
+    return result;
   }
   if (!response.body) throw new Error("Streaming response body was empty");
 
@@ -219,6 +223,10 @@ export async function readChatCompletionResponse(
     if (choice.finish_reason !== undefined) finishReason = choice.finish_reason;
 
     if (choice.message) {
+      if (choice.message.reasoning_content) {
+        reasoning += choice.message.reasoning_content;
+        callbacks.onReasoningDelta?.(choice.message.reasoning_content);
+      }
       const messageContent = choice.message.content || "";
       if (messageContent) {
         content += messageContent;

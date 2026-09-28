@@ -84,6 +84,8 @@ export interface ChatMessage {
   toolCalls?: ToolCallStep[];
   thinking?: string;
   parts?: ChatMessagePart[];
+  /** Transient event-backed activity; never a synthetic model reasoning message. */
+  activity?: { phase: "waiting" | "reasoning" | "responding" | "tool"; updatedAt: number; toolCallId?: string; waitingFor?: "acceptance" | "model" };
 }
 
 export interface ChatAttachmentRef {

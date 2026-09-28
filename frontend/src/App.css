@@ -2836,6 +2836,8 @@ select:focus-visible,
 
 .chat-messages {
   flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 14px 12px 16px;
   background: var(--surface-panel);
@@ -2896,6 +2898,7 @@ select:focus-visible,
 
 .chat-message {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   align-items: flex-start;
   gap: 7px;
@@ -2936,8 +2939,10 @@ select:focus-visible,
   line-height: 1.6;
   color: var(--text-primary);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
   width: fit-content;
+  min-width: 0;
   max-width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--line-subtle);
@@ -2953,6 +2958,8 @@ select:focus-visible,
 }
 
 .chat-code-block {
+  min-width: 0;
+  max-width: 100%;
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
@@ -2962,6 +2969,9 @@ select:focus-visible,
 
 .chat-code-header {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  overflow-wrap: anywhere;
   align-items: center;
   justify-content: space-between;
   padding: 4px 10px;
@@ -2972,6 +2982,7 @@ select:focus-visible,
 
 .chat-code-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -2993,15 +3004,20 @@ select:focus-visible,
 }
 
 .chat-code-body {
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-input-area {
+  min-width: 0;
   padding: 12px;
   background: var(--surface-workbench);
   border-top: 1px solid var(--border-light);
@@ -3175,6 +3191,8 @@ select:focus-visible,
 }
 
 .chat-composer-context code {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
@@ -3651,6 +3669,8 @@ select:focus-visible,
 
 /* ==================== Tool Call Steps ==================== */
 .chat-thinking-block {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   margin: 4px 0;
@@ -3660,13 +3680,25 @@ select:focus-visible,
 
 .chat-thinking-header {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
+  border: 0;
   background: var(--bg-secondary);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  list-style: none;
   cursor: pointer;
   user-select: none;
   transition: background var(--transition);
+}
+
+.chat-thinking-header::-webkit-details-marker {
+  display: none;
 }
 
 .chat-thinking-header:hover {
@@ -3706,7 +3738,8 @@ select:focus-visible,
   color: var(--text-secondary);
   font-style: italic;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
   border-top: 1px solid var(--border-light);
   max-height: 300px;
   overflow-y: auto;
@@ -6844,7 +6877,12 @@ select:focus-visible,
 
 /* ==================== Markdown Styles ==================== */
 .chat-markdown {
+  min-width: 0;
+  max-width: 100%;
   line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .chat-markdown p {
@@ -6877,6 +6915,8 @@ select:focus-visible,
 
 .chat-markdown ul,
 .chat-markdown ol {
+  min-width: 0;
+  max-width: 100%;
   margin: 8px 0;
   padding-left: 24px;
 }
@@ -6893,13 +6933,27 @@ select:focus-visible,
   font-size: 12px;
 }
 
+.chat-markdown :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-markdown pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 8px 0;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-markdown pre code {
   background: none;
   padding: 0;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-markdown blockquote {
@@ -6919,6 +6973,9 @@ select:focus-visible,
 }
 
 .chat-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   width: 100%;
   margin: 8px 0;
@@ -6940,6 +6997,48 @@ select:focus-visible,
   border: none;
   border-top: 1px solid var(--border);
   margin: 12px 0;
+}
+
+.chat-markdown img,
+.chat-markdown video {
+  max-width: 100%;
+  height: auto;
+}
+
+.assistant-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-workbench);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.assistant-activity > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.assistant-activity-copy {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.assistant-activity-copy strong,
+.assistant-activity-copy span {
+  display: block;
+}
+
+.assistant-activity-copy strong {
+  color: var(--text-primary);
 }
 
 /* ==================== 2026 CrownForge redesign ==================== */
@@ -9255,9 +9354,11 @@ body {
     grid-template-columns: 56px var(--files-sidebar-width, 250px) var(--files-sidebar-handle-width, 6px) minmax(0, 1fr);
   }
 
+  .workbench-view-files > .workbench-right-dock,
   .workbench-view-files > .editor-assistant-panel,
   .workbench-view-files > .run-details-panel {
     position: absolute;
+    grid-area: auto;
     top: 0;
     right: 0;
     bottom: 0;
@@ -9266,12 +9367,14 @@ body {
     box-shadow: var(--shadow-lg);
   }
 
+  .workbench-view-files > .workbench-right-dock,
   .workbench-view-files > .editor-assistant-panel {
     width: min(var(--files-assistant-width, 400px), calc(100vw - 56px));
   }
 
   .workbench-view-files > .assistant-resize-handle {
     position: absolute;
+    grid-area: auto;
     top: 0;
     right: min(var(--files-assistant-width, 400px), calc(100vw - 56px));
     bottom: 0;

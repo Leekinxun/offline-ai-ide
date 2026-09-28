@@ -541,6 +541,7 @@ export async function runAgentLoop(
     const snapshot = await control.runRecorder.event(event, metricsPatch);
     emit({
       type: "run_state",
+      requestId: event.requestId || currentRequestId,
       conversationId: control.conversationId || control.runRecorder.conversationId,
       runId: control.runRecorder.runId,
       mode,
@@ -1011,19 +1012,18 @@ export async function runAgentLoop(
       if (turnAction === "tool_calls") {
         const toolCalls = assistantMsg.tool_calls!;
         // Send any reasoning text (parse <think> tags)
-        if (assistantMsg.content && !streamedContent && !streamedReasoning) {
+        if (assistantMsg.content && !streamedContent) {
           const { thinking, rest } = extractThinkTags(assistantMsg.content);
-          if (thinking) {
+          if (thinking && !streamedReasoning) {
             currentAssistantMessage.thinking = `${
               currentAssistantMessage.thinking || ""
             }${thinking}`;
             emit({ type: "thinking", requestId: currentRequestId, content: thinking });
           }
           if (rest) {
-            currentAssistantMessage.thinking = `${
-              currentAssistantMessage.thinking || ""
-            }${rest}`;
-            emit({ type: "thinking", requestId: currentRequestId, content: rest });
+            const progress = `${currentAssistantMessage.content ? "\n\n" : ""}${rest}`;
+            currentAssistantMessage.content += progress;
+            emit({ type: "token", requestId: currentRequestId, content: progress });
           }
         }
 

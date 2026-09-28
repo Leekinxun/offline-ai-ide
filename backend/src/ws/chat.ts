@@ -623,6 +623,7 @@ export function handleChatWs(
           type: "run_state",
           conversationId,
           runId,
+          requestId,
           mode: resumeMode,
           modelName: resumeModelName,
           status: "running",
@@ -922,7 +923,7 @@ async function beginRecordedRun(
   });
   const record = recorder.snapshot();
   wsSend(run.transport, {
-    type: "run_state", conversationId: turn.conversationId, runId: recorder.runId,
+    type: "run_state", conversationId: turn.conversationId, runId: recorder.runId, requestId: turn.requestId,
     mode: turn.mode, modelName: turn.modelName, status: "running",
     metrics: record.metrics, event: record.events.at(-1),
     sequence: record.events.length, version: record.updatedAt,

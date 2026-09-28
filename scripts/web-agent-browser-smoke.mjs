@@ -12,13 +12,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "backend/package.json"));
 const { WebSocket } = require("ws");
 const args = process.argv.slice(2);
-const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, launch: false };
+const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false };
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (key === "--launch") options.launch = true;
-  else if (["--url", "--cdp", "--workspace"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
+  else if (key === "--review") options.review = true;
+  else if (["--url", "--cdp", "--workspace", "--artifacts"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
   else if (key === "--help") {
-    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch]");
+    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review] [--artifacts /tmp/review-screenshots]");
     process.exit(0);
   } else throw new Error("Unknown or incomplete option: " + key);
 }
@@ -93,16 +94,20 @@ async function evaluate(expression, session = pageSession, contextId) {
   return result.result?.value;
 }
 const call = (fn, ...values) => evaluate("(" + fn.toString() + ")(" + values.map((value) => JSON.stringify(value)).join(",") + ")");
-async function click(selector) {
-  const point = await until(() => call((query) => {
+async function click(selector, requireHit = false) {
+  const point = await until(() => call(async (query) => {
     const element = document.querySelector(query);
     if (!element || element.disabled) return null;
     element.scrollIntoView({ block: "center", inline: "center" });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const rect = element.getBoundingClientRect();
-    return rect.width && rect.height ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : null;
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return rect.width && rect.height ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
+      hitTarget: hit === element || element.contains(hit), hit: hit?.outerHTML.slice(0, 350) } : null;
   }, selector), "Clickable " + selector);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point }, pageSession);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point }, pageSession);
+  if (requireHit) assert.equal(point.hitTarget, true, 'Button is covered: ' + point.hit);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
 }
 async function key(key, code, windowsVirtualKeyCode, modifiers = 0) {
   const event = { key, code, windowsVirtualKeyCode, modifiers };
@@ -190,16 +195,20 @@ async function connect() {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
     localStorage.setItem("app-locale","en");
-    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];
+    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];
     const nativeSend=WebSocket.prototype.send;
     WebSocket.prototype.send=function(data){let value;try{value=JSON.parse(data)}catch{}
-      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||value.mode!=="ask"||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
+      const review=globalThis.__smokeReviewAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_REVIEW: format the interview document";
+      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
+      if(review){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
       return nativeSend.call(this,data)};
     const nativeFetch=window.fetch;
     window.fetch=function(input,init){const url=new URL(typeof input==="string"?input:input.url,location.href);const method=(init?.method||"GET").toUpperCase();
       if(url.pathname.startsWith("/api/files")&&!["GET","HEAD"].includes(method)){globalThis.__smokeBlocked.push("Unexpected file write");return Promise.reject(new Error("Smoke forbids file writes"))}
       return nativeFetch.apply(this,arguments)};
-    addEventListener("DOMContentLoaded",()=>new MutationObserver(()=>{const panel=document.querySelector('[data-testid="inline-assistant"]');if(panel)globalThis.__smokeInlineStates.push({busy:panel.getAttribute("aria-busy")==="true",disabled:panel.querySelector(".inline-assistant-accept")?.disabled});}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["disabled","aria-busy"]}));
+    addEventListener("DOMContentLoaded",()=>new MutationObserver(()=>{const panel=document.querySelector('[data-testid="inline-assistant"]');if(panel)globalThis.__smokeInlineStates.push({busy:panel.getAttribute("aria-busy")==="true",disabled:panel.querySelector(".inline-assistant-accept")?.disabled});
+      if(globalThis.__smokeReviewAllowed){const phase=document.querySelector('.editor-assistant-panel .assistant-activity')?.dataset.phase;const reasoningNode=document.querySelector('.editor-assistant-panel [data-assistant-reasoning]');const reasoning=reasoningNode?.textContent;const reasoningVisible=Boolean(reasoningNode?.getBoundingClientRect().height);const tool=document.querySelector('.editor-assistant-panel [data-assistant-tool-call-id]')?.textContent;const previous=globalThis.__smokeProgress.at(-1);if(previous?.phase!==phase||previous?.reasoning!==reasoning||previous?.reasoningVisible!==reasoningVisible||previous?.tool!==tool)globalThis.__smokeProgress.push({phase,reasoning,reasoningVisible,tool});}
+    }).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-busy","data-phase","data-status"]}));
   ` }, pageSession);
   await cdp.send("Page.navigate", { url: origin + "/login" }, pageSession);
 }
@@ -231,7 +240,10 @@ try {
     if (options.workspace) assert.equal(safeWorkspace, fs.realpathSync(options.workspace), "--workspace does not match the authenticated fixture");
     const [runtime, settings] = await Promise.all([uiApi("/api/chat/runtime-options"), uiApi("/api/admin/settings")]);
     assert.equal(runtime.defaultModelName, "local-fixture"); assert.equal(runtime.modeModels.ask, "local-fixture");
+    if (options.review) assert.equal(runtime.modeModels.code, "local-fixture");
     assert.equal(settings.llm.modelName, "local-fixture"); localUrl(settings.llm.vllmApiUrl);
+    for (const model of settings.llm.models || []) if (model.modelName === 'local-fixture') localUrl(model.apiUrl);
+    for (const fallback of settings.llm.fallbacks || []) localUrl(fallback.apiUrl);
     const fixtureSettings = JSON.parse(fs.readFileSync(path.join(fixtureParent, "settings.json"), "utf8"));
     assert.equal(fixtureSettings.llm.modelName, "local-fixture"); assert.equal(fixtureSettings.llm.vllmApiUrl, settings.llm.vllmApiUrl);
     await call((workspace) => { globalThis.__smokeWorkspace = workspace; globalThis.__smokeAllowed = true; }, safeWorkspace);
@@ -249,6 +261,79 @@ try {
     }), "Loaded calculator Monaco model");
     assert.equal(await modelValue(), diskBefore);
   }, true);
+  if (options.review) {
+    await scenario("review_fixture_run", async () => {
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith("请在当前目录"), true, "Review requires a fresh disposable fixture");
+      await click('[data-tree-path="review-doc.md"]');
+      await click('.editor-assistant-composer .model-selector button');
+      await call(() => {
+        const option = [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture');
+        if (!option) throw new Error('Explicit fixture model option is missing');
+        option.setAttribute('data-smoke-local-model', 'true');
+      });
+      await click('[data-smoke-local-model]');
+      await call(() => { globalThis.__smokeReviewAllowed = true; });
+      await fill('.editor-assistant-composer textarea', "FIXTURE_REVIEW: format the interview document");
+      await click('.editor-assistant-send-btn');
+      await until(() => call(() => document.querySelector('.tool-approval-card')?.textContent.includes('edit_file')), "Edit approval", 30_000);
+      await click('.tool-approval-card .tool-approval-allow');
+      await until(() => call(() => document.querySelector('.editor-assistant-message.assistant')?.textContent.includes('内容已保留。')), "Complete fixture reply", 30_000);
+      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length >= 2), "Two editor review hunks");
+      assert.ok(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith('# 技术面试'));
+    }, true);
+    await scenario("live_reasoning_and_activity", async () => {
+      const observations = await evaluate('globalThis.__smokeProgress');
+      for (const phase of ['waiting', 'reasoning', 'approval']) assert.ok(observations.some((entry) => entry.phase === phase), 'Missing visible phase: ' + phase);
+      assert.ok(observations.some((entry) => entry.reasoningVisible && entry.reasoning?.includes('Fixture reasoning: inspect Markdown structure.')), 'Provider reasoning is invisible');
+      assert.ok(observations.some((entry) => entry.tool?.includes('read_file')), 'Tool activity is invisible');
+    });
+    await scenario("real_pointer_keeps_two_hunks", async () => {
+      const before = fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8');
+      const selector = '.editor-change-review-zone .editor-change-review-actions button:first-child';
+      await click(selector, true);
+      await until(() => call(() => [...document.querySelectorAll('.editor-change-review-actions button')].some((button) => button.textContent.trim() === 'Kept')), 'First keep persisted', 4000);
+      // Select the second actual zone, then dispatch real Chromium pointer input.
+      await call(() => document.querySelectorAll('.editor-change-review-zone')[1].setAttribute('data-smoke-second-zone', 'true'));
+      await click('[data-smoke-second-zone] .editor-change-review-actions button:first-child', true);
+      await until(() => call(() => [...document.querySelectorAll('.editor-change-review-actions button')].filter((button) => button.textContent.trim() === 'Kept').length >= 2), 'Second keep persisted', 4000);
+      const kept = await until(() => responses.filter((entry) => entry.route.endsWith('/changes/keep')).length >= 2 && responses.filter((entry) => entry.route.endsWith('/changes/keep')).at(-1), 'Two real keep API responses');
+      const changes = await uiApi(kept.route.replace(/\/keep$/, '') + '?path=review-doc.md');
+      assert.equal(changes.files[0].hunks.length, 2);
+      assert.ok(changes.files[0].hunks.every((hunk) => hunk.kept), 'Keep state was not persisted on the server');
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8'), before, 'Keep changed file contents');
+      assert.equal(await call(() => { const tab = document.querySelector('.tab[title="review-doc.md"][aria-selected="true"]'); return tab ? tab.classList.contains('modified') : null; }), false, 'Keep marked editor dirty or switched its tab');
+    });
+    await scenario("reply_stays_inside_narrow_panel", async () => {
+      for (const width of [1440, 1000]) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
+        if (width === 1000) {
+          await call(() => document.querySelector('.assistant-resize-handle').focus());
+          await key('Home', 'Home', 36);
+          await until(() => call(() => document.querySelector('.editor-assistant-panel').clientWidth <= 282), '280px collaboration panel');
+        }
+        await sleep(250);
+        await call(() => { document.querySelector('.editor-assistant-messages').scrollTop = 0; });
+        if (options.artifacts) {
+          fs.mkdirSync(path.resolve(options.artifacts), { recursive: true });
+          const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
+          fs.writeFileSync(path.join(path.resolve(options.artifacts), `review-${width}.png`), Buffer.from(screenshot.data, 'base64'));
+        }
+        const overflow = await call(() => {
+          const panel = document.querySelector('.editor-assistant-panel');
+          return [...panel.querySelectorAll('.editor-assistant-messages, .editor-assistant-message, .editor-assistant-message-content, .editor-assistant-composer')]
+            .filter((node) => node.scrollWidth > node.clientWidth + 2).map((node) => ({ className: node.className, width: node.clientWidth, scrollWidth: node.scrollWidth }));
+        });
+        assert.deepEqual(overflow, [], `Reply overflow at viewport ${width}: ${JSON.stringify(overflow)}`);
+        const sendVisible = await call(() => {
+          const button = document.querySelector('.editor-assistant-send-btn');
+          const rect = button.getBoundingClientRect(); const composer = document.querySelector('.editor-assistant-composer').getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return rect.left >= composer.left && rect.right <= composer.right && (hit === button || button.contains(hit));
+        });
+        assert.equal(sendVisible, true, 'Composer send button is clipped or covered');
+      }
+    });
+  } else {
   await scenario("workspace_file_reference", async () => {
     const composer = '.editor-assistant-panel textarea[aria-label], .chat-panel textarea.chat-input';
     await fill(composer, "@file:calculator");
@@ -314,6 +399,7 @@ try {
     await until(() => call(() => document.querySelector(".process-sessions .run-output")?.textContent.includes("input: exit")), "stdin echo in the UI");
     ownedProcesses.delete(created.result.session.id);
   });
+  }
   await scenario("no_shared_disk_write_or_unsafe_request", async () => {
     assert.equal(fs.readFileSync(path.join(safeWorkspace, "calculator.ts"), "utf8"), diskBefore);
     assert.deepEqual(await evaluate("globalThis.__smokeBlocked"), []);
@@ -323,6 +409,7 @@ try {
   process.exitCode = 1;
 } finally {
   if (cdp && pageSession && safeWorkspace) {
+    await call(() => { const request = globalThis.__smokeReviewRequest; if (request && globalThis.__smokeReviewSocket?.readyState === 1) globalThis.__smokeReviewSocket.send(JSON.stringify({ type: 'stop', requestId: request.requestId, conversationId: request.conversationId })); }).catch(() => {});
     for (const id of ownedPreviews) await uiApi("/api/previews/" + id, "DELETE").catch(() => {});
     for (const id of ownedProcesses) await uiApi("/api/process-sessions/" + id, "DELETE").catch(() => {});
     await uiApi("/api/auth/logout", "POST").catch(() => {});

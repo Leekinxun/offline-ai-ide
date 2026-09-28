@@ -29,6 +29,9 @@ fs.mkdirSync(workspace);
 fs.mkdirSync(path.join(fixture, "plugins"));
 fs.writeFileSync(path.join(workspace, "calculator.ts"), "export function add(a: number, b: number) {\n  return a - b;\n}\n");
 fs.writeFileSync(path.join(workspace, "README.md"), "# Browser fixture\n\nSend FIXTURE_EDIT to exercise read, approval, edit and review without a paid model.\n");
+const reviewOriginal = "请在当前目录下用 Python 标准库实现一个轻量 Key-Value 引擎。\n\n## Requirements\n\n1.storage.py: 实现 KVStore，支持 set(key, val)、get(key)、delete(key)。\n2.tests/test_storage.py: 编写完整的 unittest，覆盖持久化和恢复。\n";
+const reviewModified = "# 技术面试任务说明：轻量 Key-Value 引擎\n\n## Requirements\n\n1. `storage.py`：实现 `KVStore`，支持 `set(key, val)`、`get(key)`、`delete(key)`。\n2. `tests/test_storage.py`：编写完整的 `unittest`，覆盖持久化和恢复。\n";
+fs.writeFileSync(path.join(workspace, "review-doc.md"), reviewOriginal);
 fs.writeFileSync(path.join(workspace, ".gitignore"), ".history/\n.checkpoints/\n.team/\n.codex/\n.crewforge/\nnode_modules/\n");
 fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", wait: "node wait.cjs" } }));
 fs.writeFileSync(path.join(workspace, "verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').ok(fs.readFileSync('calculator.ts', 'utf8').includes('return a + b;')); console.log('calculator check passed');\n");
@@ -49,8 +52,33 @@ const model = http.createServer(async (req, res) => {
     const requested = messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("FIXTURE_EDIT"));
     const toolResults = messages.filter((message) => message.role === "tool");
     const tool = (name, args, id) => ({ role: "assistant", content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
+    const reviewRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_REVIEW"));
     let message = { role: "assistant", content: "Local browser fixture ready." };
-    if (messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("Return exactly ONE fenced code block"))) {
+    if (reviewRequested) {
+      if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-read")) message = tool("read_file", { path: "review-doc.md" }, "fixture-review-read");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-edit")) message = tool("edit_file", { path: "review-doc.md", old_text: reviewOriginal, new_text: reviewModified }, "fixture-review-edit");
+      else message = { role: "assistant", content: "已完成格式调整，文件 `interview/q1_kv_engine/Technical_Interview_Task_Brief_With_A_Very_Long_Unbroken_Component_" + "long".repeat(24) + ".md` 的改动：\n\n- **添加标题**：使文档结构更清晰。\n- **修复列表语法**：`1.storage.py` → `1. storage.py`。\n- **代码标记**：统一标记类名和方法名。\n\n| 文件 | 状态 |\n| --- | --- |\n| `" + "long_path_".repeat(20) + "` | 已格式化 |\n\n```text\n" + "long_code_".repeat(35) + "\n```\n\n内容已保留。" };
+      // Deliberately slow, deterministic SSE makes waiting/reasoning/tool phases
+      // observable in the browser without contacting a real model provider.
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      res.flushHeaders();
+      const delta = (value) => res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: value, finish_reason: null }] })}\n\n`);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      delta({ reasoning_content: "Fixture reasoning: inspect Markdown structure. " });
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      delta({ reasoning_content: "Preserve content while adjusting headings and lists." });
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      if (message.tool_calls) delta({ tool_calls: message.tool_calls.map((entry, index) => ({ ...entry, index })) });
+      else {
+        for (let offset = 0; offset < message.content.length; offset += 90) {
+          delta({ content: message.content.slice(offset, offset + 90) });
+          await new Promise((resolve) => setTimeout(resolve, 35));
+        }
+      }
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: message.tool_calls ? "tool_calls" : "stop" }], usage: { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 } })}\n\ndata: [DONE]\n\n`);
+      res.end();
+      return;
+    } else if (messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("Return exactly ONE fenced code block"))) {
       message = { role: "assistant", content: "```typescript\n  return a + b;\n```" };
     } else if (messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_QUESTION"))) {
       message = toolResults.some((entry) => entry.tool_call_id === "fixture-question")

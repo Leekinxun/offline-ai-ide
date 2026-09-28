@@ -32,7 +32,6 @@ import {
   Code2,
   TestTube2,
   TextSelect,
-  ChevronRight,
   Plus,
   RefreshCw,
   Square,
@@ -66,6 +65,8 @@ import type { ChatRuntimeOptions, AiHealthInfo } from "../hooks/useChat";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { CHAT_EMPTY_QUICK_PROMPTS, type WorkbenchQuickPromptId } from "./workbenchQuickPrompts";
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
+import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
+import { assistantToolStatus } from "../utils/assistantActivity";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -964,6 +965,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             key={`${msg.requestId || "msg"}-${idx}`}
             token={token}
             message={msg}
+            pendingApprovals={pendingApprovals}
             isLast={idx === messages.length - 1}
             isStreaming={
               msg.role === "assistant" &&
@@ -978,6 +980,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             forking={busyHistoryAction === `fork:${currentConversationId}:${msg.timestamp}`}
           />
         ))}
+        <AssistantActivity messages={messages} isStreaming={isStreaming} connected={connected} runState={runState} activeRequestIds={activeRequestIds} pendingApprovals={pendingApprovals} />
         <div ref={messagesEndRef} />
       </div>
 
@@ -1170,6 +1173,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 interface MessageItemProps {
   token: string;
   message: ChatMessage;
+  pendingApprovals: ToolApprovalRequest[];
   isLast: boolean;
   isStreaming: boolean;
   onApplyCode: (code: string) => void;
@@ -1181,6 +1185,7 @@ interface MessageItemProps {
 const MessageItem: React.FC<MessageItemProps> = ({
   token,
   message,
+  pendingApprovals,
   isStreaming,
   onApplyCode,
   onNavigateToFileUpdate,
@@ -1209,17 +1214,15 @@ const MessageItem: React.FC<MessageItemProps> = ({
 
       {/* Thinking text (collapsible) */}
       {hasThinking && (
-        <ThinkingBlock content={message.thinking!} />
+        <AssistantReasoning content={message.thinking!} active={isStreaming} />
       )}
 
       {/* Tool call steps */}
       {hasToolCalls &&
         message.toolCalls!.map((step, i) => (
-          <ToolCallStep
-            key={step.toolCallId || i}
-            step={step}
-            onNavigateToFileUpdate={onNavigateToFileUpdate}
-          />
+          <div key={step.toolCallId || i} data-assistant-tool-call-id={step.toolCallId} data-status={assistantToolStatus(step, isStreaming, pendingApprovals)}>
+            <ToolCallStep step={step} onNavigateToFileUpdate={onNavigateToFileUpdate} />
+          </div>
         ))}
 
       {/* Final content */}
@@ -1245,34 +1248,6 @@ const MessageItem: React.FC<MessageItemProps> = ({
       )}
       <ContextReferenceBadges references={message.contextReferences} />
       <MessageAttachments attachments={message.attachments} token={token} />
-    </div>
-  );
-};
-
-const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  const preview = useMemo(() => {
-    const first = content.split("\n")[0];
-    return first.length > 60 ? first.slice(0, 60) + "..." : first;
-  }, [content]);
-
-  return (
-    <div className="chat-thinking-block">
-      <div
-        className="chat-thinking-header"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <ChevronRight
-          size={14}
-          className={`chat-thinking-chevron${expanded ? " expanded" : ""}`}
-        />
-        <span className="chat-thinking-label">{t("chat.thinking")}</span>
-        {!expanded && <span className="chat-thinking-preview">{preview}</span>}
-      </div>
-      {expanded && (
-        <div className="chat-thinking-body">{content}</div>
-      )}
     </div>
   );
 };

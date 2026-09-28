@@ -2,7 +2,14 @@
   background: color-mix(in srgb, #2da44e 13%, transparent);
 }
 .editor-change-review-added-gutter { border-left: 3px solid #2da44e; margin-left: 3px; }
-.editor-change-review-zone-host { box-sizing: border-box; overflow: hidden; }
+.editor-change-review-zone-host {
+  box-sizing: border-box;
+  overflow: hidden;
+  /* Monaco places its full-size view-lines hit target after view zones.
+     Raise this interactive zone above that transparent sibling so real
+     pointer input reaches the review controls. */
+  z-index: 1;
+}
 .editor-change-review-zone { height: 100%; color: var(--text-primary); font: 11px/1.4 var(--font-sans); }
 .editor-change-review-toolbar {
   box-sizing: border-box;
