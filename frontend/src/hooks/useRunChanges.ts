@@ -23,6 +23,7 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
   const listController = useRef<AbortController | null>(null);
   const loadingScope = useRef<string | null>(null);
   const actionScope = useRef<string | null>(null);
+  const actionToken = useRef<symbol | null>(null);
   const changedRef = useRef(onChanged); changedRef.current = onChanged;
   const headers = useCallback(() => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(workspaceDir ? { "X-Workspace-Dir": encodeURIComponent(workspaceDir) } : {}) }), [token, workspaceDir]);
 
@@ -53,7 +54,7 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
   useEffect(() => {
     setChanges(null); setFile(null); setSelectedPath(null); setError(null); setBusy(false);
     void refresh(true);
-    return () => { listController.current?.abort(); loadingScope.current = null; actionScope.current = null; };
+    return () => { listController.current?.abort(); loadingScope.current = null; actionScope.current = null; actionToken.current = null; };
   }, [refresh]);
   useEffect(() => { if (refreshKey !== undefined) void refresh(); }, [refresh, refreshKey]);
   useEffect(() => {
@@ -93,13 +94,14 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
 
   const decide = useCallback(async (target: ReviewFile, decision: "keep" | "revert", hunk?: ReviewHunk) => {
     if (!runId || actionScope.current === scope) return false;
+    const operation = Symbol("review-action"); actionToken.current = operation;
     actionScope.current = scope;
     setBusy(true); setError(null);
     try {
       const suffix = decision === "keep" ? "changes/keep" : "revert";
       const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/${suffix}`, { method: "POST", headers: headers(), body: JSON.stringify(reviewSelection(target, requestId, hunk)) });
       const body = await response.json();
-      if (scopeRef.current !== scope) return false;
+      if (scopeRef.current !== scope || actionToken.current !== operation) return false;
       if (decision === "revert" && body.rollback?.applied?.length) changedRef.current?.();
       if (!response.ok) {
         const reasons = (body.rollback?.unavailable || []).map((entry: { path: string; reason: string }) => `${entry.path}: ${entry.reason}`);
@@ -112,12 +114,37 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
       await refresh(true);
       return true;
     } catch (cause) {
-      if (scopeRef.current === scope) { setError(cause instanceof Error ? cause.message : "Review action failed"); await refresh(true); }
+      if (scopeRef.current === scope && actionToken.current === operation) { setError(cause instanceof Error ? cause.message : "Review action failed"); await refresh(true); }
       return false;
     } finally {
-      if (scopeRef.current === scope) { setBusy(false); actionScope.current = null; }
+      if (scopeRef.current === scope && actionToken.current === operation) { setBusy(false); actionScope.current = null; actionToken.current = null; }
+    }
+  }, [headers, refresh, requestId, runId, scope, workspaceDir]);
+  const keepAll = useCallback(async (target: ReviewChanges) => {
+    if (!runId || target.runId !== runId || (target.requestId || undefined) !== (requestId || undefined) || actionScope.current === scope) return false;
+    const operation = Symbol("review-batch"); actionToken.current = operation;
+    actionScope.current = scope;
+    setBusy(true); setError(null);
+    try {
+      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/changes/keep-all`, {
+        method: "POST", headers: headers(),
+        body: JSON.stringify({ expectedRevision: target.revision, ...(requestId ? { requestId } : {}) }),
+      });
+      const body = await response.json();
+      if (scopeRef.current !== scope || actionToken.current !== operation) return false;
+      if (!response.ok) throw new Error(body.error || "Could not keep all changes");
+      const confirmed = parseReviewChanges(body, runId, requestId);
+      setChanges(confirmed); setLoadedScope(scope);
+      window.dispatchEvent(new CustomEvent<ReviewChanged>(REVIEW_CHANGED_EVENT, { detail: { workspaceDir, runId, source: instanceRef.current } }));
+      await refresh(true);
+      return true;
+    } catch (cause) {
+      if (scopeRef.current === scope && actionToken.current === operation) { setError(cause instanceof Error ? cause.message : "Could not keep all changes"); await refresh(true); }
+      return false;
+    } finally {
+      if (scopeRef.current === scope && actionToken.current === operation) { setBusy(false); actionScope.current = null; actionToken.current = null; }
     }
   }, [headers, refresh, requestId, runId, scope, workspaceDir]);
   const retry = useCallback(async () => { setDetailRetry((value) => value + 1); await refresh(true); }, [refresh]);
-  return { changes: loadedScope === scope ? changes : null, file: loadedScope === scope && file?.path === selectedPath ? file : null, selectedPath, setSelectedPath, loading, detailLoading, busy, error, clearError: () => setError(null), refresh, retry, decide, stale: Boolean(file && selectedRevision !== file.revision) };
+  return { changes: loadedScope === scope ? changes : null, file: loadedScope === scope && file?.path === selectedPath ? file : null, selectedPath, setSelectedPath, loading, detailLoading, busy, error, clearError: () => setError(null), refresh, retry, decide, keepAll, stale: Boolean(file && selectedRevision !== file.revision) };
 }

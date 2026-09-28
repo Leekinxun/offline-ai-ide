@@ -6,7 +6,7 @@ import { useRunChanges } from "../hooks/useRunChanges";
 import { getEditorThemeName } from "../editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { getLanguage } from "../types";
-import { reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
+import { bulkReviewPolicy, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
 import "./RunChangesReview.css";
 
 const DiffEditor = lazy(() => import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor })));
@@ -58,6 +58,7 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
     setSelection({ side: "modified", startLine: 1, endLine: 1 }); setComment(""); setCommentOpen(false); setCommentRevision(null); setCommentSent(false);
   }, [runId, requestId, workspaceDir, review.selectedPath]);
   const policy = file ? reviewActionPolicy(file, { readOnly, running, busy: review.busy, stale: review.stale || review.detailLoading }) : null;
+  const bulk = bulkReviewPolicy(review.changes, { readOnly, busy: review.busy, loading: review.loading });
   const submitComment = () => {
     if (!file || !onComment || !policy?.comment || commentRevision !== file.revision) return;
     const payload = { path: file.path, revision: file.revision, ...selection, text: comment.trim() };
@@ -77,6 +78,14 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
     <header className="run-review-heading"><strong>{t("review.title")}</strong><span>{review.changes?.files.length || 0}</span>
       <button type="button" onClick={() => { review.clearError(); void review.retry(); }} disabled={review.loading || review.busy} aria-label={t("review.refresh")}><RefreshCw size={13} /></button>
     </header>
+    {!readOnly && bulk.count > 0 && <div className="run-review-bulk">
+      <button type="button" className="run-review-keep-all" disabled={!bulk.allowed}
+        title={t(bulk.unavailable ? "review.keepAllUnavailable" : "review.keepAllHint")}
+        onClick={() => { if (bulk.allowed && review.changes) void review.keepAll(review.changes); }}>
+        <Check size={14} />{review.busy ? t("review.keepingAll") : t("review.keepAll", { count: bulk.count })}
+      </button>
+      <span>{t(bulk.unavailable ? "review.keepAllUnavailable" : "review.keepAllHint")}</span>
+    </div>}
     <p className="run-review-description">{t("review.appliedHint")}</p>
     {running && <p className="run-review-notice" role="status">{t("review.runningHint")}</p>}
     {review.error && <div className="run-review-error" role="alert">{review.error}</div>}

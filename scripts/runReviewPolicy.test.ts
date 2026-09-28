@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseReviewChanges, reviewActionPolicy, reviewSelection, reviewStatus, runChangesUrl, validReviewComment, type ReviewFile } from "../frontend/src/components/runReviewPolicy.js";
+import { bulkReviewPolicy, parseReviewChanges, reviewActionPolicy, reviewSelection, reviewStatus, runChangesUrl, validReviewComment, type ReviewFile } from "../frontend/src/components/runReviewPolicy.js";
 
 function file(): ReviewFile {
   return { path: "src/a.ts", operation: "modify", original: "old\nline\n", modified: "new\nline\n",
@@ -9,6 +9,20 @@ function file(): ReviewFile {
     additions: 1, deletions: 1, hasChanges: true, isBinary: false, isTooLarge: false, updatedAt: 1, rollbackState: "applied", reviewState: "pending" };
 }
 const ready = { readOnly: false, running: false, busy: false, stale: false };
+
+test("batch review counts only pending files and requires a complete writable snapshot", () => {
+  const state = { readOnly: false, busy: false, loading: false };
+  const changes = { runId: "run", revision: "snapshot", files: [file(), { ...file(), path: "b.ts" }, { ...file(), path: "kept.ts", reviewState: "kept" as const }, { ...file(), path: "reverted.ts", rollbackState: "reverted" as const }] };
+  assert.deepEqual(bulkReviewPolicy(changes, state), { count: 2, allowed: true, unavailable: false });
+  for (const blocked of [{ readOnly: true }, { busy: true }, { loading: true }]) assert.equal(bulkReviewPolicy(changes, { ...state, ...blocked }).allowed, false);
+  for (const invalid of [{ unavailableReason: "missing" }, { isBinary: true }, { isTooLarge: true }, { mutationIds: [] }]) {
+    assert.deepEqual(bulkReviewPolicy({ ...changes, files: [file(), { ...file(), path: "b.ts", ...invalid }] }, state), { count: 2, allowed: false, unavailable: true });
+  }
+  assert.equal(bulkReviewPolicy(null, state).allowed, false);
+  assert.equal(bulkReviewPolicy({ ...changes, files: [] }, state).allowed, false);
+  assert.equal(bulkReviewPolicy({ ...changes, unavailableReason: "gap" }, state).allowed, false);
+  assert.deepEqual(bulkReviewPolicy({ ...changes, files: changes.files.slice(2) }, state), { count: 0, allowed: false, unavailable: false });
+});
 
 test("review reads fixed run/request/file scope and refuses mismatched responses", () => {
   const url = runChangesUrl("run/one", "turn two", "src/a.ts");

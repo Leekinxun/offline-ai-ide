@@ -128,3 +128,7 @@ export function canApplyEditorReviewAction(
   const positioned = layout?.positionedHunks.find((entry) => entry.hunk.id === hunk.id && entry.hunk.mutationId === hunk.mutationId);
   return Boolean(positioned && !positioned.hunk.reverted && (decision !== "keep" || !positioned.hunk.kept));
 }
+
+export function canKeepEditorFileChanges(file: ReviewFile | null | undefined, current: { path: string; content: string; dirty: boolean; readOnly: boolean }, busy: boolean): boolean {
+  return Boolean(file && !current.readOnly && !busy && buildEditorReviewLayout(file, current.path, current.content, current.dirty));
+}

@@ -83,6 +83,7 @@ import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
 import type { InlineAssistantRequest, InlineAssistantResponse } from "./editor/inlineAssistantPolicy";
 import type { RunReviewComment } from "./components/RunChangesReview";
+import { canKeepEditorFileChanges } from "./editor/editorChangeReviewPolicy";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { inlineRequestStatus } from "./utils/requestOutcome";
 import {
@@ -3609,6 +3610,19 @@ function AuthenticatedApp({
                 setRunDetailsTab("changes");
                 setRunDetailsVisible(true);
               }}
+              keepFileChangesBusy={editorChanges.busy}
+              onKeepFileChanges={canKeepEditorFileChanges(editorChangeReviewFile, { path: activeFile.path, content: activeFile.content, dirty: activeFile.modified, readOnly: readOnlyWorkspace }, false) ? async () => {
+                const file = editorChangeReviewFile;
+                const model = editorRef.current?.getModel();
+                const matchesModel = !model || (!model.isDisposed() && normalizeWorkspaceRelativePath(model.uri.path, workspaceDir) === normalizeWorkspaceRelativePath(activeFile.path, workspaceDir));
+                if (!file || !matchesModel || !canKeepEditorFileChanges(file, { path: activeFile.path, content: model?.getValue() ?? activeFile.content, dirty: activeFile.modified, readOnly: readOnlyWorkspace || Boolean(editorRef.current?.getRawOptions().readOnly) }, editorChanges.busy)) {
+                  showToast(t("editorReview.stale")); return;
+                }
+                const requestedScope = fileReadScope;
+                const kept = await editorChanges.decide(file, "keep");
+                if (currentFileReadScopeRef.current !== requestedScope) return;
+                if (!kept) { setRunDetailsTab("changes"); setRunDetailsVisible(true); showToast(t("review.actionFailed")); }
+              } : undefined}
               canRunCurrent={isDebuggablePath(activeFile.path)}
               onRunCurrent={() => void runCurrentFile()}
               readOnlyWorkspace={readOnlyWorkspace}

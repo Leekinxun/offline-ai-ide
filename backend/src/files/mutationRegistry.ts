@@ -22,6 +22,9 @@ export class MutationJournalEvidenceError extends Error {
     this.name = "MutationJournalEvidenceError";
   }
 }
+export class MutationReviewConflictError extends Error {
+  constructor() { super("Run changes changed; reload the review before keeping"); this.name = "MutationReviewConflictError"; }
+}
 export interface WorkspaceMutationEvent { workspaceDir: string; path: string; operation: "create" | "modify" | "delete" | "rename"; previousPath?: string; scope?: "file" | "prefix"; recordedAt: number; }
 interface MutationJournal { schemaVersion: 1; records: FileMutationRecord[]; skipped?: MutationEvidenceGap[]; }
 interface CapturedFile { content?: string; hash?: string; reason?: MutationCaptureResult["skipped"][number]["reason"]; }
@@ -181,7 +184,7 @@ function isEvidenceGap(value: unknown, workspaceDir: string): value is MutationE
   if (gap.requestId !== undefined && (typeof gap.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(gap.requestId))) return false;
   return path.resolve(gap.workspaceDir || "") === workspaceDir && safeRelativePath(gap.path || "") !== null && typeof gap.runId === "string" && Boolean(gap.runId.trim()) && typeof gap.toolCallId === "string" && Boolean(gap.toolCallId.trim()) && ["binary", "oversized", "unreadable"].includes(String(gap.reason)) && typeof gap.recordedAt === "number" && Number.isFinite(gap.recordedAt);
 }
-function loadJournal(workspaceDir: string, force = false): void {
+function loadJournal(workspaceDir: string, force = false): string | undefined {
   const workspace = path.resolve(workspaceDir); if (loadedWorkspaces.has(workspace) && !force) return;
   if (force) {
     loadedWorkspaces.delete(workspace);
@@ -208,6 +211,7 @@ function loadJournal(workspaceDir: string, force = false): void {
   for (const record of journal.records) mutationHistory.set(record.id, record);
   for (const gap of journal.skipped || []) mutationEvidenceGaps.set(evidenceGapKey(gap), gap);
   loadedWorkspaces.add(workspace);
+  return source;
 }
 function persistJournal(workspaceDir: string): void { const workspace = path.resolve(workspaceDir); const records = workspaceRecords(workspace).slice(-MAX_MUTATION_ENTRIES); const skipped = workspaceEvidenceGaps(workspace).sort((a, b) => a.recordedAt - b.recordedAt).slice(-MAX_MUTATION_ENTRIES); atomicWrite(inspectJournalTarget(workspace, `${JOURNAL_DIR}/${JOURNAL_FILE}`), JSON.stringify({ schemaVersion: 1, records, ...(skipped.length ? { skipped } : {}) } satisfies MutationJournal, null, 2)); }
 function trimHistory(): void { while (mutationHistory.size > MAX_MUTATION_ENTRIES) { const oldest = mutationHistory.keys().next().value; if (oldest) mutationHistory.delete(oldest); } }
@@ -283,6 +287,56 @@ export function keepFileMutations(workspaceDir: string, selection: { runId: stri
     kept.push(record.id);
   }
   if (kept.length) persistJournal(workspaceDir);
+  return kept;
+}
+
+export function isMutationReviewComplete(record: FileMutationRecord): boolean {
+  return record.revertedAt !== undefined || record.keptAt !== undefined || Boolean(record.hunks?.length && record.hunks.every((hunk) => record.keptHunkIds?.includes(hunk.id) || record.revertedHunkIds?.includes(hunk.id)));
+}
+
+export function fileMutationRevision(records: readonly FileMutationRecord[]): string {
+  return buildFileHash(JSON.stringify(records.map((record) => [record.id, record.preimageHash, record.postimageHash, record.revertedAt, record.revertedHunkIds, record.keptAt, record.keptHunkIds])));
+}
+
+/** Commits review metadata once, after all selected immutable evidence is checked. */
+export function keepRunMutationBatch(workspaceDir: string, selection: {
+  runId: string; requestId?: string; ids: readonly string[];
+  expectedFileRevisions: Readonly<Record<string, string>>;
+}): string[] {
+  const workspace = path.resolve(workspaceDir);
+  const source = loadJournal(workspace, true);
+  if (source === undefined) throw new MutationJournalEvidenceError(journalPath(workspace), "batch review source is missing");
+  const journal = JSON.parse(source) as MutationJournal;
+  if (new Set(journal.records.map((record) => record.id)).size !== journal.records.length) throw new MutationJournalEvidenceError(journalPath(workspace), "duplicate mutation ids");
+  const scoped = journal.records.filter((record) => record.runId === selection.runId && (!selection.requestId || record.requestId === selection.requestId));
+  const grouped = new Map<string, FileMutationRecord[]>();
+  for (const record of scoped) grouped.set(record.path, [...(grouped.get(record.path) || []), record]);
+  if (grouped.size !== Object.keys(selection.expectedFileRevisions).length || [...grouped].some(([filePath, records]) => fileMutationRevision(records) !== selection.expectedFileRevisions[filePath])) throw new MutationReviewConflictError();
+  const ids = new Set(selection.ids);
+  if (ids.size !== selection.ids.length || [...ids].some((id) => !scoped.some((record) => record.id === id))) throw new Error("Invalid review mutation selection");
+  const selected = scoped.filter((record) => ids.has(record.id) && !isMutationReviewComplete(record));
+  if (!selected.length) return [];
+  // Gaps are unreviewable changes even when older mutations in that path were kept.
+  if (journal.skipped?.some((gap) => gap.runId === selection.runId && (!selection.requestId || gap.requestId === selection.requestId))) throw new MutationJournalEvidenceError(journalPath(workspace), "batch review has incomplete mutation evidence");
+  for (const record of selected) {
+    if (record.rollbackUnavailableReason) throw new MutationJournalEvidenceError(journalPath(workspace), record.rollbackUnavailableReason);
+    readMutationImage(workspace, record, "preimage");
+    readMutationImage(workspace, record, "postimage");
+  }
+  const kept = selected.map((record) => record.id);
+  const keptIds = new Set(kept); const keptAt = Date.now();
+  const records = journal.records.map((record) => keptIds.has(record.id) ? { ...record, keptAt } : record);
+  const target = inspectJournalTarget(workspace, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
+  const temporary = `${target}.keep-${process.pid}-${crypto.randomUUID()}`;
+  try {
+    if (fs.readFileSync(target, "utf8") !== source) throw new MutationReviewConflictError();
+    fs.writeFileSync(temporary, JSON.stringify({ ...journal, records }, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    const revalidated = inspectJournalTarget(workspace, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
+    if (fs.readFileSync(revalidated, "utf8") !== source) throw new MutationReviewConflictError();
+    fs.renameSync(temporary, revalidated);
+  } finally { fs.rmSync(temporary, { force: true }); }
+  // Publish new cache objects only after the atomic journal write succeeded.
+  for (const record of records) mutationHistory.set(record.id, record);
   return kept;
 }
 

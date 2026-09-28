@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ReviewFile, ReviewHunk } from "../frontend/src/components/runReviewPolicy.js";
 import { reviewActionPolicy } from "../frontend/src/components/runReviewPolicy.js";
-import { buildEditorReviewLayout, canApplyEditorReviewAction, matchesRecordedEditorFile, type EditorReviewSnapshot } from "../frontend/src/editor/editorChangeReviewPolicy.js";
+import { buildEditorReviewLayout, canApplyEditorReviewAction, canKeepEditorFileChanges, matchesRecordedEditorFile, type EditorReviewSnapshot } from "../frontend/src/editor/editorChangeReviewPolicy.js";
 
 const hunk = (overrides: Partial<ReviewHunk> = {}): ReviewHunk => ({ id: "h1", mutationId: "m1", preimageHash: "pre", postimageHash: "post", preimage: "old\n", postimage: "new\n", reverted: false, kept: false, ...overrides });
 const file = (overrides: Partial<ReviewFile> = {}): ReviewFile => ({
@@ -181,4 +181,15 @@ test("a newly pending mutation is shown after earlier changes were kept", () => 
   const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
   assert.equal(layout.blocks.length, 1);
   assert.deepEqual(layout.positionedHunks.map((entry) => entry.hunk.id), ["h1"]);
+});
+
+test("keep-all current-file action requires the exact saved writable file", () => {
+  const value = file();
+  assert.equal(canKeepEditorFileChanges(value, current(value), false), true);
+  for (const invalid of [{ dirty: true }, { readOnly: true }, { content: "human edit" }, { path: "other.ts" }]) {
+    assert.equal(canKeepEditorFileChanges(value, { ...current(value), ...invalid }, false), false);
+  }
+  assert.equal(canKeepEditorFileChanges(value, current(value), true), false);
+  assert.equal(canKeepEditorFileChanges({ ...value, reviewState: "kept" }, current(value), false), false);
+  assert.equal(canKeepEditorFileChanges(null, current(value), false), false);
 });

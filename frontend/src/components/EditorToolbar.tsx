@@ -11,6 +11,7 @@ import {
   Unlink2,
   X,
   XCircle,
+  CheckCheck,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchSelect } from "./WorkbenchSelect";
@@ -40,6 +41,8 @@ export interface EditorToolbarProps {
   onToggleTerminal?: () => void;
   runDetailsVisible?: boolean;
   onOpenChanges?: () => void;
+  onKeepFileChanges?: () => void;
+  keepFileChangesBusy?: boolean;
 
   // 运行/调试
   canRunCurrent?: boolean;
@@ -73,6 +76,8 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onToggleTerminal,
   runDetailsVisible = false,
   onOpenChanges,
+  onKeepFileChanges,
+  keepFileChangesBusy = false,
   canRunCurrent = false,
   onRunCurrent,
   readOnlyWorkspace = false,
@@ -102,7 +107,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
     ];
   }, [activeFile.path]);
 
-  return (
+  return (<>
     <div className="editor-toolbar" role="toolbar" aria-label={t("workbench.editorActions")}>
       {/* 1. 左侧：精炼文件面包屑路径导航 */}
       <div className="editor-toolbar-breadcrumb" title={activeFile.path} aria-label={t("workbench.fileBreadcrumb")}>
@@ -282,5 +287,10 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
         )}
       </div>
     </div>
-  );
+    {onKeepFileChanges && !readOnlyWorkspace && <div className="editor-review-bulk-bar" role="group" aria-label={t("editorReview.keepAllHint")}>
+      <span>{t("editorReview.pendingFile")}</span>
+      <button type="button" className="editor-review-keep-all" onClick={onKeepFileChanges} disabled={keepFileChangesBusy}
+        title={t("editorReview.keepAllHint")}><CheckCheck size={14} />{t(keepFileChangesBusy ? "review.keepingAll" : "editorReview.keepAll")}</button>
+    </div>}
+  </>);
 };

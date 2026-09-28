@@ -25,8 +25,8 @@ import {
   readRunRecord,
 } from "../chat/runHistory.js";
 import { findCheckpointForRun, restoreCheckpoint } from "../chat/checkpoints.js";
-import { keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, rollbackFileMutations, safeMutationRelativePath } from "../files/mutationRegistry.js";
-import { assertRunChangesOwner, readRunChanges } from "../chat/runChanges.js";
+import { keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, MutationReviewConflictError, rollbackFileMutations, safeMutationRelativePath } from "../files/mutationRegistry.js";
+import { assertRunChangesOwner, keepAllRunChanges, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 import {
   createManagedWorktree,
@@ -607,6 +607,23 @@ chatRouter.get("/runs/:runId/changes", (req, res) => {
     if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
     const message = error instanceof Error ? error.message : "Failed to load run changes";
     res.status(message === "Run not found" || message === "Run file change not found" ? 404 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Run evidence is unavailable" : message });
+  }
+});
+
+chatRouter.post("/runs/:runId/changes/keep-all", (req, res) => {
+  if (!writable(req, res)) return;
+  const body = req.body || {};
+  if (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)) return res.status(400).json({ error: "expectedRevision is required" });
+  if (body.requestId !== undefined && body.requestId !== "" && !isValidChatRequestId(body.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
+  if (body.path !== undefined || body.ids !== undefined || body.hunkIds !== undefined) return res.status(400).json({ error: "Batch review accepts a run/request summary, not a file or hunk selection" });
+  try {
+    res.json(keepAllRunChanges(getSessionWorkspace(req), req.params.runId, body.expectedRevision, body.requestId || undefined));
+  } catch (error) {
+    if (error instanceof RunChangesKeepError) return res.status(409).json({ error: error.message, currentRevision: error.changes.revision, ...(error.reason === "unavailable" ? { unavailableReason: error.changes.unavailableReason || "pending_change_evidence_unavailable", paths: error.paths } : {}) });
+    if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    const message = error instanceof Error ? error.message : "Failed to keep run changes";
+    return res.status(message === "Run not found" ? 404 : (error as NodeJS.ErrnoException)?.code ? 409 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Change evidence is unavailable" : message });
   }
 });
 

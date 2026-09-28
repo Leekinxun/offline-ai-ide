@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   buildFileHash, listFileMutations, listMutationEvidenceGaps, readMutationImage,
   safeMutationRelativePath, type FileMutationRecord,
+  fileMutationRevision, isMutationReviewComplete, keepRunMutationBatch,
 } from "../files/mutationRegistry.js";
 import { safePath } from "../utils/safePath.js";
 
@@ -22,6 +23,12 @@ export interface RunFileChange {
 }
 export interface RunChanges {
   runId: string; requestId?: string; revision: string; files: RunFileChange[]; unavailableReason?: string;
+}
+
+export class RunChangesKeepError extends Error {
+  constructor(readonly reason: "stale" | "unavailable", readonly changes: RunChanges, readonly paths: string[] = []) {
+    super(reason === "stale" ? "Run changes changed; reload the review before keeping" : "Change evidence is unavailable for batch review");
+  }
 }
 
 /** Check ownership within the authenticated workspace without recovering or writing run state. */
@@ -58,6 +65,9 @@ export function readRunChanges(workspaceDir: string, runId: string, requestedPat
     const existing = files.find((file) => file.path === gap.path);
     if (existing) {
       existing.unavailableReason = `incomplete_evidence:${gap.reason}`;
+      existing.reviewState = "pending";
+      existing.rollbackState = "applied";
+      existing.hasChanges = true;
       delete existing.original; delete existing.modified;
     } else {
       files.push({
@@ -75,6 +85,21 @@ export function readRunChanges(workspaceDir: string, runId: string, requestedPat
   return { runId, ...(requestId ? { requestId } : {}), revision, files: selectedPath ? files.filter((file) => file.path === selectedPath) : files, ...(!files.length ? { unavailableReason: "mutation_evidence_unavailable" } : {}) };
 }
 
+export function keepAllRunChanges(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string): { kept: string[] } & RunChanges {
+  const changes = readRunChanges(workspaceDir, runId, undefined, requestId);
+  if (changes.revision !== expectedRevision) throw new RunChangesKeepError("stale", changes);
+  const pending = changes.files.filter((file) => file.reviewState !== "kept" && file.rollbackState !== "reverted");
+  const unavailable = pending.filter((file) => file.unavailableReason || file.isBinary || file.isTooLarge);
+  if (changes.unavailableReason || unavailable.length) throw new RunChangesKeepError("unavailable", changes, unavailable.map((file) => file.path));
+  if (!pending.length) return { kept: [], ...changes };
+  const kept = keepRunMutationBatch(workspaceDir, {
+    runId, requestId,
+    ids: pending.flatMap((file) => file.mutationIds),
+    expectedFileRevisions: Object.fromEntries(changes.files.filter((file) => file.mutationIds.length).map((file) => [file.path, file.revision])),
+  });
+  return { kept, ...readRunChanges(workspaceDir, runId, undefined, requestId) };
+}
+
 function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMutationRecord[], includeContent: boolean): RunFileChange {
   const first = mutations[0]; const last = mutations[mutations.length - 1];
   const originalExists = first.operation !== "create"; const modifiedExists = last.operation !== "delete";
@@ -83,7 +108,7 @@ function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMut
   const file: RunFileChange = {
     path: filePath, operation: !originalExists ? "create" : !modifiedExists ? "delete" : "modify",
     originalExists, modifiedExists, originalHash: first.preimageHash, modifiedHash: last.postimageHash,
-    revision: buildFileHash(JSON.stringify(mutations.map((mutation) => [mutation.id, mutation.preimageHash, mutation.postimageHash, mutation.revertedAt, mutation.revertedHunkIds, mutation.keptAt, mutation.keptHunkIds]))),
+    revision: fileMutationRevision(mutations),
     mutationIds: mutations.map((mutation) => mutation.id),
     hunks: mutations.flatMap((mutation) => (mutation.hunks || []).map((hunk) => ({
       id: hunk.id, mutationId: mutation.id, preimageHash: hunk.preimageHash, postimageHash: hunk.postimageHash,
@@ -95,7 +120,7 @@ function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMut
     isBinary: mutations.some((mutation) => mutation.rollbackUnavailableReason === "binary"),
     isTooLarge: mutations.some((mutation) => mutation.rollbackUnavailableReason === "oversized"),
     updatedAt: last.recordedAt, rollbackState: allReverted ? "reverted" : someReverted ? "partially_reverted" : "applied",
-    reviewState: mutations.filter((mutation) => mutation.revertedAt === undefined).every((mutation) => mutation.keptAt !== undefined)
+    reviewState: mutations.every(isMutationReviewComplete)
       ? "kept" : mutations.some((mutation) => mutation.keptAt !== undefined || mutation.keptHunkIds?.length) ? "partially_kept" : "pending",
   };
   try {

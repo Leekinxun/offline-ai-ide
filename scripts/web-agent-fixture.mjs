@@ -29,9 +29,11 @@ fs.mkdirSync(workspace);
 fs.mkdirSync(path.join(fixture, "plugins"));
 fs.writeFileSync(path.join(workspace, "calculator.ts"), "export function add(a: number, b: number) {\n  return a - b;\n}\n");
 fs.writeFileSync(path.join(workspace, "README.md"), "# Browser fixture\n\nSend FIXTURE_EDIT to exercise read, approval, edit and review without a paid model.\n");
-const reviewOriginal = "请在当前目录下用 Python 标准库实现一个轻量 Key-Value 引擎。\n\n## Requirements\n\n1.storage.py: 实现 KVStore，支持 set(key, val)、get(key)、delete(key)。\n2.tests/test_storage.py: 编写完整的 unittest，覆盖持久化和恢复。\n";
-const reviewModified = "# 技术面试任务说明：轻量 Key-Value 引擎\n\n## Requirements\n\n1. `storage.py`：实现 `KVStore`，支持 `set(key, val)`、`get(key)`、`delete(key)`。\n2. `tests/test_storage.py`：编写完整的 `unittest`，覆盖持久化和恢复。\n";
+const reviewOriginal = "请在当前目录下用 Python 标准库实现一个轻量 Key-Value 引擎。\n\n## Requirements\n\n1.storage.py: 实现 KVStore，支持 set(key, val)、get(key)、delete(key)。\n2.tests/test_storage.py: 编写完整的 unittest，覆盖持久化和恢复。\n\n## Notes\n\nDraft\n";
+const reviewModified = "# 技术面试任务说明：轻量 Key-Value 引擎\n\n## Requirements\n\n1. `storage.py`：实现 `KVStore`，支持 `set(key, val)`、`get(key)`、`delete(key)`。\n2. `tests/test_storage.py`：编写完整的 `unittest`，覆盖持久化和恢复。\n\n## Notes\n\nReady\n";
 fs.writeFileSync(path.join(workspace, "review-doc.md"), reviewOriginal);
+fs.writeFileSync(path.join(workspace, "review-notes.md"), "Notes draft\n");
+fs.writeFileSync(path.join(workspace, "review-checklist.md"), "Checklist draft\n");
 fs.writeFileSync(path.join(workspace, ".gitignore"), ".history/\n.checkpoints/\n.team/\n.codex/\n.crewforge/\nnode_modules/\n");
 fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", wait: "node wait.cjs" } }));
 fs.writeFileSync(path.join(workspace, "verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').ok(fs.readFileSync('calculator.ts', 'utf8').includes('return a + b;')); console.log('calculator check passed');\n");
@@ -57,6 +59,10 @@ const model = http.createServer(async (req, res) => {
     if (reviewRequested) {
       if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-read")) message = tool("read_file", { path: "review-doc.md" }, "fixture-review-read");
       else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-edit")) message = tool("edit_file", { path: "review-doc.md", old_text: reviewOriginal, new_text: reviewModified }, "fixture-review-edit");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-notes-read")) message = tool("read_file", { path: "review-notes.md" }, "fixture-notes-read");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-notes-edit")) message = tool("edit_file", { path: "review-notes.md", old_text: "Notes draft", new_text: "Notes ready" }, "fixture-notes-edit");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-checklist-read")) message = tool("read_file", { path: "review-checklist.md" }, "fixture-checklist-read");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-checklist-edit")) message = tool("edit_file", { path: "review-checklist.md", old_text: "Checklist draft", new_text: "Checklist ready" }, "fixture-checklist-edit");
       else message = { role: "assistant", content: "已完成格式调整，文件 `interview/q1_kv_engine/Technical_Interview_Task_Brief_With_A_Very_Long_Unbroken_Component_" + "long".repeat(24) + ".md` 的改动：\n\n- **添加标题**：使文档结构更清晰。\n- **修复列表语法**：`1.storage.py` → `1. storage.py`。\n- **代码标记**：统一标记类名和方法名。\n\n| 文件 | 状态 |\n| --- | --- |\n| `" + "long_path_".repeat(20) + "` | 已格式化 |\n\n```text\n" + "long_code_".repeat(35) + "\n```\n\n内容已保留。" };
       // Deliberately slow, deterministic SSE makes waiting/reasoning/tool phases
       // observable in the browser without contacting a real model provider.

@@ -14,6 +14,12 @@ export interface ReviewFile {
 export interface ReviewChanges { runId: string; requestId?: string; revision: string; files: ReviewFile[]; unavailableReason?: string; }
 export interface RunReviewComment { path: string; revision: string; startLine: number; endLine: number; text: string; side?: "original" | "modified"; }
 
+export function bulkReviewPolicy(changes: ReviewChanges | null, state: { readOnly: boolean; busy: boolean; loading: boolean }): { count: number; allowed: boolean; unavailable: boolean } {
+  const pending = changes?.files.filter((file) => file.reviewState !== "kept" && file.rollbackState !== "reverted") || [];
+  const unavailable = Boolean(changes?.unavailableReason || pending.some((file) => file.unavailableReason || file.isBinary || file.isTooLarge || !file.mutationIds.length));
+  return { count: pending.length, unavailable, allowed: Boolean(changes && pending.length && !unavailable && !state.readOnly && !state.busy && !state.loading) };
+}
+
 export function runChangesUrl(runId: string, requestId?: string, path?: string): string {
   const query = new URLSearchParams();
   if (requestId) query.set("requestId", requestId);

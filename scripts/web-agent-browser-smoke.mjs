@@ -262,6 +262,9 @@ try {
     assert.equal(await modelValue(), diskBefore);
   }, true);
   if (options.review) {
+    let reviewChangesRoute;
+    const reviewPaths = ['review-doc.md', 'review-notes.md', 'review-checklist.md'];
+    let reviewDiskBefore;
     await scenario("review_fixture_run", async () => {
       assert.equal(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith("请在当前目录"), true, "Review requires a fresh disposable fixture");
       await click('[data-tree-path="review-doc.md"]');
@@ -275,11 +278,17 @@ try {
       await call(() => { globalThis.__smokeReviewAllowed = true; });
       await fill('.editor-assistant-composer textarea', "FIXTURE_REVIEW: format the interview document");
       await click('.editor-assistant-send-btn');
-      await until(() => call(() => document.querySelector('.tool-approval-card')?.textContent.includes('edit_file')), "Edit approval", 30_000);
-      await click('.tool-approval-card .tool-approval-allow');
+      for (const filePath of reviewPaths) {
+        await until(() => call((filePath) => {
+          const card = document.querySelector('.tool-approval-card');
+          return card?.textContent.includes('edit_file') && card.querySelector('.tool-approval-scope code')?.textContent === filePath;
+        }, filePath), 'Edit approval: ' + filePath, 30_000);
+        await click('.tool-approval-card .tool-approval-allow');
+      }
       await until(() => call(() => document.querySelector('.editor-assistant-message.assistant')?.textContent.includes('内容已保留。')), "Complete fixture reply", 30_000);
-      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length >= 2), "Two editor review hunks");
+      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length >= 3), "Three editor review hunks");
       assert.ok(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith('# 技术面试'));
+      reviewDiskBefore = reviewPaths.map((filePath) => fs.readFileSync(path.join(safeWorkspace, filePath), 'utf8'));
     }, true);
     await scenario("live_reasoning_and_activity", async () => {
       const observations = await evaluate('globalThis.__smokeProgress');
@@ -290,32 +299,49 @@ try {
     await scenario("kept_changes_leave_editor_and_remain_in_history", async () => {
       const before = fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8');
       await click('.editor-change-review-zone button[aria-label="Open full change review"]', true);
+      await until(() => call(() => document.querySelectorAll('.run-review-files > button').length === 3), 'Three changed files');
+      await call(() => [...document.querySelectorAll('.run-review-files > button')].find((button) => button.querySelector('.run-review-file-name')?.textContent === 'review-doc.md').setAttribute('data-smoke-review-file', 'true'));
+      await click('[data-smoke-review-file]', true);
       await until(() => call(() => document.querySelector('.run-review-file-heading')?.textContent.includes('review-doc.md')), 'Full Changes review opened');
+      if (options.artifacts) {
+        fs.mkdirSync(path.resolve(options.artifacts), { recursive: true });
+        const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
+        fs.writeFileSync(path.join(path.resolve(options.artifacts), 'bulk-before.png'), Buffer.from(shot.data, 'base64'));
+      }
       await click('.run-review-hunks > summary');
       const selector = '.editor-change-review-zone .editor-change-review-actions button:first-child';
       await click(selector, true);
-      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length === 1
+      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length === 2
         && document.querySelectorAll('.run-review-hunk .run-review-state.kept').length === 1), 'Only the pending block stays; Changes sees first keep', 4000);
       assert.equal(await call(() => document.querySelector('.editor-change-review-deleted')?.textContent.includes('请在当前目录')), false, 'Accepted deletion is still displayed in the editor');
-      // Confirm the remaining change from the separate Changes reader; the
-      // editor must react without a file edit, tab switch or manual refresh.
-      await call(() => {
-        const button = [...document.querySelectorAll('.run-review-detail > .run-review-actions button')].find((node) => node.textContent.trim() === 'Keep file');
-        if (!button) throw new Error('Keep file action missing');
-        button.setAttribute('data-smoke-keep-file', 'true');
-      });
-      await click('[data-smoke-keep-file]', true);
+      // One fixed toolbar action confirms both remaining chunks in this file.
+      await click('.editor-review-keep-all', true);
       await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length === 0
         && document.querySelectorAll('.editor-change-review-added-line').length === 0
-        && document.querySelectorAll('.run-review-hunk .run-review-state.kept').length === 2), 'Editor is clean; both retained blocks remain in Changes', 4000);
+        && document.querySelectorAll('.run-review-hunk .run-review-state.kept').length === 3), 'Editor is clean; all retained blocks remain in Changes', 4000);
       const kept = await until(() => responses.filter((entry) => entry.route.endsWith('/changes/keep')).length >= 2 && responses.filter((entry) => entry.route.endsWith('/changes/keep')).at(-1), 'Two real keep API responses');
-      const changes = await uiApi(kept.route.replace(/\/keep$/, '') + '?path=review-doc.md');
-      assert.equal(changes.files[0].hunks.length, 2);
+      reviewChangesRoute = kept.route.replace(/\/keep$/, '');
+      const changes = await uiApi(reviewChangesRoute + '?path=review-doc.md');
+      assert.equal(changes.files[0].hunks.length, 3);
       assert.ok(changes.files[0].hunks.every((hunk) => hunk.kept), 'Keep state was not persisted on the server');
       assert.notEqual(changes.files[0].original, changes.files[0].modified, 'Historical diff was removed when keeping changes');
       assert.equal(await call(() => [...document.querySelectorAll('.run-review-detail > .run-review-actions button')].some((button) => button.textContent.trim() === 'Undo file' && !button.disabled)), true, 'Historical undo is unavailable');
       assert.equal(fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8'), before, 'Keep changed file contents');
       assert.equal(await call(() => { const tab = document.querySelector('.tab[title="review-doc.md"][aria-selected="true"]'); return tab ? tab.classList.contains('modified') : null; }), false, 'Keep marked editor dirty or switched its tab');
+      const remaining = await uiApi(reviewChangesRoute);
+      assert.equal(remaining.files.filter((file) => file.reviewState !== 'kept').length, 2, 'Current-file action accepted other files');
+      assert.equal(await call(() => Boolean(document.querySelector('.editor-review-keep-all'))), false, 'Current-file bulk button remains after acceptance');
+    });
+    await scenario("one_click_keeps_all_remaining_files", async () => {
+      assert.ok(reviewChangesRoute, 'Current-file review did not complete');
+      await click('.run-review-keep-all', true);
+      const accepted = await capturedResponse(reviewChangesRoute + '/keep-all');
+      assert.equal(accepted.result.files.length, 3);
+      assert.ok(accepted.result.files.every((file) => file.reviewState === 'kept'));
+      await until(() => call(() => document.querySelectorAll('.run-review-files .run-review-state.kept').length === 3), 'All files marked kept');
+      const persisted = await uiApi(reviewChangesRoute);
+      assert.ok(persisted.files.every((file) => file.reviewState === 'kept'), 'Batch decision did not persist');
+      assert.deepEqual(reviewPaths.map((filePath) => fs.readFileSync(path.join(safeWorkspace, filePath), 'utf8')), reviewDiskBefore, 'Bulk review modified file contents');
       await click('.run-details-close-btn');
       await click('[data-tree-path="calculator.ts"]');
       const reopenedAt = Date.now();

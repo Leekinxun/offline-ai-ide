@@ -2,6 +2,9 @@
 .run-review-heading, .run-review-file-heading, .run-review-hunk header { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .run-review-heading > span { color: var(--ink-muted); }
 .run-review-heading > button { margin-left: auto; }
+.run-review-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.run-review-bulk > .run-review-keep-all { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+.run-review-bulk > span { min-width: 0; flex: 1 1 140px; color: var(--ink-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .run-review-description, .run-review-notice { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
 .run-review-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); padding: 8px; border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); border-radius: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-review-error small { display: block; margin-top: 4px; }
