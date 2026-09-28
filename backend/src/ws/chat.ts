@@ -73,6 +73,7 @@ import { getContextIndexAdapter } from "../agent/contextManifestIndex.js";
 import { CompletionQualityGateError } from "../extensions/policy/completionGate.js";
 import { MutationJournalEvidenceError } from "../files/mutationRegistry.js";
 import { listManagedWorktrees } from "../chat/worktrees.js";
+import { parseContextReferences, resolveContextReferences } from "../chat/contextReferences.js";
 
 function normalizeAgentMode(value: unknown): AgentMode {
   return value === "ask" || value === "review" || value === "plan" ? value : "code";
@@ -307,9 +308,9 @@ export async function startMobileRun(
   let run: ActiveChatRun;
   try {
     run = createRunContext(executionSession, recorder, input.ownerSessionToken);
-  } catch {
+  } catch (error) {
     failChatRequest(session.workspaceDir, requestId);
-    return { ok: false, code: "conflict", message: "This conversation already has an active run" };
+    return { ok: false, code: "conflict", message: error instanceof Error ? error.message : "This conversation already has an active run" };
   }
   let accepted = false;
   try {
@@ -354,6 +355,7 @@ export function handleChatWs(
   const validateSession = options.validateSession || (() => sessionManager.getSession(liveSession.token) === liveSession);
   let unsubscribeFollowed: (() => void) | null = null;
   let latestConversationId = "";
+  let latestViewRequest = 0;
 
   const connectedTeamRole = (): "owner" | "admin" | "member" | "viewer" | null => {
     if (!connectedTeamId) return null;
@@ -374,15 +376,42 @@ export function handleChatWs(
     latestConversationId = conversationId;
   };
 
+  const unsubscribeActivity = subscribeRunEvents(session.workspaceDir, (event) => {
+    if (!validateSession() || liveSession.workspaceDir !== session.workspaceDir || (connectedTeamId && !connectedTeamRole())) return;
+    const run = getActiveRunContext(session.workspaceDir, event.conversationId);
+    if (!run || run.ownerUsername !== session.username) return;
+    const payload = event.payload;
+    if (!["run_state", "tool_approval_request", "tool_result", "question_state", "done", "stopped", "error", "summary"].includes(payload.type)) return;
+    const record = run.currentRecorder.snapshot();
+    const waiting = run.snapshot().waitingForInput;
+    wsSend(ws, { type: "background_run_state", conversationId: event.conversationId, runId: event.runId,
+      status: run.controlState.stopped ? "stopping" : record.status === "interrupted" ? "stopped" : record.status, waiting, updatedAt: Date.now(),
+      ...("requestId" in payload && payload.requestId ? { requestId: payload.requestId } : {}),
+      ...(payload.type === "done" ? { outcome: payload.interrupted ? "cancelled" as const : "completed" as const }
+        : payload.type === "error" ? { outcome: "failed" as const }
+          : payload.type === "stopped" ? { outcome: "cancelled" as const } : {}),
+    });
+  });
+  for (const active of listActiveRuns(session.workspaceDir)) {
+    if (active.ownerUsername !== session.username) continue;
+    wsSend(ws, { type: "background_run_state", conversationId: active.conversationId, runId: active.runId,
+      status: active.status, waiting: active.waitingForInput,
+      updatedAt: active.updatedAt });
+  }
+
   ws.on("close", () => {
     unsubscribeFollowed?.();
     unsubscribeFollowed = null;
+    unsubscribeActivity();
   });
 
   ws.on("message", async (raw) => {
     let requestIdForError: string | undefined;
     let requestAccepted = false;
     let processingRequestId: string | undefined;
+    let processingConversationId: string | undefined;
+    let preparedRun: ActiveChatRun | undefined;
+    const viewRequest = latestViewRequest;
     try {
       const data = JSON.parse(raw.toString());
       requestIdForError = typeof data.requestId === "string" && data.requestId.trim()
@@ -403,23 +432,35 @@ export function handleChatWs(
         return;
       }
       if (data.type === "subscribe_run") {
+        latestViewRequest++;
         const conversationId = typeof data.conversationId === "string" ? data.conversationId.trim() : "";
         if (!conversationId || !conversationExists(session.workspaceDir, conversationId)) {
-          wsSend(ws, { type: "error", content: "Conversation not found" });
+          wsSend(ws, { type: "error", conversationId, content: "Conversation not found" });
           return;
         }
         followRun(conversationId);
         const run = getActiveRunContext(session.workspaceDir, conversationId);
-        if (run) {
-          const record = readRunRecord(session.workspaceDir, run.runId);
-          if (record) wsSend(ws, {
-            type: "run_state", conversationId, runId: run.runId, mode: record.mode,
-            modelName: record.modelName, status: "running", metrics: record.metrics,
-            event: record.events.at(-1), sequence: record.events.length, version: record.updatedAt,
-          });
-          for (const approval of run.approvals.listPending(conversationId)) {
-            wsSend(ws, { type: "tool_approval_request", ...approval });
-          }
+        const history = readConversationMessages(session.workspaceDir, conversationId);
+        const transcript = run?.liveTranscript.snapshot(history) || { messages: history, activeRequestIds: [] };
+        const lastRunId = listConversationSummaries(session.workspaceDir).find((item) => item.id === conversationId)?.lastRunId;
+        const record = run?.currentRecorder.snapshot() || (lastRunId ? readRunRecord(session.workspaceDir, lastRunId) : null);
+        const questionState = run?.ownerUsername === session.username ? run.snapshot() : undefined;
+        wsSend(ws, { type: "conversation_snapshot", conversationId, ...(record ? { runId: record.runId } : {}),
+          ...transcript, run: record, pendingApprovals: run?.approvals.listPending(conversationId) || [],
+          pendingQuestionCount: questionState?.pendingQuestionCount || 0, waitingForInput: questionState?.waitingForInput || false });
+        if (run && record) {
+          wsSend(ws, { type: "run_state", conversationId, runId: run.runId, mode: record.mode,
+            modelName: record.modelName, status: record.status === "interrupted" ? "stopped" : record.status, metrics: record.metrics,
+            event: record.events.at(-1), sequence: record.events.length, version: record.updatedAt });
+          for (const approval of run.approvals.listPending(conversationId)) wsSend(ws, { type: "tool_approval_request", ...approval, conversationId, runId: run.runId });
+          for (const state of run.liveTranscript.currentStateEvents()) wsSend(ws, { ...state, conversationId, runId: run.runId });
+        }
+        return;
+      }
+      if (data.type === "unsubscribe_run") {
+        latestViewRequest++;
+        if (!data.conversationId || data.conversationId === latestConversationId) {
+          unsubscribeFollowed?.(); unsubscribeFollowed = null; latestConversationId = "";
         }
         return;
       }
@@ -438,6 +479,7 @@ export function handleChatWs(
         }
         const run = getActiveRunContext(session.workspaceDir, conversationId);
         if (!run) { wsSend(ws, { type: "error", content: "No active run for approval" }); return; }
+        if (typeof data.runId === "string" && data.runId !== run.runId) { wsSend(ws, { type: "error", conversationId, content: "Approval belongs to an older run" }); return; }
         const result = await dispatchRunCommand(liveSession, { source: "web", type: "tool_approval_all", conversationId, runId: run.runId });
         if (!result.ok) wsSend(ws, { type: "error", content: result.message || "Approval rejected" });
         return;
@@ -449,6 +491,12 @@ export function handleChatWs(
             ? data.decision
             : "deny";
         const run = findActiveRunForApproval(session.workspaceDir, approvalId);
+        if (run && ((data.conversationId && data.conversationId !== run.conversationId)
+          || (data.runId && data.runId !== run.runId)
+          || (!data.conversationId && run.conversationId !== latestConversationId))) {
+          wsSend(ws, { type: "error", conversationId: typeof data.conversationId === "string" ? data.conversationId : latestConversationId, content: "Approval does not belong to the selected conversation and run" });
+          return;
+        }
         const result = run
           ? await dispatchRunCommand(liveSession, { source: "web", type: "tool_approval", conversationId: run.conversationId, runId: run.runId, approvalId, decision })
           : { ok: false, message: "Tool approval request is no longer active" };
@@ -460,11 +508,9 @@ export function handleChatWs(
           typeof data.requestId === "string" ? data.requestId.trim() : "";
         const conversationId = typeof data.conversationId === "string" && data.conversationId.trim()
           ? data.conversationId.trim() : latestConversationId;
-        const run = conversationId ? getActiveRunContext(session.workspaceDir, conversationId) :
-          listActiveRuns(session.workspaceDir).filter((item) => item.ownerUsername === session.username).length === 1
-            ? getActiveRunContext(session.workspaceDir, listActiveRuns(session.workspaceDir).find((item) => item.ownerUsername === session.username)!.conversationId)
-            : null;
-        if (!run) { wsSend(ws, { type: "error", requestId, content: "No active run to stop" }); return; }
+        const run = conversationId ? getActiveRunContext(session.workspaceDir, conversationId) : null;
+        if (!run) { wsSend(ws, { type: "error", requestId, conversationId, content: "No active run to stop" }); return; }
+        if (data.runId && data.runId !== run.runId) { wsSend(ws, { type: "error", requestId, conversationId, content: "Stop request belongs to an older run" }); return; }
         const result = await dispatchRunCommand(liveSession, { source: "web", type: "stop", conversationId: run.conversationId, runId: run.runId, requestId: requestId || undefined });
         if (!result.ok) wsSend(ws, { type: "error", requestId, content: result.message || "Stop rejected" });
         return;
@@ -565,7 +611,7 @@ export function handleChatWs(
           timestamp: Date.now(),
         });
         requestAccepted = true;
-        wsSend(ws, { type: "request_accepted", requestId, conversationId });
+        wsSend(ws, { type: "request_accepted", requestId, conversationId, runId });
         wsSend(ws, { type: "conversation", conversationId, created: false });
         wsSend(run.transport, {
           type: "conversation_state",
@@ -612,6 +658,10 @@ export function handleChatWs(
       }
 
       const userMessage = typeof data.message === "string" ? data.message : "";
+      const referenceRequests = parseContextReferences(data.contextReferences);
+      if (referenceRequests.length && data.referenceWorkspaceDir !== session.workspaceDir) {
+        throw new Error("Workspace changed. Select workspace references again before sending.");
+      }
       const context = data.context as
         | { path: string; content: string; language: string; selection?: string }
         | undefined;
@@ -629,6 +679,7 @@ export function handleChatWs(
         if (
           (requestedConversationId && requestedConversationId !== conversationId) ||
           !original || original.content !== userMessage.trim() ||
+          JSON.stringify(original.contextReferences || []) !== JSON.stringify(referenceRequests) ||
           !Array.isArray(attachmentIds) ||
           attachmentIds.length !== originalAttachmentIds.length ||
           attachmentIds.some((id: unknown, index: number) => id !== originalAttachmentIds[index])
@@ -636,9 +687,10 @@ export function handleChatWs(
           wsSend(ws, { type: "error", requestId: pendingRequestId, content: "This request ID belongs to a different message" });
           return;
         }
-        wsSend(ws, { type: "request_accepted", requestId: pendingRequestId, conversationId, replayed: true });
+        const active = getActiveRunContext(session.workspaceDir, conversationId);
+        wsSend(ws, { type: "request_accepted", requestId: pendingRequestId, conversationId, ...(active ? { runId: active.runId } : {}), replayed: true });
         wsSend(ws, { type: "conversation", conversationId, created: false });
-        wsSend(ws, { type: "done", requestId: pendingRequestId });
+        if (!active) wsSend(ws, { type: "done", requestId: pendingRequestId, conversationId });
       };
       if (requestedRequestId) {
         const previous = getChatRequestStatus(session.workspaceDir, pendingRequestId);
@@ -672,6 +724,7 @@ export function handleChatWs(
       );
 
       const attachments = resolveChatAttachments(session.workspaceDir, data.attachments === undefined ? [] : data.attachments);
+      const contextReferences = resolveContextReferences(session.workspaceDir, referenceRequests, context);
       const inputCapabilities = resolveModelInputCapabilities(modelName);
       if (attachments.some((attachment) => attachment.kind === "image") && !inputCapabilities.image_input) {
         wsSend(ws, { type: "error", requestId: requestedRequestId || undefined, content: `Model ${modelName} is not configured for image input` });
@@ -727,17 +780,25 @@ export function handleChatWs(
       }
       processingRequestId = pendingRequestId;
       const existingRun = getActiveRunContext(session.workspaceDir, conversationId);
+      processingConversationId = conversationId;
+      if (existingRun?.currentRecorder.snapshot().status === "queued") throw new Error("This conversation is preparing a run; wait for it to start before sending another message");
       if (existingRun && attachments.length > 0) {
         failChatRequest(session.workspaceDir, pendingRequestId);
         processingRequestId = undefined;
         wsSend(ws, { type: "error", requestId: pendingRequestId, content: "Wait for the current run to finish before sending attachments" });
         return;
       }
+      if (!existingRun) {
+        const recorder = new AgentRunRecorder(session.workspaceDir, createRunId(), conversationId, mode,
+          undefined, undefined, executionPlan?.id, modelName, executionPlan ? "approved_plan" : "direct_code");
+        // Reserve the writer synchronously before any awaited preparation or ACK.
+        preparedRun = createRunContext(session, recorder);
+      }
       try {
         const index = await getContextIndexAdapter().status(session.workspaceDir);
-        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, ...index });
+        wsSend(ws, { type: "context_index_state", conversationId, requestId: requestedRequestId || undefined, ...index });
       } catch (error) {
-        wsSend(ws, { type: "context_index_state", requestId: requestedRequestId || undefined, status: "error", error: error instanceof Error ? error.message : "Context index status failed" });
+        wsSend(ws, { type: "context_index_state", conversationId, requestId: requestedRequestId || undefined, status: "error", error: error instanceof Error ? error.message : "Context index status failed" });
       }
 
       await updateConversationState(session.workspaceDir, conversationId, {
@@ -752,13 +813,14 @@ export function handleChatWs(
         content: userMessage.trim(),
         timestamp: Date.now(),
         ...(attachments.length ? { attachments } : {}),
+        ...(contextReferences.references.length ? { contextReferences: contextReferences.references } : {}),
       };
 
       await appendConversationMessage(session.workspaceDir, conversationId, userEntry);
       requestAccepted = true;
       completeChatRequest(session.workspaceDir, pendingRequestId, conversationId);
       processingRequestId = undefined;
-      wsSend(ws, { type: "request_accepted", requestId: requestedRequestId || pendingRequestId, conversationId });
+      wsSend(ws, { type: "request_accepted", requestId: requestedRequestId || pendingRequestId, conversationId, runId: (preparedRun || existingRun)?.runId });
       wsSend(ws, { type: "conversation", conversationId, created });
 
       if (created) {
@@ -789,6 +851,7 @@ export function handleChatWs(
         requestId: pendingRequestId,
         message: userMessage.trim(),
         attachments,
+        contextReferences,
         context,
         conversationId,
         mode,
@@ -798,9 +861,9 @@ export function handleChatWs(
       };
 
       const currentRun = getActiveRunContext(session.workspaceDir, conversationId);
-      if (currentRun) {
+      if (currentRun && currentRun !== preparedRun) {
         currentRun.steeringQueue.push(pendingMessage);
-        followRun(conversationId);
+        if (viewRequest === latestViewRequest) followRun(conversationId);
         wsSend(currentRun.transport, {
           type: "steering",
           requestId: pendingMessage.requestId,
@@ -812,20 +875,10 @@ export function handleChatWs(
         return;
       }
 
-      const runId = createRunId();
-      const recorder = new AgentRunRecorder(
-        session.workspaceDir,
-        runId,
-        conversationId,
-        mode,
-        undefined,
-        undefined,
-        executionPlan?.id,
-        modelName,
-        executionPlan ? "approved_plan" : "direct_code"
-      );
-      const run = createRunContext(session, recorder);
-      followRun(conversationId);
+      const run = preparedRun || (preparedRun = createRunContext(session, new AgentRunRecorder(session.workspaceDir, createRunId(), conversationId,
+        mode, undefined, undefined, executionPlan?.id, modelName, executionPlan ? "approved_plan" : "direct_code")));
+      const recorder = run.currentRecorder;
+      if (viewRequest === latestViewRequest) followRun(conversationId);
       try {
         await beginRecordedRun(session, pendingMessage, run, recorder);
         await executeRecordedRun(session, pendingMessage, run, recorder);
@@ -834,8 +887,12 @@ export function handleChatWs(
         throw error;
       }
     } catch (e: any) {
+      preparedRun?.finish();
+      if (requestAccepted && processingConversationId && !getActiveRunContext(session.workspaceDir, processingConversationId)) {
+        await updateConversationState(session.workspaceDir, processingConversationId, { status: "failed" }).catch(() => {});
+      }
       if (processingRequestId && !requestAccepted) failChatRequest(session.workspaceDir, processingRequestId);
-      wsSend(ws, { type: "error", requestId: requestAccepted ? undefined : requestIdForError, content: e.message || String(e) });
+      wsSend(ws, { type: "error", requestId: requestIdForError, ...(processingConversationId ? { conversationId: processingConversationId } : {}), content: e.message || String(e) });
     }
   });
 }
@@ -1046,6 +1103,7 @@ async function processConversationQueue(
       mode: initialTurn.mode,
       modelName: initialTurn.modelName,
       attachments: initialTurn.attachments,
+      contextReferences: initialTurn.contextReferences,
       conversationId: activeConversationId,
       runRecorder: recorder,
       requestToolApproval: (input) => {
@@ -1061,7 +1119,8 @@ async function processConversationQueue(
     await run.closeSteeringGate();
   } catch (error) {
     await run.closeSteeringGate();
-    const qualityGate = error instanceof CompletionQualityGateError ? error.evidence : undefined;
+    const recordedQuality = recorder.snapshot().qualityGate;
+    const qualityGate = error instanceof CompletionQualityGateError ? error.evidence : recordedQuality?.status === "blocked" ? recordedQuality : undefined;
     if (initialTurn.executionPlan) {
       const currentPlan = readExecutionPlan(session.workspaceDir, initialTurn.executionPlan.id);
       // A crash must not silently revive a stale plan or one awaiting amendment approval.

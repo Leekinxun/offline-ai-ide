@@ -11,6 +11,12 @@ export interface EditorProblem {
   severity: "error" | "warning" | "info";
   message: string;
   source: string;
+  code?: string;
+  modelUri?: string;
+  /** Version supplied by the diagnostic producer; absent means unverified provenance. */
+  modelVersion?: number;
+  /** Version of the live model when these markers were observed. */
+  observedModelVersion?: number;
 }
 
 type MonacoApi = typeof import("monaco-editor");
@@ -50,6 +56,10 @@ export function useEditorProblems() {
         severity: severityOf(marker.severity, api),
         message: marker.message,
         source: marker.owner || "language-service",
+        code: typeof marker.code === "string" ? marker.code : marker.code?.value,
+        modelUri: marker.resource.toString(),
+        modelVersion: marker.modelVersionId,
+        observedModelVersion: api.editor.getModel(marker.resource)?.getVersionId(),
       }));
     setProblems(next);
   }, []);

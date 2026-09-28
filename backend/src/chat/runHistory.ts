@@ -615,6 +615,14 @@ export class AgentRunRecorder {
     });
   }
 
+  async recordCompletionGate(evidence: CompletionGateEvidence): Promise<AgentRunRecord> {
+    if (evidence.runId !== this.record.runId || evidence.scopeId !== `run:${this.record.runId}`) throw new Error("Completion gate evidence belongs to another run");
+    return this.mutate((record) => {
+      record.qualityGate = redactSecrets(clone(evidence));
+      return record;
+    });
+  }
+
   async finish(
     status: Exclude<AgentRunStatus, "queued" | "running">,
     metricsPatch: Partial<AgentRunMetrics> = {},

@@ -12,6 +12,7 @@ import { runAgentLoop } from "./loop.js";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
 import { TeammateManager } from "./teammateManager.js";
+import { resolveContextReferences, type ResolvedContextReferences } from "../chat/contextReferences.js";
 
 function sessionFor(workspaceDir: string, input: { isolated?: boolean; workspaceRoot?: string } = {}): UserSession {
   const taskManager = new TaskManager(workspaceDir);
@@ -31,7 +32,7 @@ function sessionFor(workspaceDir: string, input: { isolated?: boolean; workspace
 
 async function runOnce(
   workspaceDir: string,
-  input: { requestId: string; conversationId: string; message: string; context?: { path: string; content: string; language: string }; session?: UserSession }
+  input: { requestId: string; conversationId: string; message: string; context?: { path: string; content: string; language: string }; session?: UserSession; contextReferences?: ResolvedContextReferences }
 ): Promise<string> {
   const originalFetch = globalThis.fetch;
   let body = "";
@@ -57,6 +58,7 @@ async function runOnce(
         mode: "ask",
         modelName: "test-model",
         conversationId: input.conversationId,
+        contextReferences: input.contextReferences,
       }
     );
     return body;
@@ -102,6 +104,24 @@ test("pin and exclude controls change the next provider payload and exact manife
   const excludedManifest = listContextManifests(root, { requestId: "request-after-exclude" })[0];
   assert.ok(excludedManifest.items.some((item) => item.source.path === "src/feature.ts" && item.decision === "excluded" && item.pinned));
   assert.ok(excludedManifest.items.some((item) => item.source.path === "src/feature.ts" && item.decision === "excluded" && item.kind === "editor_context"));
+});
+
+test("explicit workspace references reach the provider with versioned manifest provenance and honor excludes", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-explicit-context-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "selected.ts"), "EXPLICIT_REFERENCE_CANARY_7831");
+  const contextReferences = resolveContextReferences(root, [{ kind: "file", path: "selected.ts" }]);
+  const input = { requestId: "request-explicit", conversationId: "conversation-explicit", message: "Explain the selected reference", contextReferences };
+  const body = await runOnce(root, input);
+  assert.match(body, /EXPLICIT_REFERENCE_CANARY_7831/);
+  const item = listContextManifests(root, { requestId: input.requestId })[0]?.items.find((entry) => entry.source.type === "explicit_workspace_reference");
+  assert.equal(item?.source.path, "selected.ts");
+  assert.equal(item?.source.revision, contextReferences.items[0].source.revision);
+  assert.equal(item?.decision, "included");
+  updateContextPreferences(root, input.conversationId, { expectedVersion: 0, excludes: ["selected.ts"] });
+  const excluded = await runOnce(root, { ...input, requestId: "request-excluded-explicit" });
+  assert.doesNotMatch(excluded, /EXPLICIT_REFERENCE_CANARY_7831/);
+  assert.ok(listContextManifests(root, { requestId: "request-excluded-explicit" })[0]?.items.some((entry) => entry.source.type === "explicit_workspace_reference" && entry.decision === "excluded"));
 });
 
 test("effective managed-worktree scope and viewer are passed to retrieval without parent leakage", async (t) => {

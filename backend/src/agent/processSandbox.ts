@@ -361,36 +361,49 @@ function sandboxWrappedCommand(
  * On POSIX it creates a separate process group so cancellation reaches normal
  * descendant processes. This is supervision, not a complete OS sandbox.
  */
-export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Promise<string> {
+export interface PreparedWorkspaceProcess {
+  executable: string; args: string[]; env: Record<string, string>; timeoutMs: number; maxOutputBytes: number; cleanup: () => void;
+}
+
+export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): PreparedWorkspaceProcess {
   const executable = options.executable.trim();
-  if (!executable || executable.includes("\0")) return "Error: Invalid executable";
+  if (!executable || executable.includes("\0")) throw new Error("Invalid executable");
   const args = options.args ?? [];
-  if (!args.every((arg) => typeof arg === "string" && !arg.includes("\0"))) return "Error: Invalid process arguments";
-  if (options.signal?.aborted) return "Error: Stopped before process execution";
+  if (!args.every((arg) => typeof arg === "string" && !arg.includes("\0"))) throw new Error("Invalid process arguments");
+  if (options.signal?.aborted) throw new Error("Stopped before process execution");
 
   const limitError = validateLimits(options.limits);
-  if (limitError) return `Error: ${limitError}`;
+  if (limitError) throw new Error(limitError);
   const env = minimalEnvironment(options.env);
-  if (!env) return "Error: Process environment contains a blocked or invalid variable";
+  if (!env) throw new Error("Process environment contains a blocked or invalid variable");
 
   const timeoutMs = options.limits?.wallTimeMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
-    return "Error: Invalid process limits";
+    throw new Error("Invalid process limits");
   }
   const wrapped = resourceWrappedCommand(executable, args, options.limits, options.resourceLimitMode ?? "none");
-  if (typeof wrapped === "string") return `Error: ${wrapped}`;
+  if (typeof wrapped === "string") throw new Error(wrapped);
   let sandboxTempDir: string | undefined;
   if (options.filesystem && process.platform === "darwin") {
     try { sandboxTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sandbox-")); env.TMPDIR = sandboxTempDir; env.TMP = sandboxTempDir; env.TEMP = sandboxTempDir; }
-    catch (error) { return `Error: Filesystem isolation scratch directory failed: ${error instanceof Error ? error.message : String(error)}`; }
+    catch (error) { throw new Error(`Filesystem isolation scratch directory failed: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (options.filesystem && process.platform === "linux") {
     env.TMPDIR = "/tmp"; env.TMP = "/tmp"; env.TEMP = "/tmp";
   }
   const cleanupSandboxTemp = () => { if (sandboxTempDir) fs.rmSync(sandboxTempDir, { recursive: true, force: true }); };
   const networkWrapped = sandboxWrappedCommand(wrapped.executable, wrapped.args, options.cwd, options.networkMode ?? "inherit", options.filesystem, sandboxTempDir);
-  if (typeof networkWrapped === "string") { cleanupSandboxTemp(); return `Error: ${networkWrapped}`; }
+  if (typeof networkWrapped === "string") { cleanupSandboxTemp(); throw new Error(networkWrapped); }
 
+  return { ...networkWrapped, env, timeoutMs, maxOutputBytes, cleanup: cleanupSandboxTemp };
+}
+
+export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Promise<string> {
+  let prepared: PreparedWorkspaceProcess;
+  try { prepared = prepareWorkspaceProcess(options); }
+  catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
+  const { env, timeoutMs, maxOutputBytes, cleanup: cleanupSandboxTemp } = prepared;
+  const networkWrapped = prepared;
   return new Promise((resolve) => {
     let child;
     try {

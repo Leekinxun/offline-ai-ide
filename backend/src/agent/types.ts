@@ -123,7 +123,10 @@ export interface AgentRunEventInput {
 
 // --- WebSocket message types (server -> client) ---
 
-export type WsServerMessage =
+export type WsServerMessage = (
+  | { type: "question_state"; requestId: string; pendingQuestionCount: number; waitingForInput: boolean }
+  | { type: "conversation_snapshot"; conversationId: string; messages: import("../chat/history.js").PersistedChatMessage[]; activeRequestIds: string[]; pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[]; pendingQuestionCount?: number; waitingForInput?: boolean; run: import("../chat/runHistory.js").AgentRunRecord | null }
+  | { type: "background_run_state"; conversationId: string; runId: string; status: AgentRunStatus | "stopping"; waiting: boolean; updatedAt: number; requestId?: string; outcome?: "completed" | "cancelled" | "failed" }
   | { type: "request_accepted"; requestId: string; conversationId: string; replayed?: true }
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
@@ -255,7 +258,8 @@ export type WsServerMessage =
     }
   | { type: "token"; requestId: string; content: string }
   | { type: "done"; requestId: string; interrupted?: boolean }
-  | { type: "error"; requestId?: string; content: string };
+  | { type: "error"; requestId?: string; content: string }
+) & { conversationId?: string; runId?: string; eventSequence?: number };
 
 // --- Tool context ---
 
@@ -268,8 +272,13 @@ export interface ToolContext {
   /** Correlates a primary tool mutation with its request and tool execution. */
   requestId?: string;
   toolCallId?: string;
-  /** Set only by the approved primary bash dispatch. */
+  /** Set only after the bash/process tool permission path approves execution. */
   compatibilityShellAuthorized?: boolean;
+  /** Opaque, single-command egress permission issued only by the approval path. */
+  networkExecutionGrant?: import("./networkAccess.js").NetworkExecutionGrant;
+  sessionToken?: string;
+  sessionOwner?: string;
+  stepCheckpointId?: string;
   /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
   signal?: AbortSignal;

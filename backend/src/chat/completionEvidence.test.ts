@@ -8,6 +8,7 @@ import { changeSetsContainEvidenceGaps, collectAuthoritativeChangedFiles, derive
 import { recordFileMutation } from "../files/mutationRegistry.js";
 import { REDACTED } from "../agent/secretRedaction.js";
 import type { PersistedChatMessage } from "./history.js";
+import { ValidationFeedback } from "../agent/validationFeedback.js";
 
 const message = (toolCalls: PersistedChatMessage["toolCalls"]): PersistedChatMessage => ({ role: "assistant", content: "", timestamp: 1, toolCalls });
 const bash = (toolCallId: string, command: string, result = "ok", isError = false) => ({ toolCallId, name: "bash", input: { command }, result, isError });
@@ -143,4 +144,32 @@ test("digests redacted output without changing verification semantics", () => {
   assert.equal(result.ledger.verification[0]?.outputDigest, redactedDigest);
   assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(rawDigest));
+});
+
+test("version-bound runtime evidence supersedes an earlier planned command pass after another edit", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-stale-validation-ledger-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "code.ts"), "before");
+  const validation = new ValidationFeedback(root, ["npm test"]);
+  validation.observeCommand({ command: "npm test", toolCallId: "old-pass", output: "ok", isError: false, denied: false, changedFiles: ["code.ts"] });
+  fs.writeFileSync(path.join(root, "code.ts"), "after");
+  const runtimeValidation = validation.assess(["code.ts"], false).report;
+  const result = deriveCompletionEvidence({
+    plan: { verificationCommands: ["npm test"], acceptanceCriteria: ["Tests pass"] },
+    messages: [{ ...message([bash("old-pass", "npm test")]), runtimeValidation }],
+    criterionEvidence: { "0": ["old-pass"] },
+  });
+  assert.equal(result.ledger.verification[0].status, "pending");
+  assert.equal(result.ledger.criteria[0].state, "pending");
+  assert.equal(result.outcome, "needs_attention");
+});
+
+test("code with no discovered check is explicitly unverified in completion evidence", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-unverified-ledger-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "code.ts"), "no configured checks");
+  const runtimeValidation = new ValidationFeedback(root).assess(["code.ts"]).report;
+  const result = deriveCompletionEvidence({ messages: [{ ...message([]), runtimeValidation }] });
+  assert.equal(result.outcome, "needs_attention");
+  assert.deepEqual(result.ledger.blockers, ["check"]);
 });

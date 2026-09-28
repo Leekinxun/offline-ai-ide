@@ -21,6 +21,8 @@ import {
   ToolApprovalRequest,
   ToolApprovalDecision,
   CollaborationState,
+  ContextReference,
+  FileNode,
 } from "../types";
 import {
   Copy,
@@ -49,6 +51,10 @@ import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { AgentQuestionStack } from "./AgentQuestionStack";
+import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
+import { UndoTurnButton } from "./UndoTurnButton";
+import type { RunReviewComment } from "./RunChangesReview";
 import { ChangeSummary } from "./ChangeSummary";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
@@ -59,6 +65,7 @@ import type { ContextManifestController } from "../hooks/useContextManifest";
 import type { ChatRuntimeOptions, AiHealthInfo } from "../hooks/useChat";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { CHAT_EMPTY_QUICK_PROMPTS, type WorkbenchQuickPromptId } from "./workbenchQuickPrompts";
+import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -109,6 +116,10 @@ function quickPromptIcon(id: WorkbenchQuickPromptId): React.ReactNode {
 
 interface ChatPanelProps {
   token: string;
+  workspaceDir: string;
+  referenceFiles: FileNode[];
+  contextReferences: ContextReference[];
+  onContextReferencesChange: (references: ContextReference[]) => void;
   isolatedWindow: boolean;
   messages: ChatMessage[];
   currentConversationId: string | null;
@@ -146,15 +157,19 @@ interface ChatPanelProps {
   activeFilePath?: string | null;
   onOpenCollaboration?: () => void;
   onOpenFile: (path: string) => void;
-  onOpenDiff: (path: string) => void;
+  onOpenDiff: (path: string, runId?: string) => void;
+  theme?: "light" | "dark";
+  onReviewComment?: (comment: RunReviewComment) => void;
+  onChangesApplied?: () => void;
+  onUndoLastTurn?: () => Promise<void>;
   onOpenReviewFinding: (finding: ReviewFinding) => void;
   historyLoading: boolean;
   historyLoadingId: string | null;
   historyError: string | null;
   selectionInfo: SelectionInfo | null;
   activeFileName: string | null;
-  onSend: (message: string) => boolean;
-  onSteer: (message: string) => boolean;
+  onSend: (message: string, references?: ContextReference[]) => boolean;
+  onSteer: (message: string, references?: ContextReference[]) => boolean;
   onStop: () => void;
   onClear: () => void;
   onRetry: () => void;
@@ -180,6 +195,10 @@ interface ChatPanelProps {
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   token,
+  workspaceDir,
+  referenceFiles,
+  contextReferences,
+  onContextReferencesChange,
   isolatedWindow,
   messages,
   currentConversationId,
@@ -218,6 +237,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onOpenCollaboration,
   onOpenFile,
   onOpenDiff,
+  theme,
+  onReviewComment,
+  onChangesApplied,
+  onUndoLastTurn,
   onOpenReviewFinding,
   historyLoading,
   historyLoadingId,
@@ -311,7 +334,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   useEffect(() => {
     if (!newConversationRequest || handledNewConversationRef.current === newConversationRequest) return;
     handledNewConversationRef.current = newConversationRequest;
-    if (isStreaming) return;
     onClear();
     setHistoryOpen(false);
     setChangesOpen(false);
@@ -348,12 +370,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     let sent = false;
     if (isStreaming) {
       if (!trimmed || attachmentDeliveryChecking) return;
-      sent = onSteer(trimmed);
+      sent = onSteer(trimmed, contextReferences);
     } else {
       if ((!trimmed && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || attachmentWarning) return;
-      sent = onSend(trimmed);
+      sent = onSend(trimmed, contextReferences);
     }
     if (!sent) return;
+    onContextReferencesChange([]);
     setDetailsCollapsed(true);
     setHistoryOpen(false);
     setChangesOpen(false);
@@ -361,7 +384,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (textareaRef.current) {
       textareaRef.current.style.height = "38px";
     }
-  }, [attachmentDeliveryChecking, attachmentDraft.blocked, attachmentDraft.readyRefs.length, attachmentWarning, connected, input, isStreaming, onSend, onSteer, setInput]);
+  }, [attachmentDeliveryChecking, attachmentDraft.blocked, attachmentDraft.readyRefs.length, attachmentWarning, connected, contextReferences, input, isStreaming, onContextReferencesChange, onSend, onSteer, setInput]);
 
   const handleToggleDetails = useCallback(() => {
     setDetailsCollapsed((collapsed) => {
@@ -670,7 +693,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 onClear();
                 setHistoryOpen(false);
               }}
-              disabled={isStreaming}
+              disabled={historyLoadingId !== null}
             >
               <Plus size={14} />
               {t("chat.newConversation")}
@@ -707,7 +730,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       void onLoadConversation(conversation.id);
                       setHistoryOpen(false);
                     }}
-                    disabled={historyLoadingId === conversation.id || isStreaming || busyHistoryAction !== null}
+                    disabled={historyLoadingId === conversation.id || busyHistoryAction !== null}
                   >
                     <div className="chat-history-item-header">
                       <span className="chat-history-item-title">
@@ -894,6 +917,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {!isStreaming && currentRunSummary && (
         <ChangeSummary
           token={token}
+          workspaceDir={workspaceDir}
+          theme={theme}
+          readOnly={contextReadOnly}
+          onComment={onReviewComment}
+          onChanged={onChangesApplied}
           runId={runState?.runId}
           summary={currentRunSummary}
           expanded={changesOpen}
@@ -958,7 +986,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         requests={pendingApprovals}
         onRespond={onToolApproval}
         onApproveConversation={onApproveConversationTools}
+        onRequestRevision={(request, instruction) => {
+          const sent = onSteer(`${t("planCard.revisionPrompt")}\n${instruction}`);
+          if (sent) onToolApproval(request.approvalId, "deny");
+          return sent;
+        }}
       />
+      <AgentQuestionStack token={token} conversationId={currentConversationId} />
+      <UndoTurnButton onUndo={onUndoLastTurn} disabled={isStreaming || contextReadOnly} />
 
       <div className="chat-input-area">
         <div className="chat-composer-box">
@@ -991,6 +1026,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onCompositionEnd={handleCompositionEnd}
             rows={2}
           />
+
+          <ContextReferencePicker token={token} workspaceDir={workspaceDir} files={referenceFiles} references={contextReferences} onChange={onContextReferencesChange} value={input} onValueChange={setInput} textareaRef={textareaRef} activeFilePath={activeFilePath} selectionInfo={selectionInfo} />
 
           <input
             ref={fileInputRef}
@@ -1152,8 +1189,8 @@ const MessageItem: React.FC<MessageItemProps> = ({
 }) => {
   const { t } = useI18n();
   const parts = useMemo(
-    () => parseContent(message.content),
-    [message.content]
+    () => parseContent(message.role === "user" ? inlineInstructionLabel(message.content) || message.content : message.content),
+    [message.content, message.role]
   );
 
   const hasToolCalls = message.toolCalls && message.toolCalls.length > 0;
@@ -1206,6 +1243,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </div>
       )}
+      <ContextReferenceBadges references={message.contextReferences} />
       <MessageAttachments attachments={message.attachments} token={token} />
     </div>
   );

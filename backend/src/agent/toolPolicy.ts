@@ -8,6 +8,8 @@ export interface PolicyDecision {
 export interface ShellPolicyOptions {
   /** A shell string is never accepted unless the caller explicitly opts in. */
   compatibilityShellAuthorized?: boolean;
+  /** Policy preflight only. The executor still needs a one-time trusted grant. */
+  networkAccessAuthorized?: boolean;
 }
 
 const PROTECTED_SEGMENTS = new Set([
@@ -46,6 +48,18 @@ const NETWORK_COMMAND_PATTERNS: RegExp[] = [
   /\b(?:aws|gcloud|az|doctl|heroku|vercel|netlify|flyctl|kubectl|helm|terraform|pulumi|wrangler)\b/i,
 ];
 
+// An egress grant does not authorize publishing, credential changes, tunnels,
+// remote administration, or host package management.
+const NON_OVERRIDABLE_NETWORK_PATTERNS: RegExp[] = [
+  /\b(?:nc|netcat|socat|ssh|scp|sftp|ftp|telnet|rsync|rclone)\b/i,
+  /\b(?:aws|gcloud|az|doctl|heroku|vercel|netlify|flyctl|kubectl|helm|terraform|pulumi|wrangler)\b/i,
+  /\b(?:brew|apt|apt-get|dnf|yum|apk)\b/i,
+  /\bgit\b[^\n;&|]*\b(?:push|send-email)\b/i,
+  /\b(?:npm|pnpm|yarn|bun|pip|pip3|pipx|gem|cargo|nuget|dotnet)\b[^\n;&|]*\b(?:publish|unpublish|push|login|logout|deprecate|owner|access|token)\b/i,
+  /\b(?:curl|wget)\b[^\n;&|]*\s-[A-Za-z]*[XdFTK]/,
+  /\b(?:curl|wget)\b[^\n;&|]*\s--(?:request|method|config|data(?:-[a-z]+)?|form(?:-string)?|json|upload-file|post-data|post-file|body-data|body-file)(?:=|\s)/i,
+];
+
 export function evaluateWorkspaceWrite(targetPath: string): PolicyDecision {
   const normalized = targetPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const segments = normalized.split("/").filter(Boolean);
@@ -77,7 +91,9 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
   }
 
   const rules: Array<[RegExp, string]> = [
-    ...NETWORK_COMMAND_PATTERNS.map((pattern): [RegExp, string] => [pattern, AGENT_SHELL_NETWORK_BLOCKED]),
+    ...(options.networkAccessAuthorized
+      ? NON_OVERRIDABLE_NETWORK_PATTERNS.map((pattern): [RegExp, string] => [pattern, "Network approval does not authorize publishing, remote/system control, credentials, or remote mutations"])
+      : NETWORK_COMMAND_PATTERNS.map((pattern): [RegExp, string] => [pattern, AGENT_SHELL_NETWORK_BLOCKED])),
     [/\bsudo\b/i, "Privilege escalation is blocked"],
     [/\b(?:shutdown|reboot|halt|poweroff|launchctl|systemctl)\b/i, "System control commands are blocked"],
     [/\b(?:mkfs|fdisk|diskutil|dd)\b/i, "Disk modification commands are blocked"],

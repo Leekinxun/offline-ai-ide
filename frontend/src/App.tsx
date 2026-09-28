@@ -24,16 +24,15 @@ import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
 import { ActionConfirmDialog } from "./components/ActionConfirmDialog";
 import { useModalDialogFocus } from "./components/useModalDialogFocus";
-import { GitPanel } from "./components/GitPanel";
-import { AgentBoard } from "./components/AgentBoard";
-import { CheckpointPanel } from "./components/CheckpointPanel";
 import { ProblemsPanel } from "./components/ProblemsPanel";
 import { RunCenterPanel } from "./components/RunCenterPanel";
 import { DebugPanel } from "./components/DebugPanel";
 import { ReferencePanel } from "./components/ReferencePanel";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
+import { useEditorDiagnosticFeedback } from "./hooks/useEditorDiagnosticFeedback";
 import { useFileSystem } from "./hooks/useFileSystem";
+import { useRunChanges } from "./hooks/useRunChanges";
 import type { UploadEntriesOptions, WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useChat, type AttachmentSendReconciliation, type RejectedAttachmentSend } from "./hooks/useChat";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
@@ -42,6 +41,7 @@ import { usePlatformEnvironment } from "./hooks/usePlatformEnvironment";
 import { useViewportBreakpoint } from "./hooks/useViewportBreakpoint";
 import {
   DefinitionLocation,
+  ContextReference,
   FileNode,
   FileSelectionRange,
   FileUpdate,
@@ -70,6 +70,7 @@ import {
   Smartphone,
   FolderOpen,
   LayoutGrid,
+  Globe,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -80,6 +81,23 @@ import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
+import type { InlineAssistantRequest, InlineAssistantResponse } from "./editor/inlineAssistantPolicy";
+import type { RunReviewComment } from "./components/RunChangesReview";
+import { PreviewPanel } from "./components/PreviewPanel";
+import { inlineRequestStatus } from "./utils/requestOutcome";
+import {
+  applyFileSaveResult,
+  applyRemoteFileSnapshot,
+  beginFileRead,
+  buildClearedRemoteState,
+  createFileReadScope,
+  invalidateFileRead,
+  isCurrentFileRead,
+  isSameWorkspacePath,
+  normalizeWorkspaceRelativePath,
+  retainOpenFilesAfterTreeRefresh,
+  type FileSnapshot,
+} from "./editor/fileUpdatePolicy";
 import {
   applyHunkSelections,
   buildConflictHunks,
@@ -99,6 +117,15 @@ import {
 
 const SettingsModal = lazy(() =>
   import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
+);
+const GitPanel = lazy(() =>
+  import("./components/GitPanel").then((module) => ({ default: module.GitPanel }))
+);
+const AgentBoard = lazy(() =>
+  import("./components/AgentBoard").then((module) => ({ default: module.AgentBoard }))
+);
+const CheckpointPanel = lazy(() =>
+  import("./components/CheckpointPanel").then((module) => ({ default: module.CheckpointPanel }))
 );
 const Editor = lazy(() =>
   import("./components/Editor").then((module) => ({ default: module.Editor }))
@@ -335,29 +362,6 @@ interface EditorHighlightTarget extends FileSelectionRange {
   requestId: number;
 }
 
-/**
- * 规范化工作区相对路径：
- * 1. 统一正反斜杠；
- * 2. 若误传工作区绝对路径，自动剥离工作区前缀；
- * 3. 剔除前导 `./` 和多余的正斜杠 `/`，保证全局使用纯净唯一的相对路径。
- */
-function normalizeWorkspaceRelativePath(rawPath: string, workspaceDir?: string): string {
-  if (!rawPath) return "";
-  let normalized = rawPath.replace(/\\/g, "/").trim();
-  if (workspaceDir) {
-    const wsNormalized = workspaceDir.replace(/\\/g, "/").replace(/\/+$/, "");
-    if (normalized.toLowerCase().startsWith(wsNormalized.toLowerCase() + "/")) {
-      normalized = normalized.slice(wsNormalized.length + 1);
-    }
-  }
-  return normalized.replace(/^\.\//, "").replace(/^\/+/, "");
-}
-
-function isSameWorkspacePath(left: string | null | undefined, right: string | null | undefined, workspaceDir?: string): boolean {
-  if (!left || !right) return left === right;
-  return normalizeWorkspaceRelativePath(left, workspaceDir) === normalizeWorkspaceRelativePath(right, workspaceDir);
-}
-
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
 }
@@ -407,27 +411,6 @@ function isDebuggablePath(path: string): boolean {
   return /\.(?:js|mjs|cjs|py|pyw)$/i.test(path);
 }
 
-function buildClearedRemoteState(): Pick<
-  OpenFile,
-  | "remoteUpdated"
-  | "remoteContent"
-  | "remoteVersion"
-  | "remoteUpdatedAt"
-  | "remoteConflictReason"
-  | "remoteConflictSource"
-  | "remoteConflictActor"
-> {
-  return {
-    remoteUpdated: false,
-    remoteContent: undefined,
-    remoteVersion: undefined,
-    remoteUpdatedAt: undefined,
-    remoteConflictReason: undefined,
-    remoteConflictSource: undefined,
-    remoteConflictActor: undefined,
-  };
-}
-
 function AuthenticatedApp({
   token,
   username,
@@ -454,6 +437,13 @@ function AuthenticatedApp({
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
+  const openFilesRef = useRef(openFiles);
+  openFilesRef.current = openFiles;
+  const fileReadScope = useMemo(() => createFileReadScope(workspaceDir), [workspaceDir, token]);
+  const currentFileReadScopeRef = useRef(fileReadScope);
+  currentFileReadScopeRef.current = fileReadScope;
+  const treeReadSequenceRef = useRef(0);
+  const fileNavigationSequenceRef = useRef(0);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
@@ -484,6 +474,7 @@ function AuthenticatedApp({
   const [runDetailsVisible, setRunDetailsVisible] = useState(false);
   const [runDetailsTab, setRunDetailsTab] = useState<DetailTab>("changes");
   const [editorAssistantVisible, setEditorAssistantVisible] = useState(() => window.innerWidth > 1180);
+  const [webPreviewVisible, setWebPreviewVisible] = useState(false);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [teamVisible, setTeamVisible] = useState(false);
@@ -495,7 +486,7 @@ function AuthenticatedApp({
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
   const [workspaceSearchScope, setWorkspaceSearchScope] = useState("");
   const [gitVisible, setGitVisible] = useState(false);
-  const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number } | null>(null);
+  const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number; runId?: string } | null>(null);
   const [agentsVisible, setAgentsVisible] = useState(false);
   const [checkpointsVisible, setCheckpointsVisible] = useState(false);
   const [problemsVisible, setProblemsVisible] = useState(false);
@@ -518,6 +509,7 @@ function AuthenticatedApp({
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
+  const [confirmWorkspaceSwitch, setConfirmWorkspaceSwitch] = useState(false);
   const pickingWorkspaceRef = useRef(false);
   const openingPathsRef = useRef<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
@@ -599,7 +591,7 @@ function AuthenticatedApp({
   const responsiveDefaultAssistantWidth = isLaptopOrCompact ? Math.min(assistantWidth, 340) : assistantWidth;
 
   const dockedRightWidth = viewportWidth > 1180
-    ? runDetailsVisible ? (isLaptopOrCompact ? 340 : 400) : editorAssistantVisible ? responsiveDefaultAssistantWidth : 0
+    ? webPreviewVisible ? Math.max(400, responsiveDefaultAssistantWidth) : runDetailsVisible ? (isLaptopOrCompact ? 340 : 400) : editorAssistantVisible ? responsiveDefaultAssistantWidth : 0
     : 0;
 
   // 黄金编辑区保底空间：大屏保留 520px，中屏保留 460px，紧凑模式保留至少 360px
@@ -1261,13 +1253,21 @@ function AuthenticatedApp({
 
   // --- Load file tree ---
   const loadTree = useCallback(async () => {
+    if (currentFileReadScopeRef.current !== fileReadScope) return;
+    const request = ++treeReadSequenceRef.current;
     try {
       const tree = await fs.fetchTree();
+      if (currentFileReadScopeRef.current !== fileReadScope || request !== treeReadSequenceRef.current) return;
       setFileTree(tree);
-      const visiblePaths = collectVisiblePaths(tree);
-      setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
-      setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
+      const visiblePaths = new Set(Array.from(collectVisiblePaths(tree), (path) => normalizeWorkspaceRelativePath(path, workspaceDir)));
+      setOpenFiles((prev) => currentFileReadScopeRef.current === fileReadScope
+        ? retainOpenFilesAfterTreeRefresh(prev, visiblePaths, workspaceDir) : prev);
+      const retainedPath = (path: string | null) => path && (
+        visiblePaths.has(normalizeWorkspaceRelativePath(path, workspaceDir))
+        || openFilesRef.current.some((file) => file.modified && isSameWorkspacePath(file.path, path, workspaceDir))
+      ) ? path : null;
+      setActiveFilePath(retainedPath);
+      setDiffViewerPath(retainedPath);
       setPreviewModes((prev) => {
         const next: Record<string, FilePreviewMode> = {};
         for (const [path, mode] of Object.entries(prev)) {
@@ -1280,9 +1280,9 @@ function AuthenticatedApp({
       lastWorkspaceMtimeRef.current = Date.now();
       setTreeRefreshNonce((prev) => prev + 1);
     } catch {
-      showToast(t("app.failedToLoadFileTree"));
+      if (currentFileReadScopeRef.current === fileReadScope) showToast(t("app.failedToLoadFileTree"));
     }
-  }, [fs, showToast, t]);
+  }, [fileReadScope, fs, showToast, t, workspaceDir]);
 
   useEffect(() => {
     loadTree();
@@ -1292,122 +1292,115 @@ function AuthenticatedApp({
   useEffect(() => {
     setOpenFiles([]);
     setActiveFilePath(null);
+    setCompareFilePath(null);
+    setDiffViewerPath(null);
+    setClaimSaveConfirmation(null);
+    setClaimSaveError(null);
+    setMergeSelections({});
     setPreviewModes({});
+    setGitDiffRequest(null);
     setProblemCounts({ errors: 0, warnings: 0 });
     setActiveRunLabel(null);
     editorViewStatesRef.current = {};
+    savedBufferContentRef.current = {};
+    collaborationBufferVersionRef.current = {};
+    openingPathsRef.current.clear();
+    fileNavigationSequenceRef.current += 1;
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
-    loadTree();
-  }, [loadTree, workspaceDir]);
+  }, [fileReadScope]);
 
-  const applyFileUpdateToTabs = useCallback(
-    (update: FileUpdate, ensureOpen: boolean) => {
-      const canonicalPath = normalizeWorkspaceRelativePath(update.path, workspaceDir);
-      const name = canonicalPath.split("/").pop() || canonicalPath;
-      const nextFile: OpenFile = {
-        path: canonicalPath,
+  const refreshOpenFile = useCallback(async (
+    rawPath: string,
+    ensureOpen = false,
+    fallbackSource?: (snapshot: FileSnapshot) => Pick<FileSnapshot, "source" | "actor">,
+  ) => {
+    if (currentFileReadScopeRef.current !== fileReadScope) return false;
+    const ticket = beginFileRead(fileReadScope, rawPath);
+    if (!ticket.path) return false;
+    const next = await fs.readFileWithMeta(ticket.path);
+    if (!isCurrentFileRead(ticket, currentFileReadScopeRef.current)) return false;
+    const snapshot = { ...next, ...(next.source ? {} : fallbackSource?.(next)) };
+    setOpenFiles((prev) => {
+      if (!isCurrentFileRead(ticket, currentFileReadScopeRef.current)) return prev;
+      const existing = prev.find((file) => isSameWorkspacePath(file.path, ticket.path, workspaceDir));
+      if (existing) {
+        return prev.map((file) => file === existing ? applyRemoteFileSnapshot(file, snapshot) : file);
+      }
+      if (!ensureOpen) return prev;
+      const name = ticket.path.split("/").pop() || ticket.path;
+      return [...prev, {
+        path: ticket.path,
         name,
-        content: update.content,
         language: getLanguage(name),
+        content: next.content,
         modified: false,
-        version: undefined,
-        updatedAt: undefined,
+        version: next.version,
+        updatedAt: next.updatedAt,
         ...buildClearedRemoteState(),
-      };
-
-      setOpenFiles((prev) => {
-        const existingIndex = prev.findIndex((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
-        if (existingIndex >= 0) {
-          return prev.map((file, idx) => (idx === existingIndex ? nextFile : file));
-        }
-        return ensureOpen ? [...prev, nextFile] : prev;
-      });
-    },
-    [workspaceDir]
-  );
+      }];
+    });
+    return true;
+  }, [fileReadScope, fs, workspaceDir]);
 
   const handleAiFileUpdate = useCallback(
     (update: FileUpdate) => {
-      applyFileUpdateToTabs(update, false);
-      if (update.selection && activeFilePath === update.path) {
+      if (currentFileReadScopeRef.current !== fileReadScope) return;
+      const path = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      const file = openFilesRef.current.find((entry) => isSameWorkspacePath(entry.path, path, workspaceDir));
+      if (update.selection && isSameWorkspacePath(activeFilePath, path, workspaceDir) && !file?.modified) {
         highlightRequestRef.current += 1;
         setEditorHighlightTarget({
-          path: update.path,
+          path,
           requestId: highlightRequestRef.current,
           ...update.selection,
         });
       }
       void loadTree();
-      void (async () => {
-        try {
-          const next = await fs.readFileWithMeta(update.path);
-          setOpenFiles((prev) =>
-            prev.map((file) =>
-              file.path === update.path
-                ? {
-                  ...file,
-                  content: next.content,
-                  version: next.version,
-                  updatedAt: next.updatedAt,
-                  ...buildClearedRemoteState(),
-                }
-              : file
-            )
-          );
-        } catch {
-          // best effort only
-        }
-      })();
+      // Tool payloads have no disk revision and may be replayed. Read the current
+      // file before syncing any buffer, retaining dirty text in the conflict flow.
+      void refreshOpenFile(path, false, () => ({ source: "assistant_tool" })).catch(() => {});
     },
-    [activeFilePath, applyFileUpdateToTabs, fs, loadTree]
+    [activeFilePath, fileReadScope, loadTree, refreshOpenFile, workspaceDir]
   );
 
   const handleNavigateToFileUpdate = useCallback(
-    (update: FileUpdate) => {
+    async (update: FileUpdate) => {
+      if (currentFileReadScopeRef.current !== fileReadScope) return;
+      const request = ++fileNavigationSequenceRef.current;
+      const path = normalizeWorkspaceRelativePath(update.path, workspaceDir);
       setWorkspaceView("files");
-      applyFileUpdateToTabs(update, true);
-      setActiveFilePath(update.path);
+      // Historical tool cards are navigation targets, not authoritative disk contents.
+      if (openFilesRef.current.some((file) => isSameWorkspacePath(file.path, path, workspaceDir))) {
+        setActiveFilePath(path);
+      }
       void loadTree();
-      void (async () => {
-        try {
-          const next = await fs.readFileWithMeta(update.path);
-          setOpenFiles((prev) =>
-            prev.map((file) =>
-              file.path === update.path
-                ? {
-                  ...file,
-                  content: next.content,
-                  version: next.version,
-                  updatedAt: next.updatedAt,
-                  ...buildClearedRemoteState(),
-                }
-              : file
-            )
-          );
-        } catch {
-          // best effort only
-        }
-      })();
-
+      try {
+        if (!(await refreshOpenFile(path, true))) return;
+      } catch {
+        return;
+      }
+      if (currentFileReadScopeRef.current !== fileReadScope || request !== fileNavigationSequenceRef.current) return;
+      setActiveFilePath(path);
       if (!update.selection) return;
       navigationRequestRef.current += 1;
       setEditorNavigationTarget({
-        path: update.path,
+        path,
         requestId: navigationRequestRef.current,
         ...update.selection,
       });
     },
-    [applyFileUpdateToTabs, fs, loadTree]
+    [fileReadScope, loadTree, refreshOpenFile, workspaceDir]
   );
 
   const handleWorkspaceRestored = useCallback(async () => {
-    setOpenFiles([]);
-    setActiveFilePath(null);
-    setCompareFilePath(null);
+    if (currentFileReadScopeRef.current !== fileReadScope) return;
+    fileReadScope.requests.clear();
+    const paths = openFilesRef.current.map((file) => file.path);
     setTreeRefreshNonce((value) => value + 1);
     await loadTree();
-  }, [loadTree]);
+    await Promise.allSettled(paths.map((path) => refreshOpenFile(path)));
+  }, [fileReadScope, loadTree, refreshOpenFile]);
 
   const handleNavigationComplete = useCallback((requestId: number) => {
     setEditorNavigationTarget((prev) =>
@@ -1423,6 +1416,10 @@ function AuthenticatedApp({
 
   const chatAttachmentDraft = useChatAttachmentDraft(token);
   const [chatDraftText, setChatDraftText] = useState("");
+  const restoredTurnDraftRef = useRef<{ conversationId: string; text: string; scope: ReturnType<typeof createFileReadScope> } | null>(null);
+  const [contextReferences, setContextReferences] = useState<ContextReference[]>([]);
+  const [inlineRequest, setInlineRequest] = useState<InlineAssistantRequest | null>(null);
+  const [inlineCancelledId, setInlineCancelledId] = useState<string | null>(null);
   const [attachmentSubmissionError, setAttachmentSubmissionError] = useState<string | null>(null);
   const [attachmentSubmissionNotice, setAttachmentSubmissionNotice] = useState<string | null>(null);
   const [pendingAttachmentVerificationIds, setPendingAttachmentVerificationIds] = useState<Set<string>>(() => new Set());
@@ -1480,6 +1477,8 @@ function AuthenticatedApp({
     }
   }, [chatAttachmentDraft.removeRefs, t]);
   const chat = useChat(token, workspaceDir, handleAiFileUpdate, handleAttachmentSendRejected, handleAttachmentSendReconciled);
+  const currentChatIdRef = useRef(chat.currentConversationId);
+  currentChatIdRef.current = chat.currentConversationId;
   const selectedChatModelName = chat.selectedModelName
     || chat.runtimeOptions.modeModels[chat.agentMode]
     || chat.runtimeOptions.defaultModelName;
@@ -1509,6 +1508,7 @@ function AuthenticatedApp({
       : null;
 
   const clearChatConversation = useCallback(() => {
+    restoredTurnDraftRef.current = null;
     chatAttachmentDraft.clear();
     setChatDraftText("");
     setAttachmentSubmissionError(null);
@@ -1518,6 +1518,7 @@ function AuthenticatedApp({
     chat.clearMessages();
   }, [chatAttachmentDraft.clear, chat.clearMessages]);
   const loadChatConversation = useCallback((conversationId: string) => {
+    restoredTurnDraftRef.current = null;
     chatAttachmentDraft.clear();
     setChatDraftText("");
     setAttachmentSubmissionError(null);
@@ -1531,7 +1532,11 @@ function AuthenticatedApp({
     const previousId = previousChatConversationIdRef.current;
     if (previousId !== chat.currentConversationId && previousId !== null) {
       chatAttachmentDraft.clear();
-      setChatDraftText("");
+      const restored = restoredTurnDraftRef.current;
+      if (restored?.conversationId === chat.currentConversationId && restored.scope === currentFileReadScopeRef.current) {
+        setChatDraftText((current) => current.trim() ? current : restored.text);
+        restoredTurnDraftRef.current = null;
+      } else setChatDraftText("");
       setAttachmentSubmissionError(null);
       setAttachmentSubmissionNotice(null);
       setPendingAttachmentVerificationIds(new Set());
@@ -1555,7 +1560,7 @@ function AuthenticatedApp({
   }, [chat.pendingApprovals.length, workspaceView]);
   const switchConversation = useCallback(
     (direction: -1 | 1) => {
-      if (chat.isStreaming || chat.conversations.length === 0) return;
+      if (chat.conversations.length === 0) return;
       const currentIndex = chat.conversations.findIndex(
         (conversation) => conversation.id === chat.currentConversationId
       );
@@ -1687,121 +1692,14 @@ function AuthenticatedApp({
 
         if (result.changed) {
           lastWorkspaceMtimeRef.current = result.latestMtime;
-          const currentActivePath = activeFilePath;
-          const currentOpenFiles = openFiles;
+          const currentOpenFiles = openFilesRef.current;
           await loadTree();
-
-          if (currentActivePath) {
-            try {
-              const next = await fs.readFileWithMeta(currentActivePath);
-              if (cancelled) {
-                return;
-              }
-              setOpenFiles((prev) =>
-                prev.map((file) =>
-                  file.path === currentActivePath && !file.modified
-                    ? {
-                        ...file,
-                        content: next.content,
-                        version: next.version,
-                        updatedAt: next.updatedAt,
-                        ...buildClearedRemoteState(),
-                      }
-                    : file.path === currentActivePath &&
-                        file.modified &&
-                        file.content !== next.content
-                      ? (() => {
-                          if (file.remoteContent === next.content) {
-                            return file;
-                          }
-                          const sourceInfo =
-                            next.source === "team_member" ||
-                            next.source === "assistant_tool" ||
-                            next.source === "external" ||
-                            next.source === "unknown"
-                              ? {
-                                  source: next.source,
-                                  actor: next.actor,
-                                }
-                              : inferConflictSource(currentActivePath, {
-                                  knownRemoteUpdatedAt: next.updatedAt,
-                                });
-                          return {
-                            ...file,
-                            remoteUpdated: true,
-                            remoteContent: next.content,
-                            remoteVersion: next.version,
-                            remoteUpdatedAt: next.updatedAt,
-                            remoteConflictReason: "background",
-                            remoteConflictSource: sourceInfo.source,
-                            remoteConflictActor: sourceInfo.actor,
-                          };
-                        })()
-                    : file
-                )
-              );
-            } catch {
-              // ignore missing active file during polling
-            }
-          }
-
-          for (const file of currentOpenFiles) {
-            if (file.path === currentActivePath) {
-              continue;
-            }
-            try {
-              const next = await fs.readFileWithMeta(file.path);
-              if (cancelled) {
-                return;
-              }
-              setOpenFiles((prev) =>
-                prev.map((entry) =>
-                  entry.path === file.path && !entry.modified
-                    ? {
-                        ...entry,
-                        content: next.content,
-                        version: next.version,
-                        updatedAt: next.updatedAt,
-                        ...buildClearedRemoteState(),
-                      }
-                    : entry.path === file.path &&
-                        entry.modified &&
-                        entry.content !== next.content
-                      ? entry.remoteContent === next.content
-                        ? {
-                            ...entry,
-                          }
-                        : (() => {
-                            const sourceInfo =
-                              next.source === "team_member" ||
-                              next.source === "assistant_tool" ||
-                              next.source === "external" ||
-                              next.source === "unknown"
-                                ? {
-                                    source: next.source,
-                                    actor: next.actor,
-                                  }
-                                : inferConflictSource(file.path, {
-                                    knownRemoteUpdatedAt: next.updatedAt,
-                                  });
-                            return {
-                              ...entry,
-                              remoteUpdated: true,
-                              remoteContent: next.content,
-                              remoteVersion: next.version,
-                              remoteUpdatedAt: next.updatedAt,
-                              remoteConflictReason: "background",
-                              remoteConflictSource: sourceInfo.source,
-                              remoteConflictActor: sourceInfo.actor,
-                            };
-                          })()
-                    : entry
-                )
-              );
-            } catch {
-              // ignore deleted file during polling; tree refresh handles visibility
-            }
-          }
+          if (cancelled) return;
+          await Promise.allSettled(currentOpenFiles.map((file) =>
+            refreshOpenFile(file.path, false, (next) => inferConflictSource(file.path, {
+              knownRemoteUpdatedAt: next.updatedAt,
+            }))
+          ));
         } else {
           lastWorkspaceMtimeRef.current = Math.max(
             lastWorkspaceMtimeRef.current,
@@ -1824,65 +1722,42 @@ function AuthenticatedApp({
         window.clearTimeout(timer);
       }
     };
-  }, [activeFilePath, fs, inferConflictSource, loadTree, openFiles]);
+  }, [fs, inferConflictSource, loadTree, refreshOpenFile]);
 
   // --- File operations ---
   const openFile = useCallback(
     async (rawPath: string) => {
+      if (currentFileReadScopeRef.current !== fileReadScope) return false;
+      const request = ++fileNavigationSequenceRef.current;
       setWorkspaceView("files");
       if (window.innerWidth > 1180) setEditorAssistantVisible(true);
       const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
-      if (!canonicalPath) return;
-
-      // 1. 若文件已在打开列表中，直接激活并聚焦
-      const existing = openFiles.find((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
+      if (!canonicalPath) return false;
+      const existing = openFilesRef.current.find((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
       if (existing) {
         setActiveFilePath(existing.path);
-        return;
+        return true;
       }
-
-      // 2. 检查是否有针对该文件的网络拉取正在进行中（防并发双击/多重触发）
-      if (openingPathsRef.current.has(canonicalPath)) {
-        return;
-      }
-
+      if (openingPathsRef.current.has(canonicalPath)) return false;
       openingPathsRef.current.add(canonicalPath);
       try {
-        const next = await fs.readFileWithMeta(canonicalPath);
-        const name = canonicalPath.split("/").pop() || canonicalPath;
-        const language = getLanguage(name);
-        const newFile: OpenFile = {
-          path: canonicalPath,
-          name,
-          content: next.content,
-          language,
-          modified: false,
-          version: next.version,
-          updatedAt: next.updatedAt,
-          ...buildClearedRemoteState(),
-        };
-
-        // 3. 终极防线：原子更新二次去重，坚决杜绝重复标签与僵尸 DOM 节点
-        setOpenFiles((prev) => {
-          const alreadyOpen = prev.some((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
-          if (alreadyOpen) {
-            return prev;
-          }
-          return [...prev, newFile];
-        });
+        const refreshed = await refreshOpenFile(canonicalPath, true);
+        if (!refreshed || currentFileReadScopeRef.current !== fileReadScope || request !== fileNavigationSequenceRef.current) return false;
         setActiveFilePath(canonicalPath);
+        return true;
       } catch {
-        showToast(t("app.failedToOpenFile"));
+        if (currentFileReadScopeRef.current === fileReadScope) showToast(t("app.failedToOpenFile"));
+        return false;
       } finally {
-        openingPathsRef.current.delete(canonicalPath);
+        if (currentFileReadScopeRef.current === fileReadScope) openingPathsRef.current.delete(canonicalPath);
       }
     },
-    [fs, openFiles, showToast, t, workspaceDir]
+    [fileReadScope, refreshOpenFile, showToast, t, workspaceDir]
   );
 
   const handleNavigateToLocation = useCallback(
     async (path: string, selection: FileSelectionRange) => {
-      await openFile(path);
+      if (!(await openFile(path))) return;
       navigationRequestRef.current += 1;
       setEditorNavigationTarget({
         path,
@@ -1925,6 +1800,8 @@ function AuthenticatedApp({
   const closeTab = useCallback(
     (rawPath: string) => {
       const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
+      invalidateFileRead(fileReadScope, canonicalPath);
+      fileNavigationSequenceRef.current += 1;
       setOpenFiles((prev) => {
         const filtered = prev.filter((f) => !isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
         setPreviewModes((current) => {
@@ -1947,12 +1824,14 @@ function AuthenticatedApp({
         return filtered;
       });
     },
-    [activeFilePath, compareFilePath, workspaceDir]
+    [activeFilePath, compareFilePath, fileReadScope, workspaceDir]
   );
 
   const closeOtherTabs = useCallback(
     (keepPath: string) => {
       const canonicalKeep = normalizeWorkspaceRelativePath(keepPath, workspaceDir);
+      fileReadScope.requests.clear();
+      fileNavigationSequenceRef.current += 1;
       setOpenFiles((prev) => {
         const filtered = prev.filter((f) => isSameWorkspacePath(f.path, canonicalKeep, workspaceDir));
         setActiveFilePath(canonicalKeep);
@@ -1962,12 +1841,14 @@ function AuthenticatedApp({
         return filtered;
       });
     },
-    [compareFilePath, workspaceDir]
+    [compareFilePath, fileReadScope, workspaceDir]
   );
 
   const closeTabsToTheRight = useCallback(
     (targetPath: string) => {
       const canonicalTarget = normalizeWorkspaceRelativePath(targetPath, workspaceDir);
+      fileReadScope.requests.clear();
+      fileNavigationSequenceRef.current += 1;
       setOpenFiles((prev) => {
         const targetIndex = prev.findIndex((f) => isSameWorkspacePath(f.path, canonicalTarget, workspaceDir));
         if (targetIndex === -1) return prev;
@@ -1981,14 +1862,16 @@ function AuthenticatedApp({
         return filtered;
       });
     },
-    [activeFilePath, compareFilePath, workspaceDir]
+    [activeFilePath, compareFilePath, fileReadScope, workspaceDir]
   );
 
   const closeAllTabs = useCallback(() => {
+    fileReadScope.requests.clear();
+    fileNavigationSequenceRef.current += 1;
     setOpenFiles([]);
     setActiveFilePath(null);
     setCompareFilePath(null);
-  }, []);
+  }, [fileReadScope]);
 
   const handleEditorChange = useCallback(
     (value: string) => {
@@ -2032,6 +1915,7 @@ function AuthenticatedApp({
       setClaimSaveConfirmation({ file, username: activeClaim.username });
       return false;
     }
+    invalidateFileRead(fileReadScope, file.path);
     try {
       const result = await fs.writeFile(
         file.path,
@@ -2039,21 +1923,18 @@ function AuthenticatedApp({
         Boolean(activeClaim && activeClaim.username !== username),
         file.version
       );
+      if (currentFileReadScopeRef.current !== fileReadScope) return false;
+      invalidateFileRead(fileReadScope, file.path);
       setOpenFiles((prev) =>
         prev.map((f) =>
-          f.path === activeFilePath
-            ? {
-                ...f,
-                modified: false,
-                version: result.version,
-                updatedAt: result.updatedAt,
-                ...buildClearedRemoteState(),
-              }
+          f.path === file.path
+            ? applyFileSaveResult(f, file, result)
             : f
         )
       );
       return true;
     } catch (error) {
+      if (currentFileReadScopeRef.current !== fileReadScope) return false;
       const claimError = error as Error & {
         code?: string;
         claim?: { username: string };
@@ -2066,36 +1947,18 @@ function AuthenticatedApp({
         };
       };
       if (claimError.code === "FILE_VERSION_CONFLICT" && claimError.current) {
-        const sourceInfo =
-          claimError.current.source === "team_member" ||
-          claimError.current.source === "assistant_tool" ||
-          claimError.current.source === "external" ||
-          claimError.current.source === "unknown"
-            ? {
-                source: claimError.current.source,
-                actor: claimError.current.actor,
-              }
-            : inferConflictSource(file.path, {
-                knownRemoteUpdatedAt: claimError.current?.updatedAt,
-              });
-        setOpenFiles((prev) =>
-          prev.map((entry) =>
-            entry.path === file.path
-              ? {
-                  ...entry,
-                  remoteUpdated: true,
-                  remoteContent: claimError.current?.content ?? entry.remoteContent,
-                  remoteVersion: claimError.current?.version ?? entry.remoteVersion,
-                  remoteUpdatedAt: claimError.current?.updatedAt ?? entry.remoteUpdatedAt,
-                  remoteConflictReason: "save",
-                  remoteConflictSource: sourceInfo.source,
-                  remoteConflictActor: sourceInfo.actor,
-                }
-              : entry
-          )
-        );
-        setDiffViewerPath(file.path);
-        showToast(t("app.remoteConflictTitle"));
+        const current = openFilesRef.current.find((entry) => entry.path === file.path);
+        if (!current || current.version !== file.version) return false;
+        // A delayed 409 may describe an obsolete disk version. Read the current
+        // source through the same generation guard as every other remote update.
+        try {
+          await refreshOpenFile(file.path);
+          if (currentFileReadScopeRef.current !== fileReadScope) return false;
+          setOpenFiles((previous) => previous.map((entry) => entry.path === file.path && entry.remoteUpdated
+            ? { ...entry, remoteConflictReason: "save" } : entry));
+          setDiffViewerPath(file.path);
+          showToast(t("app.remoteConflictTitle"));
+        } catch { showToast(t("app.failedToSaveFile")); }
         return false;
       }
       if (claimError.code === "TEAM_CLAIM_CONFLICT" && claimError.claim?.username) {
@@ -2108,8 +1971,9 @@ function AuthenticatedApp({
   }, [
     activeClaim,
     activeFilePath,
+    fileReadScope,
     fs,
-    inferConflictSource,
+    refreshOpenFile,
     openFiles,
     readOnlyWorkspace,
     showToast,
@@ -2122,9 +1986,12 @@ function AuthenticatedApp({
     if (!pending) return;
     setClaimSaveBusy(true);
     setClaimSaveError(null);
+    invalidateFileRead(fileReadScope, pending.file.path);
     try {
       const result = await fs.writeFile(pending.file.path, pending.file.content, true, pending.file.version);
-      setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? { ...file, modified: false, version: result.version, updatedAt: result.updatedAt, ...buildClearedRemoteState() } : file));
+      if (currentFileReadScopeRef.current !== fileReadScope) return;
+      invalidateFileRead(fileReadScope, pending.file.path);
+      setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? applyFileSaveResult(file, pending.file, result) : file));
       setClaimSaveConfirmation(null);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("app.failedToSaveFile");
@@ -2133,7 +2000,7 @@ function AuthenticatedApp({
     } finally {
       setClaimSaveBusy(false);
     }
-  }, [claimSaveConfirmation, fs, showToast, t]);
+  }, [claimSaveConfirmation, fileReadScope, fs, showToast, t]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -2366,9 +2233,10 @@ function AuthenticatedApp({
 
   const handleReloadRemoteVersion = useCallback(() => {
     if (!activeFilePath) return;
+    invalidateFileRead(fileReadScope, activeFilePath);
     setOpenFiles((prev) =>
       prev.map((file) =>
-        file.path === activeFilePath
+        file.path === activeFilePath && file.remoteContent !== undefined
           ? {
               ...file,
               content: file.remoteContent ?? file.content,
@@ -2383,10 +2251,11 @@ function AuthenticatedApp({
     setDiffViewerPath(null);
     setMergeSelections({});
     showToast(t("app.remoteVersionLoaded"));
-  }, [activeFilePath, showToast, t]);
+  }, [activeFilePath, fileReadScope, showToast, t]);
 
   const handleKeepLocalVersion = useCallback(() => {
     if (!activeFilePath) return;
+    invalidateFileRead(fileReadScope, activeFilePath);
     setOpenFiles((prev) =>
       prev.map((file) =>
         file.path === activeFilePath
@@ -2400,24 +2269,21 @@ function AuthenticatedApp({
     setDiffViewerPath(null);
     setMergeSelections({});
     showToast(t("app.localVersionKept"));
-  }, [activeFilePath, showToast, t]);
+  }, [activeFilePath, fileReadScope, showToast, t]);
 
   const handleForceSaveAfterVersionConflict = useCallback(async () => {
     if (!activeFilePath) return;
     const file = openFiles.find((entry) => entry.path === activeFilePath);
     if (!file) return;
+    invalidateFileRead(fileReadScope, file.path);
     try {
       const result = await fs.writeFile(file.path, file.content, true);
+      if (currentFileReadScopeRef.current !== fileReadScope) return;
+      invalidateFileRead(fileReadScope, file.path);
       setOpenFiles((prev) =>
         prev.map((entry) =>
-          entry.path === activeFilePath
-            ? {
-                ...entry,
-                modified: false,
-                version: result.version,
-                updatedAt: result.updatedAt,
-                ...buildClearedRemoteState(),
-              }
+          entry.path === file.path
+            ? applyFileSaveResult(entry, file, result)
             : entry
         )
       );
@@ -2426,11 +2292,11 @@ function AuthenticatedApp({
     } catch {
       showToast(t("app.failedToSaveFile"));
     }
-  }, [activeFilePath, fs, openFiles, showToast, t]);
+  }, [activeFilePath, fileReadScope, fs, openFiles, showToast, t]);
 
   // --- Chat: send with file + selection context ---
   const handleChatSend = useCallback(
-    (message: string) => {
+    (message: string, references: ContextReference[] = contextReferences) => {
       if (chatAttachmentDraft.blocked || attachmentWarning) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
@@ -2451,7 +2317,7 @@ function AuthenticatedApp({
         && chatAttachmentDraft.readyRefs.every((attachment, index) => attachment.id === matchingAttachmentRetries[0].attachmentIds[index])
         ? matchingAttachmentRetries[0].requestId
         : undefined;
-      const sent = chat.sendMessage(message, context, undefined, chatAttachmentDraft.readyRefs, retryRequestId);
+      const sent = chat.sendMessage(message, context, undefined, chatAttachmentDraft.readyRefs, retryRequestId, references);
       if (sent) {
         if (matchingAttachmentRetries.length) {
           const consumedIds = new Set(matchingAttachmentRetries.map((item) => item.requestId));
@@ -2464,11 +2330,11 @@ function AuthenticatedApp({
       }
       return sent;
     },
-    [chat, chatAttachmentDraft.blocked, chatAttachmentDraft.readyRefs, chatAttachmentDraft.clear, attachmentWarning, matchingAttachmentRetries, openFiles, activeFilePath, selectionInfo]
+    [chat, contextReferences, chatAttachmentDraft.blocked, chatAttachmentDraft.readyRefs, chatAttachmentDraft.clear, attachmentWarning, matchingAttachmentRetries, openFiles, activeFilePath, selectionInfo]
   );
 
   const handleChatSteer = useCallback(
-    (message: string) => {
+    (message: string, references: ContextReference[] = contextReferences) => {
       if (pendingAttachmentVerificationIds.size > 0) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
@@ -2483,10 +2349,83 @@ function AuthenticatedApp({
               : undefined,
           }
         : undefined;
-      return chat.sendSteering(message, context);
+      return chat.sendSteering(message, context, [], references);
     },
-    [chat, pendingAttachmentVerificationIds.size, openFiles, activeFilePath, selectionInfo]
+    [chat, contextReferences, pendingAttachmentVerificationIds.size, openFiles, activeFilePath, selectionInfo]
   );
+
+  useEffect(() => { setContextReferences([]); }, [workspaceDir, chat.currentConversationId]);
+  useEffect(() => { setInlineRequest(null); setInlineCancelledId(null); }, [workspaceDir, token]);
+
+  const handleInlineSubmit = useCallback((request: InlineAssistantRequest) => {
+    if (chat.isStreaming || readOnlyWorkspace) return false;
+    const sent = chat.sendMessage(request.prompt, {
+      path: request.path, content: request.fullModelSnapshot, language: request.language,
+      selection: request.selectedText, dirty: request.dirty,
+      selectionRange: { startLine: request.selection.startLine, endLine: request.selection.endLine },
+    }, "ask", [], undefined, contextReferences, { requestId: request.id, preserveMode: true, modelName: selectedChatModelName });
+    if (sent) { setInlineRequest(request); setInlineCancelledId(null); }
+    return sent;
+  }, [chat, contextReferences, readOnlyWorkspace, selectedChatModelName]);
+  const handleInlineCancel = useCallback((requestId: string) => {
+    setInlineCancelledId(requestId);
+    chat.stopRequest(requestId);
+  }, [chat]);
+  const inlineResponse = useMemo<InlineAssistantResponse | undefined>(() => {
+    if (!inlineRequest) return undefined;
+    const responses = chat.messages.filter((message) => message.requestId === inlineRequest.id && message.role === "assistant");
+    const nonempty = responses.filter((message) => message.content.trim());
+    const text = nonempty[nonempty.length - 1]?.content || "";
+    const active = chat.activeRequestIds.includes(inlineRequest.id);
+    return {
+      requestId: inlineRequest.id, text,
+      status: inlineRequestStatus(chat.requestOutcomes[inlineRequest.id], inlineCancelledId === inlineRequest.id),
+      ...(!active && !text ? { error: t("chat.noChanges") } : {}),
+    };
+  }, [chat.activeRequestIds, chat.messages, chat.requestOutcomes, inlineCancelledId, inlineRequest, t]);
+
+  const handleReviewComment = useCallback((comment: RunReviewComment) => {
+    const reference = `${comment.path}:${comment.startLine}-${comment.endLine} (${comment.side || "modified"}, revision ${comment.revision})`;
+    setChatDraftText((current) => [current.trim(), `${reference}\n${comment.text}`].filter(Boolean).join("\n\n"));
+    setContextReferences((current) => current.some((item) => item.kind === "file" && item.path === comment.path)
+      ? current : [...current, { kind: "file" as const, path: comment.path }].slice(-16));
+    if (workspaceView === "files") { setRunDetailsVisible(false); setEditorAssistantVisible(true); }
+    else setChatVisible(true);
+  }, [workspaceView]);
+
+  const handleUndoLastTurn = useCallback(async () => {
+    const users = chat.messages.filter((message) => message.role === "user" && message.requestId);
+    const last = users[users.length - 1];
+    const runId = chat.runState?.runId;
+    const conversationId = chat.currentConversationId;
+    if (chat.isStreaming || readOnlyWorkspace || !last?.requestId || !runId || !conversationId) throw new Error(t("undoTurn.unavailable"));
+    const requestedScope = fileReadScope;
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Workspace-Dir": encodeURIComponent(workspaceDir) };
+    const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/changes?requestId=${encodeURIComponent(last.requestId)}`, { headers });
+    const evidence = await response.json();
+    if (!response.ok || !evidence.files?.length || evidence.unavailableReason) throw new Error(evidence.error || t("undoTurn.unavailable"));
+    if (currentFileReadScopeRef.current !== requestedScope) throw new Error(t("undoTurn.unavailable"));
+    const reverted = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/revert`, {
+      method: "POST", headers,
+      body: JSON.stringify({ requestId: last.requestId, expectedRevision: evidence.revision, expectedWorkspace: workspaceDir, forkBeforeRequest: true }),
+    });
+    const payload = await reverted.json();
+    if (currentFileReadScopeRef.current === requestedScope) await handleWorkspaceRestored();
+    if (!reverted.ok) throw new Error(payload.error || t("undoTurn.failed"));
+    if (!payload.conversation?.id) throw new Error(t("undoTurn.failed"));
+    if (currentFileReadScopeRef.current === requestedScope && currentChatIdRef.current === conversationId) {
+      restoredTurnDraftRef.current = { conversationId: payload.conversation.id, text: last.content, scope: requestedScope };
+      await chat.loadConversation(payload.conversation.id);
+      if (currentFileReadScopeRef.current === requestedScope && chat.getCurrentConversationId() === payload.conversation.id) {
+        setInlineRequest(null);
+        showToast(t("undoTurn.done"));
+      } else if (chat.getCurrentConversationId() === conversationId) {
+        restoredTurnDraftRef.current = null;
+        throw new Error(t("undoTurn.contextFailed"));
+      }
+    }
+    await chat.refreshConversations();
+  }, [chat, fileReadScope, handleWorkspaceRestored, readOnlyWorkspace, showToast, t, token, workspaceDir]);
 
   const handleGitReview = useCallback(() => {
     chat.setAgentMode("review");
@@ -2498,8 +2437,8 @@ function AuthenticatedApp({
     );
   }, [chat, focusChat]);
 
-  const handleOpenGitDiff = useCallback((path: string) => {
-    setGitDiffRequest((current) => ({ path, id: (current?.id || 0) + 1 }));
+  const handleOpenGitDiff = useCallback((path: string, runId?: string) => {
+    setGitDiffRequest((current) => ({ path, runId, id: (current?.id || 0) + 1 }));
     toggleUtilityPanel("git", true);
   }, [toggleUtilityPanel]);
 
@@ -2543,9 +2482,10 @@ function AuthenticatedApp({
     [loadTree, onChangeWorkspace, showToast, t]
   );
 
-  const handlePickDesktopWorkspace = useCallback(async () => {
+  const handlePickDesktopWorkspace = useCallback(async (confirmed = false) => {
     if (pickingWorkspaceRef.current) return;
-    if (openFiles.some((file) => file.modified) && !window.confirm(t("app.unsavedWorkspaceSwitch"))) {
+    if (!confirmed && openFiles.some((file) => file.modified)) {
+      setConfirmWorkspaceSwitch(true);
       return;
     }
     pickingWorkspaceRef.current = true;
@@ -2575,6 +2515,7 @@ function AuthenticatedApp({
   // --- Global keyboard shortcuts ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       const isShortcut = e.metaKey || e.ctrlKey;
       if (isShortcut && e.key.toLowerCase() === "s") {
         e.preventDefault();
@@ -2638,6 +2579,19 @@ function AuthenticatedApp({
 
   // --- Derived ---
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
+  useEditorDiagnosticFeedback({ token, workspaceDir, file: activeFile, problems: editorProblems.problems, enabled: !readOnlyWorkspace });
+  const changeReviewRunning = chat.runState?.status === "running" || chat.runState?.status === "queued";
+  const editorChanges = useRunChanges({
+    token, workspaceDir,
+    runId: workspaceView === "files" && activeFile && chat.runState?.mode === "code" ? chat.runState.runId : undefined,
+    running: changeReviewRunning,
+    refreshKey: `${chat.runState?.status}:${chat.runState?.events.length || 0}`,
+    onChanged: () => void handleWorkspaceRestored(),
+  });
+  useEffect(() => {
+    editorChanges.setSelectedPath(activeFilePath && editorChanges.changes?.files.some((file) => file.path === activeFilePath) ? activeFilePath : null);
+  }, [activeFilePath, editorChanges.changes?.revision, editorChanges.setSelectedPath]);
+  const editorChangeReviewFile = !editorChanges.stale && !editorChanges.detailLoading && editorChanges.file?.path === activeFilePath ? editorChanges.file : null;
 
   useEffect(() => {
     if (!activeFile || readOnlyWorkspace || !activeFile.version) return;
@@ -2783,6 +2737,7 @@ function AuthenticatedApp({
 
   const handleSelectTab = useCallback(
     (path: string) => {
+      fileNavigationSequenceRef.current += 1;
       const canonicalPath = normalizeWorkspaceRelativePath(path, workspaceDir);
       if (isSameWorkspacePath(canonicalPath, compareFilePath, workspaceDir) && activeFilePath) {
         setCompareFilePath(activeFilePath);
@@ -3004,9 +2959,11 @@ function AuthenticatedApp({
 
   const handleApplyMergedResult = useCallback(() => {
     if (!diffViewerFile || mergedConflictContent === null) return;
+    invalidateFileRead(fileReadScope, diffViewerFile.path);
     setOpenFiles((prev) =>
       prev.map((file) =>
-        file.path === diffViewerFile.path
+        file.path === diffViewerFile.path && file.content === diffViewerFile.content
+          && file.remoteContent === diffViewerFile.remoteContent
           ? {
               ...file,
               content: mergedConflictContent,
@@ -3021,7 +2978,7 @@ function AuthenticatedApp({
     setDiffViewerPath(null);
     setMergeSelections({});
     showToast(t("app.mergeApplied"));
-  }, [diffViewerFile, mergedConflictContent, showToast, t]);
+  }, [diffViewerFile, fileReadScope, mergedConflictContent, showToast, t]);
 
   const activeConversation = chat.currentConversationId
     ? chat.conversations.find((conversation) => conversation.id === chat.currentConversationId)
@@ -3095,7 +3052,7 @@ function AuthenticatedApp({
       {/* Main Layout */}
       <div
         ref={mainLayoutRef}
-        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible && !runDetailsVisible ? " with-editor-assistant" : ""}`}
+        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && (editorAssistantVisible || webPreviewVisible) && !runDetailsVisible ? " with-editor-assistant" : ""}`}
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,
@@ -3160,6 +3117,18 @@ function AuthenticatedApp({
               <span className="activity-rail-badge">{chat.currentRunSummary?.changedFiles.length}</span>
             )}
           </button>
+          <button
+            type="button"
+            className={`activity-rail-btn${webPreviewVisible && workspaceView === "files" ? " active" : ""}`}
+            onClick={() => {
+              const opening = workspaceView !== "files" || !webPreviewVisible;
+              setWebPreviewVisible(opening);
+              if (opening) { setWorkspaceView("files"); setRunDetailsVisible(false); setEditorAssistantVisible(false); }
+            }}
+            title={t("preview.title")}
+            aria-label={t("preview.title")}
+            aria-pressed={webPreviewVisible && workspaceView === "files"}
+          ><Globe size={18} /></button>
           <button
             type="button"
             className={`activity-rail-btn${agentsVisible ? " active" : ""}`}
@@ -3326,6 +3295,7 @@ function AuthenticatedApp({
         </nav>
         {isLeftDockOpen && (
           <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
+            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
             {gitVisible ? (
               <GitPanel
                 key={`git:${workspaceDir}`}
@@ -3338,6 +3308,7 @@ function AuthenticatedApp({
                 conversationId={chat.currentConversationId}
                 runId={chat.runState?.runId || null}
                 requestedDiffPath={gitDiffRequest?.path}
+                requestedDiffRunId={gitDiffRequest?.runId}
                 requestedDiffId={gitDiffRequest?.id}
                 onOpenFile={openFile}
                 onAskReview={handleGitReview}
@@ -3505,6 +3476,8 @@ function AuthenticatedApp({
               />
             ) : runCenterVisible ? (
               <RunCenterPanel
+                workspaceDir={workspaceDir}
+                readOnly={readOnlyWorkspace}
                 key={`run:${workspaceDir}`}
                 visible={true}
                 token={token}
@@ -3538,6 +3511,7 @@ function AuthenticatedApp({
               />
             ) : workspaceView === "chat" ? (
               <TaskSidebar
+                activity={chat.conversationActivity}
                 workspaceLabel={workspaceLabel}
                 workspaceDir={workspaceDir}
                 conversations={chat.conversations}
@@ -3586,6 +3560,7 @@ function AuthenticatedApp({
                 activeTeam={team.activeTeam}
               />
             )}
+            </Suspense>
           </aside>
         )}
 
@@ -3727,6 +3702,22 @@ function AuthenticatedApp({
                     <Editor
                       key={`editor:${activeFile.path}`}
                       content={activeFile.content}
+                      dirty={activeFile.modified}
+                      onInlineSubmit={handleInlineSubmit}
+                      onInlineCancel={handleInlineCancel}
+                      inlineResponse={inlineResponse}
+                      inlineDisabled={chat.isStreaming}
+                      inlineModelKey={selectedChatModelName}
+                      changeReviewFile={editorChangeReviewFile}
+                      changeReviewRunning={changeReviewRunning}
+                      changeReviewBusy={editorChanges.busy}
+                      onChangeReviewAction={async (file, hunk, decision) => {
+                        const requestedScope = fileReadScope;
+                        const applied = await editorChanges.decide(file, decision, hunk);
+                        if (currentFileReadScopeRef.current !== requestedScope) return;
+                        if (!applied) { setRunDetailsTab("changes"); setRunDetailsVisible(true); showToast(t("review.actionFailed")); }
+                      }}
+                      onOpenChangeReview={() => { setWebPreviewVisible(false); setRunDetailsTab("changes"); setRunDetailsVisible(true); }}
                       language={activeFile.language}
                       path={activeFile.path}
                       collaboration={team.collaboration}
@@ -3817,6 +3808,22 @@ function AuthenticatedApp({
                         <Editor
                           key={`editor:${activeFile.path}`}
                           content={activeFile.content}
+                      dirty={activeFile.modified}
+                      onInlineSubmit={handleInlineSubmit}
+                      onInlineCancel={handleInlineCancel}
+                      inlineResponse={inlineResponse}
+                      inlineDisabled={chat.isStreaming}
+                      inlineModelKey={selectedChatModelName}
+                      changeReviewFile={editorChangeReviewFile}
+                      changeReviewRunning={changeReviewRunning}
+                      changeReviewBusy={editorChanges.busy}
+                      onChangeReviewAction={async (file, hunk, decision) => {
+                        const requestedScope = fileReadScope;
+                        const applied = await editorChanges.decide(file, decision, hunk);
+                        if (currentFileReadScopeRef.current !== requestedScope) return;
+                        if (!applied) { setRunDetailsTab("changes"); setRunDetailsVisible(true); showToast(t("review.actionFailed")); }
+                      }}
+                      onOpenChangeReview={() => { setWebPreviewVisible(false); setRunDetailsTab("changes"); setRunDetailsVisible(true); }}
                           language={activeFile.language}
                           path={activeFile.path}
                           collaboration={team.collaboration}
@@ -3872,6 +3879,22 @@ function AuthenticatedApp({
                 <Editor
                   key={`editor:${activeFile.path}`}
                   content={activeFile.content}
+                      dirty={activeFile.modified}
+                      onInlineSubmit={handleInlineSubmit}
+                      onInlineCancel={handleInlineCancel}
+                      inlineResponse={inlineResponse}
+                      inlineDisabled={chat.isStreaming}
+                      inlineModelKey={selectedChatModelName}
+                      changeReviewFile={editorChangeReviewFile}
+                      changeReviewRunning={changeReviewRunning}
+                      changeReviewBusy={editorChanges.busy}
+                      onChangeReviewAction={async (file, hunk, decision) => {
+                        const requestedScope = fileReadScope;
+                        const applied = await editorChanges.decide(file, decision, hunk);
+                        if (currentFileReadScopeRef.current !== requestedScope) return;
+                        if (!applied) { setRunDetailsTab("changes"); setRunDetailsVisible(true); showToast(t("review.actionFailed")); }
+                      }}
+                      onOpenChangeReview={() => { setWebPreviewVisible(false); setRunDetailsTab("changes"); setRunDetailsVisible(true); }}
                   language={activeFile.language}
                   path={activeFile.path}
                   collaboration={team.collaboration}
@@ -3965,6 +3988,14 @@ function AuthenticatedApp({
 
         <ChatPanel
           token={token}
+          theme={theme}
+          onReviewComment={handleReviewComment}
+          onChangesApplied={() => void handleWorkspaceRestored()}
+          onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
+          workspaceDir={workspaceDir}
+          referenceFiles={fileTree}
+          contextReferences={contextReferences}
+          onContextReferencesChange={setContextReferences}
           isolatedWindow={isolatedWindow}
           messages={chat.messages}
           currentConversationId={chat.currentConversationId}
@@ -4057,7 +4088,7 @@ function AuthenticatedApp({
           onPlanAmendmentDecision={chat.decidePlanAmendment}
           style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
         />
-        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
             role="separator"
@@ -4071,13 +4102,23 @@ function AuthenticatedApp({
             onKeyDown={(e) => handlePanelResizeKeyDown("assistant", e)}
           />
         )}
-        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
           <aside
             className="workbench-right-dock"
-            aria-label={runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
+            aria-label={webPreviewVisible ? t("preview.title") : runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
           >
-            {runDetailsVisible ? (
+            {webPreviewVisible ? (
+              <PreviewPanel token={token} workspaceDir={workspaceDir} readOnly={readOnlyWorkspace}
+                key={workspaceDir}
+                onClose={() => { setWebPreviewVisible(false); setEditorAssistantVisible(true); }}
+                onFeedback={(text) => { setChatDraftText((current) => [current, text].filter(Boolean).join("\n\n")); setWebPreviewVisible(false); setEditorAssistantVisible(true); }}
+                onOpenSource={(path, line, column) => void handleNavigateToLocation(path, { startLine: line, startColumn: column, endLine: line, endColumn: column + 1 })} />
+            ) : runDetailsVisible ? (
               <RunDetailsPanel
+                theme={theme}
+                readOnly={readOnlyWorkspace}
+                onComment={handleReviewComment}
+                onChanged={() => void handleWorkspaceRestored()}
                 token={token}
                 workspaceDir={workspaceDir}
                 visible={runDetailsVisible}
@@ -4098,6 +4139,12 @@ function AuthenticatedApp({
             ) : (
               <EditorAssistantPanel
                 token={token}
+                onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
+                workspaceDir={workspaceDir}
+                referenceFiles={fileTree}
+                contextReferences={contextReferences}
+                onContextReferencesChange={setContextReferences}
+                selectionInfo={selectionInfo}
                 visible={true}
                 activeFilePath={activeFilePath}
                 activeFileDirty={Boolean(activeFile?.modified)}
@@ -4137,6 +4184,10 @@ function AuthenticatedApp({
         )}
         {workspaceView === "chat" && runDetailsVisible && (
           <RunDetailsPanel
+                theme={theme}
+                readOnly={readOnlyWorkspace}
+                onComment={handleReviewComment}
+                onChanged={() => void handleWorkspaceRestored()}
             token={token}
             workspaceDir={workspaceDir}
             visible={runDetailsVisible}
@@ -4348,6 +4399,13 @@ function AuthenticatedApp({
           </div>
         </div>
       )}
+
+      <ActionConfirmDialog
+        intent={confirmWorkspaceSwitch ? { id: "switch-workspace", title: t("sidebar.openFolder"), description: t("app.unsavedWorkspaceSwitch"), tone: "danger" } : null}
+        busy={pickingWorkspace}
+        onClose={() => setConfirmWorkspaceSwitch(false)}
+        onConfirm={async () => { setConfirmWorkspaceSwitch(false); await handlePickDesktopWorkspace(true); }}
+      />
 
       <ActionConfirmDialog
         intent={claimSaveConfirmation ? { id: `claim-save:${claimSaveConfirmation.file.path}:${claimSaveConfirmation.username}`, title: t("team.confirmAction"), description: t("team.claimConflictConfirm", { username: claimSaveConfirmation.username }), confirmLabel: t("common.confirm"), tone: "danger" } : null}

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
+import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "./networkAccess.js";
 
 export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
   cpuTimeMs: 60_000,
@@ -18,6 +19,7 @@ export interface WorkspaceCommandOptions {
   resourceLimits?: ProcessResourceLimits;
   /** Effective admin/profile/workspace sandbox grant for this agent run. */
   filesystem?: WorkspaceFilesystemGrant;
+  networkExecutionGrant?: NetworkExecutionGrant;
 }
 
 /** Read-only commands share the policy parser and never enter a shell. */
@@ -73,9 +75,15 @@ export async function runWorkspaceCommand(
 ): Promise<string> {
   const policy = evaluateShellCommand(command, {
     compatibilityShellAuthorized: options.compatibilityShellAuthorized === true,
+    networkAccessAuthorized: Boolean(options.networkExecutionGrant),
   });
   if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
   if (signal?.aborted) return "Error: Stopped before shell execution";
+  if (options.networkExecutionGrant) {
+    try { consumeNetworkExecutionGrant(options.networkExecutionGrant, cwd, command, "bash"); }
+    catch (error) { return `Error: ${error instanceof Error ? error.message : "Invalid network approval"}`; }
+  }
+  const networkMode = options.networkExecutionGrant ? "inherit" : "deny";
 
   const limits: ProcessResourceLimits = {
     wallTimeMs: options.resourceLimits?.wallTimeMs,
@@ -92,7 +100,7 @@ export async function runWorkspaceCommand(
       signal,
       limits,
       resourceLimitMode: "posix-shell",
-      networkMode: "deny",
+      networkMode,
       filesystem: options.filesystem || { workspaceDir: cwd, readPaths: ["."], writePaths: ["."] },
     });
   }
@@ -105,7 +113,7 @@ export async function runWorkspaceCommand(
     signal,
     limits,
     resourceLimitMode: "posix-shell",
-    networkMode: "deny",
+    networkMode,
     filesystem: options.filesystem || { workspaceDir: cwd, readPaths: ["."], writePaths: ["."] },
   });
 }

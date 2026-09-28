@@ -15,6 +15,7 @@ export interface ModeCapabilityDecision {
 }
 
 const INSPECTION_TOOLS = new Set([
+  "ask_user",
   "compress",
   "memory_read",
   "skill_load",
@@ -63,6 +64,8 @@ export function evaluateModeCapability(options: {
   if (contract.kind === "direct_code") return { allowed: true };
   const approvedPlan = contract.plan;
   if (INSPECTION_TOOLS.has(toolName)) return { allowed: true };
+  if (toolName === "process_poll" || toolName === "process_stop") return { allowed: true };
+  if (toolName === "process_input") return amendmentRequired("Interactive process input is not covered by the approved plan; use an approved non-interactive verification command");
   if (toolName === "submit_completion_evidence") return { allowed: true };
   if (toolName === "request_plan_amendment") return { allowed: true };
 
@@ -76,7 +79,7 @@ export function evaluateModeCapability(options: {
         );
   }
 
-  if (toolName === "bash") {
+  if (toolName === "bash" || toolName === "process_start") {
     const command = typeof input.command === "string" ? input.command.trim() : "";
     if (approvedPlan.verificationCommands.includes(command)) return { allowed: true };
     const inspection = evaluateInspectionCommand(command);

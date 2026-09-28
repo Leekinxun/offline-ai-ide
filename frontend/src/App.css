@@ -9565,3 +9565,15 @@ body {
     width: 260px;
   }
 }
+
+.plan-approval-content { max-height: 45vh; overflow: auto; padding: 8px; }
+.plan-approval-content section { margin-bottom: 12px; }
+.plan-approval-content ol { padding-left: 20px; margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-revision-input { display: grid; gap: 8px; padding: 8px; }
+.plan-revision-input textarea { width: 100%; min-height: 70px; box-sizing: border-box; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; }
+.plan-revision-input button { min-height: 36px; cursor: pointer; }
+
+.undo-turn-control { padding: 6px 10px; flex: 0 0 auto; }
+.undo-turn-control p { margin: 6px 0; color: var(--error-color, #c43d48); font-size: 12px; }
+
+.tool-approval-network { border-left: 3px solid var(--warning-color, #ad6500); padding: 8px; }

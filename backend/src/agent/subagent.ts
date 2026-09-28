@@ -74,7 +74,7 @@ async function dispatchSubTool(
     });
   }
   if (name === "read_file") {
-    return runReadFile(args.path as string, args.limit as number | undefined, cwd);
+    return runReadFile(args.path as string, args.limit as number | undefined, cwd, args);
   }
   return executeRepositoryInspectionTool(name, args, cwd, signal);
 }

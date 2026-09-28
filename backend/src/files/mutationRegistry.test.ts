@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createCheckpoint } from "../chat/checkpoints.js";
-import { captureCheckpointMutationsDetailed, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
+import { captureCheckpointMutationsDetailed, keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
 
 test("mutation rollback refuses manual edits and can target a run tool and file", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mutations-"));
@@ -60,8 +60,9 @@ test("checkpoint mutation capture excludes protected runtime artifacts", (t) => 
     fs.mkdirSync(path.join(workspace, directory), { recursive: true });
     fs.writeFileSync(path.join(workspace, directory, "runtime.json"), "internal");
   }
-  const records = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" }).records;
+  const records = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", requestId: "turn-one", toolCallId: "tool" }).records;
   assert.deepEqual(records.map((record) => record.path), ["source.txt"]);
+  assert.equal(records[0].requestId, "turn-one");
   assert.deepEqual(listFileMutations(workspace, { path: ".history/runtime.json" }), []);
   assert.throws(() => recordFileMutation({ workspaceDir: workspace, path: ".history/runtime.json", source: "assistant_tool", postimageContent: "internal" }));
 });
@@ -145,4 +146,252 @@ test("future and unreadable mutation journals fail closed while ENOENT remains e
   fs.rmSync(journal); fs.mkdirSync(journal);
   assert.throws(() => listFileMutations(workspace), MutationJournalEvidenceError);
   assert.equal(fs.lstatSync(journal).isDirectory(), true);
+});
+
+
+test("same-millisecond changes replay backwards once per file and repeat safely after reload", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-chain-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.mock.method(Date, "now", () => 123456789);
+  const a = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "A", postimageContent: "B" });
+  const b = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "B", postimageContent: "C" });
+  assert.notEqual(a.id, b.id);
+  assert.deepEqual(listFileMutations(workspace).map((entry) => entry.id), [b.id, a.id]);
+  fs.writeFileSync(path.join(workspace, "a.txt"), "C");
+  fs.writeFileSync(path.join(workspace, "user.txt"), "keep");
+  const rename = t.mock.method(fs, "renameSync");
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(rename.mock.calls.filter((call) => call.arguments[1] === path.join(workspace, "a.txt")).length, 1);
+  assert.deepEqual(result.applied, [b.id, a.id]);
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "A");
+  assert.equal(fs.readFileSync(path.join(workspace, "user.txt"), "utf8"), "keep");
+  reloadMutationJournal(workspace);
+  fs.writeFileSync(path.join(workspace, "a.txt"), "new user edit");
+  const repeated = rollbackFileMutations(workspace, { runId: "run" });
+  assert.deepEqual(repeated.applied, []);
+  assert.deepEqual(repeated.alreadyReverted, [b.id, a.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "new user edit");
+});
+
+test("create then edit and edit then delete restore correct existence", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-existence-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  recordFileMutation({ workspaceDir: workspace, path: "created.txt", source: "assistant_tool", runId: "run", postimageContent: "" });
+  recordFileMutation({ workspaceDir: workspace, path: "created.txt", source: "assistant_tool", runId: "run", preimageContent: "", postimageContent: "new" });
+  recordFileMutation({ workspaceDir: workspace, path: "deleted.txt", source: "assistant_tool", runId: "run", preimageContent: "old", postimageContent: "updated" });
+  recordFileMutation({ workspaceDir: workspace, path: "deleted.txt", source: "assistant_tool", runId: "run", preimageContent: "updated" });
+  fs.writeFileSync(path.join(workspace, "created.txt"), "new");
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(result.applied.length, 4);
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(fs.existsSync(path.join(workspace, "created.txt")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "deleted.txt"), "utf8"), "old");
+});
+
+test("interleaved user or other-run edits refuse the entire batch", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-interleave-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "A", postimageContent: "B" });
+  recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "other", preimageContent: "B", postimageContent: "X" });
+  recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "X", postimageContent: "C" });
+  recordFileMutation({ workspaceDir: workspace, path: "safe.txt", source: "assistant_tool", runId: "run", preimageContent: "safe-before", postimageContent: "safe-after" });
+  fs.writeFileSync(path.join(workspace, "a.txt"), "C");
+  fs.writeFileSync(path.join(workspace, "safe.txt"), "safe-after");
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "C");
+  assert.equal(fs.readFileSync(path.join(workspace, "safe.txt"), "utf8"), "safe-after");
+  const skipped = rollbackFileMutations(workspace, { runId: "run" }, { strategy: "skip-conflicts" });
+  assert.equal(skipped.applied.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "C");
+  assert.equal(fs.readFileSync(path.join(workspace, "safe.txt"), "utf8"), "safe-before");
+});
+
+test("partial hunk rollback persists and a following whole-file rollback knows its changed postimage", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-hunk-state-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run",
+    preimageContent: "first=old\nunchanged\nlast=old\n", postimageContent: "first=new\nunchanged\nlast=new\n" });
+  fs.writeFileSync(path.join(workspace, "a.txt"), "first=new\nunchanged\nlast=new\n");
+  const hunkId = mutation.hunks![0].id;
+  assert.equal(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [hunkId] }).applied.length, 1);
+  reloadMutationJournal(workspace);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [hunkId] }).alreadyReverted, [mutation.id]);
+  assert.deepEqual(rollbackFileMutations(workspace, { runId: "run" }).applied, [mutation.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), mutation.preimageContent);
+});
+
+test("an absent file never matches a user-created empty file during delete rollback", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-empty-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "old" });
+  fs.writeFileSync(path.join(workspace, "a.txt"), "");
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "");
+});
+
+test("tampered or missing blobs refuse all rollback writes", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rollback-blob-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: "before", postimageContent: "after" });
+  fs.writeFileSync(path.join(workspace, "a.txt"), "after");
+  fs.writeFileSync(path.join(workspace, ".checkpoints", "blobs", mutation.preimageBlob!), "tampered");
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(result.applied.length, 0); assert.equal(result.unavailable.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "after");
+});
+
+test("hunk rollback refuses a matching snippet moved into an unrelated function", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-location-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "function a() {\n  return 1;\n}\nfunction b() {\n  return 9;\n}\n";
+  const after = before.replace("return 1", "return 2");
+  const user = "function a() {\n  return 3;\n}\nfunction b() {\n  return 2;\n}\n";
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.ts", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.ts"), user);
+  const result = rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [mutation.hunks![0].id] });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.ts"), "utf8"), user);
+});
+
+test("hunk offsets and unchanged context identify duplicate code in different functions", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-duplicate-context-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "function a() {\n  return 1;\n}\nfunction b() {\n  return 2;\n}\n";
+  const after = before.replace("return 1", "return 2");
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.ts", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.ts"), after);
+  const result = rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [mutation.hunks![0].id] });
+  assert.deepEqual(result.applied, [mutation.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.ts"), "utf8"), before);
+});
+
+test("hunk rollback maps a proven insertion before its unchanged context and retains it", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-prefix-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "// header\nfunction a() {\n  return 1;\n}\n";
+  const after = before.replace("return 1", "return 2");
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.ts", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.ts"), "// user note\n" + after);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [mutation.hunks![0].id] }).applied, [mutation.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.ts"), "utf8"), "// user note\n" + before);
+});
+
+test("legacy hunk snippets only apply to their exact effective postimage", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-legacy-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "header\nold\nfooter\n"; const after = "header\nnew\nfooter\n";
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after, hunks: [{ id: "legacy", preimage: "old\n", postimage: "new\n" }] });
+  fs.writeFileSync(path.join(workspace, "a.txt"), "note\n" + after);
+  assert.equal(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: ["legacy"] }).conflicts.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "note\n" + after);
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: ["legacy"] }).applied, [mutation.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), before);
+});
+
+test("an earlier partial rollback is carried through later mutations before whole-run rollback", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-chain-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "first=old\nseparator\nlast=old\n";
+  const middle = "first=new\nseparator\nlast=old\n";
+  const after = "first=new\nseparator\nlast=new\n";
+  const first = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", requestId: "one", preimageContent: before, postimageContent: middle });
+  const last = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", requestId: "two", preimageContent: middle, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [first.id], hunkIds: [first.hunks![0].id] }).applied, [first.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "first=old\nseparator\nlast=new\n");
+  reloadMutationJournal(workspace);
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(result.applied, [last.id, first.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), before);
+  assert.deepEqual(rollbackFileMutations(workspace, { runId: "run" }).alreadyReverted, [last.id, first.id]);
+});
+
+test("request rollback preserves an earlier undone insertion and keep decisions do not change the replay", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-insertion-chain-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "header\nseparator\nlast=old\nfooter\n";
+  const middle = "header\ninserted\nseparator\nlast=old\nfooter\n";
+  const after = middle.replace("last=old", "last=new");
+  const first = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", requestId: "one", preimageContent: before, postimageContent: middle });
+  const last = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", requestId: "two", preimageContent: middle, postimageContent: after });
+  keepFileMutations(workspace, { runId: "run", path: "a.txt", ids: [last.id], hunkIds: [last.hunks![0].id] });
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  assert.equal(first.hunks![0].preimage, "");
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [first.id], hunkIds: [first.hunks![0].id] }).applied, [first.id]);
+  reloadMutationJournal(workspace);
+  const result = rollbackFileMutations(workspace, { runId: "run", requestId: "two" });
+  assert.deepEqual(result.applied, [last.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), before);
+  assert.deepEqual(listFileMutations(workspace, { requestId: "two" })[0].keptHunkIds, [last.hunks![0].id]);
+  assert.deepEqual(rollbackFileMutations(workspace, { runId: "run" }).applied, [first.id]);
+});
+
+test("a deleted-line hunk restores at its recorded boundary without replacing another block", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-deletion-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "header\nremoved\nseparator\nlast=old\nfooter\n";
+  const middle = "header\nseparator\nlast=old\nfooter\n";
+  const after = middle.replace("last=old", "last=new");
+  const first = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: middle });
+  const last = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: middle, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  assert.equal(first.hunks![0].postimage, "");
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [first.id], hunkIds: [first.hunks![0].id] }).applied, [first.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), before.replace("last=old", "last=new"));
+  assert.deepEqual(rollbackFileMutations(workspace, { runId: "run" }).applied, [last.id, first.id]);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), before);
+});
+
+test("existing partial decisions do not hide a later manual divergence during whole-run rollback", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-chain-diverged-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "first=old\nseparator\nlast=old\n";
+  const middle = "first=new\nseparator\nlast=old\n";
+  const after = middle.replace("last=old", "last=new");
+  const first = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: middle });
+  recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: middle, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  rollbackFileMutations(workspace, { ids: [first.id], hunkIds: [first.hunks![0].id] });
+  const edited = "first=old\nseparator\nlast=user\n";
+  fs.writeFileSync(path.join(workspace, "a.txt"), edited);
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), edited);
+});
+
+test("empty text replacements retain file existence and can be reversed as anchored hunks", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-empty-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  for (const [index, [before, after]] of [["content\n", ""], ["", "content\n"]].entries()) {
+    const filePath = `${index}.txt`;
+    const mutation = recordFileMutation({ workspaceDir: workspace, path: filePath, source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after });
+    fs.writeFileSync(path.join(workspace, filePath), after);
+    assert.equal(mutation.hunks?.length, 1);
+    assert.deepEqual(rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [mutation.hunks![0].id] }).applied, [mutation.id]);
+    assert.equal(fs.readFileSync(path.join(workspace, filePath), "utf8"), before);
+  }
+});
+
+test("tampered anchor offsets are rejected before any rollback write", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-hunk-anchor-integrity-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = "header\nold\nfooter\n"; const after = "header\nnew\nfooter\n";
+  const mutation = recordFileMutation({ workspaceDir: workspace, path: "a.txt", source: "assistant_tool", runId: "run", preimageContent: before, postimageContent: after });
+  fs.writeFileSync(path.join(workspace, "a.txt"), after);
+  const journalPath = path.join(workspace, ".checkpoints", "mutations.json");
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+  journal.records[0].hunks[0].anchor.afterOffset += 1;
+  fs.writeFileSync(journalPath, JSON.stringify(journal));
+  const result = rollbackFileMutations(workspace, { ids: [mutation.id], hunkIds: [mutation.hunks![0].id] });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.unavailable.length, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), after);
 });

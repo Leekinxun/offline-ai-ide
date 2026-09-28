@@ -40,6 +40,11 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
     proxy: {
+      "/preview": {
+        target: backendProxyUrl,
+        changeOrigin: true,
+        ws: true,
+      },
       "/api": {
         target: backendProxyUrl,
         changeOrigin: true,

@@ -22,6 +22,7 @@ export function subagentMode(role: SubagentRole): AgentMode {
 }
 
 export function subagentAllowsTool(role: SubagentRole, name: string): boolean {
+  if (name.startsWith("process_")) return false;
   if (role === "general") return true;
   return (REPOSITORY_READ_TOOLS as readonly string[]).includes(name)
     || (role !== "explore" && name === "bash");

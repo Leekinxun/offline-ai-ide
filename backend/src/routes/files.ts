@@ -5,6 +5,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { safePath as safePathUtil } from "../utils/safePath.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
+import { searchContextSymbols } from "../chat/contextSymbols.js";
 import { findTypeScriptReferences, getTypeScriptLanguageServiceMetrics } from "../utils/typescriptLanguageService.js";
 import { findPythonDefinition, findPythonReferences } from "../utils/pythonLanguageService.js";
 import { createDirectoryZipStream } from "../utils/zipStream.js";
@@ -629,6 +630,19 @@ filesRouter.get("/read", (req, res) => {
 });
 
 // GET /definition?symbol=xxx&currentPath=yyy
+filesRouter.get("/context-symbols", async (req, res) => {
+  const workspaceDir = getWorkspace(req);
+  if (req.query.expectedWorkspaceDir !== workspaceDir) return res.status(409).json({ detail: "Workspace changed; search symbols again" });
+  const query = typeof req.query.query === "string" ? req.query.query : "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  const closed = () => { if (!res.writableEnded) controller.abort(); };
+  res.on("close", closed);
+  try { return res.json({ workspaceDir, ...(await searchContextSymbols(workspaceDir, query, controller.signal)) }); }
+  catch (error) { if (!res.writableEnded) return res.status(controller.signal.aborted ? 408 : 500).json({ detail: controller.signal.aborted ? "Symbol search timed out; use a narrower name" : error instanceof Error ? error.message : "Symbol search failed" }); }
+  finally { clearTimeout(timeout); res.off("close", closed); }
+});
+
 filesRouter.get("/definition", async (req, res) => {
   const symbol = typeof req.query.symbol === "string" ? req.query.symbol.trim() : "";
   const currentPath =

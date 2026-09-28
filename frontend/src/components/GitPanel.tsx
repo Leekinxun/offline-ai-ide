@@ -7,6 +7,7 @@ import { useGitDelivery } from "../hooks/useGitDelivery";
 import { useProviderDelivery } from "../hooks/useProviderDelivery";
 import { useOfflineBundles } from "../hooks/useOfflineBundles";
 import { ChangeDiffDialog } from "./ChangeDiffDialog";
+import { changeDiffUrl, parseRunDiff } from "./changeDiffSource";
 import { DeliveryOperationCard } from "./DeliveryOperationCard";
 import { GitLocalPanel } from "./GitLocalPanel";
 import { OfflineBundlePanel } from "./OfflineBundlePanel";
@@ -27,6 +28,7 @@ interface GitPanelProps {
   conversationId?: string | null;
   runId?: string | null;
   requestedDiffPath?: string | null;
+  requestedDiffRunId?: string | null;
   requestedDiffId?: number;
   onOpenFile: (path: string) => void;
   onAskReview?: () => void;
@@ -62,11 +64,12 @@ function operationIntent(operation: GitOperation, t: ReturnType<typeof useI18n>[
   };
 }
 
-export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir, theme, drawerMode = false, readOnly = false, conversationId, runId, requestedDiffPath, requestedDiffId, onOpenFile, onAskReview, onFollowUpCreated, onOpenFollowUpRun, onClose }) => {
+export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir, theme, drawerMode = false, readOnly = false, conversationId, runId, requestedDiffPath, requestedDiffRunId, requestedDiffId, onOpenFile, onAskReview, onFollowUpCreated, onOpenFollowUpRun, onClose }) => {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<GitPanelTab>("changes");
   const [selectedChange, setSelectedChange] = useState<GitStatusEntry | null>(null);
   const [diffPayload, setDiffPayload] = useState<GitDiffPayload | null>(null);
+  const [diffRunId, setDiffRunId] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [selectedOperation, setSelectedOperation] = useState<GitOperation | null>(null);
@@ -84,8 +87,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir
 
   useEffect(() => {
     diffControllerRef.current?.abort();
+    handledRequestRef.current = 0;
+    diffSequenceRef.current += 1;
     setSelectedChange(null);
     setDiffPayload(null);
+    setDiffRunId(null);
     setDiffError(null);
     setSelectedOperation(null);
     setActiveTab("changes");
@@ -93,20 +99,22 @@ export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir
   }, [workspaceDir]);
   useEffect(() => () => diffControllerRef.current?.abort(), []);
 
-  const openDiff = useCallback(async (entry: GitStatusEntry) => {
+  const openDiff = useCallback(async (entry: GitStatusEntry, sourceRunId?: string | null) => {
     diffControllerRef.current?.abort();
     const controller = new AbortController();
     diffControllerRef.current = controller;
     const sequence = ++diffSequenceRef.current;
     const scope = workspaceDir;
     setSelectedChange(entry);
+    setDiffRunId(sourceRunId || null);
     setDiffPayload(null);
     setDiffError(null);
     setDiffLoading(true);
     try {
-      const response = await fetch(`/api/files/git-diff?path=${encodeURIComponent(entry.path)}`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+      const response = await fetch(changeDiffUrl(entry.path, sourceRunId), { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
       if (!response.ok) throw new Error(t("git.diffFailed"));
-      const payload = await response.json() as GitDiffPayload;
+      const body = await response.json();
+      const payload = sourceRunId ? parseRunDiff(body, entry.path) : body as GitDiffPayload;
       if (controller.signal.aborted || sequence !== diffSequenceRef.current || scope !== workspaceDir) return;
       setDiffPayload(payload);
     } catch (nextError) {
@@ -118,12 +126,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir
   }, [t, token, workspaceDir]);
 
   useEffect(() => {
-    if (!visible || !requestedDiffPath || !requestedDiffId || requestedDiffId <= handledRequestRef.current || !status) return;
+    if (!visible || !requestedDiffPath || !requestedDiffId || requestedDiffId <= handledRequestRef.current || (!requestedDiffRunId && !status)) return;
     handledRequestRef.current = requestedDiffId;
     setActiveTab("changes");
-    const entry = status.entries.find((candidate) => candidate.path === requestedDiffPath) || { path: requestedDiffPath, indexStatus: " ", worktreeStatus: "M", kind: "modified" as const };
-    void openDiff(entry);
-  }, [openDiff, requestedDiffId, requestedDiffPath, status, visible]);
+    const entry = status?.entries.find((candidate) => candidate.path === requestedDiffPath) || { path: requestedDiffPath, indexStatus: " ", worktreeStatus: "M", kind: "modified" as const };
+    void openDiff(entry, requestedDiffRunId);
+  }, [openDiff, requestedDiffId, requestedDiffPath, requestedDiffRunId, status, visible]);
 
   const groupedEntries = useMemo(() => {
     const entries = status?.entries || [];
@@ -196,7 +204,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ visible, token, workspaceDir
     {activeTab === "local" && status?.isRepo && <div id="git-panel-local" role="tabpanel" aria-labelledby="git-tab-local" className="git-panel-tab-body"><GitLocalPanel controller={git} changeSets={checkpointState.changeSets} readOnly={readOnly} conversationId={conversationId} runId={runId} onPrepared={setSelectedOperation} /></div>}
     {activeTab === "delivery" && status?.isRepo && <div id="git-panel-delivery" role="tabpanel" aria-labelledby="git-tab-delivery" className="git-panel-tab-body"><ProviderDeliveryPanel controller={provider} gitOperations={git.operations} changeSets={checkpointState.changeSets} readOnly={readOnly} onFollowUpCreated={onFollowUpCreated} onOpenFollowUpRun={onOpenFollowUpRun} onShowOfflineBundles={() => setShowBundles(true)} /><button type="button" className="offline-bundle-disclosure" aria-expanded={showBundles} onClick={() => setShowBundles((value) => !value)}><Activity size={14} />{t("bundle.title")}</button>{showBundles && <OfflineBundlePanel controller={bundles} changeSets={checkpointState.changeSets} readOnly={readOnly} />}</div>}
     {activeTab === "activity" && <div id="git-panel-activity" role="tabpanel" aria-labelledby="git-tab-activity" className="git-panel-tab-body delivery-activity-list" aria-live="polite">{git.operations.length === 0 ? <div className="git-panel-empty"><History size={20} /><strong>{t("delivery.noActivity")}</strong><span>{t("delivery.noActivityHint")}</span></div> : git.operations.map((operation) => <DeliveryOperationCard key={operation.id} operation={operation} busy={git.busyId === operation.id} readOnly={readOnly} onApprove={(item) => { setSelectedOperation(item); }} onCancel={async (item) => { await git.cancel(item); }} onRebuild={async () => { await git.refresh(); setActiveTab("local"); }} />)}</div>}
-    {selectedChange && <ChangeDiffDialog path={selectedChange.path} kind={selectedChange.kind} payload={diffPayload} loading={diffLoading} error={diffError} theme={theme} revision={status?.headSha || undefined} stale={Boolean(diffPayload && diffPayload.updatedAt < (status?.updatedAt || 0))} onRetry={() => void openDiff(selectedChange)} onClose={() => setSelectedChange(null)} onOpenFile={onOpenFile} />}
+    {selectedChange && <ChangeDiffDialog path={selectedChange.path} kind={selectedChange.kind} payload={diffPayload} loading={diffLoading} error={diffError} theme={theme} revision={diffPayload?.revision || (diffRunId ? undefined : status?.headSha || undefined)} stale={!diffRunId && Boolean(diffPayload && diffPayload.updatedAt < (status?.updatedAt || 0))} onRetry={() => void openDiff(selectedChange, diffRunId)} onClose={() => setSelectedChange(null)} onOpenFile={onOpenFile} />}
     <OperationApprovalDialog intent={selectedOperation ? operationIntent(selectedOperation, t) : null} busy={Boolean(selectedOperation && git.busyId === selectedOperation.id)} error={git.error} onApprove={async (_intent, reason) => { if (!selectedOperation) return; await git.approve(selectedOperation, reason); setSelectedOperation(null); setActiveTab("activity"); }} onClose={() => { if (!git.busyId) setSelectedOperation(null); }} />
   </aside>;
 };

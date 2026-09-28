@@ -29,11 +29,17 @@ import {
   ConversationRunSummary,
   ToolApprovalDecision,
   ToolApprovalRequest,
+  ContextReference,
+  FileNode,
+  SelectionInfo,
 } from "../types";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { AgentQuestionStack } from "./AgentQuestionStack";
+import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
+import { UndoTurnButton } from "./UndoTurnButton";
 import { ContextInspector } from "./ContextInspector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
@@ -41,9 +47,15 @@ import { MessageAttachments, type ChatAttachmentDraftController } from "./ChatAt
 import { ModelSelector } from "./ModelSelector";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
+import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 
 interface EditorAssistantPanelProps {
   token: string;
+  workspaceDir: string;
+  referenceFiles: FileNode[];
+  contextReferences: ContextReference[];
+  onContextReferencesChange: (references: ContextReference[]) => void;
+  selectionInfo?: SelectionInfo | null;
   visible: boolean;
   activeFilePath: string | null;
   activeFileDirty: boolean;
@@ -68,9 +80,10 @@ interface EditorAssistantPanelProps {
   pendingApprovals: ToolApprovalRequest[];
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
-  onSend: (message: string) => boolean;
-  onSteer: (message: string) => boolean;
+  onSend: (message: string, references?: ContextReference[]) => boolean;
+  onSteer: (message: string, references?: ContextReference[]) => boolean;
   onStop: () => void;
+  onUndoLastTurn?: () => Promise<void>;
   onResume: (conversationId: string, runId?: string) => Promise<void> | void;
   onNewConversation: () => void;
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
@@ -101,6 +114,11 @@ function EventIcon({ event }: { event: AgentRunEvent }) {
 
 export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   token,
+  workspaceDir,
+  referenceFiles,
+  contextReferences,
+  onContextReferencesChange,
+  selectionInfo,
   visible,
   activeFilePath,
   activeFileDirty,
@@ -128,6 +146,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onSend,
   onSteer,
   onStop,
+  onUndoLastTurn,
   onResume,
   onNewConversation,
   onToolApproval,
@@ -227,12 +246,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     let sent = false;
     if (isStreaming) {
       if (!message || attachmentDeliveryChecking) return;
-      sent = onSteer(message);
+      sent = onSteer(message, contextReferences);
     } else {
       if ((!message && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || attachmentWarning) return;
-      sent = onSend(message);
+      sent = onSend(message, contextReferences);
     }
     if (!sent) return;
+    onContextReferencesChange([]);
     setInput("");
   };
 
@@ -478,9 +498,10 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                   {renderChatTextPart(getRenderableMessageContent(message.content), message)}
                 </div>
               ) : getRenderableMessageContent(message.content) ? (
-                <p>{getRenderableMessageContent(message.content)}</p>
+                <p>{inlineInstructionLabel(message.content) || getRenderableMessageContent(message.content)}</p>
               ) : null}
-              <MessageAttachments attachments={message.attachments} token={token} />
+                  <ContextReferenceBadges references={message.contextReferences} />
+                  <MessageAttachments attachments={message.attachments} token={token} />
               {message.role === "user" && activeFilePath && (
                 <small>{t("workbench.messageContext", {
                   path: activeFilePath,
@@ -564,10 +585,17 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         requests={pendingApprovals}
         onRespond={onToolApproval}
         onApproveConversation={onApproveConversationTools}
+        onRequestRevision={(request, instruction) => {
+          const sent = onSteer(`${t("planCard.revisionPrompt")}\n${instruction}`);
+          if (sent) onToolApproval(request.approvalId, "deny");
+          return sent;
+        }}
         className="editor-assistant-approvals"
       />
 
       <div className="editor-assistant-composer">
+        <AgentQuestionStack token={token} conversationId={runState?.conversationId} />
+        <UndoTurnButton onUndo={onUndoLastTurn} disabled={isStreaming || contextReadOnly} />
         <textarea
           ref={textareaRef}
           value={input}
@@ -581,6 +609,8 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           placeholder={t(`workbench.assistantPlaceholder.${agentMode}`)}
           aria-label={t("workbench.askAboutCurrentFile")}
         />
+
+        <ContextReferencePicker token={token} workspaceDir={workspaceDir} files={referenceFiles} references={contextReferences} onChange={onContextReferencesChange} value={input} onValueChange={setInput} textareaRef={textareaRef} activeFilePath={activeFilePath} selectionInfo={selectionInfo} />
 
         <input
           ref={fileInputRef}

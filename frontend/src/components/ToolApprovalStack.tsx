@@ -8,6 +8,7 @@ interface ToolApprovalStackProps {
   requests: ToolApprovalRequest[];
   onRespond: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversation: (conversationId: string) => void;
+  onRequestRevision?: (request: ToolApprovalRequest, instruction: string) => boolean;
   className?: string;
 }
 
@@ -15,6 +16,7 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
   requests,
   onRespond,
   onApproveConversation,
+  onRequestRevision,
   className,
 }, ref) => {
   const { t } = useI18n();
@@ -31,7 +33,7 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
       className={`tool-approval-stack${className ? ` ${className}` : ""}`}
       aria-label={pendingLabel}
     >
-      {firstRequest.conversationId && firstRequest.name !== "submit_plan" && (
+      {firstRequest.conversationId && firstRequest.name !== "submit_plan" && firstRequest.input.allow_network !== true && (
         <div className="tool-approval-bulk">
           <span>{pendingLabel}</span>
           <button
@@ -44,7 +46,7 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
         </div>
       )}
       {requests.map((request) => (
-        <ToolApprovalCard key={request.approvalId} request={request} onRespond={onRespond} />
+        <ToolApprovalCard key={request.approvalId} request={request} onRespond={onRespond} onRequestRevision={onRequestRevision} />
       ))}
     </section>
   );

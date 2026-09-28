@@ -13,6 +13,7 @@ import {
 import { ConversationRunSummary, ReviewFinding, ReviewFindingLifecycle } from "../types";
 import { useI18n } from "../i18n";
 import { allowedFindingTransitions, useFindings } from "../hooks/useFindings";
+import { RunChangesReview, type RunReviewComment } from "./RunChangesReview";
 
 interface ChangeSummaryProps {
   token: string;
@@ -21,7 +22,13 @@ interface ChangeSummaryProps {
   expanded: boolean;
   onToggle: () => void;
   onOpenFile: (path: string) => void;
-  onOpenDiff: (path: string) => void;
+  onOpenDiff: (path: string, runId?: string) => void;
+  workspaceDir?: string;
+  requestId?: string;
+  theme?: "light" | "dark";
+  readOnly?: boolean;
+  onComment?: (comment: RunReviewComment) => void;
+  onChanged?: () => void;
   onOpenLocation: (finding: ReviewFinding) => void;
   onRetry: () => void;
   onPlanAmendmentDecision: (planId: string, amendmentId: string, decision: "approved" | "rejected") => Promise<void> | void;
@@ -35,6 +42,12 @@ export const ChangeSummary: React.FC<ChangeSummaryProps> = ({
   onToggle,
   onOpenFile,
   onOpenDiff,
+  workspaceDir,
+  requestId,
+  theme,
+  readOnly,
+  onComment,
+  onChanged,
   onOpenLocation,
   onRetry,
   onPlanAmendmentDecision,
@@ -135,11 +148,14 @@ export const ChangeSummary: React.FC<ChangeSummaryProps> = ({
             </div>
           )}
 
-          {summary.changedFiles.length > 0 && (
+          {runId && <RunChangesReview token={token} workspaceDir={workspaceDir} runId={runId} requestId={requestId}
+            theme={theme} readOnly={readOnly} compact onOpenFile={onOpenFile} onOpenDiff={onOpenDiff}
+            onComment={onComment} onChanged={onChanged} />}
+          {!runId && summary.changedFiles.length > 0 && (
             <div className="change-summary-files">
               {summary.changedFiles.map((path) => (
                 <div className="change-summary-file" key={path}>
-                  <button type="button" className="change-summary-file-diff" onClick={() => onOpenDiff(path)} title={`${t("git.openDiff")}: ${path}`}>
+                  <button type="button" className="change-summary-file-diff" disabled={!runId} onClick={() => onOpenDiff(path, runId)} title={`${t("git.openDiff")}: ${path}`}>
                     <GitCompare size={12} />
                     <code>{path}</code>
                   </button>

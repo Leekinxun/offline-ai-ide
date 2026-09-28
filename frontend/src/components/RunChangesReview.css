@@ -1,0 +1,43 @@
+.run-review { display: flex; flex-direction: column; gap: 10px; min-width: 0; color: var(--ink); font-size: 12px; }
+.run-review-heading, .run-review-file-heading, .run-review-hunk header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.run-review-heading > span { color: var(--ink-muted); }
+.run-review-heading > button { margin-left: auto; }
+.run-review-description, .run-review-notice { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.run-review-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); padding: 8px; border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); border-radius: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-review-error small { display: block; margin-top: 4px; }
+.run-review button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line-subtle); background: var(--surface-quiet); color: var(--ink); border-radius: 5px; min-height: 28px; padding: 4px 7px; font: inherit; cursor: pointer; }
+.run-review button:hover:not(:disabled) { border-color: var(--accent); }
+.run-review button:disabled { opacity: .45; cursor: default; }
+.run-review button:focus-visible, .run-review summary:focus-visible, .run-review input:focus-visible, .run-review textarea:focus-visible, .run-review select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.run-review-files { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.run-review-files > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; text-align: left; justify-content: stretch; padding: 8px; gap: 4px 8px; }
+.run-review-files > button.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface-panel)); }
+.run-review-file-name { overflow-wrap: anywhere; }
+.run-review-stats { display: flex; gap: 6px; font-variant-numeric: tabular-nums; font-size: 11px; }
+.run-review-stats .added { color: var(--success); }
+.run-review-stats .removed { color: var(--danger); }
+.run-review-state { font-size: 10px; font-weight: 500; color: var(--ink-muted); }
+.run-review-state.kept { color: var(--success); }
+.run-review-state.reverted { color: var(--warning); }
+.run-review-state.partial { color: var(--accent); }
+.run-review-detail { display: flex; flex-direction: column; gap: 9px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line-subtle); }
+.run-review-file-heading { align-items: flex-start; justify-content: space-between; }
+.run-review-file-heading strong { overflow-wrap: anywhere; }
+.run-review-file-heading code { font-size: 10px; color: var(--ink-muted); white-space: nowrap; }
+.run-review-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.run-review-canvas { height: 380px; min-height: 240px; border: 1px solid var(--line-subtle); border-radius: 5px; overflow: hidden; }
+.run-review.compact .run-review-canvas { height: 300px; }
+.run-review-hunks { min-width: 0; }
+.run-review-hunks summary { display: flex; align-items: center; gap: 5px; cursor: pointer; padding: 6px 0; }
+.run-review-hunk { margin-top: 8px; border: 1px solid var(--line-subtle); padding: 8px; border-radius: 5px; display: flex; flex-direction: column; gap: 7px; }
+.run-review-hunk header { justify-content: space-between; }
+.run-review-hunk-code { min-width: 0; max-height: 220px; overflow: auto; font-size: 11px; }
+.run-review-hunk-code pre { padding: 6px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-review-hunk-code pre.removed { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.run-review-hunk-code pre.added { background: color-mix(in srgb, var(--success) 10%, transparent); }
+.run-review-comment form, .run-review-comment label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.run-review-comment form { gap: 9px; }
+.run-review-comment-range { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 7px; }
+.run-review-comment textarea, .run-review-comment input, .run-review-comment select { width: 100%; box-sizing: border-box; min-width: 0; border: 1px solid var(--line-subtle); border-radius: 4px; background: var(--surface-panel); color: var(--ink); padding: 6px; font: inherit; }
+.run-review-comment textarea { resize: vertical; }
+.run-review-comment p { color: var(--ink-muted); font-size: 11px; }

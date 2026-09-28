@@ -1,0 +1,20 @@
+.web-preview-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; color: var(--text-primary); background: var(--bg-primary); border-left: 1px solid var(--border-color); }
+.web-preview-panel header, .web-preview-controls { display: flex; gap: 8px; align-items: center; padding: 10px; }
+.web-preview-panel header { justify-content: space-between; }
+.web-preview-panel strong { display: flex; gap: 6px; align-items: center; }
+.web-preview-panel button, .web-preview-panel select { color: inherit; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; min-height: 32px; padding: 5px 8px; cursor: pointer; }
+.web-preview-panel select { flex: 1; min-width: 0; }
+.web-preview-panel button:disabled { cursor: default; opacity: .5; }
+.web-preview-targets { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px; }
+.web-preview-targets button { display: flex; align-items: center; gap: 4px; }
+.web-preview-panel iframe { flex: 1; width: 100%; min-height: 260px; border: 0; background: white; }
+.web-preview-inspect { margin: 0 10px 8px; }
+.web-preview-empty { flex: 1; padding: 30px 14px; color: var(--text-secondary); }
+.web-preview-error { padding: 10px; color: var(--error-color, #c43d48); overflow-wrap: anywhere; }
+.web-preview-events { flex: 0 0 auto; max-height: 32vh; overflow: auto; padding: 10px; }
+.web-preview-events article { padding: 8px 0; border-top: 1px solid var(--border-color); }
+.web-preview-events pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.web-preview-events small { display: block; color: var(--text-secondary); }
+.web-preview-panel :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.web-preview-config-note { padding: 0 10px; font-size: 11px; color: var(--text-secondary); }

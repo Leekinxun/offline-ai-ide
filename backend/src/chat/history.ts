@@ -6,6 +6,8 @@ import type { AgentMode } from "../agent/types.js";
 import type { ReviewFinding } from "./reviewFindings.js";
 import type { CompletionEvidence } from "./completionEvidence.js";
 import { deleteUnreferencedChatAttachments, isChatAttachmentRef, type ChatAttachmentRef } from "./attachments.js";
+import { parseContextReferences } from "./contextReferences.js";
+import { isRuntimeValidationReport, type RuntimeValidationReport } from "../agent/validationFeedback.js";
 
 export type ExecutionContractKind = "direct_code" | "approved_plan";
 
@@ -62,6 +64,8 @@ export interface PersistedChatMessage {
   timestamp: number;
   requestId?: string;
   attachments?: ChatAttachmentRef[];
+  contextReferences?: import("./contextReferences.js").ContextReference[];
+  runtimeValidation?: RuntimeValidationReport;
   toolCalls?: PersistedToolCallStep[];
   thinking?: string;
   parts?: PersistedMessagePart[];
@@ -336,6 +340,9 @@ function normalizePersistedMessage(raw: unknown): PersistedChatMessage | null {
         }))
       : undefined;
 
+  let contextReferences: PersistedChatMessage["contextReferences"];
+  try { contextReferences = candidate.role === "user" ? parseContextReferences(candidate.contextReferences) : undefined; }
+  catch { contextReferences = undefined; }
   return withStructuredParts({
     role: candidate.role,
     content: candidate.content,
@@ -344,6 +351,8 @@ function normalizePersistedMessage(raw: unknown): PersistedChatMessage | null {
       ? { requestId: candidate.requestId }
       : {}),
     ...(attachments ? { attachments } : {}),
+    ...(contextReferences?.length ? { contextReferences } : {}),
+    ...(candidate.role === "assistant" && isRuntimeValidationReport(candidate.runtimeValidation) ? { runtimeValidation: candidate.runtimeValidation } : {}),
     ...(typeof candidate.thinking === "string" && candidate.thinking
       ? { thinking: candidate.thinking }
       : {}),
@@ -818,14 +827,17 @@ export function deleteConversation(
 export function forkConversation(
   workspaceDir: string,
   conversationId: string,
-  input: { upToTimestamp?: number; title?: string } = {}
+  input: { upToTimestamp?: number; title?: string; beforeRequestId?: string; deferPrune?: boolean } = {}
 ): ConversationSummary {
   const sourcePath = getConversationPath(workspaceDir, conversationId);
   if (!fs.existsSync(sourcePath)) throw new Error("Conversation not found");
   const source = readConversationFile(workspaceDir, conversationId);
+  const beforeIndex = input.beforeRequestId === undefined ? -1 : source.messages.findIndex((message) => message.role === "user" && message.requestId === input.beforeRequestId);
+  if (input.beforeRequestId !== undefined && beforeIndex < 0) throw new Error("Conversation turn not found");
+  const eligibleMessages = beforeIndex < 0 ? source.messages : source.messages.slice(0, beforeIndex);
   const messages = typeof input.upToTimestamp === "number" && Number.isFinite(input.upToTimestamp)
-    ? source.messages.filter((message) => message.timestamp <= input.upToTimestamp!)
-    : source.messages;
+    ? eligibleMessages.filter((message) => message.timestamp <= input.upToTimestamp!)
+    : eligibleMessages;
   const id = createConversationId();
   const now = Date.now();
   const requestedTitle = typeof input.title === "string" ? sanitizeConversationTitle(input.title) : "";
@@ -843,7 +855,7 @@ export function forkConversation(
     // accepted into the source conversation and must keep that ownership.
     messages: messages.map(({ requestId: _requestId, ...message }) => withStructuredParts(message)),
   });
-  pruneConversationHistory(workspaceDir);
+  if (!input.deferPrune) pruneConversationHistory(workspaceDir);
   const summary = listConversationSummaries(workspaceDir).find((entry) => entry.id === id);
   if (!summary) throw new Error("Failed to create conversation fork");
   return summary;
@@ -883,7 +895,7 @@ export function listConversationSummaries(
   return entries.sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
-export function pruneConversationHistory(workspaceDir: string): void {
+export function pruneConversationHistory(workspaceDir: string, preservedConversationIds: readonly string[] = []): void {
   const historyDir = ensureHistoryDir(workspaceDir);
   const files = fs
     .readdirSync(historyDir)
@@ -897,7 +909,11 @@ export function pruneConversationHistory(workspaceDir: string): void {
     })
     .sort((left, right) => right.updatedAt - left.updatedAt);
 
-  const expired = files.slice(MAX_STORED_CONVERSATIONS);
+  const preserved = new Set(preservedConversationIds);
+  const isPreserved = (entry: { fullPath: string }) => preserved.has(path.basename(entry.fullPath, CONVERSATION_FILE_EXTENSION));
+  const preservedCount = files.filter(isPreserved).length;
+  if (preservedCount > MAX_STORED_CONVERSATIONS) throw new Error("Too many conversations selected for preservation");
+  const expired = files.filter((entry) => !isPreserved(entry)).slice(MAX_STORED_CONVERSATIONS - preservedCount);
   if (expired.length === 0) return;
   const requestIndex = getRequestIndex(workspaceDir);
   const removedIds = new Set<string>();

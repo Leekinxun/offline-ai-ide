@@ -115,8 +115,10 @@ test("write-capable child writes only its managed worktree and emits a ChangeSet
     if (String(input).endsWith("/chat/completions")) {
       completion += 1;
       return Response.json({ choices: [{ message: completion === 1
-        ? { role: "assistant", content: null, tool_calls: [{ id: "write-1", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "note.txt", content: "child\n" }) } }] }
-        : { role: "assistant", content: "done" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+        ? { role: "assistant", content: null, tool_calls: [{ id: "read-1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] }
+        : completion === 2
+          ? { role: "assistant", content: null, tool_calls: [{ id: "write-1", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "note.txt", content: "child\n" }) } }] }
+          : { role: "assistant", content: "done" }, finish_reason: completion <= 2 ? "tool_calls" : "stop" }], usage: {} });
     }
     return new Response("not found", { status: 404 });
   };

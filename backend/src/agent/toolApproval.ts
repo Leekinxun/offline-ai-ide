@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import path from "path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
+import { isNetworkToolRequest } from "./networkAccess.js";
 
 export type ToolRisk = "medium" | "high";
 export type ToolApprovalDecision = "allow_once" | "allow_session" | "deny";
@@ -57,18 +58,30 @@ export function classifyToolApproval(
     };
   }
 
-  if (name === "bash") {
+  if (name === "process_input") {
+    const text = input.text === undefined ? "" : input.text;
+    if (typeof text !== "string" || Buffer.byteLength(text) > 16_384) return { kind: "blocked", reason: "Process input must be at most 16 KiB of text" };
+    if (text.trim()) {
+      const policy = evaluateShellCommand(text, { compatibilityShellAuthorized: true });
+      if (!policy.allowed) return { kind: "blocked", reason: policy.reason || "Process input blocked" };
+    }
+    return { kind: "approval", risk: "high", reason: "Send new interactive input to a process; this can execute additional instructions", scope: `${String(input.session_id || "")}: ${text.slice(0, 400) || "EOF"}`, canAllowSession: false };
+  }
+
+  if (name === "bash" || name === "process_start") {
+    if (input.allow_network !== undefined && typeof input.allow_network !== "boolean") return { kind: "blocked", reason: "allow_network must be a boolean" };
+    const network = isNetworkToolRequest(name, input);
     const command = typeof input.command === "string" ? input.command : "";
     // This is only a preflight. The execution path repeats the policy check
     // after this high-risk approval has been granted.
-    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true });
+    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: network });
     if (!policy.allowed) {
       return { kind: "blocked", reason: policy.reason || "Shell command blocked" };
     }
     return {
       kind: "approval",
       risk: "high",
-      reason: "Execute this command through the compatibility shell in the workspace",
+      reason: network ? "NETWORK ACCESS: this one command may connect to any network destination and transmit workspace data. Requires both administrator grants and explicit one-time approval; Plan/session approval cannot authorize it" : "Execute this command through the compatibility shell in the workspace",
       scope: command,
       canAllowSession: false,
     };
@@ -127,6 +140,7 @@ export interface ToolApprovalRequestEvent extends ToolApprovalRequestInput {
 
 interface PendingApproval {
   request: ToolApprovalRequestEvent;
+  networkRequested: boolean;
   conversationId?: string;
   risk: ToolRisk;
   canAllowSession: boolean;
@@ -146,15 +160,17 @@ export class ToolApprovalSession {
   ) {}
 
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
+    const network = isNetworkToolRequest(input.name, input.input);
+    if (network) input = { ...input, risk: "high", canAllowSession: false, sessionKey: undefined };
     if (
-      input.name !== "submit_plan" &&
+      !network && input.name !== "submit_plan" &&
       input.risk !== "high" &&
       input.conversationId &&
       this.conversationAllowed.has(input.conversationId)
     ) {
       return Promise.resolve("allow_once");
     }
-    if (input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
+    if (!network && input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
       return Promise.resolve("allow_session");
     }
 
@@ -167,6 +183,7 @@ export class ToolApprovalSession {
       timer.unref?.();
       this.pending.set(request.approvalId, {
         request,
+        networkRequested: network,
         conversationId: input.conversationId,
         risk: input.risk,
         canAllowSession: input.canAllowSession,
@@ -210,8 +227,8 @@ export class ToolApprovalSession {
     this.pending.delete(approvalId);
     clearTimeout(pending.timer);
 
-    const acceptedDecision =
-      decision === "allow_session" && !pending.canAllowSession ? "allow_once" : decision;
+    const acceptedDecision = decision === "allow_session" && pending.networkRequested
+      ? "deny" : decision === "allow_session" && !pending.canAllowSession ? "allow_once" : decision;
     if (acceptedDecision === "allow_session" && pending.sessionKey) {
       this.sessionAllowed.add(pending.sessionKey);
     }

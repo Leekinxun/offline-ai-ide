@@ -20,6 +20,8 @@ export interface DiagnosticsResult {
   startedAt: number;
   durationMs: number;
   session: DiagnosticsSessionState;
+  /** Present only when the bounded workspace snapshot stayed stable during checks. */
+  workspaceVersion?: string;
 }
 
 export interface DiagnosticsSessionState {
@@ -281,6 +283,7 @@ export function getDiagnostics(workspaceDir: string): DiagnosticsResult {
 
 async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResult> {
   const startedAt = Date.now();
+  const beforeVersion = getDiagnosticsWorkspaceVersion(workspaceDir);
   const diagnostics: WorkspaceDiagnostic[] = [];
   const tools: string[] = [];
   const session = sessions.get(workspaceDir);
@@ -316,7 +319,8 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
       error: undefined,
     };
   }
-  const next = { diagnostics: diagnostics.slice(0, 2_000), tools, startedAt, durationMs: Date.now() - startedAt, session: { ...(session?.state || stoppedState()) } };
+  const afterVersion = getDiagnosticsWorkspaceVersion(workspaceDir);
+  const next = { diagnostics: diagnostics.slice(0, 2_000), tools, startedAt, durationMs: Date.now() - startedAt, session: { ...(session?.state || stoppedState()) }, ...(beforeVersion && beforeVersion === afterVersion ? { workspaceVersion: afterVersion } : {}) };
   resultCache.set(workspaceDir, next);
   return next;
 }
@@ -336,33 +340,41 @@ export function runDiagnostics(workspaceDir: string): Promise<DiagnosticsResult>
 }
 
 const WATCH_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".json", ".toml"]);
-const WATCH_IGNORED = new Set([".git", ".checkpoints", "node_modules", "dist", "build", "target", ".venv"]);
+const WATCH_IGNORED = new Set([".git", ".history", ".checkpoints", ".team", ".tasks", ".codex", ".omx", ".crewforge", ".transcripts", "node_modules", "dist", "build", "target", ".venv"]);
 
 function workspaceSignature(workspaceDir: string): string {
   let count = 0;
+  let visited = 0;
+  let incomplete = false;
   let fingerprint = 2166136261;
   const visit = (directory: string, depth: number) => {
-    if (depth > 10 || count >= 5_000) return;
+    if (depth > 10 || count >= 5_000 || visited >= 10_000) { incomplete = true; return; }
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { incomplete = true; return; }
     for (const entry of entries) {
-      if (count >= 5_000 || WATCH_IGNORED.has(entry.name)) break;
+      if (count >= 5_000 || ++visited >= 10_000) { incomplete = true; break; }
+      if (WATCH_IGNORED.has(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) { visit(full, depth + 1); continue; }
       if (!entry.isFile() || !WATCH_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
       try {
         const stat = fs.statSync(full);
-        const value = `${path.relative(workspaceDir, full)}:${stat.mtimeMs}:${stat.size}`;
+        const value = `${path.relative(workspaceDir, full)}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
         for (let index = 0; index < value.length; index += 1) {
           fingerprint ^= value.charCodeAt(index);
           fingerprint = Math.imul(fingerprint, 16777619);
         }
         count += 1;
-      } catch { /* file changed while scanning */ }
+      } catch { incomplete = true; }
     }
   };
   visit(workspaceDir, 0);
-  return `${count}:${fingerprint >>> 0}`;
+  return `${incomplete ? "incomplete:" : ""}${count}:${fingerprint >>> 0}`;
+}
+
+export function getDiagnosticsWorkspaceVersion(workspaceDir: string): string | undefined {
+  const signature = workspaceSignature(workspaceDir);
+  return signature.startsWith("incomplete:") ? undefined : signature;
 }
 
 export async function startDiagnosticsSession(workspaceDir: string): Promise<DiagnosticsResult> {
