@@ -180,7 +180,7 @@ async function connect() {
     }
     if (event.method === "Network.loadingFinished") {
       const request = pendingRequests.get(event.sessionId + ":" + event.params.requestId);
-      if (request?.method === "POST") void cdp.send("Network.getResponseBody", { requestId: event.params.requestId }, event.sessionId).then(({ body, base64Encoded }) => {
+      if (request && (request.method === "POST" || /^\/api\/chat\/runs\/[^/]+\/changes$/.test(request.route))) void cdp.send("Network.getResponseBody", { requestId: event.params.requestId }, event.sessionId).then(({ body, base64Encoded }) => {
         let result; try { result = JSON.parse(base64Encoded ? Buffer.from(body, "base64").toString() : body); } catch { return; }
         responses.push({ ...request, result, time: Date.now() });
         if (request.route === "/api/previews" && result.preview?.id) ownedPreviews.add(result.preview.id);
@@ -287,21 +287,43 @@ try {
       assert.ok(observations.some((entry) => entry.reasoningVisible && entry.reasoning?.includes('Fixture reasoning: inspect Markdown structure.')), 'Provider reasoning is invisible');
       assert.ok(observations.some((entry) => entry.tool?.includes('read_file')), 'Tool activity is invisible');
     });
-    await scenario("real_pointer_keeps_two_hunks", async () => {
+    await scenario("kept_changes_leave_editor_and_remain_in_history", async () => {
       const before = fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8');
+      await click('.editor-change-review-zone button[aria-label="Open full change review"]', true);
+      await until(() => call(() => document.querySelector('.run-review-file-heading')?.textContent.includes('review-doc.md')), 'Full Changes review opened');
+      await click('.run-review-hunks > summary');
       const selector = '.editor-change-review-zone .editor-change-review-actions button:first-child';
       await click(selector, true);
-      await until(() => call(() => [...document.querySelectorAll('.editor-change-review-actions button')].some((button) => button.textContent.trim() === 'Kept')), 'First keep persisted', 4000);
-      // Select the second actual zone, then dispatch real Chromium pointer input.
-      await call(() => document.querySelectorAll('.editor-change-review-zone')[1].setAttribute('data-smoke-second-zone', 'true'));
-      await click('[data-smoke-second-zone] .editor-change-review-actions button:first-child', true);
-      await until(() => call(() => [...document.querySelectorAll('.editor-change-review-actions button')].filter((button) => button.textContent.trim() === 'Kept').length >= 2), 'Second keep persisted', 4000);
+      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length === 1
+        && document.querySelectorAll('.run-review-hunk .run-review-state.kept').length === 1), 'Only the pending block stays; Changes sees first keep', 4000);
+      assert.equal(await call(() => document.querySelector('.editor-change-review-deleted')?.textContent.includes('请在当前目录')), false, 'Accepted deletion is still displayed in the editor');
+      // Confirm the remaining change from the separate Changes reader; the
+      // editor must react without a file edit, tab switch or manual refresh.
+      await call(() => {
+        const button = [...document.querySelectorAll('.run-review-detail > .run-review-actions button')].find((node) => node.textContent.trim() === 'Keep file');
+        if (!button) throw new Error('Keep file action missing');
+        button.setAttribute('data-smoke-keep-file', 'true');
+      });
+      await click('[data-smoke-keep-file]', true);
+      await until(() => call(() => document.querySelectorAll('.editor-change-review-zone').length === 0
+        && document.querySelectorAll('.editor-change-review-added-line').length === 0
+        && document.querySelectorAll('.run-review-hunk .run-review-state.kept').length === 2), 'Editor is clean; both retained blocks remain in Changes', 4000);
       const kept = await until(() => responses.filter((entry) => entry.route.endsWith('/changes/keep')).length >= 2 && responses.filter((entry) => entry.route.endsWith('/changes/keep')).at(-1), 'Two real keep API responses');
       const changes = await uiApi(kept.route.replace(/\/keep$/, '') + '?path=review-doc.md');
       assert.equal(changes.files[0].hunks.length, 2);
       assert.ok(changes.files[0].hunks.every((hunk) => hunk.kept), 'Keep state was not persisted on the server');
+      assert.notEqual(changes.files[0].original, changes.files[0].modified, 'Historical diff was removed when keeping changes');
+      assert.equal(await call(() => [...document.querySelectorAll('.run-review-detail > .run-review-actions button')].some((button) => button.textContent.trim() === 'Undo file' && !button.disabled)), true, 'Historical undo is unavailable');
       assert.equal(fs.readFileSync(path.join(safeWorkspace, 'review-doc.md'), 'utf8'), before, 'Keep changed file contents');
       assert.equal(await call(() => { const tab = document.querySelector('.tab[title="review-doc.md"][aria-selected="true"]'); return tab ? tab.classList.contains('modified') : null; }), false, 'Keep marked editor dirty or switched its tab');
+      await click('.run-details-close-btn');
+      await click('[data-tree-path="calculator.ts"]');
+      const reopenedAt = Date.now();
+      await click('[data-tree-path="review-doc.md"]');
+      await until(() => call(() => Boolean(document.querySelector('.tab[title="review-doc.md"][aria-selected="true"]'))), 'Return to reviewed file');
+      await until(() => responses.some((entry) => entry.method === 'GET' && entry.time >= reopenedAt
+        && entry.result.files?.some((file) => file.path === 'review-doc.md' && typeof file.modified === 'string')), 'Reopened file review reloaded');
+      assert.equal(await call(() => document.querySelectorAll('.editor-change-review-zone, .editor-change-review-added-line').length), 0, 'Reviewed decorations returned on reopening');
     });
     await scenario("reply_stays_inside_narrow_panel", async () => {
       for (const width of [1440, 1000]) {

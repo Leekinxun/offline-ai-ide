@@ -5,7 +5,10 @@ interface Options {
   token: string; workspaceDir?: string; runId?: string; requestId?: string;
   running?: boolean; refreshKey?: string | number; onChanged?: () => void;
 }
+const REVIEW_CHANGED_EVENT = "crewforge:run-review-changed";
+interface ReviewChanged { workspaceDir?: string; runId: string; source: symbol; }
 export function useRunChanges({ token, workspaceDir, runId, requestId, running = false, refreshKey, onChanged }: Options) {
+  const instanceRef = useRef(Symbol("run-review"));
   const [changes, setChanges] = useState<ReviewChanges | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [file, setFile] = useState<ReviewFile | null>(null);
@@ -54,6 +57,14 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
   }, [refresh]);
   useEffect(() => { if (refreshKey !== undefined) void refresh(); }, [refresh, refreshKey]);
   useEffect(() => {
+    const handleReviewChanged = (event: Event) => {
+      const detail = (event as CustomEvent<ReviewChanged>).detail;
+      if (detail?.source !== instanceRef.current && detail?.runId === runId && detail?.workspaceDir === workspaceDir) void refresh(true);
+    };
+    window.addEventListener(REVIEW_CHANGED_EVENT, handleReviewChanged);
+    return () => window.removeEventListener(REVIEW_CHANGED_EVENT, handleReviewChanged);
+  }, [refresh, runId, workspaceDir]);
+  useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => { if (actionScope.current !== scope) void refresh(); }, 1800);
     return () => window.clearInterval(timer);
@@ -95,6 +106,9 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
         const conflicts = (body.rollback?.conflicts || []).map((entry: { path: string }) => entry.path);
         throw new Error([body.error || "Review action failed", ...reasons, ...conflicts].join("\n"));
       }
+      // The editor and the Changes panel own separate readers of the same run.
+      // Refresh each reader through its own authenticated/request-scoped URL.
+      window.dispatchEvent(new CustomEvent<ReviewChanged>(REVIEW_CHANGED_EVENT, { detail: { workspaceDir, runId, source: instanceRef.current } }));
       await refresh(true);
       return true;
     } catch (cause) {
@@ -103,7 +117,7 @@ export function useRunChanges({ token, workspaceDir, runId, requestId, running =
     } finally {
       if (scopeRef.current === scope) { setBusy(false); actionScope.current = null; }
     }
-  }, [headers, refresh, requestId, runId, scope]);
+  }, [headers, refresh, requestId, runId, scope, workspaceDir]);
   const retry = useCallback(async () => { setDetailRetry((value) => value + 1); await refresh(true); }, [refresh]);
   return { changes: loadedScope === scope ? changes : null, file: loadedScope === scope && file?.path === selectedPath ? file : null, selectedPath, setSelectedPath, loading, detailLoading, busy, error, clearError: () => setError(null), refresh, retry, decide, stale: Boolean(file && selectedRevision !== file.revision) };
 }

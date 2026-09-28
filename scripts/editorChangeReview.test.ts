@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ReviewFile, ReviewHunk } from "../frontend/src/components/runReviewPolicy.js";
+import { reviewActionPolicy } from "../frontend/src/components/runReviewPolicy.js";
 import { buildEditorReviewLayout, canApplyEditorReviewAction, matchesRecordedEditorFile, type EditorReviewSnapshot } from "../frontend/src/editor/editorChangeReviewPolicy.js";
 
 const hunk = (overrides: Partial<ReviewHunk> = {}): ReviewHunk => ({ id: "h1", mutationId: "m1", preimageHash: "pre", postimageHash: "post", preimage: "old\n", postimage: "new\n", reverted: false, kept: false, ...overrides });
@@ -118,11 +119,66 @@ test("click-time validation refuses typing, undo-version drift, model replacemen
   assert.equal(canApplyEditorReviewAction(snapshot(), current(), value, value.hunks[0], "revert", { running: false, busy: true }), false);
 });
 
-test("kept hunks can be explicitly undone, while reverted and foreign IDs cannot act", () => {
+test("kept hunks leave the editor but remain undoable in Changes", () => {
   const kept = file({ hunks: [hunk({ kept: true })] });
+  const evidence = structuredClone(kept);
+  assert.equal(buildEditorReviewLayout(kept, kept.path, kept.modified!, false), null);
   assert.equal(canApplyEditorReviewAction(snapshot(), current(), kept, kept.hunks[0], "keep", { running: false, busy: false }), false);
-  assert.equal(canApplyEditorReviewAction(snapshot(), current(), kept, kept.hunks[0], "revert", { running: false, busy: false }), true);
+  assert.equal(canApplyEditorReviewAction(snapshot(), current(), kept, kept.hunks[0], "revert", { running: false, busy: false }), false);
+  assert.equal(reviewActionPolicy(kept, { readOnly: false, running: false, busy: false, stale: false }, kept.hunks[0]).revert, true);
+  assert.deepEqual(kept, evidence, "hiding an editor overlay must not change its historical evidence");
+});
+
+test("reverted and foreign hunk IDs cannot act in the editor", () => {
   const reverted = file({ hunks: [hunk({ reverted: true })] });
   assert.equal(canApplyEditorReviewAction(snapshot(), current(), reverted, reverted.hunks[0], "revert", { running: false, busy: false }), false);
   assert.equal(canApplyEditorReviewAction(snapshot(), current(), file(), hunk({ mutationId: "foreign" }), "revert", { running: false, busy: false }), false);
+});
+
+test("keeping one separated block removes only its decoration and controls", () => {
+  const value = file({ original: "head\nold\nmiddle\nold two\ntail\n", modified: "head\nnew\nmiddle\nnew two\ntail\n",
+    reviewState: "partially_kept", hunks: [hunk({ kept: true }), hunk({ id: "h2", preimage: "old two\n", postimage: "new two\n" })] });
+  const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
+  assert.equal(layout.blocks.length, 1);
+  assert.deepEqual(layout.blocks[0].removed, ["old two\n"]);
+  assert.equal(layout.blocks[0].modifiedStartLine, 4);
+  assert.deepEqual(layout.positionedHunks.map((entry) => entry.hunk.id), ["h2"]);
+  value.hunks[1].kept = true;
+  assert.equal(buildEditorReviewLayout(value, value.path, value.modified!, false), null);
+});
+
+test("a shared diff block stays pending while any of its hunks needs review", () => {
+  const value = file({ original: "head\nold\nold two\ntail\n", modified: "head\nnew\nnew two\ntail\n",
+    hunks: [hunk({ kept: true }), hunk({ id: "h2", preimage: "old two\n", postimage: "new two\n" })] });
+  const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
+  assert.equal(layout.blocks.length, 1);
+  assert.deepEqual(layout.positionedHunks.map((entry) => entry.hunk.id), ["h2"]);
+});
+
+test("whole-file review state hides overlays even without hunk metadata or within large diffs", () => {
+  for (const value of [file({ reviewState: "kept", hunks: [] }), file({ reviewState: "kept", original: "old\n".repeat(501), modified: "new\n".repeat(501) })]) {
+    assert.equal(buildEditorReviewLayout(value, value.path, value.modified!, false), null);
+  }
+});
+
+test("unreviewed whole-file mutations are not hidden by an empty or partially covered hunk list", () => {
+  assert.ok(buildEditorReviewLayout(file({ hunks: [] }), "src/a.ts", "head\nnew\ntail\n", false));
+  const value = file({ mutationIds: ["create", "m1"], hunks: [hunk({ kept: true })], reviewState: "partially_kept" });
+  const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
+  assert.ok(layout, "the Changes fallback remains available for the unreviewed create");
+  assert.deepEqual(layout.blocks, [], "accepted changes are not repainted to represent unknown history");
+});
+
+test("unpositioned pending history retains the Changes fallback after a newer block is kept", () => {
+  const value = file({ mutationIds: ["m0", "m1"], hunks: [hunk({ mutationId: "m0", id: "earlier" }), hunk({ kept: true })] });
+  const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
+  assert.deepEqual(layout.blocks, []);
+  assert.deepEqual(layout.unavailableHunks.map((entry) => entry.id), ["earlier"]);
+});
+
+test("a newly pending mutation is shown after earlier changes were kept", () => {
+  const value = file({ mutationIds: ["earlier", "m1"], hunks: [hunk({ mutationId: "earlier", id: "kept", kept: true }), hunk()] });
+  const layout = buildEditorReviewLayout(value, value.path, value.modified!, false)!;
+  assert.equal(layout.blocks.length, 1);
+  assert.deepEqual(layout.positionedHunks.map((entry) => entry.hunk.id), ["h1"]);
 });

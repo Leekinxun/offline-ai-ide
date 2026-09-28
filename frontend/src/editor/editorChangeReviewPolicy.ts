@@ -72,15 +72,23 @@ export function matchesRecordedEditorFile(file: ReviewFile | null | undefined, p
 
 export function buildEditorReviewLayout(file: ReviewFile, path: string, content: string, dirty: boolean): EditorReviewLayout | null {
   if (!matchesRecordedEditorFile(file, path, content, dirty)) return null;
+  if (file.reviewState === "kept") return null;
+  const pendingHunks = file.hunks.filter((hunk) => !hunk.kept && !hunk.reverted);
+  // Whole-file mutations can lack hunk metadata, so an empty hunk list alone
+  // does not prove the entire file was reviewed.
+  if (!pendingHunks.length && file.mutationIds.length > 0
+    && file.mutationIds.every((id) => file.hunks.some((hunk) => hunk.mutationId === id))) return null;
   const blocks = lineBlocks(file.original!, file.modified!);
-  if (!blocks) return { blocks: [], positionedHunks: [], unavailableHunks: file.hunks.filter((hunk) => !hunk.reverted), largeDiff: true };
+  if (!blocks) return { blocks: [], positionedHunks: [], unavailableHunks: pendingHunks, largeDiff: true };
   const positionedHunks: PositionedReviewHunk[] = []; const unavailableHunks: ReviewHunk[] = [];
   const latestMutationId = file.mutationIds[file.mutationIds.length - 1];
-  for (const hunk of file.hunks) {
-    if (hunk.reverted) continue;
+  for (const hunk of pendingHunks) {
     // Earlier mutations have no full intermediate image/anchor in this API.
     // A coincidental match in the latest text cannot establish their location.
-    if (hunk.truncated || typeof hunk.preimage !== "string" || typeof hunk.postimage !== "string" || hunk.mutationId !== latestMutationId) { unavailableHunks.push(hunk); continue; }
+    if (hunk.truncated || typeof hunk.preimage !== "string" || typeof hunk.postimage !== "string" || hunk.mutationId !== latestMutationId) {
+      unavailableHunks.push(hunk);
+      continue;
+    }
     let block: EditorReviewBlock | undefined; let startLine = 0; let endLine = 0;
     if (hunk.postimage) {
       const offset = content.indexOf(hunk.postimage);
@@ -96,7 +104,12 @@ export function buildEditorReviewLayout(file: ReviewFile, path: string, content:
     if (block) positionedHunks.push({ hunk, blockId: block.id, startLine, endLine });
     else unavailableHunks.push(hunk);
   }
-  return { blocks, positionedHunks, unavailableHunks, largeDiff: false };
+  const pendingBlockIds = new Set(positionedHunks.map((entry) => entry.blockId));
+  const hasResolvedHunks = file.hunks.some((hunk) => hunk.kept || hunk.reverted);
+  // A mixed block remains pending until all of its positioned hunks are kept.
+  // After partial review, unpositioned history belongs in the full Changes view.
+  const visibleBlocks = blocks.filter((block) => pendingBlockIds.has(block.id) || !hasResolvedHunks);
+  return { blocks: visibleBlocks, positionedHunks, unavailableHunks, largeDiff: false };
 }
 
 export function canApplyEditorReviewAction(
