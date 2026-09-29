@@ -102,7 +102,7 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
     const networkExecutionGrant = networkGrantForTool(context, args);
     const command = typeof args.command === "string" ? args.command.trim() : "";
     if (!command || command.length > 16_000) throw new Error("A bounded command is required");
-    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: Boolean(networkExecutionGrant) });
+    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, workspaceDir: context.workspaceDir, networkAccessAuthorized: Boolean(networkExecutionGrant) });
     if (!policy.allowed) throw new Error(`Command blocked by workspace policy: ${policy.reason}`);
     if (context.executionPlan && !context.executionPlan.verificationCommands.includes(command) && !evaluateInspectionCommand(command).allowed) throw new Error("Process command is outside the approved execution plan");
     if (pendingAgentProcesses(context, true).some((item) => item.session.status === "running")) throw new Error("Wait for the current workspace Agent process to finish before starting another");
@@ -131,7 +131,7 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
     if (typeof text !== "string") throw new Error("Process input must be a string");
     if (args.eof !== undefined && typeof args.eof !== "boolean") throw new Error("eof must be a boolean");
     if (text.trim()) {
-      const policy = evaluateShellCommand(text, { compatibilityShellAuthorized: true });
+      const policy = evaluateShellCommand(text, { compatibilityShellAuthorized: true, workspaceDir: context.workspaceDir });
       if (!policy.allowed) throw new Error(`Interactive input blocked by workspace policy: ${policy.reason}`);
     }
     await inputProcessSession(owner, id, text, args.eof === true);

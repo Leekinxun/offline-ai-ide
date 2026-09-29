@@ -69,7 +69,7 @@ const DEFAULTS: Record<AgentProfileId, AgentProfile> = {
   code: profile("code", 30, 80, 30 * 60_000, true, ALL_TOOLS),
   explore: profile("explore", 20, 40, 15 * 60_000, false, ["read_file", "find_files", "search_files", "list_directory"]),
   subagent: profile("subagent", 30, 60, 25 * 60_000, true, ALL_TOOLS),
-  teammate: profile("teammate", 50, 100, 60 * 60_000, true, ["bash", "read_file", "write_file", "edit_file", "send_message", "idle", "claim_task"]),
+  teammate: profile("teammate", 50, 100, 60 * 60_000, true, ["bash", "read_file", "write_file", "edit_file", "rename_file", "send_message", "idle", "claim_task"]),
 };
 
 function profile(

@@ -30,7 +30,8 @@ const WORKSPACE_SIDE_EFFECT_TOOLS = new Set([
 
 export function classifyToolApproval(
   name: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  options: { workspaceDir?: string } = {},
 ): ToolApprovalRequirement {
   if (name === "submit_plan") {
     return {
@@ -40,6 +41,16 @@ export function classifyToolApproval(
       scope: typeof input.goal === "string" ? input.goal : "Execution plan",
       canAllowSession: false,
     };
+  }
+  if (name === "rename_file") {
+    const source = typeof input.source_path === "string" ? input.source_path : "";
+    const target = typeof input.target_path === "string" ? input.target_path : "";
+    for (const candidate of [source, target]) {
+      const policy = evaluateWorkspaceWrite(candidate);
+      if (!policy.allowed) return { kind: "blocked", reason: policy.reason || "Workspace rename blocked" };
+    }
+    return { kind: "approval", risk: "medium", reason: "Rename a workspace file without replacing an existing target", scope: `${source} → ${target}`, canAllowSession: true,
+      sessionKey: `rename_file:${path.posix.dirname(source.replace(/\\/g, "/"))}->${path.posix.dirname(target.replace(/\\/g, "/"))}` };
   }
   if (name === "write_file" || name === "edit_file") {
     const target = typeof input.path === "string" ? input.path : "";
@@ -62,7 +73,7 @@ export function classifyToolApproval(
     const text = input.text === undefined ? "" : input.text;
     if (typeof text !== "string" || Buffer.byteLength(text) > 16_384) return { kind: "blocked", reason: "Process input must be at most 16 KiB of text" };
     if (text.trim()) {
-      const policy = evaluateShellCommand(text, { compatibilityShellAuthorized: true });
+      const policy = evaluateShellCommand(text, { compatibilityShellAuthorized: true, workspaceDir: options.workspaceDir });
       if (!policy.allowed) return { kind: "blocked", reason: policy.reason || "Process input blocked" };
     }
     return { kind: "approval", risk: "high", reason: "Send new interactive input to a process; this can execute additional instructions", scope: `${String(input.session_id || "")}: ${text.slice(0, 400) || "EOF"}`, canAllowSession: false };
@@ -74,7 +85,7 @@ export function classifyToolApproval(
     const command = typeof input.command === "string" ? input.command : "";
     // This is only a preflight. The execution path repeats the policy check
     // after this high-risk approval has been granted.
-    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: network });
+    const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: network, workspaceDir: options.workspaceDir });
     if (!policy.allowed) {
       return { kind: "blocked", reason: policy.reason || "Shell command blocked" };
     }

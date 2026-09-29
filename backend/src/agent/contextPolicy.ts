@@ -82,6 +82,17 @@ export function containsContextSecret(content: string): boolean {
   return false;
 }
 
+/** Shared content policy for workspace context and explicitly granted external reads. */
+export function assertAuthorizedContextContent(buffer: Buffer): string {
+  if (buffer.includes(0)) throw new Error("Context file is not authorized: binary");
+  const content = buffer.toString("utf8");
+  if (/^(?:\/\/|#|\/\*)\s*@generated\b/im.test(content.slice(0, 4096)) || /\bDO NOT EDIT\b/i.test(content.slice(0, 4096))) {
+    throw new Error("Context file is not authorized: generated");
+  }
+  if (containsContextSecret(content)) throw new Error("Context file is not authorized: secret");
+  return content;
+}
+
 function contained(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
@@ -113,12 +124,7 @@ export function readAuthorizedWorkspaceFile(
   if (!stat.isFile()) throw new Error("Context file is not authorized: not_file");
   if (stat.size > Math.max(1, maxBytes)) throw new Error("Context file is not authorized: oversized");
   const buffer = fs.readFileSync(fullPath);
-  if (buffer.includes(0)) throw new Error("Context file is not authorized: binary");
-  const content = buffer.toString("utf8");
-  if (/^(?:\/\/|#|\/\*)\s*@generated\b/im.test(content.slice(0, 4096)) || /\bDO NOT EDIT\b/i.test(content.slice(0, 4096))) {
-    throw new Error("Context file is not authorized: generated");
-  }
-  if (containsContextSecret(content)) throw new Error("Context file is not authorized: secret");
+  const content = assertAuthorizedContextContent(buffer);
   return {
     path: decision.normalizedPath,
     fullPath,

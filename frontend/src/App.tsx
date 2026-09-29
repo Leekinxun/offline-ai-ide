@@ -88,6 +88,7 @@ import { PreviewPanel } from "./components/PreviewPanel";
 import { inlineRequestStatus } from "./utils/requestOutcome";
 import {
   applyFileSaveResult,
+  applyRemoteFileRename,
   applyRemoteFileSnapshot,
   beginFileRead,
   buildClearedRemoteState,
@@ -98,6 +99,8 @@ import {
   normalizeWorkspaceRelativePath,
   retainOpenFilesAfterTreeRefresh,
   type FileSnapshot,
+  type FileReadTicket,
+  type RemoteFileRename,
 } from "./editor/fileUpdatePolicy";
 import {
   applyHunkSelections,
@@ -444,6 +447,7 @@ function AuthenticatedApp({
   const currentFileReadScopeRef = useRef(fileReadScope);
   currentFileReadScopeRef.current = fileReadScope;
   const treeReadSequenceRef = useRef(0);
+  const pendingRenameReadsRef = useRef(new Map<string, FileReadTicket>());
   const fileNavigationSequenceRef = useRef(0);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
@@ -1261,6 +1265,10 @@ function AuthenticatedApp({
       if (currentFileReadScopeRef.current !== fileReadScope || request !== treeReadSequenceRef.current) return;
       setFileTree(tree);
       const visiblePaths = new Set(Array.from(collectVisiblePaths(tree), (path) => normalizeWorkspaceRelativePath(path, workspaceDir)));
+      // Keep a clean source tab until its pending rename check has settled.
+      for (const [path, ticket] of pendingRenameReadsRef.current) {
+        if (ticket.scope === fileReadScope) visiblePaths.add(path);
+      }
       setOpenFiles((prev) => currentFileReadScopeRef.current === fileReadScope
         ? retainOpenFilesAfterTreeRefresh(prev, visiblePaths, workspaceDir) : prev);
       const retainedPath = (path: string | null) => path && (
@@ -1306,6 +1314,7 @@ function AuthenticatedApp({
     savedBufferContentRef.current = {};
     collaborationBufferVersionRef.current = {};
     openingPathsRef.current.clear();
+    pendingRenameReadsRef.current.clear();
     fileNavigationSequenceRef.current += 1;
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
@@ -1317,6 +1326,7 @@ function AuthenticatedApp({
     fallbackSource?: (snapshot: FileSnapshot) => Pick<FileSnapshot, "source" | "actor">,
   ) => {
     if (currentFileReadScopeRef.current !== fileReadScope) return false;
+    if (pendingRenameReadsRef.current.get(normalizeWorkspaceRelativePath(rawPath, workspaceDir))?.scope === fileReadScope) return false;
     const ticket = beginFileRead(fileReadScope, rawPath);
     if (!ticket.path) return false;
     const next = await fs.readFileWithMeta(ticket.path);
@@ -1344,10 +1354,88 @@ function AuthenticatedApp({
     return true;
   }, [fileReadScope, fs, workspaceDir]);
 
+  const updateMovedPathsInEditor = useCallback((oldPath: string, newPath: string, verified?: {
+    rename: RemoteFileRename;
+    isCurrent: () => boolean;
+  }) => {
+    if (currentFileReadScopeRef.current !== fileReadScope) return;
+    setOpenFiles((prev) => {
+      if (currentFileReadScopeRef.current !== fileReadScope || (verified && !verified.isCurrent())) return prev;
+      const nextFiles = verified ? applyRemoteFileRename(prev, verified.rename, workspaceDir) : prev.map((file) => {
+        const path = remapMovedPath(file.path, oldPath, newPath);
+        return path !== file.path ? { ...file, path, name: path.split("/").pop() || path, language: getLanguage(path.split("/").pop() || "") } : file;
+      });
+      if (nextFiles === prev) return verified ? prev.map((file) => isSameWorkspacePath(file.path, newPath, workspaceDir)
+        ? applyRemoteFileSnapshot(file, verified.rename.snapshot) : file) : prev;
+      setPreviewModes((current) => {
+        let changed = false;
+        const next: typeof current = {};
+        for (const [previewPath, mode] of Object.entries(current)) {
+          const remappedPath = remapMovedPath(previewPath, oldPath, newPath);
+          next[remappedPath] = mode;
+          changed ||= remappedPath !== previewPath;
+        }
+        return changed ? next : current;
+      });
+      setActiveFilePath((current) =>
+        current ? remapMovedPath(current, oldPath, newPath) : current
+      );
+      setCompareFilePath((current) => current ? remapMovedPath(current, oldPath, newPath) : current);
+      setDiffViewerPath((current) => current ? remapMovedPath(current, oldPath, newPath) : current);
+      setEditorNavigationTarget((current) =>
+        current
+          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
+          : current
+      );
+      setEditorHighlightTarget((current) =>
+        current
+          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
+          : current
+      );
+      return nextFiles;
+    });
+  }, [fileReadScope, workspaceDir]);
+
   const handleAiFileUpdate = useCallback(
     (update: FileUpdate) => {
       if (currentFileReadScopeRef.current !== fileReadScope) return;
       const path = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      if (update.previousPath && update.previousVersion) {
+        const previousPath = normalizeWorkspaceRelativePath(update.previousPath, workspaceDir);
+        const sourceTicket = beginFileRead(fileReadScope, previousPath);
+        const targetTicket = beginFileRead(fileReadScope, path);
+        const isCurrent = () => isCurrentFileRead(sourceTicket, currentFileReadScopeRef.current)
+          && isCurrentFileRead(targetTicket, currentFileReadScopeRef.current);
+        pendingRenameReadsRef.current.set(previousPath, sourceTicket);
+        pendingRenameReadsRef.current.set(path, targetTicket);
+        treeReadSequenceRef.current += 1;
+        void (async () => {
+          let migrationQueued = false;
+          try {
+            const snapshot = await fs.readFileWithMeta(path);
+            if (!isCurrent()) return;
+            const sourceStatus = await fs.readFileWithMeta(previousPath).then(() => 200, (error: unknown) =>
+              error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : undefined);
+            if (!isCurrent()) return;
+            migrationQueued = true;
+            updateMovedPathsInEditor(previousPath, path, {
+              rename: { previousPath, previousVersion: update.previousVersion!, path, sourceStatus, snapshot: { ...snapshot, source: snapshot.source || "assistant_tool" } },
+              isCurrent,
+            });
+          } catch {
+            // Missing evidence must not move an editor buffer or trust tool content.
+          } finally {
+            if (pendingRenameReadsRef.current.get(previousPath) === sourceTicket) pendingRenameReadsRef.current.delete(previousPath);
+            if (pendingRenameReadsRef.current.get(path) === targetTicket) pendingRenameReadsRef.current.delete(path);
+            if (currentFileReadScopeRef.current === fileReadScope) {
+              void loadTree();
+              if (!migrationQueued) void refreshOpenFile(path, false, () => ({ source: "assistant_tool" })).catch(() => {});
+            }
+          }
+        })();
+        return;
+      }
+      invalidateFileRead(fileReadScope, path);
       const file = openFilesRef.current.find((entry) => isSameWorkspacePath(entry.path, path, workspaceDir));
       if (update.selection && isSameWorkspacePath(activeFilePath, path, workspaceDir) && !file?.modified) {
         highlightRequestRef.current += 1;
@@ -1362,7 +1450,7 @@ function AuthenticatedApp({
       // file before syncing any buffer, retaining dirty text in the conflict flow.
       void refreshOpenFile(path, false, () => ({ source: "assistant_tool" })).catch(() => {});
     },
-    [activeFilePath, fileReadScope, loadTree, refreshOpenFile, workspaceDir]
+    [activeFilePath, fileReadScope, fs, loadTree, refreshOpenFile, updateMovedPathsInEditor, workspaceDir]
   );
 
   const handleNavigateToFileUpdate = useCallback(
@@ -2113,45 +2201,6 @@ function AuthenticatedApp({
     },
     [fs, removeDeletedEntriesFromState]
   );
-
-  const updateMovedPathsInEditor = useCallback((oldPath: string, newPath: string) => {
-      setPreviewModes((current) => {
-        let changed = false;
-        const next: typeof current = {};
-        for (const [previewPath, mode] of Object.entries(current)) {
-          const remappedPath = remapMovedPath(previewPath, oldPath, newPath);
-          next[remappedPath] = mode;
-          changed ||= remappedPath !== previewPath;
-        }
-        return changed ? next : current;
-      });
-      setOpenFiles((prev) =>
-        prev.map((file) => {
-          const path = remapMovedPath(file.path, oldPath, newPath);
-          return path !== file.path
-            ? {
-                ...file,
-                path,
-                name: path.split("/").pop() || path,
-                language: getLanguage(path.split("/").pop() || ""),
-              }
-            : file;
-        })
-      );
-      setActiveFilePath((current) =>
-        current ? remapMovedPath(current, oldPath, newPath) : current
-      );
-      setEditorNavigationTarget((current) =>
-        current
-          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
-          : current
-      );
-      setEditorHighlightTarget((current) =>
-        current
-          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
-          : current
-      );
-    }, []);
 
   const handleRenameEntry = useCallback(
     async (oldPath: string, newPath: string) => {

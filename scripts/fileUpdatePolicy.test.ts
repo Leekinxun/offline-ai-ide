@@ -3,6 +3,7 @@ import test from "node:test";
 import type { OpenFile } from "../frontend/src/types/index.js";
 import {
   applyFileSaveResult,
+  applyRemoteFileRename,
   applyRemoteFileSnapshot,
   beginFileRead,
   buildClearedRemoteState,
@@ -13,6 +14,7 @@ import {
   normalizeWorkspaceRelativePath,
   retainOpenFilesAfterTreeRefresh,
   type FileSnapshot,
+  type RemoteFileRename,
 } from "../frontend/src/editor/fileUpdatePolicy.js";
 
 const file = (overrides: Partial<OpenFile> = {}): OpenFile => ({
@@ -163,4 +165,77 @@ test("save acknowledgements do not replace a newer version or clear a new remote
   assert.equal(result.modified, true);
   assert.equal(result.remoteContent, "agent edit");
   assert.equal(result.remoteUpdated, true);
+});
+
+const rename = (overrides: Partial<RemoteFileRename> = {}): RemoteFileRename => ({
+  previousPath: "src/main.ts", previousVersion: "v1", path: "src/TASK.md", sourceStatus: 404,
+  snapshot: { content: "saved", version: "v1", updatedAt: 2, source: "assistant_tool" }, ...overrides,
+});
+
+test("a verified rename migrates the open tab and reads authoritative destination metadata", () => {
+  const next = applyRemoteFileRename([file()], rename({ snapshot: { content: "latest disk", version: "v2", updatedAt: 3 } }), "/repo");
+  assert.equal(next.length, 1);
+  assert.equal(next[0].path, "src/TASK.md");
+  assert.equal(next[0].name, "TASK.md");
+  assert.equal(next[0].language, "markdown");
+  assert.equal(next[0].content, "latest disk");
+  assert.equal(next[0].version, "v2");
+  assert.equal(next[0].updatedAt, 3);
+});
+
+test("rename retains dirty text and its baseline, including typing while the read was pending", () => {
+  const dirty = file({ content: "typed during rename", modified: true });
+  const moved = applyRemoteFileRename([dirty], rename(), "/repo")[0];
+  assert.equal(moved.path, "src/TASK.md");
+  assert.equal(moved.content, dirty.content);
+  assert.equal(moved.modified, true);
+  assert.equal(moved.version, "v1");
+  assert.equal(moved.remoteUpdated, false, "An unchanged moved baseline is not a remote conflict");
+  const changed = applyRemoteFileRename([dirty], rename({ snapshot: { content: "destination changed", version: "v2" } }), "/repo")[0];
+  assert.equal(changed.content, dirty.content);
+  assert.equal(changed.version, "v1");
+  assert.equal(changed.remoteContent, "destination changed");
+  assert.equal(changed.remoteVersion, "v2");
+});
+
+test("rename refuses recreated or unverified sources and never overwrites an open destination", () => {
+  const tabs = [file({ modified: true, content: "unsaved source" })];
+  for (const sourceStatus of [200, 403, 409, 500, undefined]) {
+    assert.equal(applyRemoteFileRename(tabs, rename({ sourceStatus }), "/repo"), tabs);
+  }
+  for (const previousVersion of ["", "another-version"]) {
+    assert.equal(applyRemoteFileRename(tabs, rename({ previousVersion }), "/repo"), tabs);
+  }
+  const recreated = [file({ version: "new-source" })];
+  assert.equal(applyRemoteFileRename(recreated, rename(), "/repo"), recreated);
+  const withDestination = [...tabs, file({ path: "src/TASK.md", content: "unsaved destination", modified: true })];
+  assert.equal(applyRemoteFileRename(withDestination, rename(), "/repo"), withDestination);
+  assert.equal(applyRemoteFileRename(tabs, rename({ snapshot: { content: "no version" } }), "/repo"), tabs);
+});
+
+test("rename replay cannot create duplicate tabs, restore closed tabs or move through an invalid path", () => {
+  const moved = applyRemoteFileRename([file()], rename(), "/repo");
+  assert.equal(applyRemoteFileRename(moved, rename(), "/repo"), moved);
+  const closed: OpenFile[] = [];
+  assert.equal(applyRemoteFileRename(closed, rename(), "/repo"), closed);
+  for (const path of ["", "src/main.ts", "../outside.ts"]) {
+    const tabs = [file()];
+    assert.equal(applyRemoteFileRename(tabs, rename({ path }), "/repo"), tabs);
+  }
+});
+
+test("rename evidence is invalidated by either file generation or workspace replacement", () => {
+  for (const changed of ["source", "target", "workspace"]) {
+    const scope = createFileReadScope("/repo");
+    const source = beginFileRead(scope, "src/main.ts");
+    const target = beginFileRead(scope, "src/TASK.md");
+    let currentScope = scope;
+    if (changed === "source") invalidateFileRead(scope, source.path);
+    if (changed === "target") beginFileRead(scope, target.path);
+    if (changed === "workspace") currentScope = createFileReadScope("/repo");
+    let tabs = [file({ modified: true, content: "preserve me" })];
+    const original = tabs;
+    if (isCurrentFileRead(source, currentScope) && isCurrentFileRead(target, currentScope)) tabs = applyRemoteFileRename(tabs, rename(), "/repo");
+    assert.equal(tabs, original, changed);
+  }
 });

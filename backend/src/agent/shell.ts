@@ -76,6 +76,7 @@ export async function runWorkspaceCommand(
   const policy = evaluateShellCommand(command, {
     compatibilityShellAuthorized: options.compatibilityShellAuthorized === true,
     networkAccessAuthorized: Boolean(options.networkExecutionGrant),
+    workspaceDir: cwd,
   });
   if (!policy.allowed) return `Error: Command blocked by workspace policy: ${policy.reason}`;
   if (signal?.aborted) return "Error: Stopped before shell execution";

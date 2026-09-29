@@ -34,6 +34,14 @@ const reviewModified = "# 技术面试任务说明：轻量 Key-Value 引擎\n\n
 fs.writeFileSync(path.join(workspace, "review-doc.md"), reviewOriginal);
 fs.writeFileSync(path.join(workspace, "review-notes.md"), "Notes draft\n");
 fs.writeFileSync(path.join(workspace, "review-checklist.md"), "Checklist draft\n");
+const renameSources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);
+for (const [index, source] of renameSources.entries()) {
+  fs.mkdirSync(path.dirname(path.join(workspace, source)), { recursive: true });
+  fs.writeFileSync(path.join(workspace, source), `# Question ${index + 1}\nKeep file content unchanged.\n`);
+}
+const referenceRoot = path.join(fixture, "references");
+fs.mkdirSync(referenceRoot);
+fs.writeFileSync(path.join(referenceRoot, "ordinary.txt"), "External ordinary reference, read only.\n");
 fs.writeFileSync(path.join(workspace, ".gitignore"), ".history/\n.checkpoints/\n.team/\n.codex/\n.crewforge/\nnode_modules/\n");
 fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", wait: "node wait.cjs" } }));
 fs.writeFileSync(path.join(workspace, "verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').ok(fs.readFileSync('calculator.ts', 'utf8').includes('return a + b;')); console.log('calculator check passed');\n");
@@ -43,7 +51,7 @@ for (const args of [["init"], ["config", "user.email", "fixture@localhost"], ["c
   const result = spawnSync("git", args, { cwd: workspace, stdio: "ignore" });
   if (result.status !== 0) throw new Error("Could not initialize disposable fixture repository");
 }
-fs.writeFileSync(path.join(fixture, "users.json"), JSON.stringify({ allowedRoots: [workspace], users: [{ username: "fixture", password: "local-fixture-only", defaultWorkspace: workspace, isAdmin: true }], pendingRegistrations: [] }));
+fs.writeFileSync(path.join(fixture, "users.json"), JSON.stringify({ allowedRoots: [workspace, referenceRoot], users: [{ username: "fixture", password: "local-fixture-only", defaultWorkspace: workspace, isAdmin: true }], pendingRegistrations: [] }));
 
 const model = http.createServer(async (req, res) => {
   const chunks = [];
@@ -55,8 +63,19 @@ const model = http.createServer(async (req, res) => {
     const toolResults = messages.filter((message) => message.role === "tool");
     const tool = (name, args, id) => ({ role: "assistant", content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
     const reviewRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_REVIEW"));
+    const renameRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_RENAME"));
     let message = { role: "assistant", content: "Local browser fixture ready." };
-    if (reviewRequested) {
+    if (renameRequested) {
+      if (!toolResults.some((entry) => entry.tool_call_id === "rename-reference")) message = tool("read_file", { path: path.join(referenceRoot, "ordinary.txt") }, "rename-reference");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "rename-discovery")) message = tool("bash", { command: "ls interview/*/题目.md 2>/dev/null; printf 'discovery finished'" }, "rename-discovery");
+      else {
+        message = { role: "assistant", content: "Renamed all ten interview files. File contents remain unchanged." };
+        for (const [index, source] of renameSources.entries()) {
+          if (!toolResults.some((entry) => entry.tool_call_id === `rename-read-${index}`)) { message = tool("read_file", { path: source }, `rename-read-${index}`); break; }
+          if (!toolResults.some((entry) => entry.tool_call_id === `rename-file-${index}`)) { message = tool("rename_file", { source_path: source, target_path: source.replace("题目.md", "TASK.md") }, `rename-file-${index}`); break; }
+        }
+      }
+    } else if (reviewRequested) {
       if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-read")) message = tool("read_file", { path: "review-doc.md" }, "fixture-review-read");
       else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-review-edit")) message = tool("edit_file", { path: "review-doc.md", old_text: reviewOriginal, new_text: reviewModified }, "fixture-review-edit");
       else if (!toolResults.some((entry) => entry.tool_call_id === "fixture-notes-read")) message = tool("read_file", { path: "review-notes.md" }, "fixture-notes-read");

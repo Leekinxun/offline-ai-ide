@@ -60,6 +60,8 @@ export interface FileSelectionRange {
 
 export interface ToolFileUpdate {
   path: string;
+  previousPath?: string;
+  previousVersion?: string;
   content: string;
   selection?: FileSelectionRange;
 }
@@ -281,6 +283,9 @@ export interface ToolContext {
   stepCheckpointId?: string;
   /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
+  /** Trusted server-provided read-only roots; never accepted from tool input. */
+  externalReadRoots?: readonly string[];
+  getExternalReadRoots?: () => readonly string[];
   signal?: AbortSignal;
   authorizeTool?: import("./permissionService.js").PermissionAuthorizer;
   /** Tool schemas and external adapters available to a delegated child. */

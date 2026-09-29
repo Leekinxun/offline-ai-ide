@@ -271,6 +271,88 @@ export function listFileMutations(workspaceDir: string, selection: { runId?: str
 export function listMutationEvidenceGaps(workspaceDir: string, selection: { runId?: string; requestId?: string; toolCallId?: string; path?: string } = {}): MutationEvidenceGap[] { const target = path.resolve(workspaceDir); loadJournal(target, true); const selectedPath = selection.path === undefined ? undefined : safeRelativePath(selection.path); if (selection.path !== undefined && !selectedPath) return []; return workspaceEvidenceGaps(target).filter((x) => (!selection.runId || x.runId === selection.runId) && (!selection.requestId || x.requestId === selection.requestId) && (!selection.toolCallId || x.toolCallId === selection.toolCallId) && (!selectedPath || x.path === selectedPath)).sort((a, b) => b.recordedAt - a.recordedAt); }
 /** Records exact pre/post images for durable, whole-file-only rollback. */
 export function recordFileMutation(input: Omit<FileMutationRecord, "id" | "recordedAt" | "version" | "workspaceDir" | "mtimeMs" | "postimageHash" | "preimageHash" | "rollbackScope" | "operation" | "preimageBlob" | "postimageBlob" | "hunks"> & { workspaceDir: string; mtimeMs?: number; postimageContent?: string; preimageContent?: string; hunks?: Array<{ id: string; preimage: string; postimage: string }>; }): FileMutationRecord { const known = recordKnownFileMutation({ workspaceDir: input.workspaceDir, path: input.path, source: input.source, actor: input.actor, mtimeMs: input.mtimeMs || Date.now(), content: input.postimageContent, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimageContent: input.preimageContent, hunkSelections: input.hunkSelections, hunks: input.hunks }); return listFileMutations(input.workspaceDir, { path: known.path }).find((x) => x.recordedAt === known.recordedAt)!; }
+
+export interface FileMutationBatchInput {
+  workspaceDir: string; path: string; source: KnownFileMutationSource; actor?: string;
+  mtimeMs?: number; runId?: string; requestId?: string; toolCallId?: string;
+  preimageContent?: string; postimageContent?: string;
+}
+
+/** Prepare bounded whole-file evidence before a multi-path operation changes disk. */
+export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean } = {}): {
+  commit: () => FileMutationRecord[];
+  cancel: () => void;
+} {
+  if (!inputs.length || inputs.length > 64) throw new Error("Mutation batches require 1 to 64 file records");
+  const workspaceDir = path.resolve(inputs[0].workspaceDir);
+  const originalJournal = loadJournal(workspaceDir, true);
+  const previousRecords = workspaceRecords(workspaceDir);
+  const firstSequence = previousRecords.reduce((maximum, entry, index) => Math.max(maximum, entry.sequence ?? index + 1), 0) + 1;
+  const paths = new Set<string>();
+  const records = inputs.map((input, index): FileMutationRecord => {
+    const relativePath = safeRelativePath(input.path);
+    if (path.resolve(input.workspaceDir) !== workspaceDir || !relativePath || paths.has(relativePath)) throw new Error("Mutation batch paths must be distinct files in one workspace");
+    paths.add(relativePath);
+    if (input.requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId)) throw new Error("Invalid mutation request id");
+    if (input.preimageContent === undefined && input.postimageContent === undefined) throw new Error("Mutation batch requires a preimage or postimage");
+    for (const content of [input.preimageContent, input.postimageContent]) {
+      if (content !== undefined && (typeof content !== "string" || content.includes("\0") || Buffer.byteLength(content) > MAX_CAPTURE_FILE_BYTES)) throw new Error("Mutation batch evidence must be bounded text");
+    }
+    const recordedAt = Date.now();
+    return {
+      workspaceDir, path: relativePath, source: input.source, ...(input.actor ? { actor: input.actor } : {}),
+      id: `${recordedAt}-${crypto.randomBytes(4).toString("hex")}`, recordedAt, mtimeMs: input.mtimeMs ?? recordedAt,
+      sequence: firstSequence + index, version: buildFileVersion(input.postimageContent ?? ""),
+      ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+      ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}),
+      operation: input.preimageContent === undefined ? "create" : input.postimageContent === undefined ? "delete" : "modify",
+      preimageHash: buildFileHash(input.preimageContent ?? ""), postimageHash: buildFileHash(input.postimageContent ?? ""),
+      ...(input.preimageContent !== undefined ? { preimageContent: input.preimageContent, preimageBlob: storeBlob(workspaceDir, input.preimageContent) } : {}),
+      ...(input.postimageContent !== undefined ? { postimageBlob: storeBlob(workspaceDir, input.postimageContent) } : {}),
+      rollbackScope: "whole-file",
+    };
+  });
+  const target = inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
+  const temporary = `${target}.batch-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+  const skipped = workspaceEvidenceGaps(workspaceDir).sort((a, b) => a.recordedAt - b.recordedAt).slice(-MAX_MUTATION_ENTRIES);
+  const journal: MutationJournal = { schemaVersion: 1, records: [...previousRecords, ...records].slice(-MAX_MUTATION_ENTRIES), ...(skipped.length ? { skipped } : {}) };
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2), { encoding: "utf8", flag: "wx" }); }
+  catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
+  let settled = false;
+  const cancel = () => {
+    if (!settled) { fs.rmSync(temporary, { force: true }); settled = true; }
+  };
+  return {
+    cancel,
+    commit: () => {
+      if (settled) throw new Error("Mutation batch has already settled");
+      // A concurrent journal writer must not be overwritten by our prepared batch.
+      if (loadJournal(workspaceDir, true) !== originalJournal) throw new Error("Mutation journal changed before committing the operation");
+      inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
+      fs.renameSync(temporary, target);
+      settled = true;
+      for (const record of records) {
+        mutationHistory.set(record.id, record);
+        mutationRegistry.set(key(workspaceDir, record.path), record);
+      }
+      trimHistory();
+      while (mutationRegistry.size > MAX_MUTATION_ENTRIES) { const oldest = mutationRegistry.keys().next().value; if (oldest) mutationRegistry.delete(oldest); }
+      for (const record of records) {
+        if (options.notify !== false) notifyWorkspaceMutation({ workspaceDir, path: record.path, operation: record.operation, recordedAt: record.recordedAt });
+        try { new CollaborationStore(workspaceDir).recordMutation(record.path, record.actor || "system"); } catch { /* best-effort collaboration notification */ }
+      }
+      return records;
+    },
+  };
+}
+
+/** Commit related whole-file mutations together, without a partially persisted journal. */
+export function recordFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean } = {}): FileMutationRecord[] {
+  const prepared = prepareFileMutationBatch(inputs, options);
+  try { return prepared.commit(); } finally { prepared.cancel(); }
+}
 /** Review decisions belong to the existing immutable mutation evidence, not current disk text. */
 export function keepFileMutations(workspaceDir: string, selection: { runId: string; requestId?: string; path: string; ids?: string[]; hunkIds?: string[] }): string[] {
   const records = listFileMutations(workspaceDir, selection).filter((record) => !selection.ids || selection.ids.includes(record.id));

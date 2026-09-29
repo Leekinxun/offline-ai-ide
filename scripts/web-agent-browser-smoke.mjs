@@ -12,17 +12,19 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "backend/package.json"));
 const { WebSocket } = require("ws");
 const args = process.argv.slice(2);
-const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false };
+const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false };
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (key === "--launch") options.launch = true;
   else if (key === "--review") options.review = true;
+  else if (key === "--rename") options.rename = true;
   else if (["--url", "--cdp", "--workspace", "--artifacts"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
   else if (key === "--help") {
-    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review] [--artifacts /tmp/review-screenshots]");
+    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename] [--artifacts /tmp/review-screenshots]");
     process.exit(0);
   } else throw new Error("Unknown or incomplete option: " + key);
 }
+assert.ok(!(options.rename && options.review), 'Choose one fixture scenario per run');
 function localUrl(value, protocols = ["http:", "https:"]) {
   const url = new URL(value);
   assert.ok(protocols.includes(url.protocol) && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname), "Only loopback fixture/CDP endpoints are allowed");
@@ -199,8 +201,9 @@ async function connect() {
     const nativeSend=WebSocket.prototype.send;
     WebSocket.prototype.send=function(data){let value;try{value=JSON.parse(data)}catch{}
       const review=globalThis.__smokeReviewAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_REVIEW: format the interview document";
-      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
-      if(review){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
+      const rename=globalThis.__smokeRenameAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_RENAME: rename all interview files";
+      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&!rename&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
+      if(review||rename){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
       return nativeSend.call(this,data)};
     const nativeFetch=window.fetch;
     window.fetch=function(input,init){const url=new URL(typeof input==="string"?input:input.url,location.href);const method=(init?.method||"GET").toUpperCase();
@@ -240,7 +243,7 @@ try {
     if (options.workspace) assert.equal(safeWorkspace, fs.realpathSync(options.workspace), "--workspace does not match the authenticated fixture");
     const [runtime, settings] = await Promise.all([uiApi("/api/chat/runtime-options"), uiApi("/api/admin/settings")]);
     assert.equal(runtime.defaultModelName, "local-fixture"); assert.equal(runtime.modeModels.ask, "local-fixture");
-    if (options.review) assert.equal(runtime.modeModels.code, "local-fixture");
+    if (options.review || options.rename) assert.equal(runtime.modeModels.code, "local-fixture");
     assert.equal(settings.llm.modelName, "local-fixture"); localUrl(settings.llm.vllmApiUrl);
     for (const model of settings.llm.models || []) if (model.modelName === 'local-fixture') localUrl(model.apiUrl);
     for (const fallback of settings.llm.fallbacks || []) localUrl(fallback.apiUrl);
@@ -261,7 +264,66 @@ try {
     }), "Loaded calculator Monaco model");
     assert.equal(await modelValue(), diskBefore);
   }, true);
-  if (options.review) {
+  if (options.rename) {
+    const sources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);
+    const targets = sources.map((source) => source.replace('题目.md', 'TASK.md'));
+    let before;
+    await scenario('rename_fixture_run', async () => {
+      before = sources.map((source) => fs.readFileSync(path.join(safeWorkspace, source), 'utf8'));
+      assert.ok(targets.every((target) => !fs.existsSync(path.join(safeWorkspace, target))), 'Rename requires a fresh fixture');
+      await click('[data-tree-path="interview"]');
+      await click('[data-tree-path="interview/q1 sample"]');
+      await click('[data-tree-path="interview/q1 sample/题目.md"]');
+      await until(() => call(async (source) => {
+        const url = performance.getEntriesByType('resource').map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
+        const monaco = await import(url); const editor = monaco.editor.getEditors().find((item) => item.getModel()?.uri.path.endsWith(source));
+        if (!editor) return false;
+        const model = editor.getModel(); editor.setPosition({ lineNumber: model.getLineCount(), column: model.getLineMaxColumn(model.getLineCount()) });
+        editor.trigger('keyboard', 'type', { text: 'Unsaved reviewer note.\n' }); return true;
+      }, sources[0]), 'Open source buffer');
+      await click('.editor-assistant-composer .model-selector button');
+      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture').setAttribute('data-smoke-local-model', 'true'));
+      await click('[data-smoke-local-model]');
+      await call(() => { globalThis.__smokeRenameAllowed = true; });
+      await fill('.editor-assistant-composer textarea', 'FIXTURE_RENAME: rename all interview files');
+      await click('.editor-assistant-send-btn');
+      await until(() => call(() => document.querySelector('.tool-approval-card')?.textContent.includes('bash')), 'Screenshot command approval');
+      await click('.tool-approval-card .tool-approval-allow');
+      await until(() => call(() => document.querySelector('.tool-approval-card')?.textContent.includes('rename_file')), 'Structured rename approval');
+      await click('.tool-approval-bulk button');
+      await until(() => call(() => document.querySelector('.editor-assistant-message.assistant')?.textContent.includes('Renamed all ten interview files.')), 'Ten renames completed', 60_000);
+      await until(() => call(() => !document.querySelector('.editor-assistant-panel .assistant-activity')), 'Rename run finished', 30_000);
+    }, true);
+    await scenario('rename_keeps_disk_bytes_and_reads_external_file_only', async () => {
+      for (const [index, source] of sources.entries()) {
+        assert.equal(fs.existsSync(path.join(safeWorkspace, source)), false);
+        assert.equal(fs.readFileSync(path.join(safeWorkspace, targets[index]), 'utf8'), before[index]);
+      }
+      const tools = await call(() => [...document.querySelectorAll('[data-assistant-tool-call-id]')].map((node) => ({ id: node.getAttribute('data-assistant-tool-call-id'), status: node.getAttribute('data-status'), text: node.textContent })));
+      assert.equal(tools.filter((tool) => tool.id.startsWith('rename-file-') && tool.status === 'completed').length, 10);
+      const reference = tools.find((tool) => tool.id === 'rename-reference');
+      assert.equal(reference?.status, 'completed');
+      assert.match(reference.text, /"read_only":true/); assert.match(reference.text, /"source":"external"/);
+      assert.match(tools.find((tool) => tool.id === 'rename-discovery')?.text || '', /discovery finished/);
+      assert.equal(fs.readFileSync(path.join(path.dirname(safeWorkspace), 'references/ordinary.txt'), 'utf8'), 'External ordinary reference, read only.\n');
+    });
+    await scenario('rename_migrates_dirty_editor_without_losing_unsaved_text', async () => {
+      await until(() => call((target) => Boolean(document.querySelector(`.tab[title="${target}"][aria-selected="true"].modified`)), targets[0]), 'Dirty source tab migrated to TASK.md');
+      const content = await call(async (target) => {
+        const url = performance.getEntriesByType('resource').map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
+        const monaco = await import(url);
+        return monaco.editor.getEditors().find((item) => item.getModel()?.uri.path.endsWith(target))?.getModel().getValue();
+      }, targets[0]);
+      assert.equal(content, before[0] + 'Unsaved reviewer note.\n');
+      await until(() => call((target) => Boolean(document.querySelector(`[data-tree-path="${target}"]`)), targets[0]), 'Explorer shows the renamed file');
+      assert.equal(await call((source) => Boolean(document.querySelector(`[data-tree-path="${source}"]`)), sources[0]), false, 'Explorer still shows the old filename');
+      if (options.artifacts) {
+        fs.mkdirSync(path.resolve(options.artifacts), { recursive: true });
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
+        fs.writeFileSync(path.join(path.resolve(options.artifacts), 'rename-dirty.png'), Buffer.from(screenshot.data, 'base64'));
+      }
+    });
+  } else if (options.review) {
     let reviewChangesRoute;
     const reviewPaths = ['review-doc.md', 'review-notes.md', 'review-checklist.md'];
     let reviewDiskBefore;

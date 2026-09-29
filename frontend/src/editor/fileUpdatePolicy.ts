@@ -1,4 +1,4 @@
-import type { OpenFile } from "../types";
+import { getLanguage, type OpenFile } from "../types";
 
 export function normalizeWorkspaceRelativePath(rawPath: string, workspaceDir?: string): string {
   if (!rawPath) return "";
@@ -73,6 +73,26 @@ export function applyRemoteFileSnapshot(file: OpenFile, snapshot: FileSnapshot):
     updatedAt: snapshot.updatedAt ?? (file.content === snapshot.content ? file.updatedAt : undefined),
     ...buildClearedRemoteState(),
   };
+}
+
+export interface RemoteFileRename {
+  previousPath: string;
+  previousVersion: string;
+  path: string;
+  sourceStatus: number | undefined;
+  snapshot: FileSnapshot;
+}
+
+/** A historical move cannot claim a recreated source or replace a destination tab. */
+export function applyRemoteFileRename(files: OpenFile[], rename: RemoteFileRename, workspaceDir: string): OpenFile[] {
+  if (rename.sourceStatus !== 404 || !rename.previousVersion || !rename.snapshot.version) return files;
+  const oldPath = normalizeWorkspaceRelativePath(rename.previousPath, workspaceDir);
+  const newPath = normalizeWorkspaceRelativePath(rename.path, workspaceDir);
+  if (!oldPath || !newPath || oldPath === newPath || [oldPath, newPath].some((path) => path.split("/").includes(".."))) return files;
+  const source = files.find((file) => isSameWorkspacePath(file.path, oldPath, workspaceDir));
+  if (!source || source.version !== rename.previousVersion || files.some((file) => isSameWorkspacePath(file.path, newPath, workspaceDir))) return files;
+  const name = newPath.split("/").pop() || newPath;
+  return files.map((file) => file !== source ? file : applyRemoteFileSnapshot({ ...file, path: newPath, name, language: getLanguage(name) }, rename.snapshot));
 }
 
 /** A save acknowledgement belongs to the submitted text, not subsequent typing. */

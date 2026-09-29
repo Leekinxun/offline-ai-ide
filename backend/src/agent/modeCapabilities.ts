@@ -79,6 +79,12 @@ export function evaluateModeCapability(options: {
         );
   }
 
+  if (toolName === "rename_file") {
+    const paths = [input.source_path, input.target_path].map((value) => typeof value === "string" ? normalizePath(value) : "");
+    const outside = paths.find((target) => !target || !approvedPlan.files.some((entry) => scopeContains(entry, target)));
+    return outside === undefined ? { allowed: true } : amendmentRequired(`Execution plan scope violation: both rename paths must be in the approved file scope (${outside || "missing path"})`);
+  }
+
   if (toolName === "bash" || toolName === "process_start") {
     const command = typeof input.command === "string" ? input.command.trim() : "";
     if (approvedPlan.verificationCommands.includes(command)) return { allowed: true };

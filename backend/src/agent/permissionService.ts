@@ -140,7 +140,7 @@ export function createPermissionAuthorizer(options: {
         requiresReplan: capability.requiresReplan,
       });
     }
-    const requirement = classifyToolApproval(request.name, request.input);
+    const requirement = classifyToolApproval(request.name, request.input, { workspaceDir: options.workspace });
 
     if (request.name.startsWith("mcp_") && options.readOnly) {
       return decide({
@@ -159,7 +159,7 @@ export function createPermissionAuthorizer(options: {
     }
     if (
       options.executionPlan && !networkRequested &&
-      (request.name === "write_file" || request.name === "edit_file" || request.name === "bash" || request.name === "process_start")
+      (request.name === "write_file" || request.name === "edit_file" || request.name === "rename_file" || request.name === "bash" || request.name === "process_start")
     ) {
       return decide({ allowed: true, decision: "not_required" });
     }

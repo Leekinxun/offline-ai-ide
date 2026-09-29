@@ -20,7 +20,8 @@ import { runInspectionCommand, runWorkspaceCommand } from "./shell.js";
 import { networkGrantForTool } from "./networkAccess.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { requestAgentQuestion } from "../chat/agentQuestions.js";
-import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
+import { readAuthorizedAgentFile } from "./externalFileAccess.js";
+import { renameWorkspaceFile } from "./renameFile.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
 import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
 import { SUBAGENT_ROLES } from "./subagentRoles.js";
@@ -175,7 +176,7 @@ export async function runReadFile(
   limit: number | undefined,
   cwd: string,
   options: { offset?: unknown; start_line?: unknown; character_offset?: unknown } = {},
-  context?: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId">
+  context?: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "externalReadRoots" | "getExternalReadRoots">
 ): Promise<string> {
   try {
     const integer = (value: unknown, name: string, minimum: number): number => {
@@ -188,7 +189,7 @@ export async function runReadFile(
       throw new Error("Use only one of offset, start_line, or character_offset");
     }
     const lineLimit = limit === undefined ? undefined : integer(limit, "limit", 1);
-    const file = readAuthorizedWorkspaceFile(cwd, filePath);
+    const file = readAuthorizedAgentFile(cwd, filePath, context?.getExternalReadRoots?.() ?? context?.externalReadRoots ?? []);
     const content = file.content;
     const lineStarts = [0];
     for (let index = 0; index < content.length; index += 1) if (content[index] === "\n") lineStarts.push(index + 1);
@@ -214,9 +215,10 @@ export async function runReadFile(
     }
     const nextLine = end < content.length ? lineStarts.indexOf(end) : -1;
     const truncated = end < content.length;
-    rememberFileRead(cwd, file.path, content, start, end, context);
+    if (!file.external) rememberFileRead(cwd, file.path, content, start, end, context);
     return JSON.stringify({
       path: file.path,
+      ...(file.external ? { read_only: true, source: "external" } : {}),
       version: buildFileVersion(content),
       start_line: firstLine + 1,
       offset: firstLine,
@@ -455,6 +457,14 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx,
       args.expected_version
     ),
+
+  rename_file: async (args, ctx) => {
+    const result = renameWorkspaceFile({ workspaceDir: ctx.workspaceDir, source_path: args.source_path, target_path: args.target_path, expected_version: args.expected_version }, ctx);
+    return {
+      output: JSON.stringify({ source_path: result.sourcePath, path: result.path, version: result.version, renamed: result.changed }),
+      ...(result.changed ? { fileUpdate: { path: result.path, previousPath: result.sourcePath, previousVersion: result.version, content: result.content } } : {}),
+    };
+  },
 
   TodoWrite: async (args, ctx) =>
     ctx.todoManager.update(args.items as unknown[]),
@@ -794,17 +804,33 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a versioned page of a workspace file. Returns JSON with content, version, and explicit continuation offsets. Read existing files before editing; never include the metadata in file content. Pages are bounded to 50,000 characters and context policy limits file size.",
+      description: "Read a versioned file page. Workspace files can later be edited; external ordinary files inside server-authorized roots are read-only and marked read_only. Returns JSON content, version and continuation offsets; never write metadata into files. Pages are bounded to 50,000 characters and file content policy still applies.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative path from workspace root" },
+          path: { type: "string", description: "Workspace-relative path, or an explicit absolute path to an authorized external read-only file; parent traversal is not accepted" },
           limit: { type: "integer", minimum: 1, description: "Maximum lines to read; character budget may shorten the page" },
           offset: { type: "integer", minimum: 0, description: "Zero-based line offset. Use only one of offset, start_line, or character_offset" },
           start_line: { type: "integer", minimum: 1, description: "One-based starting line (alternative to offset)" },
           character_offset: { type: "integer", minimum: 0, description: "Exact UTF-16 character offset returned in next_character_offset, including continuation within a long line" },
         },
         required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rename_file",
+      description: "Rename or move a regular file inside the workspace without overwriting a target. Read the complete source first or supply expected_version. Both paths must be workspace-relative; directories, links, external paths and existing targets are refused. The rename is recorded for review and undo.",
+      parameters: {
+        type: "object",
+        properties: {
+          source_path: { type: "string", description: "Existing workspace-relative file path" },
+          target_path: { type: "string", description: "New workspace-relative path; parent directory must exist and target must not exist" },
+          expected_version: { type: "string", description: "Source version from read_file, optional after a complete read in this run" },
+        },
+        required: ["source_path", "target_path"],
       },
     },
   },
@@ -1093,7 +1119,7 @@ export function getAllTools(options?: {
   constrainedCode?: boolean;
 }): OpenAIToolDef[] {
   const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
-  if (options?.mode === "code" && options.constrainedCode) {
+  if (options?.mode === "code" && options.constrainedCode && !options.readOnly) {
     const codeContractTools = new Set([
       "ask_user",
       "compress",
@@ -1108,6 +1134,7 @@ export function getAllTools(options?: {
       "process_start", "process_poll", "process_input", "process_stop",
       "write_file",
       "edit_file",
+      "rename_file",
       "submit_completion_evidence",
       "request_plan_amendment",
     ]);

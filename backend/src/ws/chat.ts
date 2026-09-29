@@ -1069,6 +1069,7 @@ async function processConversationQueue(
         detail: `${checkpoint.id} · ${checkpoint.fileCount} files`,
       });
     }
+    const readWorkspace = session.workspaceDir;
     assistantMessages = await runAgentLoop(
     ws,
     initialTurn.message,
@@ -1102,6 +1103,11 @@ async function processConversationQueue(
         return controlState.createAbortSignal();
       },
       mode: initialTurn.mode,
+      getExternalReadRoots: () => {
+        const current = sessionManager.getSession(session.token, { touch: false });
+        return current && !current.isolated && current.username === session.username && current.workspaceDir === readWorkspace
+          ? sessionManager.getAllowedRoots() : [];
+      },
       modelName: initialTurn.modelName,
       attachments: initialTurn.attachments,
       contextReferences: initialTurn.contextReferences,

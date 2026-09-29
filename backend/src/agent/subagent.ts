@@ -541,7 +541,7 @@ export async function runSubagent(
           authorize,
           tc.id,
           async () => {
-            if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
+            if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)) {
               try {
                 const checkpoint = createCheckpoint(childWorkspaceDir, {
                   label: `Before ${agentName} · ${tc.function.name}`,

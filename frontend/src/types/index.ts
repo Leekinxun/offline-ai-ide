@@ -38,6 +38,8 @@ export type ReferenceLocation = DefinitionLocation;
 
 export interface FileUpdate {
   path: string;
+  previousPath?: string;
+  previousVersion?: string;
   content: string;
   selection?: FileSelectionRange;
 }

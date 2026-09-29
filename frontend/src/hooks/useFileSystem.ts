@@ -405,7 +405,11 @@ export function useFileSystem(token: string) {
       const res = await fetch(`${API}/read?path=${encodeURIComponent(path)}`, {
         headers: authHeaders(),
       });
-      if (!res.ok) throw new Error("Failed to read file");
+      if (!res.ok) {
+        const error = new Error("Failed to read file") as Error & { status: number };
+        error.status = res.status;
+        throw error;
+      }
       const data = await res.json();
       return {
         content: data.content,
