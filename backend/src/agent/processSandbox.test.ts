@@ -3,13 +3,86 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import childProcess from "node:child_process";
 import {
   compileFilesystemPolicy,
   buildLinuxFilesystemSandboxArgs,
+  buildLinuxIsolationProbeArgs,
+  linuxTrustedRuntimeReadPaths,
   probeFilesystemIsolation,
   probeNetworkIsolation,
   runWorkspaceProcess,
 } from "./processSandbox.js";
+
+test("Linux capability probes include executable runtime mounts without exposing host root or config", () => {
+  const args = buildLinuxIsolationProbeArgs();
+  assert.ok(args.includes("--unshare-user"));
+  assert.ok(args.includes("--unshare-net"));
+  assert.ok(args.includes("--unshare-pid"));
+  assert.deepEqual(args.slice(-4), ["--chdir", "/tmp", "--", "/bin/true"]);
+  const binds = args.flatMap((arg, index) => arg === "--ro-bind" || arg === "--bind" ? [[arg, args[index + 1], args[index + 2]]] : []);
+  assert.ok(binds.some((bind) => bind[1] === "/usr"));
+  assert.ok(binds.some((bind) => bind[1] === "/bin"));
+  for (const forbidden of ["/", "/dev", "/app", "/app/config", "/home", "/root"]) assert.ok(binds.every((bind) => bind[1] !== forbidden), forbidden);
+  assert.equal(args.filter((arg, index) => arg === "--dev" && args[index + 1] === "/dev").length, 1);
+  assert.equal(buildLinuxIsolationProbeArgs("inherit").includes("--unshare-net"), false);
+});
+
+test("Linux probes distinguish namespace, mount, executable and timeout failures with bounded redacted stderr", (t) => {
+  const exists = fs.existsSync;
+  t.mock.method(fs, "existsSync", (candidate: fs.PathLike) => String(candidate) === "/usr/bin/bwrap" || exists(candidate));
+  if (typeof process.getuid === "function") t.mock.method(process as NodeJS.Process & { getuid: () => number }, "getuid", () => 10001);
+  let stderr = "";
+  let error: Error | undefined;
+  t.mock.method(childProcess, "spawnSync", (command: string, args: readonly string[], options: childProcess.SpawnSyncOptions) => {
+    assert.equal(command, "/usr/bin/bwrap");
+    assert.ok(args.includes("--ro-bind"));
+    assert.ok(options.timeout && options.timeout <= 5000);
+    assert.deepEqual(options.stdio, ["ignore", "ignore", "pipe"]);
+    assert.deepEqual(options.env, { PATH: "/usr/bin:/bin", LANG: "C" });
+    return { pid: 0, output: [], stdout: "", stderr, status: error ? null : 1, signal: null, error };
+  });
+  for (const [message, code] of [
+    ["bwrap: No permissions to create a new namespace", "namespace_permission_denied"],
+    ["bwrap: Failed to mount tmpfs: Operation not permitted", "mount_permission_denied"],
+    ["bwrap: execvp /bin/true: No such file or directory", "runtime_unavailable"],
+    ["bwrap: Creating new namespace failed: nesting depth exceeded (ENOSPC)", "namespace_limit"],
+  ]) {
+    stderr = message;
+    const result = probeNetworkIsolation("linux");
+    assert.equal(result.available, false);
+    assert.equal(result.reasonCode, code);
+    assert.ok(result.reason?.includes(message));
+  }
+  stderr = "Bearer abcdefghijklmnop sk-diagnosticCanary123456\u001b[31m " + "x".repeat(5000);
+  const bounded = probeFilesystemIsolation("linux");
+  assert.ok((bounded.stderr?.length || 0) <= 2048);
+  assert.doesNotMatch(bounded.reason || "", /abcdefghijklmnop|diagnosticCanary|\u001b/);
+  assert.match(bounded.reason || "", /REDACTED/);
+  error = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+  stderr = "";
+  assert.equal(probeNetworkIsolation("linux").reasonCode, "probe_timeout");
+});
+
+test("Conda is exposed read-only only from the fixed root-owned runtime directory", (t) => {
+  const original = fs.lstatSync;
+  let mode = 0o40755;
+  let uid = 0;
+  let symlink = false;
+  t.mock.method(fs, "lstatSync", (candidate: fs.PathLike) => {
+    if (["/opt", "/opt/conda"].includes(String(candidate))) return { uid, mode, isDirectory: () => true, isSymbolicLink: () => symlink } as fs.Stats;
+    return original(candidate);
+  });
+  assert.deepEqual(linuxTrustedRuntimeReadPaths(), ["/opt/conda"]);
+  const args = buildLinuxIsolationProbeArgs();
+  assert.ok(args.some((arg, index) => arg === "--ro-bind" && args[index + 1] === "/opt/conda" && args[index + 2] === "/opt/conda"));
+  mode = 0o40777;
+  assert.deepEqual(linuxTrustedRuntimeReadPaths(), []);
+  mode = 0o40755; uid = 10001;
+  assert.deepEqual(linuxTrustedRuntimeReadPaths(), []);
+  uid = 0; symlink = true;
+  assert.deepEqual(linuxTrustedRuntimeReadPaths(), []);
+});
 
 test("Linux bubblewrap plan mounts only system reads and declared workspace paths", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-bwrap-plan-"));
@@ -27,6 +100,7 @@ test("Linux bubblewrap plan mounts only system reads and declared workspace path
   assert.ok(bindTuples.some((item) => item[0] === "--ro-bind" && item[1] === path.join(policy.workspaceDir, "read")));
   assert.ok(bindTuples.some((item) => item[0] === "--bind" && item[1] === path.join(policy.workspaceDir, "write")));
   assert.ok(bindTuples.every((item) => !String(item[1]).includes("crewforge-bwrap-outside")));
+  assert.ok(command.some((item, index) => item === "--remount-ro" && command[index + 1] === path.join(policy.workspaceDir, ".codex")));
 });
 
 test("filesystem grants compile to canonical workspace paths and reject escapes", (t) => {
@@ -113,6 +187,7 @@ test("hard filesystem helper blocks outside, secret, and control-path escapes", 
 test("network isolation probe reports unsupported platforms explicitly", () => {
   assert.deepEqual(probeNetworkIsolation("win32"), {
     available: false,
+    reasonCode: "unsupported_platform",
     reason: "hard network deny is unsupported on platform win32",
   });
 });

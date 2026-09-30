@@ -5,7 +5,9 @@ import {
   narrowPermissionAuthorizer,
   type PermissionAuthorizer,
 } from "./permissionService.js";
-import { runInspectionCommand } from "./shell.js";
+import { runInspectionCommand, runReadOnlyShellCommand } from "./shell.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
+import { classifyToolApproval } from "./toolApproval.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./providerRouting.js";
 import { AgentRunRecorder, createRunId } from "../chat/runHistory.js";
@@ -52,6 +54,7 @@ async function dispatchSubTool(
   context: Parameters<ToolHandler>[1] | undefined,
   filesystemSandbox: ToolContext["filesystemSandbox"]
 ): Promise<string> {
+  const readOnlyShellCommand = name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command) ? args.command as string : undefined;
   const permission = await authorize({ requestId: agentName, toolCallId, name, input: args, agentName });
   if (!permission.allowed) return `Error: Tool denied: ${permission.reason || "permission denied"}`;
   signal?.throwIfAborted();
@@ -59,7 +62,7 @@ async function dispatchSubTool(
   signal?.throwIfAborted();
   if (context) {
     const childContext = {
-      ...context, toolCallId, compatibilityShellAuthorized: name === "bash",
+      ...context, toolCallId, compatibilityShellAuthorized: name === "bash", readOnlyShellCommand,
       lineage: context.lineage && { ...context.lineage, parentToolCallId: toolCallId },
     };
     const handler = TOOL_DISPATCH[name];
@@ -69,7 +72,8 @@ async function dispatchSubTool(
     return typeof result === "string" ? result : result?.output || `Error: Unknown tool: ${name}`;
   }
   if (name === "bash") {
-    return runInspectionCommand(args.command as string, cwd, signal, {
+    const execute = readOnlyShellCommand ? runReadOnlyShellCommand : runInspectionCommand;
+    return execute(args.command as string, cwd, signal, {
       readPaths: filesystemSandbox?.readPaths || [], writePaths: [],
     });
   }
@@ -527,12 +531,14 @@ export async function runSubagent(
         if (toolCallCount++ >= profile.budget.maxToolCalls) {
           throw new Error(`Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`);
         }
-        await recorder?.toolState({
-          toolCallId: tc.id,
-          requestId: lineage?.parentRequestId || agentName,
-          name: tc.function.name,
-          status: "awaiting_permission",
-        });
+        if (classifyToolApproval(tc.function.name, args).kind === "approval") {
+          await recorder?.toolState({
+            toolCallId: tc.id,
+            requestId: lineage?.parentRequestId || agentName,
+            name: tc.function.name,
+            status: "awaiting_permission",
+          });
+        }
         output = await dispatchSubTool(
           tc.function.name,
           args,
@@ -541,7 +547,8 @@ export async function runSubagent(
           authorize,
           tc.id,
           async () => {
-            if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)) {
+            if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)
+              && !(tc.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command))) {
               try {
                 const checkpoint = createCheckpoint(childWorkspaceDir, {
                   label: `Before ${agentName} · ${tc.function.name}`,

@@ -637,12 +637,25 @@
 
 /* 审批浮层 */
 .editor-assistant-approvals {
-  max-height: min(46%, 380px);
-  flex: 0 1 auto;
+  max-height: min(38%, 340px);
+  flex: 0 0 auto;
   overflow-y: auto;
   border-top-color: color-mix(in srgb, var(--warning) 32%, var(--line-strong));
   background: color-mix(in srgb, var(--warning) 4%, var(--surface-workbench));
 }
+
+.editor-assistant-stop-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  color: var(--danger);
+  cursor: pointer;
+}
+.editor-assistant-stop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .editor-assistant-approvals + .editor-assistant-composer {
   margin-top: 10px;

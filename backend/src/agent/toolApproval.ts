@@ -2,9 +2,16 @@ import crypto from "crypto";
 import path from "path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 import { isNetworkToolRequest } from "./networkAccess.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
 
 export type ToolRisk = "medium" | "high";
 export type ToolApprovalDecision = "allow_once" | "allow_session" | "deny";
+export type ToolApprovalCause = "user_denied" | "timed_out" | "cancelled" | "invalid_decision";
+export interface ToolApprovalOutcome {
+  decision: ToolApprovalDecision;
+  cause?: ToolApprovalCause;
+  timeoutMs?: number;
+}
 
 export type ToolApprovalRequirement =
   | { kind: "none" }
@@ -83,6 +90,7 @@ export function classifyToolApproval(
     if (input.allow_network !== undefined && typeof input.allow_network !== "boolean") return { kind: "blocked", reason: "allow_network must be a boolean" };
     const network = isNetworkToolRequest(name, input);
     const command = typeof input.command === "string" ? input.command : "";
+    if (name === "bash" && !network && planReadOnlyShell(command)) return { kind: "none" };
     // This is only a preflight. The execution path repeats the policy check
     // after this high-risk approval has been granted.
     const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: network, workspaceDir: options.workspaceDir });
@@ -156,7 +164,7 @@ interface PendingApproval {
   risk: ToolRisk;
   canAllowSession: boolean;
   sessionKey?: string;
-  resolve: (decision: ToolApprovalDecision) => void;
+  resolve: (outcome: ToolApprovalOutcome) => void;
   timer: NodeJS.Timeout;
 }
 
@@ -171,6 +179,10 @@ export class ToolApprovalSession {
   ) {}
 
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
+    return this.requestDetailed(input).then((outcome) => outcome.decision);
+  }
+
+  requestDetailed(input: ToolApprovalRequestInput): Promise<ToolApprovalOutcome> {
     const network = isNetworkToolRequest(input.name, input.input);
     if (network) input = { ...input, risk: "high", canAllowSession: false, sessionKey: undefined };
     if (
@@ -179,17 +191,17 @@ export class ToolApprovalSession {
       input.conversationId &&
       this.conversationAllowed.has(input.conversationId)
     ) {
-      return Promise.resolve("allow_once");
+      return Promise.resolve({ decision: "allow_once" });
     }
-    if (!network && input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
-      return Promise.resolve("allow_session");
+    if (!network && input.name !== "submit_plan" && input.risk !== "high" && input.canAllowSession && input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
+      return Promise.resolve({ decision: "allow_session" });
     }
 
     const request = { approvalId: crypto.randomUUID(), createdAt: Date.now(), ...input };
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.approvalId);
-        resolve("deny");
+        resolve({ decision: "deny", cause: "timed_out", timeoutMs: this.timeoutMs });
       }, this.timeoutMs);
       timer.unref?.();
       this.pending.set(request.approvalId, {
@@ -223,10 +235,10 @@ export class ToolApprovalSession {
     this.conversationAllowed.add(normalized);
     let resolvedCount = 0;
     for (const [approvalId, pending] of this.pending) {
-      if (pending.conversationId !== normalized || pending.risk === "high") continue;
+      if (pending.conversationId !== normalized || pending.risk === "high" || pending.request.name === "submit_plan" || pending.networkRequested) continue;
       this.pending.delete(approvalId);
       clearTimeout(pending.timer);
-      pending.resolve("allow_once");
+      pending.resolve({ decision: "allow_once" });
       resolvedCount += 1;
     }
     return resolvedCount;
@@ -239,11 +251,12 @@ export class ToolApprovalSession {
     clearTimeout(pending.timer);
 
     const acceptedDecision = decision === "allow_session" && pending.networkRequested
-      ? "deny" : decision === "allow_session" && !pending.canAllowSession ? "allow_once" : decision;
+      ? "deny" : decision === "allow_session" && (!pending.canAllowSession || pending.risk === "high" || pending.request.name === "submit_plan") ? "allow_once" : decision;
     if (acceptedDecision === "allow_session" && pending.sessionKey) {
       this.sessionAllowed.add(pending.sessionKey);
     }
-    pending.resolve(acceptedDecision);
+    pending.resolve({ decision: acceptedDecision,
+      ...(acceptedDecision === "deny" ? { cause: decision === "deny" ? "user_denied" as const : "invalid_decision" as const } : {}) });
     return true;
   }
 
@@ -255,7 +268,7 @@ export class ToolApprovalSession {
   cancelAll(): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      pending.resolve("deny");
+      pending.resolve({ decision: "deny", cause: "cancelled" });
     }
     this.pending.clear();
   }

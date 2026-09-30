@@ -2,6 +2,7 @@ import type { AgentMode } from "./types.js";
 import {
   classifyToolApproval,
   type ToolApprovalDecision,
+  type ToolApprovalOutcome,
   type ToolApprovalRequestInput,
 } from "./toolApproval.js";
 import { agentProfileAllowsTool, type AgentProfile } from "./agentProfiles.js";
@@ -53,7 +54,7 @@ export function createPermissionAuthorizer(options: {
   mode: AgentMode;
   readOnly: boolean;
   signal?: AbortSignal;
-  requestApproval?: (input: ToolApprovalRequestInput) => Promise<ToolApprovalDecision>;
+  requestApproval?: (input: ToolApprovalRequestInput) => Promise<ToolApprovalDecision | ToolApprovalOutcome>;
   profile?: AgentProfile;
   runId?: string;
   /** When both workspace and runId are supplied, decisions are durably audited. */
@@ -170,7 +171,7 @@ export function createPermissionAuthorizer(options: {
       });
     }
 
-    const decision = await options.requestApproval({
+    const approvalOutcome = await options.requestApproval({
       requestId: request.requestId,
       toolCallId: request.toolCallId,
       name: request.name,
@@ -181,8 +182,18 @@ export function createPermissionAuthorizer(options: {
       canAllowSession: requirement.canAllowSession,
       sessionKey: requirement.sessionKey,
     });
+    const decision = typeof approvalOutcome === "string" ? approvalOutcome : approvalOutcome.decision;
     if (options.signal?.aborted) {
       return decide({ allowed: false, reason: "The agent run was stopped", decision: "deny" });
+    }
+    if (decision === "deny") {
+      const cause = typeof approvalOutcome === "string" ? "user_denied" : approvalOutcome.cause || "user_denied";
+      const reason = cause === "timed_out"
+        ? `Tool approval timed out${typeof approvalOutcome !== "string" && approvalOutcome.timeoutMs ? ` after ${approvalOutcome.timeoutMs / 1000} seconds` : ""}; no approval was received and the tool was not executed`
+        : cause === "cancelled" ? "Tool approval was cancelled; the tool was not executed"
+          : cause === "invalid_decision" ? "This tool requires an explicit one-time approval; session approval was not accepted"
+            : "The user denied this tool execution";
+      return decide({ allowed: false, reason, decision });
     }
     if (networkRequested) {
       if (decision !== "allow_once") return decide({ allowed: false, reason: "Network access requires an explicit allow_once decision; session approval is not accepted", decision });
@@ -191,8 +202,6 @@ export function createPermissionAuthorizer(options: {
         return decide({ allowed: true, decision, networkExecutionGrant });
       } catch (error) { return decide({ allowed: false, decision: "deny", reason: error instanceof Error ? error.message : "Network policy could not be verified" }); }
     }
-    return decide(decision === "deny"
-      ? { allowed: false, reason: "Tool execution was denied or cancelled", decision }
-      : { allowed: true, decision });
+    return decide({ allowed: true, decision });
   };
 }

@@ -131,7 +131,7 @@ and restore it separately from each workspace-local `.team` snapshot.
 | --- | --- | --- |
 | Approved agent shell | Structured argv, minimal environment, blocked loader variables, wall timeout and bounded output; network mode is deny | Network deny requires `/usr/bin/sandbox-exec` on macOS or `bubblewrap` plus usable user namespaces on Linux. Unsupported hosts fail the agent shell closed (`PROC-01`). |
 | Resource limits | POSIX wrapper can enforce CPU/open-file limits; address-space limit is Linux-only | Windows lacks the POSIX hard-limit path. macOS address-space hard limits are not exposed through this wrapper (`PROC-01`). |
-| Filesystem | Tool policy, safe-path checks, workspace scope and managed worktrees constrain CrownForge operations | The process wrapper is **not** a complete filesystem sandbox. macOS Seatbelt and Linux bubblewrap are currently used for network denial, not a fully isolated filesystem (`PROC-01`). |
+| Filesystem | Agent/extension commands enforce declared workspace read/write paths through macOS Seatbelt or Linux bubblewrap; runtime paths are read-only, protected control/secret paths are hidden or read-only | A working OS helper is mandatory. This does not turn the user terminal or debugger into an Agent sandbox (`PROC-01`). |
 | Debug target and user terminal | Minimal launcher environment and process supervision | These are not the agent network-deny sandbox; do not use them for untrusted code (`DBG-01`). |
 | Docker service | Non-root UID/GID 10001, read-only root, dropped capabilities, no-new-privileges, writable workspace/config mounts | Verified by `scripts/docker-smoke.sh` only on a host with Docker and compatible user namespaces (`CONT-01`). |
 
@@ -143,6 +143,77 @@ expand a denied permission (`PROF-01`, `EXT-01`).
 Agent profile 中的 `sandbox`、`worktree` 与 `workspace` 表示请求的执行边界。
 最终权限是 profile、服务端策略、团队角色、计划/审批与扩展策略的交集；profile
 不能放大已被拒绝的权限（`PROF-01`、`EXT-01`）。
+
+### Linux container sandbox diagnostics
+
+`GET /api/runtime/sandbox` requires an authenticated administrator. The response
+contains `filesystem`, `network`, `executionReady`, helper version, UID/GID,
+read-only runtime paths, and selected Linux metadata: `NoNewPrivs`, `CapEff`,
+`Seccomp`, AppArmor profile and user-namespace sysctls. Unknown values are `null`.
+Results are cached for 30 seconds; HTTP responses use `Cache-Control: no-store`.
+Probes run fixed `/bin/true` commands with the real sandbox mount builder and a
+five-second limit. Errors retain at most 2,048 redacted characters. No endpoint
+parameter can select a command, executable, workspace, or host file to inspect.
+
+| Evidence | Meaning and next action |
+| --- | --- |
+| `helper_missing` | Install the distribution's supported bubblewrap package in the image. |
+| `root_user` | Run the service as the configured non-root account. |
+| `namespace_permission_denied` | Nested namespace creation was refused. Inspect the container seccomp/AppArmor policy and host kernel settings; an enabled userns sysctl alone is insufficient. |
+| `namespace_unavailable` / `namespace_limit` | The kernel lacks support, disables creation, or has exhausted its namespace limit. |
+| `mount_permission_denied` | Required private mounts or root switching were refused. If the error names `/proc`, also inspect the outer container's masked/read-only proc mounts; permitting namespace syscalls alone may be insufficient. |
+| `runtime_unavailable` | The probe could not execute its mounted runtime. Check the image/runtime paths; do not reinterpret this as proof of network isolation. |
+| `probe_timeout` / `probe_failed` | Use the bounded stderr and container audit logs to identify the failing stage. |
+
+The runtime's `--unshare-user` is mandatory; it does not fall back to an
+unisolated command. System mounts include the standard executable/library
+directories and selected loader files, not `/`. `/dev` is created with `--dev`
+and must not be replaced by a host `/dev` bind. `/opt/conda` is the only extra
+runtime root: it and its parent must be real, root-owned directories without
+group/other write permission. It is mounted read-only, including its Python
+libraries and Ruff executable. Runtime search paths never authorize `/app` or
+`/app/config`, and caller-supplied `PATH` does not add filesystem grants.
+
+For containers, first preserve the hardened deployment: non-root UID/GID,
+zero effective capabilities, `no-new-privileges`, read-only root filesystem,
+bounded resources, and the existing workspace/config volumes. A deployment
+administrator can then create a **service-specific** profile derived from the
+matching Docker version's default seccomp policy, plus an AppArmor profile on
+hosts that enforce it. Allow only the operations needed for the tested private
+namespaces and mounts; retain the remaining default denials. A profile must be
+validated against the actual kernel, Docker and bubblewrap versions. This
+repository does not ship an untested syscall allowlist or relax Compose by
+default. No ready-to-install profile has been validated against every canary on
+the affected Docker/AppArmor deployment. An experimental rule set that advances
+from a namespace error to a `/proc` mount error is still a failed deployment,
+not an approved configuration. Do not use `seccomp=unconfined`, `apparmor=unconfined`, `privileged`,
+`SYS_ADMIN`, `systempaths=unconfined`, or a global user-namespace restriction
+disable as a shortcut. Do not replace the private PID namespace's `/proc` with
+the parent container's `/proc`; that changes which processes and descriptors
+the Agent can inspect. Nested proc mount limitations are also documented in
+[bubblewrap's upstream container discussion](https://github.com/containers/bubblewrap/issues/284).
+
+Run the fixed `runSandboxSelfTest()` command shown in the README **inside the
+deployed container as its service account**. It must prove that a real child
+executed, that an allowed disposable workspace write succeeds, outside/control
+writes and secret reads fail, `/dev/null` works, and the child cannot connect to
+a temporary parent loopback listener. Docker images must also show both Conda
+runtime checks passing. Then run `scripts/docker-smoke.sh` with the reviewed
+`CROWNFORGE_SMOKE_SECCOMP_PROFILE` file and, where applicable, the preloaded
+`CROWNFORGE_SMOKE_APPARMOR_PROFILE` name. These options reject `unconfined`; the
+smoke also verifies `Seccomp: 2`. Test mounts and login configuration are
+disposable, and the smoke binds its HTTP port only to loopback.
+
+An HTTP-ready service with a failed sandbox probe must keep Agent shell disabled.
+Web admin settings cannot change the container's seccomp filter or load a host
+AppArmor profile. Keep structured read/edit tools available within their own
+permissions, report the specific deployment blocker, and do not run the rejected
+command through the user terminal as an automatic fallback.
+
+Upstream references: [bubblewrap mount model](https://github.com/containers/bubblewrap#usage),
+[Docker seccomp policy](https://docs.docker.com/engine/security/seccomp/),
+[Docker AppArmor policy](https://docs.docker.com/engine/security/apparmor/), and
+[Ubuntu user-namespace restrictions](https://documentation.ubuntu.com/release-notes/24.04/).
 
 ## Git and provider integrations / Git 与 Provider 集成
 

@@ -25,6 +25,7 @@ import {
 import { useI18n } from "../i18n";
 import { useContextManifest } from "./useContextManifest";
 import { updateAssistantMessage } from "../utils/assistantActivity";
+import { applyToolApprovalSnapshot, canApproveToolInConversation } from "../utils/toolApprovalPolicy";
 import { acceptsConversationEvent, canBindAcceptedRequest, type ChatRequestScope, type ConversationActivity } from "../utils/chatScope";
 
 interface ConversationsResponse {
@@ -819,6 +820,13 @@ export function useChat(
           ]);
           break;
 
+        case "tool_approval_all_result":
+          setPendingApprovals((previous) => applyToolApprovalSnapshot(previous, data, {
+            conversationId: currentConversationIdRef.current,
+            runId: currentRunIdRef.current,
+          }));
+          break;
+
         case "tool_result":
           setPendingApprovals((previous) =>
             previous.filter((item) => item.toolCallId !== data.toolCallId)
@@ -1171,15 +1179,15 @@ export function useChat(
 
   const approveConversationTools = useCallback((conversationId: string) => {
     if (!conversationId || conversationId !== currentConversationIdRef.current || !currentRunIdRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!pendingApprovals.some((request) => request.conversationId === conversationId && canApproveToolInConversation(request))) return;
     wsRef.current.send(JSON.stringify({
       type: "tool_approval_all",
       conversationId,
       runId: currentRunIdRef.current,
     }));
-    setPendingApprovals((previous) =>
-      previous.filter((item) => item.conversationId !== conversationId)
-    );
-  }, []);
+    // High-risk requests remain pending, and even eligible requests stay visible
+    // until the server confirms its authoritative remaining queue.
+  }, [pendingApprovals]);
 
   const retryLast = useCallback(() => {
     const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");

@@ -50,6 +50,7 @@ import { ToolCallStep } from "./ToolCallStep";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { approvalTaskAction } from "../utils/toolApprovalPolicy";
 import { AgentQuestionStack } from "./AgentQuestionStack";
 import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
 import { UndoTurnButton } from "./UndoTurnButton";
@@ -569,19 +570,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [runState]
   );
   const runStatus = isStreaming ? "running" : runState?.status || "queued";
-  const runTone: TaskStateTone = runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
+  const runTone: TaskStateTone = pendingApprovals.length ? "warning" : runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
   const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
   const hasRecoveryAction = runState?.status === "failed" || runState?.status === "stopped";
-  const taskAction = isStreaming ? t("chat.stop") : hasRecoveryAction ? t("workbench.resumeRun") : pendingApprovals.length ? t("chat.approval.title") : currentRunSummary?.changedFiles.length ? t("chat.changes") : t("chat.focusComposer");
+  const taskActionKind = approvalTaskAction(pendingApprovals.length > 0, isStreaming, hasRecoveryAction);
+  const taskAction = taskActionKind === "approval" ? t("chat.approval.view") : taskActionKind === "stop" ? t("chat.stop") : taskActionKind === "resume" ? t("workbench.resumeRun") : currentRunSummary?.changedFiles.length ? t("chat.changes") : t("chat.focusComposer");
   const handleTaskAction = () => {
-    if (isStreaming) { onStop(); return; }
-    if (hasRecoveryAction && runState) { void onResumeRun(runState.conversationId, runState.runId); return; }
-    if (pendingApprovals.length) {
+    if (taskActionKind === "approval") {
       const stack = approvalStackRef.current;
       stack?.scrollIntoView({ behavior: "smooth", block: "center" });
       window.requestAnimationFrame(() => (stack?.querySelector<HTMLElement>('button:not(:disabled)') || stack)?.focus());
       return;
     }
+    if (taskActionKind === "stop") { onStop(); return; }
+    if (taskActionKind === "resume" && runState) { void onResumeRun(runState.conversationId, runState.runId); return; }
     if (currentRunSummary?.changedFiles.length) { setChangesOpen(true); return; }
     textareaRef.current?.focus();
   };
@@ -612,7 +614,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         completionEvidence={runState?.completionEvidence || currentRunSummary?.completionEvidence}
       />
       {(messages.length > 0 || isStreaming || Boolean(runState)) && (
-        <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+        <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
       )}
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}

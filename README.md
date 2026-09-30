@@ -404,17 +404,45 @@ by default so mixed registry URLs in the lockfile do not require access to
 `registry.npmjs.org`. Set `NPM_REGISTRY` to an internal or alternative npm
 registry before running Compose when your deployment uses a different mirror.
 
-Linux images include `bubblewrap`. Approved agent shell processes are launched
-with `bwrap --die-with-parent --unshare-net`, so they can execute local tools but
-cannot use the parent server's network namespace; the CrownForge server itself
-retains network access for model and MCP connections. This requires unprivileged
-user namespaces to be available to UID 10001. You can verify the host/runtime
-combination with `docker compose exec ai-ide bwrap --unshare-net -- /bin/true`.
-If Docker's seccomp, user-namespace policy, or the host kernel rejects that probe,
-CrownForge fails agent shell execution closed. Do not add `SYS_ADMIN`, disable
-seccomp globally, or run the service as root to make the probe pass; keep agent
-shell disabled for that deployment or enable unprivileged user namespaces through
-the host's narrowly scoped container policy.
+Linux images include `bubblewrap`. Agent commands use a private user/mount/PID
+namespace, a separate network namespace by default, read-only system runtimes,
+and only their declared workspace read/write mounts. `/dev` is a private device
+filesystem. The shipped root-owned `/opt/conda` runtime is mounted read-only;
+`/app/config`, user homes, and the rest of the host root are not exposed. The
+CrownForge server retains network access for model and MCP connections.
+
+**Installing bubblewrap is not sufficient for Docker deployments.** The runtime
+must permit UID 10001 to create nested user/mount/network namespaces. Docker's
+default seccomp/AppArmor policies may block this even when
+`kernel.unprivileged_userns_clone=1`. The default Compose file retains all its
+security restrictions and does not silently enable Agent shell on incompatible
+hosts. `/api/health` reports HTTP liveness, not sandbox readiness.
+
+An authenticated administrator can inspect `GET /api/runtime/sandbox`, which
+returns fixed capability probes, bounded/redacted helper errors, and selected
+namespace/security metadata. It accepts no command or file-path parameters.
+The same diagnostics are available without reading application configuration:
+
+```bash
+docker compose exec ai-ide node --input-type=module -e \
+  'import {collectSandboxDiagnostics} from "./dist/run/sandboxDiagnostics.js"; console.log(JSON.stringify(collectSandboxDiagnostics(), null, 2));'
+docker compose exec ai-ide node --input-type=module -e \
+  'import {runSandboxSelfTest} from "./dist/run/sandboxDiagnostics.js"; const r=await runSandboxSelfTest(); console.log(JSON.stringify(r, null, 2)); process.exitCode=r.passed?0:1;'
+```
+
+The self-test uses disposable canaries to verify workspace writes, blocked
+outside/control-file writes, blocked secret reads, `/dev/null`, parent-loopback
+isolation, and the installed Conda Python/Ruff tools. A helper that cannot start
+fails the test; an arbitrary connection failure alone never counts as isolation.
+
+If the result is `namespace_permission_denied` or `mount_permission_denied`, a
+deployment administrator must install and test narrowly scoped container
+seccomp/AppArmor policies, then recreate the service. Web administrator settings
+cannot change these host/container restrictions. Keep non-root execution,
+`cap_drop: ALL`, `no-new-privileges`, and the read-only root filesystem. Do not use
+`privileged`, add `SYS_ADMIN`, or disable seccomp/AppArmor as a fallback. See the
+[sandbox deployment runbook](docs/operations/operator-runbook.md#linux-container-sandbox-diagnostics)
+for evidence and acceptance requirements.
 
 ### Desktop app
 

@@ -25,6 +25,16 @@ ls interview/*/题目.md 2>/dev/null
 
 Shell 在每次调用时从工作区根目录启动；`cd` 不跨调用持久。复杂命令替换、内联解释器和危险主机命令的限制没有取消。
 
+## 工具审批与容器权限是两层检查
+
+`pwd`、不带通配符的简单 `ls`，以及支持的 Python、Node、Git、Ruff 版本查询，使用固定参数与可信可执行文件直接运行，无需工具审批。Python 模块版本查询启用隔离导入并关闭 bytecode 写入。该通道始终使用只读文件挂载、禁用网络，不创建修改快照，也不会把同时发生的人工编辑记为 Agent 改动。
+
+带通配符、重定向、组合运算符或括号分组的 shell 命令仍逐次审批。批准后允许普通分组，例如 `python3 --version && (python3 -m ruff --version || echo "no ruff module")`；命令替换和函数定义继续拒绝，文件写入仍受工作区沙箱限制。
+
+“批量批准”只批准当前及后续中风险普通操作。高风险 shell、联网和计划确认保留各自的审批卡；界面收到服务端返回的待批队列后才更新。等待审批时显示“等待批准 / 查看审批”，短窗口可以滚动查看按钮。超时、用户拒绝和运行取消分别说明原因，不再统一显示为无法区分的 denied/cancelled。
+
+工具获批不表示容器具备启动沙箱的条件。Docker 默认 seccomp/AppArmor 可能阻止 bubblewrap 创建私有 namespace，导致已经批准的 `ls` 也无法执行。此时需要宿主机部署诊断，不能通过扩大工作区路径权限修复。管理员可查询 `GET /api/runtime/sandbox`；诊断和固定自检见 [部署手册](../operations/operator-runbook.md#linux-container-sandbox-diagnostics)。
+
 ## 文件重命名
 
 Agent 新增 `rename_file`：

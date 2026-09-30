@@ -6,6 +6,7 @@ import path from "node:path";
 import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "./networkAccess.js";
+import { planReadOnlyShell, resolveReadOnlyExecutable } from "./readOnlyShell.js";
 
 export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
   cpuTimeMs: 60_000,
@@ -27,7 +28,8 @@ export async function runInspectionCommand(
   command: string,
   cwd: string,
   signal?: AbortSignal,
-  filesystem?: WorkspaceFilesystemGrant
+  filesystem?: WorkspaceFilesystemGrant,
+  trustedExecutable?: string
 ): Promise<string> {
   const policy = evaluateInspectionCommand(command, (candidate) => {
     try {
@@ -51,7 +53,7 @@ export async function runInspectionCommand(
     args.splice(1, 0, "--no-ext-diff", "--no-textconv");
   }
   return runWorkspaceProcess({
-    executable,
+    executable: trustedExecutable || executable,
     args,
     cwd,
     signal,
@@ -61,6 +63,19 @@ export async function runInspectionCommand(
     networkMode: "deny",
     filesystem: { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] },
   });
+}
+
+/** Auto-approved queries always run as argv with read-only workspace mounts. */
+export async function runReadOnlyShellCommand(command: string, cwd: string, signal?: AbortSignal, filesystem?: WorkspaceFilesystemGrant): Promise<string> {
+  const plan = planReadOnlyShell(command);
+  if (!plan) return "Error: Command is not a supported read-only query";
+  const executable = resolveReadOnlyExecutable(plan, cwd);
+  if (!executable) return `Error: A trusted system executable is unavailable for the read-only query: ${plan.executableName}`;
+  const grants = { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] };
+  if (plan.kind === "listing") return runInspectionCommand(command, cwd, signal, grants, executable);
+  return runWorkspaceProcess({ executable, args: plan.args, cwd, signal,
+    limits: { wallTimeMs: 30_000, ...DEFAULT_COMPATIBILITY_SHELL_LIMITS }, resourceLimitMode: "posix-shell",
+    networkMode: "deny", filesystem: grants });
 }
 
 /**

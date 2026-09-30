@@ -1,7 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { redactSecrets } from "./secretRedaction.js";
 
 export interface ProcessResourceLimits {
   /** A wall-clock limit, enforced by this supervisor. */
@@ -50,6 +51,9 @@ export interface NetworkIsolationCapability {
   helper?: "sandbox-exec" | "bubblewrap";
   executable?: string;
   reason?: string;
+  reasonCode?: "root_user" | "helper_missing" | "unsupported_platform" | "namespace_permission_denied" | "namespace_unavailable" | "namespace_limit" | "mount_permission_denied" | "runtime_unavailable" | "probe_timeout" | "probe_failed";
+  exitCode?: number | null;
+  stderr?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -60,6 +64,67 @@ const MACOS_SANDBOX_PROFILE = "(version 1)(deny network*)(allow default)";
 const LINUX_BWRAP_CANDIDATES = ["/usr/bin/bwrap", "/bin/bwrap"] as const;
 const PROTECTED_WORKSPACE_NAMES = [".git", ".codex", ".history", ".checkpoints", ".crewforge", ".ssh", ".npmrc", ".pypirc", ".netrc"] as const;
 const SYSTEM_READ_PATHS = ["/System", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/Library", "/private/var/db", "/dev", "/etc/ld.so.cache", "/etc/ld.so.preload", "/etc/alternatives", "/etc/localtime"] as const;
+const LINUX_SYSTEM_READ_PATHS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc/ld.so.cache", "/etc/alternatives", "/etc/localtime"] as const;
+const LINUX_RUNTIME_ROOTS = ["/opt/conda"] as const;
+export const ISOLATION_PROBE_TIMEOUT_MS = 5_000;
+export const ISOLATION_PROBE_STDERR_LIMIT = 2_048;
+
+/** Only shipped, root-owned runtimes are added; PATH never grants host directories. */
+export function linuxTrustedRuntimeReadPaths(): string[] {
+  return LINUX_RUNTIME_ROOTS.filter((runtime) => {
+    try {
+      for (const candidate of [...pathPrefixes(runtime), runtime]) {
+        const stat = fs.lstatSync(candidate);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return false;
+      }
+      return true;
+    } catch { return false; }
+  });
+}
+
+export function sanitizeIsolationDiagnostic(value: unknown): string {
+  const text = typeof value === "string" ? value : Buffer.isBuffer(value) ? value.toString("utf8") : "";
+  return redactSecrets(text).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").trim().slice(0, ISOLATION_PROBE_STDERR_LIMIT);
+}
+
+function probeFailure(label: string, probe: ReturnType<typeof childProcess.spawnSync>): NetworkIsolationCapability {
+  const stderr = sanitizeIsolationDiagnostic(probe.stderr);
+  const errorCode = (probe.error as NodeJS.ErrnoException | undefined)?.code;
+  const reasonCode: NetworkIsolationCapability["reasonCode"] = errorCode === "ETIMEDOUT" ? "probe_timeout"
+    : /(?:no permissions|operation not permitted|permission denied).*namespace|namespace.*(?:not permitted|permission denied)/i.test(stderr) ? "namespace_permission_denied"
+      : /namespace.*(?:ENOSPC|nesting depth|exceeded)/i.test(stderr) ? "namespace_limit"
+        : /kernel.*(?:does not support|not allow).*namespace|namespace.*not supported/i.test(stderr) ? "namespace_unavailable"
+          : /mount|pivot_root/i.test(stderr) && /not permitted|permission denied/i.test(stderr) ? "mount_permission_denied"
+            : /exec(?:vp|v|ve)?.*(?:no such file|not found)|no such file.*(?:true|loader)/i.test(stderr) ? "runtime_unavailable" : "probe_failed";
+  const detail = stderr || (errorCode ? `spawn error ${errorCode}` : probe.signal ? `signal ${probe.signal}` : "no helper diagnostic");
+  return { available: false, reasonCode, exitCode: probe.status, ...(stderr ? { stderr } : {}), reason: `${label} failed with code ${probe.status ?? "unknown"}: ${detail}` };
+}
+
+/** A fixed true command with the same runtime mounts used by real Agent commands. */
+export function buildLinuxIsolationProbeArgs(networkMode: "inherit" | "deny" = "deny"): string[] {
+  const args = buildLinuxFilesystemSandboxArgs({ workspaceDir: "/tmp", readPaths: [], writePaths: [], protectedPaths: [] }, networkMode, "/bin/true", [], "/tmp");
+  if (typeof args === "string") throw new Error(args);
+  return args;
+}
+
+function probeIsolation(kind: "network" | "filesystem", platform: NodeJS.Platform): NetworkIsolationCapability {
+  if ((platform === "darwin" || platform === "linux") && typeof process.getuid === "function" && process.getuid() === 0) {
+    return { available: false, reasonCode: "root_user", reason: "sandboxed commands cannot run as root" };
+  }
+  const helper = platform === "darwin" ? "sandbox-exec" : platform === "linux" ? "bubblewrap" : undefined;
+  if (!helper) return { available: false, reasonCode: "unsupported_platform", reason: `hard ${kind === "network" ? "network deny" : "filesystem isolation"} is unsupported on platform ${platform}` };
+  const executable = helper === "sandbox-exec" ? "/usr/bin/sandbox-exec" : LINUX_BWRAP_CANDIDATES.find((candidate) => fs.existsSync(candidate));
+  if (!executable || !fs.existsSync(executable)) return { available: false, helper, reasonCode: "helper_missing", reason: `${helper} is not installed at ${helper === "sandbox-exec" ? "/usr/bin/sandbox-exec" : LINUX_BWRAP_CANDIDATES.join(" or ")}` };
+  const args = helper === "sandbox-exec"
+    ? ["-p", MACOS_SANDBOX_PROFILE, "/usr/bin/true"]
+    : buildLinuxIsolationProbeArgs(kind === "network" ? "deny" : "inherit");
+  const probe = childProcess.spawnSync(executable, args, {
+    encoding: "utf8", stdio: ["ignore", "ignore", "pipe"], timeout: ISOLATION_PROBE_TIMEOUT_MS,
+    maxBuffer: 8_192, env: { PATH: "/usr/bin:/bin", LANG: "C" },
+  });
+  if (probe.status !== 0 || probe.error) return { helper, executable, ...probeFailure(`${helper} ${kind} capability probe`, probe) };
+  return { available: true, helper, executable };
+}
 
 function literalWorkspacePath(root: string, candidate: string): string {
   if (!candidate || /[*?{}[\]]/.test(candidate)) throw new Error("Filesystem grants must be literal workspace paths");
@@ -95,52 +160,12 @@ export function compileFilesystemPolicy(workspaceDir: string, grant: WorkspaceFi
 
 /** Probes the actual hard egress helper, including kernel/user-namespace support. */
 export function probeNetworkIsolation(platform: NodeJS.Platform = process.platform): NetworkIsolationCapability {
-  if ((platform === "darwin" || platform === "linux") && typeof process.getuid === "function" && process.getuid() === 0) {
-    return { available: false, reason: "sandboxed commands cannot run as root" };
-  }
-  if (platform === "darwin") {
-    const executable = "/usr/bin/sandbox-exec";
-    if (!fs.existsSync(executable)) {
-      return { available: false, reason: `${executable} is not installed` };
-    }
-    const probe = spawnSync(executable, ["-p", MACOS_SANDBOX_PROFILE, "/usr/bin/true"], {
-      stdio: "ignore",
-      timeout: 5_000,
-    });
-    if (probe.status !== 0) {
-      return { available: false, reason: `sandbox-exec capability probe failed with code ${probe.status ?? "unknown"}` };
-    }
-    return { available: true, helper: "sandbox-exec", executable };
-  }
-  if (platform === "linux") {
-    const executable = LINUX_BWRAP_CANDIDATES.find((candidate) => fs.existsSync(candidate));
-    if (!executable) {
-      return { available: false, reason: `bubblewrap is not installed at ${LINUX_BWRAP_CANDIDATES.join(" or ")}` };
-    }
-    const probe = spawnSync(executable, ["--die-with-parent", "--unshare-net", "--", "/bin/true"], {
-      stdio: "ignore",
-      timeout: 5_000,
-    });
-    if (probe.status !== 0) {
-      return { available: false, reason: `bubblewrap network namespace probe failed with code ${probe.status ?? "unknown"}` };
-    }
-    return { available: true, helper: "bubblewrap", executable };
-  }
-  return { available: false, reason: `hard network deny is unsupported on platform ${platform}` };
+  return probeIsolation("network", platform);
 }
 
 /** Filesystem and network isolation use the same mandatory OS helper. */
 export function probeFilesystemIsolation(platform: NodeJS.Platform = process.platform): NetworkIsolationCapability {
-  const capability = probeNetworkIsolation(platform);
-  if (!capability.available) return { ...capability, reason: capability.reason?.replace(/^hard network deny/, "hard filesystem isolation") };
-  if (platform === "linux" && capability.executable) {
-    const probe = spawnSync(capability.executable, ["--die-with-parent", "--unshare-user-try", "--unshare-pid", "--ro-bind", "/", "/", "--", "/bin/true"], {
-      stdio: "ignore",
-      timeout: 5_000,
-    });
-    if (probe.status !== 0) return { available: false, reason: `bubblewrap filesystem capability probe failed with code ${probe.status ?? "unknown"}` };
-  }
-  return capability;
+  return probeIsolation("filesystem", platform);
 }
 
 function processGroupKill(pid: number | undefined, signal: NodeJS.Signals): void {
@@ -233,7 +258,8 @@ function resourceWrappedCommand(
 function networkWrappedCommand(
   executable: string,
   args: readonly string[],
-  mode: WorkspaceProcessOptions["networkMode"]
+  mode: WorkspaceProcessOptions["networkMode"],
+  cwd: string
 ): { executable: string; args: string[] } | string {
   if (mode !== "deny") return { executable, args: [...args] };
   const capability = probeNetworkIsolation();
@@ -246,10 +272,11 @@ function networkWrappedCommand(
       args: ["-p", MACOS_SANDBOX_PROFILE, executable, ...args],
     };
   }
-  return {
-    executable: capability.executable,
-    args: ["--die-with-parent", "--unshare-net", "--", executable, ...args],
-  };
+  // Callers without an explicit filesystem grant receive only workspace reads.
+  // Building a complete mount tree is mandatory even for a network-only request.
+  const policy = compileFilesystemPolicy(cwd, { readPaths: ["."], writePaths: [] });
+  const linuxArgs = buildLinuxFilesystemSandboxArgs(policy, "deny", executable, args, policy.workspaceDir);
+  return typeof linuxArgs === "string" ? linuxArgs : { executable: capability.executable, args: linuxArgs };
 }
 
 function sbplLiteral(value: string): string { return JSON.stringify(value); }
@@ -299,10 +326,10 @@ export function buildLinuxFilesystemSandboxArgs(
 ): string[] | string {
   for (const granted of policy.readPaths) if (!fs.existsSync(granted)) return `Filesystem read grant does not exist: ${granted}`;
   for (const granted of policy.writePaths) if (!fs.existsSync(granted)) return `Filesystem write grant does not exist: ${granted}`;
-  const systemReads = SYSTEM_READ_PATHS.filter((item) => fs.existsSync(item));
+  const systemReads = [...LINUX_SYSTEM_READ_PATHS.filter((item) => fs.existsSync(item)), ...linuxTrustedRuntimeReadPaths()];
   const mounts = Array.from(new Set([...systemReads, ...policy.readPaths, ...(fs.existsSync(executable) ? [executable] : [])]));
   const directories = Array.from(new Set([...mounts, cwd].flatMap(pathPrefixes))).sort((left, right) => left.length - right.length);
-  const result = ["--die-with-parent", "--new-session", "--unshare-user-try", "--unshare-pid", "--unshare-ipc", "--unshare-uts"];
+  const result = ["--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts"];
   if (networkMode === "deny") result.push("--unshare-net");
   result.push("--tmpfs", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp");
   for (const directory of directories) result.push("--dir", directory);
@@ -318,7 +345,7 @@ export function buildLinuxFilesystemSandboxArgs(
     if (protectedPath.includes("/proc/") || protectedPath.includes("/dev/")) return "Protected path cannot target a virtual filesystem";
     const stat = fs.lstatSync(protectedPath);
     if (entry.denyRead) {
-      if (stat.isDirectory()) result.push("--tmpfs", protectedPath);
+      if (stat.isDirectory()) result.push("--tmpfs", protectedPath, "--remount-ro", protectedPath);
       else result.push("--ro-bind", "/dev/null", protectedPath);
     } else if (entry.denyWrite) {
       result.push("--ro-bind", protectedPath, protectedPath);
@@ -336,7 +363,7 @@ function sandboxWrappedCommand(
   filesystem: WorkspaceProcessOptions["filesystem"],
   scratchDir?: string
 ): { executable: string; args: string[] } | string {
-  if (!filesystem) return networkWrappedCommand(executable, args, networkMode);
+  if (!filesystem) return networkWrappedCommand(executable, args, networkMode, cwd);
   let policy: CompiledFilesystemPolicy;
   try { policy = compileFilesystemPolicy(filesystem.workspaceDir || cwd, filesystem); }
   catch (error) { return error instanceof Error ? error.message : String(error); }

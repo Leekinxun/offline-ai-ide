@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -12,19 +12,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "backend/package.json"));
 const { WebSocket } = require("ws");
 const args = process.argv.slice(2);
-const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false };
+const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false, approval: false };
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (key === "--launch") options.launch = true;
   else if (key === "--review") options.review = true;
   else if (key === "--rename") options.rename = true;
+  else if (key === "--approval") options.approval = true;
   else if (["--url", "--cdp", "--workspace", "--artifacts"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
   else if (key === "--help") {
-    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename] [--artifacts /tmp/review-screenshots]");
+    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename|--approval] [--artifacts /tmp/review-screenshots]");
     process.exit(0);
   } else throw new Error("Unknown or incomplete option: " + key);
 }
-assert.ok(!(options.rename && options.review), 'Choose one fixture scenario per run');
+assert.ok([options.rename, options.review, options.approval].filter(Boolean).length <= 1, 'Choose one fixture scenario per run');
 function localUrl(value, protocols = ["http:", "https:"]) {
   const url = new URL(value);
   assert.ok(protocols.includes(url.protocol) && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname), "Only loopback fixture/CDP endpoints are allowed");
@@ -55,7 +56,11 @@ async function scenario(name, action, fatal = false) {
       value: document.querySelector(".inline-assistant textarea")?.value,
       buttons: [...document.querySelectorAll(".inline-assistant button")].map((button) => ({ text: button.textContent, disabled: button.disabled })),
       active: document.activeElement?.outerHTML?.slice(0, 350),
+    })).catch(() => undefined) : name.startsWith("approval_") && cdp && pageSession ? await call(() => ({
+      approvals: [...document.querySelectorAll('.tool-approval-stack')].map((node) => ({ text: node.textContent.slice(0, 1200), rect: node.getBoundingClientRect().toJSON(), scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })),
+      navigation: [...document.querySelectorAll('.task-state-action button, .editor-assistant-compact-summary button')].map((node) => ({ text: node.textContent, rect: node.getBoundingClientRect().toJSON(), disabled: node.disabled })),
     })).catch(() => undefined) : undefined;
+    if (name.startsWith("approval_") && cdp && pageSession) await screenshot('failure-' + name).catch(() => {});
     results.push({ scenario: name, status: "fail", reason: safeError(error), ...(diagnostics ? { diagnostics } : {}), durationMs: Date.now() - started }); if (fatal) throw error;
   }
   finally { console.log(JSON.stringify(results[results.length - 1])); }
@@ -139,6 +144,13 @@ async function uiApi(route, method = "GET", body) {
 async function capturedResponse(route, after = 0) {
   return until(() => responses.find((entry) => entry.route === route && entry.method === "POST" && entry.time >= after), "UI response for " + route, 30_000);
 }
+async function screenshot(name) {
+  if (!options.artifacts) return;
+  const destination = path.resolve(options.artifacts);
+  fs.mkdirSync(destination, { recursive: true });
+  const result = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
+  fs.writeFileSync(path.join(destination, name + '.png'), Buffer.from(result.data, 'base64'));
+}
 async function launchOwnedChrome() {
   const executable = process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : process.env.CHROME_BINARY;
   assert.ok(executable && fs.existsSync(executable), "Chrome is unavailable; supply an existing loopback --cdp endpoint or CHROME_BINARY");
@@ -197,13 +209,18 @@ async function connect() {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
     localStorage.setItem("app-locale","en");
-    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];
+    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];globalThis.__smokeApprovalEvents=[];
     const nativeSend=WebSocket.prototype.send;
     WebSocket.prototype.send=function(data){let value;try{value=JSON.parse(data)}catch{}
       const review=globalThis.__smokeReviewAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_REVIEW: format the interview document";
       const rename=globalThis.__smokeRenameAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_RENAME: rename all interview files";
-      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&!rename&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
-      if(review||rename){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
+      const approval=globalThis.__smokeApprovalAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_APPROVAL: approve the fixture note and run its check";
+      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&!rename&&!approval&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
+      if(review||rename||approval){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
+      if(approval&&!this.__smokeApprovalObserver){this.__smokeApprovalObserver=true;this.addEventListener("message",event=>{let frame;try{frame=JSON.parse(event.data)}catch{return}
+        if(frame.type==="request_accepted"&&frame.requestId===globalThis.__smokeReviewRequest?.requestId)globalThis.__smokeReviewRequest={...globalThis.__smokeReviewRequest,conversationId:frame.conversationId,runId:frame.runId};
+        if(["request_accepted","tool_approval_request","tool_approval_all_result","tool_result","done","error","stopped"].includes(frame.type)){globalThis.__smokeApprovalEvents.push(frame);if(globalThis.__smokeApprovalEvents.length>150)globalThis.__smokeApprovalEvents.shift()}
+      });}
       return nativeSend.call(this,data)};
     const nativeFetch=window.fetch;
     window.fetch=function(input,init){const url=new URL(typeof input==="string"?input:input.url,location.href);const method=(init?.method||"GET").toUpperCase();
@@ -243,7 +260,7 @@ try {
     if (options.workspace) assert.equal(safeWorkspace, fs.realpathSync(options.workspace), "--workspace does not match the authenticated fixture");
     const [runtime, settings] = await Promise.all([uiApi("/api/chat/runtime-options"), uiApi("/api/admin/settings")]);
     assert.equal(runtime.defaultModelName, "local-fixture"); assert.equal(runtime.modeModels.ask, "local-fixture");
-    if (options.review || options.rename) assert.equal(runtime.modeModels.code, "local-fixture");
+    if (options.review || options.rename || options.approval) assert.equal(runtime.modeModels.code, "local-fixture");
     assert.equal(settings.llm.modelName, "local-fixture"); localUrl(settings.llm.vllmApiUrl);
     for (const model of settings.llm.models || []) if (model.modelName === 'local-fixture') localUrl(model.apiUrl);
     for (const fallback of settings.llm.fallbacks || []) localUrl(fallback.apiUrl);
@@ -264,7 +281,105 @@ try {
     }), "Loaded calculator Monaco model");
     assert.equal(await modelValue(), diskBefore);
   }, true);
-  if (options.rename) {
+  if (options.approval) {
+    let trackedBefore, pendingShell;
+    await scenario('approval_medium_bulk_ack', async () => {
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, 'approval-note.md'), 'utf8'), 'Approval fixture draft\n', 'Approval requires a fresh fixture');
+      const tracked = spawnSync('git', ['ls-files', '-z'], { cwd: safeWorkspace, encoding: 'utf8' });
+      assert.equal(tracked.status, 0);
+      trackedBefore = new Map(tracked.stdout.split('\0').filter(Boolean).map((file) => [file, fs.readFileSync(path.join(safeWorkspace, file))]));
+      await click('button[aria-label="AI tasks"]', true);
+      await until(() => call(() => Boolean(document.querySelector('.main-layout.workbench-view-chat .chat-panel'))), 'Task chat surface');
+      await click('.chat-composer-mode-select button', true);
+      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'Code').setAttribute('data-smoke-code-mode', 'true'));
+      await click('[data-smoke-code-mode]', true);
+      await click('.chat-composer-model-select .model-selector button', true);
+      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture').setAttribute('data-smoke-local-model', 'true'));
+      await click('[data-smoke-local-model]', true);
+      await call(() => { globalThis.__smokeApprovalAllowed = true; });
+      await fill('.chat-panel textarea.chat-input', 'FIXTURE_APPROVAL: approve the fixture note and run its check');
+      await click('.chat-composer-send-btn', true);
+      await until(() => call(() => document.querySelector('.chat-panel .tool-approval-card.risk-medium')?.textContent.includes('approval-note.md')), 'Medium-risk edit approval');
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, 'approval-note.md'), 'utf8'), 'Approval fixture draft\n', 'Edit ran before approval');
+      await screenshot('approval-medium-before-bulk');
+      await click('.chat-panel .tool-approval-bulk button', true);
+      const acknowledgement = await until(() => call(() => globalThis.__smokeApprovalEvents.find((event) => event.type === 'tool_approval_all_result' && event.resolvedCount === 1)), 'Bulk approval ACK');
+      assert.ok(acknowledgement.conversationId && acknowledgement.runId && Number.isInteger(acknowledgement.eventSequence));
+      assert.equal(acknowledgement.pendingApprovals.some((request) => request.toolCallId === 'approval-edit'), false);
+      await until(() => fs.readFileSync(path.join(safeWorkspace, 'approval-note.md'), 'utf8') === 'Approval fixture approved\n', 'Approved fixture note');
+    }, true);
+    await scenario('approval_high_survives_bulk_and_shows_waiting', async () => {
+      pendingShell = await until(() => call(() => globalThis.__smokeApprovalEvents.find((event) => event.type === 'tool_approval_request' && event.toolCallId === 'approval-check')), 'High-risk check approval');
+      assert.equal(pendingShell.risk, 'high'); assert.equal(pendingShell.input.command, 'npm run approval-check');
+      await until(() => call(() => document.querySelector('.chat-panel .tool-approval-card.risk-high')?.textContent.includes('npm run approval-check')), 'Visible high-risk card');
+      assert.equal(await call(() => Boolean(document.querySelector('.chat-panel .tool-approval-bulk button'))), false, 'High-only queue offers misleading bulk approval');
+      assert.equal(await call(() => document.querySelector('.chat-panel .task-state-action button')?.textContent.trim()), 'View approvals');
+      assert.ok(await call(() => document.querySelector('.chat-panel .task-state-strip')?.textContent.includes('Waiting for approval')));
+      const after = await call(() => globalThis.__smokeApprovalEvents.length);
+      await call((pending) => {
+        if (!globalThis.__smokeApprovalAllowed || globalThis.__smokeReviewSocket?.readyState !== 1) throw new Error('Owned fixture socket unavailable');
+        const accepted = globalThis.__smokeReviewRequest;
+        if (accepted.conversationId !== pending.conversationId || accepted.runId !== pending.runId) throw new Error('Fixture approval scope mismatch');
+        globalThis.__smokeReviewSocket.send(JSON.stringify({ type: 'tool_approval_all', conversationId: pending.conversationId, runId: pending.runId }));
+      }, pendingShell);
+      const acknowledgement = await until(() => call((after) => globalThis.__smokeApprovalEvents.slice(after).find((event) => event.type === 'tool_approval_all_result'), after), 'High-only bulk ACK');
+      assert.equal(acknowledgement.resolvedCount, 0);
+      assert.equal(acknowledgement.pendingApprovals.find((request) => request.approvalId === pendingShell.approvalId)?.risk, 'high');
+      await call(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.ok(await call(() => document.querySelector('.chat-panel .tool-approval-card.risk-high')?.textContent.includes('npm run approval-check')), 'ACK hid the unresolved shell request');
+      assert.equal(await call(() => globalThis.__smokeApprovalEvents.some((event) => event.type === 'tool_result' && event.toolCallId === 'approval-check')), false, 'Bulk approval executed a high-risk check');
+    }, true);
+    await scenario('approval_editor_entry_retains_the_same_request', async () => {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 600, deviceScaleFactor: 1, mobile: false }, pageSession);
+      await click('button[aria-label="Explorer"]', true);
+      await until(() => call(() => document.querySelector('.editor-assistant-panel .tool-approval-card.risk-high')?.textContent.includes('npm run approval-check')), 'Editor entry retained approval');
+      assert.equal(await call(() => Boolean(document.querySelector('.editor-assistant-panel .tool-approval-bulk button'))), false);
+      await call(() => {
+        const button = [...document.querySelectorAll('.editor-assistant-panel button')].find((node) => node.textContent.trim() === 'View approvals' && node.getBoundingClientRect().height > 0);
+        if (!button) throw new Error('Editor approval navigation is missing');
+        button.setAttribute('data-smoke-editor-approval-navigation', 'true');
+      });
+      await click('[data-smoke-editor-approval-navigation]', true);
+      assert.ok(await call(() => Boolean(document.querySelector('.editor-assistant-composer .editor-assistant-stop-btn'))), 'Editor has no independent stop control');
+      await screenshot('approval-editor-600px');
+      await click('button[aria-label="AI tasks"]', true);
+    }, true);
+    await scenario('approval_short_viewport_real_mouse_permission', async () => {
+      await until(() => call(() => Boolean(document.querySelector('.chat-panel .tool-approval-card.risk-high'))), 'Task approval restored');
+      await click('.chat-panel .task-state-action button', true);
+      const layout = await call(() => {
+        const stack = document.querySelector('.chat-panel .tool-approval-stack');
+        const rect = stack.getBoundingClientRect();
+        return { viewport: innerHeight, height: rect.height, top: rect.top, bottom: rect.bottom, scrollHeight: stack.scrollHeight, clientHeight: stack.clientHeight, overflow: getComputedStyle(stack).overflowY,
+          stop: Boolean(document.querySelector('.chat-panel .chat-composer-stop-btn')) };
+      });
+      assert.equal(layout.viewport, 600); assert.equal(layout.overflow, 'auto');
+      assert.ok(layout.height > 0 && layout.top >= 0 && layout.bottom <= layout.viewport, 'Approval stack is outside the viewport: ' + JSON.stringify(layout));
+      assert.ok(layout.scrollHeight > layout.clientHeight, 'Short viewport did not exercise internal approval scrolling');
+      assert.equal(layout.stop, true);
+      await screenshot('approval-chat-600px-before-allow');
+      await click('.chat-panel .tool-approval-card.risk-high .tool-approval-allow', true);
+      const result = await until(() => call(() => globalThis.__smokeApprovalEvents.find((event) => event.type === 'tool_result' && event.toolCallId === 'approval-check')), 'Mouse approval executed shell check', 45_000);
+      assert.equal(result.isError, false, String(result.result)); assert.match(result.result, /approval check passed/);
+    }, true);
+    await scenario('approval_finishes_with_only_expected_workspace_change', async () => {
+      await until(() => call(() => globalThis.__smokeApprovalEvents.some((event) => event.type === 'done' && event.requestId === globalThis.__smokeReviewRequest.requestId)), 'Approval run completion', 45_000);
+      await until(() => call(() => !document.querySelector('.chat-panel .assistant-activity') && !document.querySelector('.chat-panel .tool-approval-card')), 'Completed task UI');
+      const request = await evaluate('globalThis.__smokeReviewRequest');
+      const run = await uiApi('/api/chat/runs/' + encodeURIComponent(request.runId));
+      assert.equal(run.status, 'completed');
+      const completed = await call(() => globalThis.__smokeApprovalEvents.filter((event) => event.type === 'tool_result'));
+      assert.deepEqual(completed.map((event) => event.toolCallId), ['approval-read', 'approval-edit', 'approval-check']);
+      assert.ok(completed.every((event) => !event.isError), 'Fixture tool failed');
+      for (const [file, before] of trackedBefore) {
+        const expected = file === 'approval-note.md' ? Buffer.from('Approval fixture approved\n') : before;
+        assert.deepEqual(fs.readFileSync(path.join(safeWorkspace, file)), expected, 'Unexpected changed file: ' + file);
+      }
+      const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: safeWorkspace, encoding: 'utf8' });
+      assert.equal(status.status, 0); assert.equal(status.stdout.trim(), 'M approval-note.md');
+      await screenshot('approval-completed-600px');
+    }, true);
+  } else if (options.rename) {
     const sources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);
     const targets = sources.map((source) => source.replace('题目.md', 'TASK.md'));
     let before;

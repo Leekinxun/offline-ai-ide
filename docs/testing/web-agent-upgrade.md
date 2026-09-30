@@ -119,3 +119,28 @@ node scripts/web-agent-browser-smoke.mjs \
 该场景包含十个有空格的子目录和中文文件名。实际通过审批执行带 `2>/dev/null` 的枚举命令，再用 `rename_file` 改名；检查十份文件内容不变、外部普通参考文件返回只读标记、当前脏标签迁移到新名称后保留未保存文字，以及运行结束后的文件树更新。
 
 验证记录：后端全量 **922 项：919 通过、0 失败、3 条件跳过**（151 个测试文件）；前端回归 **130/130**；真实浏览器 `--rename` **6/6**。重命名底层另外覆盖目标冲突、并发替换、提交失败恢复和整轮撤销；外部读取覆盖假授权、授权撤销、敏感内容、链接与读取竞态。真实配置哈希保持一致。权限模型详见 [工作区文件访问](../security/workspace-file-access.md)。
+
+## 工具审批与短窗口（2026-09-30）
+
+启动新 fixture 后，单独运行审批检查（不重复其他模式）：
+
+```sh
+node scripts/web-agent-browser-smoke.mjs \
+  --launch --approval \
+  --workspace "<fixture 输出的 workspace 路径>" \
+  --artifacts /tmp/crownforge-approval-screenshots
+```
+
+`--approval` 与 `--review`、`--rename` 互斥。完成账号、临时工作区及本地模型校验后，脚本只允许固定的 `FIXTURE_APPROVAL: approve the fixture note and run its check` Code 请求。离线模型先读取并修改 `approval-note.md`，随后请求执行 `npm run approval-check`；该命令仅检查这份临时文件并输出结果。
+
+检查覆盖：任务页实际点击中风险批量批准、服务端 ACK 确认获批项、后续高风险 bash 卡持续可见且没有批量入口；再对自己创建的 fixture WebSocket 发送批量批准，确认 `resolvedCount: 0` 且高风险卡保留。随后切到编辑器助手核对同一审批，再回任务页，在 600px 高窗口中检查内部滚动与鼠标命中，通过真实 CDP 鼠标按下/松开批准一次，等待工具检查和运行成功。
+
+结束时比对全部 Git 跟踪文件字节及工作区状态，只允许 `approval-note.md` 出现预期修改。截图包含中风险批准前、600px 编辑器审批、600px 任务页审批及完成状态。脚本清理自己的 Chrome 上下文和进程；fixture 退出时删除整个临时工作区。不读取正常用户配置，不访问线上，也不调用真实模型。
+
+验证结果：真实 Chrome `--approval` **8/8**；后端完整测试与所有根目录前端策略测试合计 **1,084 项：1,081 通过、0 失败、3 条件跳过**；只读命令与变更集专项最终 **51/51**，补充通配符边界后只读命令测试 **7/7**。前后端类型检查、严格未使用变量检查、生产构建、体积预算、UI contract、发布方法检查通过。新增固定沙箱自检在本机 macOS 的七项 canary 均通过。
+
+本轮全量测试使用独立 settings/users/workspace 与只允许 loopback 的 Node 网络 guard。完整 clean-snapshot 发布流程在复制已有 `desktop-dist` 构建产物时遇到框架符号链接而退出，因此改为上述隔离配置回归；未删除用户的桌面构建产物，也未宣称完整发布 soak 通过。
+
+线上只读排查复现了两层失败：隐藏的高风险审批在约 300 秒后超时；真正获批的命令又因 bubblewrap 无法创建 namespace 而失败。宿主机报告默认 AppArmor、默认 seccomp 和 `no-new-privileges`。独立 Linux Docker 27.4.0 / bubblewrap 0.8.0 实验复现默认 seccomp 下的 namespace 拒绝；实验规则进一步允许 namespace 后仍无法挂载私有 `/proc`，没有得到可部署的完整通过结果。应用修复、macOS canary 通过和浏览器成功不能替代目标服务器的沙箱验收；线上容器未在此验证中重建或放宽安全策略。部署步骤见 [沙箱诊断手册](../operations/operator-runbook.md#linux-container-sandbox-diagnostics)。
+
+验证结果：独立 `--approval` **8/8 通过**，已实际查看两个入口的 600px 截图；浏览器上下文及自建 Chrome 清理成功，临时 fixture 服务已停止。此前一轮脚本误选了折叠详情中的隐藏导航按钮，已改为定位真实可见入口，并在全新 fixture 上完成上述结果。

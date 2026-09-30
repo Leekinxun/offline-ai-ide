@@ -7,6 +7,7 @@ import { PolicyAuditLog } from "./policyAudit.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ToolApprovalSession, type ToolApprovalOutcome } from "./toolApproval.js";
 
 const request = {
   requestId: "request-1",
@@ -143,4 +144,36 @@ test("permission decisions are audited with redacted input when workspace and ru
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
+});
+
+test("tool permission denial tells the model whether approval expired, was rejected, or was cancelled", async () => {
+  const cases: Array<[ToolApprovalOutcome | "deny", RegExp]> = [
+    [{ decision: "deny", cause: "timed_out", timeoutMs: 300_000 }, /approval timed out after 300 seconds.*not executed/],
+    [{ decision: "deny", cause: "user_denied" }, /user denied/],
+    [{ decision: "deny", cause: "cancelled" }, /approval was cancelled.*not executed/],
+    [{ decision: "deny", cause: "invalid_decision" }, /explicit one-time approval/],
+    ["deny", /user denied/],
+  ];
+  for (const [outcome, expected] of cases) {
+    const authorize = createPermissionAuthorizer({ mode: "code", readOnly: false, requestApproval: async () => outcome });
+    const result = await authorize(request);
+    assert.equal(result.allowed, false); assert.equal(result.decision, "deny");
+    assert.match(result.reason || "", expected);
+    assert.doesNotMatch(result.reason || "", /denied or cancelled/);
+  }
+});
+
+test("real approval timeout reaches permission feedback and a stopped run keeps its stop reason", async () => {
+  const session = new ToolApprovalSession(() => {}, 10);
+  const authorize = createPermissionAuthorizer({ mode: "code", readOnly: false, requestApproval: (input) => session.requestDetailed(input) });
+  const pending = authorize(request);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.match((await pending).reason || "", /approval timed out/);
+  assert.equal(session.pendingCount(), 0);
+
+  const controller = new AbortController();
+  const stopped = createPermissionAuthorizer({ mode: "code", readOnly: false, signal: controller.signal, requestApproval: async () => {
+    controller.abort(); return { decision: "deny", cause: "cancelled" };
+  } });
+  assert.match((await stopped(request)).reason || "", /run was stopped/);
 });

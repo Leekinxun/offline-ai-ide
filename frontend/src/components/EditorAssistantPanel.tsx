@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
+  Square,
   TerminalSquare,
   TestTube2,
   X,
@@ -37,6 +38,7 @@ import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { approvalTaskAction } from "../utils/toolApprovalPolicy";
 import { AgentQuestionStack } from "./AgentQuestionStack";
 import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
 import { UndoTurnButton } from "./UndoTurnButton";
@@ -162,6 +164,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const input = draftText;
   const setInput = onDraftTextChange;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const approvalStackRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -288,11 +291,18 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     ? (runState.endedAt || (isStreaming ? now : runState.updatedAt)) - runState.startedAt
     : 0;
   const taskRunStatus = isStreaming ? "running" : runState?.status || "queued";
-  const taskRunTone: TaskStateTone = taskRunStatus === "running" || taskRunStatus === "queued" ? "running" : taskRunStatus === "completed" ? "success" : taskRunStatus === "failed" ? "danger" : "warning";
+  const taskRunTone: TaskStateTone = pendingApprovals.length ? "warning" : taskRunStatus === "running" || taskRunStatus === "queued" ? "running" : taskRunStatus === "completed" ? "success" : taskRunStatus === "failed" ? "danger" : "warning";
   const taskEvidenceCount = (completionEvidence?.ledger.verification.length || 0) + (completionEvidence?.ledger.criteria.length || 0) + (currentRunSummary?.changedFiles.length || 0);
-  const taskAction = isStreaming ? t("workbench.pauseRun") : runState?.status === "failed" || runState?.status === "stopped" ? t("workbench.resumeRun") : t("chat.focusComposer");
+  const taskActionKind = approvalTaskAction(pendingApprovals.length > 0, isStreaming, runState?.status === "failed" || runState?.status === "stopped");
+  const taskAction = taskActionKind === "approval" ? t("chat.approval.view") : taskActionKind === "stop" ? t("workbench.pauseRun") : taskActionKind === "resume" ? t("workbench.resumeRun") : t("chat.focusComposer");
   const handleTaskAction = () => {
-    if (isStreaming || runState?.status === "failed" || runState?.status === "stopped") { handleRunControl(); return; }
+    if (taskActionKind === "approval") {
+      const stack = approvalStackRef.current;
+      stack?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      window.requestAnimationFrame(() => (stack?.querySelector<HTMLElement>('button:not(:disabled)') || stack)?.focus());
+      return;
+    }
+    if (taskActionKind === "stop" || taskActionKind === "resume") { handleRunControl(); return; }
     textareaRef.current?.focus();
   };
   const handleToggleDetails = () => {
@@ -340,7 +350,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         </div>
       </header>
       {showAssistantSummary && <div id="editor-assistant-details" className="editor-assistant-details" hidden={detailsCollapsed}>
-      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
 
       <section className="editor-assistant-context">
         <span>{t("workbench.autoAttachedContext")}</span>
@@ -407,7 +417,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         <div className="editor-assistant-compact-summary">
           <div className="editor-assistant-compact-copy">
             <strong>{fileName || t("workbench.noActiveFile")}</strong>
-            <small aria-live="polite">{t(`chat.taskStatus.${taskRunStatus}`)}</small>
+            <small aria-live="polite">{pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${taskRunStatus}`)}</small>
           </div>
           <button type="button" onClick={handleTaskAction} disabled={!connected} title={!connected ? t("chat.offline") : taskAction}>
             {taskAction}
@@ -599,6 +609,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       </div>
 
       <ToolApprovalStack
+        ref={approvalStackRef}
         requests={pendingApprovals}
         onRespond={onToolApproval}
         onApproveConversation={onApproveConversationTools}
@@ -731,6 +742,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                 <span>{fileName}</span>
               </span>
             )}
+            {isStreaming && <button type="button" className="editor-assistant-stop-btn" onClick={onStop} disabled={!connected} title={t("chat.stop")} aria-label={t("chat.stop")}>
+              <Square size={12} aria-hidden="true" />
+            </button>}
             <button
               type="button"
               className="editor-assistant-send-btn"

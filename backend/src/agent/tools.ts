@@ -16,7 +16,8 @@ import { buildFileVersion, listFileMutations, recordFileMutation } from "../file
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
-import { runInspectionCommand, runWorkspaceCommand } from "./shell.js";
+import { runInspectionCommand, runWorkspaceCommand, runReadOnlyShellCommand } from "./shell.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
 import { networkGrantForTool } from "./networkAccess.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { requestAgentQuestion } from "../chat/agentQuestions.js";
@@ -413,6 +414,12 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   },
 
   bash: async (args, ctx) => {
+    const command = typeof args.command === "string" ? args.command : "";
+    if (ctx.readOnlyShellCommand !== undefined && (command !== ctx.readOnlyShellCommand || args.allow_network === true)) return "Error: Read-only command changed after authorization";
+    if (args.allow_network !== true && planReadOnlyShell(command)) {
+      return runReadOnlyShellCommand(command, ctx.workspaceDir, ctx.signal, { readPaths: ctx.filesystemSandbox?.readPaths || [], writePaths: [] });
+    }
+    if (ctx.readOnlyShellCommand !== undefined) return "Error: Read-only authorization cannot run a writable shell";
     let networkExecutionGrant;
     try { networkExecutionGrant = networkGrantForTool(ctx, args); }
     catch (error) { return `Error: ${error instanceof Error ? error.message : "Network opt-in denied"}`; }

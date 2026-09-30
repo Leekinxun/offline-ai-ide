@@ -381,7 +381,7 @@ export function handleChatWs(
     const run = getActiveRunContext(session.workspaceDir, event.conversationId);
     if (!run || run.ownerUsername !== session.username) return;
     const payload = event.payload;
-    if (!["run_state", "tool_approval_request", "tool_result", "question_state", "done", "stopped", "error", "summary"].includes(payload.type)) return;
+    if (!["run_state", "tool_approval_request", "tool_approval_all_result", "tool_result", "question_state", "done", "stopped", "error", "summary"].includes(payload.type)) return;
     const record = run.currentRecorder.snapshot();
     const waiting = run.snapshot().waitingForInput;
     wsSend(ws, { type: "background_run_state", conversationId: event.conversationId, runId: event.runId,
@@ -1115,7 +1115,7 @@ async function processConversationQueue(
       runRecorder: recorder,
       requestToolApproval: (input) => {
         run.stopIfAccessRevoked();
-        return controlState.stopped ? Promise.resolve("deny") : approvals.request({
+        return controlState.stopped ? Promise.resolve({ decision: "deny" as const, cause: "cancelled" as const }) : approvals.requestDetailed({
           ...input,
           conversationId: activeConversationId,
         });

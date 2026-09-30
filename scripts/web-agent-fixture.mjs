@@ -34,6 +34,7 @@ const reviewModified = "# 技术面试任务说明：轻量 Key-Value 引擎\n\n
 fs.writeFileSync(path.join(workspace, "review-doc.md"), reviewOriginal);
 fs.writeFileSync(path.join(workspace, "review-notes.md"), "Notes draft\n");
 fs.writeFileSync(path.join(workspace, "review-checklist.md"), "Checklist draft\n");
+fs.writeFileSync(path.join(workspace, "approval-note.md"), "Approval fixture draft\n");
 const renameSources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);
 for (const [index, source] of renameSources.entries()) {
   fs.mkdirSync(path.dirname(path.join(workspace, source)), { recursive: true });
@@ -43,7 +44,8 @@ const referenceRoot = path.join(fixture, "references");
 fs.mkdirSync(referenceRoot);
 fs.writeFileSync(path.join(referenceRoot, "ordinary.txt"), "External ordinary reference, read only.\n");
 fs.writeFileSync(path.join(workspace, ".gitignore"), ".history/\n.checkpoints/\n.team/\n.codex/\n.crewforge/\nnode_modules/\n");
-fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", wait: "node wait.cjs" } }));
+fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", "approval-check": "node approval-verify.cjs", wait: "node wait.cjs" } }));
+fs.writeFileSync(path.join(workspace, "approval-verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').equal(fs.readFileSync('approval-note.md', 'utf8'), 'Approval fixture approved\\n'); console.log('approval check passed');\n");
 fs.writeFileSync(path.join(workspace, "verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').ok(fs.readFileSync('calculator.ts', 'utf8').includes('return a + b;')); console.log('calculator check passed');\n");
 fs.writeFileSync(path.join(workspace, "wait.cjs"), "console.log('session ready'); const timer = setInterval(() => console.log('heartbeat'), 1000); process.stdin.on('data', value => { console.log('input: ' + value); if (String(value).trim() === 'exit') { clearInterval(timer); process.exit(0); } });\n");
 fs.writeFileSync(path.join(workspace, "index.html"), '<!doctype html><html><head><meta charset="utf-8"><title>Preview fixture</title><style>body{font:16px system-ui;padding:32px;background:#eef4ff}button{padding:12px 20px;margin:8px;border-radius:12px;border:0;background:#2563eb;color:white}</style></head><body><h1>Preview fixture</h1><button id="save" onclick="document.querySelector(\'#status\').textContent=\'Saved\'">Save</button><button id="fail" onclick="throw new Error(\'Fixture preview error\')">Test error</button><p id="status">Ready</p></body></html>');
@@ -64,8 +66,17 @@ const model = http.createServer(async (req, res) => {
     const tool = (name, args, id) => ({ role: "assistant", content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
     const reviewRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_REVIEW"));
     const renameRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_RENAME"));
+    const approvalRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_APPROVAL: approve the fixture note and run its check"));
     let message = { role: "assistant", content: "Local browser fixture ready." };
-    if (renameRequested) {
+    if (approvalRequested) {
+      if (!toolResults.some((entry) => entry.tool_call_id === "approval-read")) message = tool("read_file", { path: "approval-note.md" }, "approval-read");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "approval-edit")) message = tool("edit_file", { path: "approval-note.md", old_text: "Approval fixture draft", new_text: "Approval fixture approved" }, "approval-edit");
+      else if (!toolResults.some((entry) => entry.tool_call_id === "approval-check")) message = tool("bash", { command: "npm run approval-check" }, "approval-check");
+      else {
+        const passed = String(toolResults.find((entry) => entry.tool_call_id === "approval-check")?.content || "").includes("approval check passed");
+        message = { role: "assistant", content: passed ? "Approval fixture complete: the note changed and its check passed." : "Approval fixture failed: the check did not pass." };
+      }
+    } else if (renameRequested) {
       if (!toolResults.some((entry) => entry.tool_call_id === "rename-reference")) message = tool("read_file", { path: path.join(referenceRoot, "ordinary.txt") }, "rename-reference");
       else if (!toolResults.some((entry) => entry.tool_call_id === "rename-discovery")) message = tool("bash", { command: "ls interview/*/题目.md 2>/dev/null; printf 'discovery finished'" }, "rename-discovery");
       else {

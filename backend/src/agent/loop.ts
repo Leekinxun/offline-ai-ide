@@ -28,7 +28,7 @@ import {
   safeTrimMessages,
 } from "./context.js";
 import { AgentRunRecorder } from "../chat/runHistory.js";
-import { classifyToolApproval, type ToolApprovalDecision } from "./toolApproval.js";
+import { classifyToolApproval, type ToolApprovalDecision, type ToolApprovalOutcome } from "./toolApproval.js";
 import { ProviderRequestError } from "./providerErrors.js";
 import { createPermissionAuthorizer } from "./permissionService.js";
 import { ThinkStreamSplitter } from "./thinkStream.js";
@@ -62,6 +62,7 @@ import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./provi
 import { redactSecrets } from "./secretRedaction.js";
 import { resolveResumedValidation, ValidationFeedback, validationFileVersions } from "./validationFeedback.js";
 import { pendingAgentProcesses, stopAgentProcesses, type AgentProcessResult } from "./processTools.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
 
 const MAX_MODEL_ATTACHMENT_COUNT = 4;
 const MAX_MODEL_ATTACHMENT_BYTES = 12 * 1024 * 1024;
@@ -1079,11 +1080,14 @@ export async function runAgentLoop(
           let networkExecutionGrant: import("./networkAccess.js").NetworkExecutionGrant | undefined;
           let snapshotId: string | undefined;
           let executionAttempted = false;
+          const readOnlyShellCommand = toolCall.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command)
+            ? args.command as string : undefined;
+          const needsMutationSnapshot = readOnlyShellCommand === undefined && shouldCreateStepSnapshot(toolCall.function.name);
           const handler = TOOL_DISPATCH[toolCall.function.name];
           const approval = classifyToolApproval(toolCall.function.name, args, { workspaceDir: session.workspaceDir });
           let shouldExecute = true;
           let deniedByPolicyOrUser = false;
-          if (shouldCreateStepSnapshot(toolCall.function.name) && toolCall.function.name !== "process_start" && pendingAgentProcesses({ ...toolCtx, requestId: currentRequestId }, true).some((item) => item.session.status === "running")) {
+          if (needsMutationSnapshot && toolCall.function.name !== "process_start" && pendingAgentProcesses({ ...toolCtx, requestId: currentRequestId }, true).some((item) => item.session.status === "running")) {
             result = "Error: A workspace Agent process is still running. Poll or stop it before issuing another workspace mutation tool.";
             isError = true; shouldExecute = false;
           }
@@ -1125,7 +1129,7 @@ export async function runAgentLoop(
           }
 
           if (shouldExecute) {
-            if (shouldCreateStepSnapshot(toolCall.function.name)) {
+            if (needsMutationSnapshot) {
               try {
                 const checkpoint = createCheckpoint(session.workspaceDir, {
                   label: `Before ${toolCall.function.name}`,
@@ -1240,6 +1244,7 @@ export async function runAgentLoop(
                 // The shell compatibility path is available only after this tool call
                 // has passed the ordinary mode, policy, and approval checks above.
                 compatibilityShellAuthorized: ["bash", "process_start", "process_input"].includes(toolCall.function.name),
+                readOnlyShellCommand,
                 networkExecutionGrant,
                 ...(control?.runRecorder
                   ? {
@@ -1686,7 +1691,7 @@ export interface AgentLoopControl {
     scope: string;
     canAllowSession: boolean;
     sessionKey?: string;
-  }) => Promise<ToolApprovalDecision>;
+  }) => Promise<ToolApprovalDecision | ToolApprovalOutcome>;
 }
 
 function buildUserContent(

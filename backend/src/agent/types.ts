@@ -250,6 +250,13 @@ export type WsServerMessage = (
       canAllowSession: boolean;
     }
   | {
+      type: "tool_approval_all_result";
+      conversationId: string;
+      runId: string;
+      resolvedCount: number;
+      pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[];
+    }
+  | {
       type: "tool_result";
       requestId: string;
       toolCallId: string;
@@ -276,6 +283,8 @@ export interface ToolContext {
   toolCallId?: string;
   /** Set only after the bash/process tool permission path approves execution. */
   compatibilityShellAuthorized?: boolean;
+  /** Immutable text of a server-classified read-only bash call. */
+  readOnlyShellCommand?: string;
   /** Opaque, single-command egress permission issued only by the approval path. */
   networkExecutionGrant?: import("./networkAccess.js").NetworkExecutionGrant;
   sessionToken?: string;

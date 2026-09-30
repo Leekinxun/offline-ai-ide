@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import type { AgentMode, WsServerMessage } from "../agent/types.js";
 import { sessionManager, type UserSession } from "../auth/sessionManager.js";
-import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
+import { ToolApprovalSession, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
 import type { ChatAttachmentRef } from "./attachments.js";
 import type { ExecutionPlan } from "./executionPlans.js";
 import type { AgentRunRecorder } from "./runHistory.js";
@@ -101,6 +101,8 @@ export interface RunCommandResult {
   code: "accepted" | "not_found" | "forbidden" | "conflict" | "invalid";
   message?: string;
   requestId?: string;
+  resolvedCount?: number;
+  pendingApprovals?: ToolApprovalRequestEvent[];
 }
 
 type EventListener = (event: ChatRunEvent) => void;
@@ -344,8 +346,10 @@ export class ActiveChatRun {
     }
     if (command.type === "tool_approval_all") {
       if (command.source === "mobile") return { ok: false, code: "forbidden", message: "Approve all is unavailable on mobile" };
-      this.approvals.allowConversation(this.conversationId);
-      return { ok: true, code: "accepted" };
+      const resolvedCount = this.approvals.allowConversation(this.conversationId);
+      const pendingApprovals = this.approvals.listPending(this.conversationId);
+      this.emit({ type: "tool_approval_all_result", conversationId: this.conversationId, runId: this.runId, resolvedCount, pendingApprovals });
+      return { ok: true, code: "accepted", resolvedCount, pendingApprovals };
     }
     const pending = this.approvals.getPending(command.approvalId);
     if (!pending) return { ok: false, code: "conflict", message: "Tool approval request is no longer active" };

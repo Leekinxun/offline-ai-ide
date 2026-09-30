@@ -100,7 +100,7 @@ function shellTokens(command: string): ShellToken[] | null {
     if (quote === '"') { if (character === '"') quote = undefined; else { if (character === "$" || character === "`") literal = false; value += character; } continue; }
     if (character === "'" || character === '"') { quote = character; started = true; continue; }
     if (/\s/.test(character)) { flush(); if (character === "\n") result.push({ kind: "operator", value: ";" }); continue; }
-    if (";&|<>".includes(character)) {
+    if (";&|<>()".includes(character)) {
       flush();
       const operator = ["&>>", "<<<", ">>", "<<", "<>", ">&", "<&", ">|", "&>", "&&", "||", ";;"].find((item) => command.startsWith(item, index)) || character;
       result.push({ kind: "operator", value: operator }); index += operator.length - 1; continue;
@@ -144,7 +144,7 @@ function shellRedirectionPolicy(command: string, workspaceDir?: string): PolicyD
   let commandPosition = true;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (token.kind === "operator" && [";", ";;", "&&", "||", "|", "&"].includes(token.value)) { commandPosition = true; continue; }
+    if (token.kind === "operator" && [";", ";;", "&&", "||", "|", "&", "(", ")"].includes(token.value)) { commandPosition = true; continue; }
     if (token.kind === "operator" && [">", ">>", ">|", "<", "<>", ">&", "<&", "<<", "<<<", "&>", "&>>"].includes(token.value)) {
       if (["<<", "<<<", "&>", "&>>"].includes(token.value)) return { allowed: false, reason: "Use literal file redirection and numeric descriptor duplication instead of this shell redirection form" };
       const target = tokens[++index];
@@ -180,7 +180,7 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
   // Commands are passed to a shell by the legacy executor. Reject shell syntax
   // by default so callers cannot accidentally treat unstructured text as exec.
   // The executor may opt in only after a high-risk tool approval has succeeded.
-  if (!options.compatibilityShellAuthorized && /(?:[;&|`]|\$\(|\$\{|\(\s*\)|\n|>|<)/.test(normalized)) {
+  if (!options.compatibilityShellAuthorized && /(?:[;&|`()\n><]|\$\(|\$\{)/.test(normalized)) {
     return { allowed: false, reason: "Shell syntax requires explicit compatibility-shell authorization" };
   }
 
@@ -192,12 +192,13 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
     [/\b(?:shutdown|reboot|halt|poweroff|launchctl|systemctl)\b/i, "System control commands are blocked"],
     [/\b(?:mkfs|fdisk|diskutil|dd)\b/i, "Disk modification commands are blocked"],
     [/\b(?:chmod|chown|chgrp)\b/i, "Permission and ownership changes require manual approval"],
-    [/(?:^|[;&|]\s*)rm\s/i, "File deletion requires manual approval"],
+    [/(?:^|[;&|(\n])\s*rm\s/i, "File deletion requires manual approval"],
     [/\bgit\s+(?:reset\s+--hard|clean\s+-[^\n]*f|checkout\s+--\s+\.|restore\s+\.)/i, "Destructive Git commands are blocked"],
     [/(?:curl|wget)[^\n|;&]*\|\s*(?:sh|bash|zsh|python|node)\b/i, "Downloaded code cannot be piped directly to an interpreter"],
     [/\b(?:sh|bash|zsh|fish|dash|ksh)\s+(?:-c|--command)\b/i, "Nested shell interpreters are blocked"],
     [/\b(?:node|python(?:3)?|ruby|perl|php)\s+(?:-e|-c)\b/i, "Inline interpreter execution is blocked"],
-    [/(?:\$\(|`|\$\{|\(\s*)/, "Command substitution and subshells are blocked"],
+    [/(?:\$\(|`|\$\{)/, "Command substitution is blocked"],
+    [/(?:\(\s*\)|(?:^|[;&|(\n])\s*function\s)/, "Shell function definitions are blocked"],
     [/(?:^|\s)(?:\/etc|\/usr|\/bin|\/sbin|\/System|\/Library|~\/\.ssh|~\/\.aws)(?:\/|\s|$)/i, "Commands targeting system or credential directories are blocked"],
     [/(?:^|[\s"'=])(?:\.\/)?\.crewforge(?:\/|[\s"'=]|$)/i, "Agent shell access to CrewForge control metadata is blocked"],
     [/(?:^|[\s;])(?:\.\.\/)+/i, "Commands cannot escape the workspace"],

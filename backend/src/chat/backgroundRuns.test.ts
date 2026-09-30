@@ -96,6 +96,42 @@ test("real WS switching and reconnect recover live text and approvals without st
   assert.equal(runB.controlState.stopped, false);
 });
 
+test("real WS bulk approval ack keeps high-risk and Plan requests visible through reconnect", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-approval-ack-ws-"));
+  const session = sessionFor(workspace);
+  await appendConversationMessage(workspace, "approval-task", { role: "user", requestId: "request", content: "seed", timestamp: Date.now() });
+  const recorder = new AgentRunRecorder(workspace, "approval-run", "approval-task", "code"); await recorder.start();
+  const run = createActiveRun({ session, recorder, queueSteering: async () => ({ ok: true, code: "accepted" }) });
+  const server = await socketServer(session);
+  t.after(async () => { run.finish(); await server.close(); fs.rmSync(workspace, { recursive: true, force: true }); });
+  const first = await server.connect();
+  first.send({ type: "subscribe_run", conversationId: "approval-task" });
+  await waitUntil(() => first.frames.some((frame) => frame.type === "conversation_snapshot"));
+  const base = { conversationId: "approval-task", requestId: "request", toolCallId: "write", name: "write_file", input: { path: "a.ts" } as Record<string, unknown>, risk: "medium" as const, reason: "action", scope: "action", canAllowSession: true };
+  const write = run.approvals.request(base);
+  const high = run.approvals.request({ ...base, toolCallId: "shell", name: "bash", input: { command: "npm test" }, risk: "high" });
+  const plan = run.approvals.request({ ...base, toolCallId: "plan", name: "submit_plan", canAllowSession: false });
+  await waitUntil(() => first.frames.filter((frame) => frame.type === "tool_approval_request").length === 3);
+  first.send({ type: "tool_approval_all", conversationId: "approval-task", runId: "stale-run" });
+  await waitUntil(() => first.frames.some((frame) => frame.type === "error" && /older run/.test(frame.content)));
+  assert.equal(run.approvals.pendingCount(), 3);
+  assert.equal(first.frames.some((frame) => frame.type === "tool_approval_all_result"), false);
+  first.send({ type: "tool_approval_all", conversationId: "approval-task", runId: "approval-run" });
+  await waitUntil(() => first.frames.some((frame) => frame.type === "tool_approval_all_result"));
+  const ack = first.frames.find((frame) => frame.type === "tool_approval_all_result");
+  assert.equal(ack.conversationId, "approval-task"); assert.equal(ack.runId, "approval-run");
+  assert.equal(ack.resolvedCount, 1); assert.equal(await write, "allow_once");
+  assert.deepEqual(ack.pendingApprovals.map((item: { toolCallId: string }) => item.toolCallId), ["shell", "plan"]);
+  assert.ok(ack.eventSequence > first.frames.filter((frame) => frame.type === "tool_approval_request").at(-1).eventSequence);
+  first.socket.terminate();
+  const second = await server.connect(); second.send({ type: "subscribe_run", conversationId: "approval-task" });
+  await waitUntil(() => second.frames.some((frame) => frame.type === "conversation_snapshot"));
+  const restored = second.frames.find((frame) => frame.type === "conversation_snapshot");
+  assert.deepEqual(restored.pendingApprovals.map((item: { approvalId: string }) => item.approvalId), ack.pendingApprovals.map((item: { approvalId: string }) => item.approvalId));
+  assert.equal(run.snapshot().waitingForInput, true);
+  run.approvals.cancelAll(); assert.deepEqual(await Promise.all([high, plan]), ["deny", "deny"]);
+});
+
 test("real WS admission serializes primary Code writers while allowing concurrent Ask", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-background-writer-"));
   const session = sessionFor(workspace);
