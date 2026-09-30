@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   linuxTrustedRuntimeReadPaths, probeFilesystemIsolation, probeNetworkIsolation,
-  runWorkspaceProcess, sanitizeIsolationDiagnostic, type NetworkIsolationCapability,
+  resolveLinuxProcMode, runWorkspaceProcess, sanitizeIsolationDiagnostic, type LinuxProcMode, type NetworkIsolationCapability,
 } from "../agent/processSandbox.js";
 
 export interface SandboxDiagnostics {
@@ -20,6 +20,7 @@ export interface SandboxDiagnostics {
   executionReady: boolean;
   runtimeReadPaths: string[];
   linux: {
+    procMode: LinuxProcMode | "invalid";
     noNewPrivs: number | null;
     effectiveCapabilities: string | null;
     seccomp: number | null;
@@ -68,6 +69,7 @@ export function collectSandboxDiagnostics(): SandboxDiagnostics {
     helperVersion, filesystem, network, executionReady: filesystem.available && network.available,
     runtimeReadPaths: process.platform === "linux" ? linuxTrustedRuntimeReadPaths() : [],
     linux: process.platform === "linux" ? {
+      procMode: filesystem.procMode ?? network.procMode ?? "invalid",
       ...parseSandboxProcessStatus(readKernelValue("/proc/self/status") || ""),
       apparmorProfile: readKernelValue("/proc/self/attr/current"),
       maxUserNamespaces: integer(readKernelValue("/proc/sys/user/max_user_namespaces")),
@@ -92,7 +94,22 @@ export interface SandboxSelfTestResult {
   passed: boolean;
   diagnostics: SandboxDiagnostics;
   checks?: Record<string, boolean>;
+  /** A same-named file was created only in private scratch; the host canary stayed hidden and unchanged. */
+  scratchShadowWrite?: boolean;
   error?: string;
+}
+
+/** The protected boundary is the host file, not the same pathname in private tmpfs. */
+export function evaluateOutsideCanary(evidence: Record<string, unknown>, hostContent: string): { outsideWriteDenied: boolean; scratchShadowWrite: boolean } {
+  const hostProtected = evidence.outsideReadBefore === null && hostContent === "outside-canary";
+  const writeBlocked = evidence.outsideWrite === false && evidence.outsideReadAfter === null;
+  const privateShadow = evidence.outsideWrite === true && evidence.outsideReadAfter === "unexpected";
+  return {
+    // Retain the legacy key: this means host access was denied, while private
+    // scratch is intentionally writable under the existing sandbox contract.
+    outsideWriteDenied: hostProtected && (writeBlocked || privateShadow),
+    scratchShadowWrite: hostProtected && privateShadow,
+  };
 }
 
 /** Operator/CI-only test: all write probes use disposable canaries, never the active workspace. */
@@ -117,9 +134,16 @@ export async function runSandboxSelfTest(): Promise<SandboxSelfTestResult> {
       const fs = require('fs'); const net = require('net'); const cp = require('child_process');
       const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
       const write = file => { try { fs.writeFileSync(file, 'unexpected'); return true; } catch { return false; } };
+      const outsideReadBefore = read(process.argv[1]);
+      const outsideWrite = write(process.argv[1]);
+      const outsideReadAfter = read(process.argv[1]);
       const evidence = { allowedRead: read('allowed/input.txt'), allowedWrite: write('allowed/output.txt'),
-        secretRead: read('.env'), controlWrite: write('.codex/control.txt'), outsideWrite: write(process.argv[1]),
+        secretRead: read('.env'), controlWrite: write('.codex/control.txt'), outsideReadBefore, outsideWrite, outsideReadAfter,
         nullWrite: write('/dev/null') };
+      if (process.argv[4] === 'none') {
+        evidence.payloadProcAbsent = false;
+        try { fs.lstatSync('/proc'); } catch (error) { evidence.payloadProcAbsent = error.code === 'ENOENT'; }
+      }
       if (process.argv[3] === 'conda') {
         try { evidence.python = cp.execFileSync('/opt/conda/bin/python', ['--version'], { encoding: 'utf8' }).trim(); } catch { evidence.python = ''; }
         try { evidence.ruff = cp.execFileSync('/opt/conda/bin/ruff', ['--version'], { encoding: 'utf8' }).trim(); } catch { evidence.ruff = ''; }
@@ -129,19 +153,22 @@ export async function runSandboxSelfTest(): Promise<SandboxSelfTestResult> {
       socket.once('connect', () => done(true)); socket.once('error', () => done(false)); socket.setTimeout(1000, () => done(false));
     `;
     const conda = diagnostics.runtimeReadPaths.includes("/opt/conda");
-    const output = await runWorkspaceProcess({ executable: process.execPath, args: ["-e", command, outside, String(address.port), conda ? "conda" : ""], cwd: workspace,
+    if (diagnostics.linux && resolveLinuxProcMode() !== diagnostics.linux.procMode) throw new Error("Sandbox proc mode changed during self-test; run the diagnostic again");
+    const output = await runWorkspaceProcess({ executable: process.execPath, args: ["-e", command, outside, String(address.port), conda ? "conda" : "", diagnostics.linux?.procMode || ""], cwd: workspace,
       filesystem: { workspaceDir: workspace, readPaths: ["."], writePaths: ["allowed"] }, networkMode: "deny", timeoutMs: 10_000, maxOutputBytes: 8_192 });
     if (output.startsWith("Error:")) return { passed: false, diagnostics, error: sanitizeIsolationDiagnostic(output) };
     const evidence = JSON.parse(output) as Record<string, unknown>;
+    const outsideBoundary = evaluateOutsideCanary(evidence, fs.readFileSync(outside, "utf8"));
     const checks = {
       allowedRead: evidence.allowedRead === "allowed-canary", allowedWrite: evidence.allowedWrite === true,
-      outsideWriteDenied: evidence.outsideWrite === false && fs.readFileSync(outside, "utf8") === "outside-canary",
+      outsideWriteDenied: outsideBoundary.outsideWriteDenied,
       secretReadDenied: evidence.secretRead !== "private-canary",
       controlWriteDenied: evidence.controlWrite === false && fs.readFileSync(path.join(workspace, ".codex/control.txt"), "utf8") === "control-canary",
       nullDeviceWritable: evidence.nullWrite === true, parentNetworkDenied: evidence.parentReachable === false,
+      ...(diagnostics.linux?.procMode === "none" ? { payloadProcAbsent: evidence.payloadProcAbsent === true } : {}),
       ...(conda ? { condaPythonVisible: /^Python \d/.test(String(evidence.python)), condaRuffVisible: /^ruff \d/.test(String(evidence.ruff)) } : {}),
     };
-    return { passed: Object.values(checks).every(Boolean), diagnostics, checks };
+    return { passed: Object.values(checks).every(Boolean), diagnostics, checks, scratchShadowWrite: outsideBoundary.scratchShadowWrite };
   } catch (error) { return { passed: false, diagnostics, error: sanitizeIsolationDiagnostic(error instanceof Error ? error.message : String(error)) }; }
   finally {
     await new Promise<void>((resolve) => { if (server.listening) server.close(() => resolve()); else resolve(); });

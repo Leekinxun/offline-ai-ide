@@ -1,19 +1,39 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import childProcess from "node:child_process";
 import test from "node:test";
 import express from "express";
 import type { UserSession } from "../auth/sessionManager.js";
 import { createRuntimeRouter } from "../routes/runtime.js";
-import { collectSandboxDiagnostics, createSandboxDiagnosticsReader, parseSandboxProcessStatus, runSandboxSelfTest, type SandboxDiagnostics } from "./sandboxDiagnostics.js";
+import { collectSandboxDiagnostics, createSandboxDiagnosticsReader, evaluateOutsideCanary, parseSandboxProcessStatus, runSandboxSelfTest, type SandboxDiagnostics } from "./sandboxDiagnostics.js";
 
 function blocked(): SandboxDiagnostics {
   const capability = { available: false, helper: "bubblewrap" as const, reasonCode: "namespace_permission_denied" as const, reason: "No permissions to create a new namespace" };
-  return { checkedAt: 123, platform: "linux", kernel: "fixture", uid: 10001, gid: 10001, helperVersion: "bubblewrap 0.8.0", filesystem: capability, network: capability, executionReady: false, runtimeReadPaths: ["/opt/conda"], linux: { noNewPrivs: 1, effectiveCapabilities: "0000000000000000", seccomp: 2, apparmorProfile: "docker-default (enforce)", maxUserNamespaces: 31585, unprivilegedUsernsClone: 1, apparmorRestrictUnprivilegedUserns: null } };
+  return { checkedAt: 123, platform: "linux", kernel: "fixture", uid: 10001, gid: 10001, helperVersion: "bubblewrap 0.8.0", filesystem: capability, network: capability, executionReady: false, runtimeReadPaths: ["/opt/conda"], linux: { procMode: "private", noNewPrivs: 1, effectiveCapabilities: "0000000000000000", seccomp: 2, apparmorProfile: "docker-default (enforce)", maxUserNamespaces: 31585, unprivilegedUsernsClone: 1, apparmorRestrictUnprivilegedUserns: null } };
 }
 
 test("process metadata parser exposes only bounded sandbox fields and preserves unavailable values", () => {
   assert.deepEqual(parseSandboxProcessStatus("Name:\tnode\nNoNewPrivs:\t1\nCapEff:\t0000000000000000\nSeccomp:\t2\n"), { noNewPrivs: 1, effectiveCapabilities: "0000000000000000", seccomp: 2 });
   assert.deepEqual(parseSandboxProcessStatus("NoNewPrivs: unknown\nCapEff: invalid\nSeccomp: unknown"), { noNewPrivs: null, effectiveCapabilities: null, seccomp: null });
+});
+
+test("outside canary accepts a denied write or a private scratch shadow only when the host stays hidden and unchanged", () => {
+  const blocked = { outsideReadBefore: null, outsideWrite: false, outsideReadAfter: null };
+  const shadow = { outsideReadBefore: null, outsideWrite: true, outsideReadAfter: "unexpected" };
+  assert.deepEqual(evaluateOutsideCanary(blocked, "outside-canary"), { outsideWriteDenied: true, scratchShadowWrite: false });
+  assert.deepEqual(evaluateOutsideCanary(shadow, "outside-canary"), { outsideWriteDenied: true, scratchShadowWrite: true });
+  for (const evidence of [blocked, shadow]) {
+    assert.equal(evaluateOutsideCanary(evidence, "unexpected").outsideWriteDenied, false, "a host mutation always fails");
+    assert.equal(evaluateOutsideCanary({ ...evidence, outsideReadBefore: "outside-canary" }, "outside-canary").outsideWriteDenied, false, "read exposure fails even if the write was denied");
+    assert.equal(evaluateOutsideCanary({ ...evidence, outsideReadBefore: "other visible content" }, "outside-canary").outsideWriteDenied, false);
+    assert.equal(evaluateOutsideCanary({ ...evidence, outsideReadBefore: undefined }, "outside-canary").outsideWriteDenied, false, "missing evidence cannot pass");
+  }
+  for (const evidence of [{}, { ...shadow, outsideReadAfter: null }, { ...blocked, outsideReadAfter: "outside-canary" }, { ...shadow, outsideWrite: "true" }]) {
+    assert.equal(evaluateOutsideCanary(evidence, "outside-canary").outsideWriteDenied, false);
+  }
 });
 
 test("diagnostic readers cache bounded probe work and return independent snapshots", () => {
@@ -26,6 +46,43 @@ test("diagnostic readers cache bounded probe work and return independent snapsho
   now += 30_001;
   read();
   assert.equal(calls, 2);
+});
+
+test("Linux diagnostics publish explicit private, none, and invalid proc modes", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-proc-diagnostics-"));
+  const metadata = path.join(root, "mountinfo"); fs.writeFileSync(metadata, "24 1 0:22 / /proc rw - proc proc rw\n");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const previousMode = process.env.CROWNFORGE_SANDBOX_PROC_MODE;
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  const exists = fs.existsSync; const open = fs.openSync;
+  t.mock.method(fs, "existsSync", (candidate: fs.PathLike) => String(candidate) === "/usr/bin/bwrap" || exists(candidate));
+  t.mock.method(fs, "openSync", ((file: fs.PathLike, ...args: unknown[]) => Reflect.apply(open, fs, [String(file) === "/proc/self/mountinfo" ? metadata : file, ...args])) as typeof fs.openSync);
+  if (typeof process.getuid === "function") t.mock.method(process as NodeJS.Process & { getuid: () => number }, "getuid", () => 10001);
+  let probes = 0;
+  t.mock.method(childProcess, "spawnSync", (_command: string, args: readonly string[]) => {
+    if (!args.includes("--version")) {
+      probes += 1;
+      assert.equal(args.includes("--proc"), process.env.CROWNFORGE_SANDBOX_PROC_MODE !== "none");
+    }
+    return { pid: 0, output: [], stdout: "bubblewrap 0.8.0", stderr: "", status: 0, signal: null };
+  });
+  t.after(() => {
+    Object.defineProperty(process, "platform", platform);
+    if (previousMode === undefined) delete process.env.CROWNFORGE_SANDBOX_PROC_MODE; else process.env.CROWNFORGE_SANDBOX_PROC_MODE = previousMode;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  for (const mode of ["private", "none"] as const) {
+    process.env.CROWNFORGE_SANDBOX_PROC_MODE = mode;
+    const result = collectSandboxDiagnostics();
+    assert.equal(result.linux?.procMode, mode); assert.equal(result.executionReady, true);
+    assert.equal(result.filesystem.procMode, mode); assert.equal(result.network.procMode, mode);
+  }
+  assert.equal(probes, 4);
+  process.env.CROWNFORGE_SANDBOX_PROC_MODE = "invalid-config";
+  const invalid = collectSandboxDiagnostics();
+  assert.equal(invalid.executionReady, false); assert.equal(invalid.linux?.procMode, "invalid");
+  assert.equal(invalid.filesystem.reasonCode, "invalid_configuration"); assert.equal(invalid.network.reasonCode, "invalid_configuration");
+  assert.equal(probes, 4);
 });
 
 test("runtime diagnostics require an authenticated admin and accept no executable or path input", async (t) => {
@@ -66,6 +123,25 @@ test("fixed self-test uses real boundaries when available and otherwise fails cl
     assert.equal(result.passed, true, JSON.stringify(result));
     assert.equal(result.checks?.outsideWriteDenied, true);
     assert.equal(result.checks?.parentNetworkDenied, true);
+    assert.equal(result.checks?.nullDeviceWritable, true);
+    assert.equal(typeof result.scratchShadowWrite, "boolean");
+  }
+});
+
+test("Linux no-proc fixed canary requires proc absence and all existing boundaries", { skip: process.platform !== "linux" ? "No-proc payload requires a Linux bubblewrap host" : false }, async (t) => {
+  const previous = process.env.CROWNFORGE_SANDBOX_PROC_MODE;
+  process.env.CROWNFORGE_SANDBOX_PROC_MODE = "none";
+  t.after(() => { if (previous === undefined) delete process.env.CROWNFORGE_SANDBOX_PROC_MODE; else process.env.CROWNFORGE_SANDBOX_PROC_MODE = previous; });
+  const result = await runSandboxSelfTest();
+  assert.equal(result.diagnostics.linux?.procMode, "none");
+  if (!result.diagnostics.executionReady) {
+    assert.equal(result.passed, false); assert.equal(result.checks, undefined);
+    assert.match(result.error || "", /no command was run outside the sandbox/);
+  } else {
+    assert.equal(result.passed, true, JSON.stringify(result));
+    assert.equal(result.checks?.payloadProcAbsent, true);
+    assert.equal(result.checks?.outsideWriteDenied, true); assert.equal(result.checks?.parentNetworkDenied, true);
+    assert.equal(result.checks?.allowedRead, true); assert.equal(result.checks?.allowedWrite, true);
     assert.equal(result.checks?.nullDeviceWritable, true);
   }
 });

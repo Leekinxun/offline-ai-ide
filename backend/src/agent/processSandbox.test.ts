@@ -11,8 +11,102 @@ import {
   linuxTrustedRuntimeReadPaths,
   probeFilesystemIsolation,
   probeNetworkIsolation,
+  prepareWorkspaceProcess,
+  resolveLinuxProcMode,
   runWorkspaceProcess,
 } from "./processSandbox.js";
+
+function procModeEnvironment(t: test.TestContext, mode?: string): void {
+  const previous = process.env.CROWNFORGE_SANDBOX_PROC_MODE;
+  if (mode === undefined) delete process.env.CROWNFORGE_SANDBOX_PROC_MODE;
+  else process.env.CROWNFORGE_SANDBOX_PROC_MODE = mode;
+  t.after(() => { if (previous === undefined) delete process.env.CROWNFORGE_SANDBOX_PROC_MODE; else process.env.CROWNFORGE_SANDBOX_PROC_MODE = previous; });
+}
+
+function linuxProcFixture(t: test.TestContext) {
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-proc-policy-")));
+  const workspace = path.join(directory, "workspace"); fs.mkdirSync(workspace);
+  const metadata = path.join(directory, "mountinfo");
+  fs.writeFileSync(metadata, "24 1 0:22 / /proc rw - proc proc rw\n");
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...descriptor, value: "linux" });
+  const open = fs.openSync; const exists = fs.existsSync;
+  t.mock.method(fs, "openSync", ((file: fs.PathLike, ...args: unknown[]) => Reflect.apply(open, fs, [String(file) === "/proc/self/mountinfo" ? metadata : file, ...args])) as typeof fs.openSync);
+  t.mock.method(fs, "existsSync", (file: fs.PathLike) => String(file) === "/usr/bin/bwrap" || exists(file));
+  if (typeof process.getuid === "function") t.mock.method(process as NodeJS.Process & { getuid: () => number }, "getuid", () => 10001);
+  t.after(() => { Object.defineProperty(process, "platform", descriptor); fs.rmSync(directory, { recursive: true, force: true }); });
+  return { directory, workspace, metadata };
+}
+
+test("Linux proc mode is explicit, defaults to private, and rejects invalid values without spawning", (t) => {
+  procModeEnvironment(t);
+  assert.equal(resolveLinuxProcMode(), "private");
+  assert.equal(resolveLinuxProcMode("none"), "none");
+  const calls: string[] = [];
+  t.mock.method(childProcess, "spawnSync", (command: string) => { calls.push(command); throw new Error("must not spawn"); });
+  for (const value of ["", "automatic", "NONE", "private ", "secret-invalid-value"]) {
+    process.env.CROWNFORGE_SANDBOX_PROC_MODE = value;
+    assert.throws(() => resolveLinuxProcMode(), /Invalid CROWNFORGE_SANDBOX_PROC_MODE/);
+    const result = probeFilesystemIsolation("linux");
+    assert.equal(result.available, false); assert.equal(result.reasonCode, "invalid_configuration");
+    assert.equal(result.reason?.includes("secret-invalid-value"), false);
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("no-proc Linux argv removes only the private proc mount and keeps mandatory isolation and grants", (t) => {
+  procModeEnvironment(t, "private");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-no-proc-plan-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const policy = compileFilesystemPolicy(root, { readPaths: ["."], writePaths: ["."] });
+  const original = buildLinuxFilesystemSandboxArgs(policy, "deny", "/bin/sh", ["-c", "printf test"], policy.workspaceDir, "private");
+  const none = buildLinuxFilesystemSandboxArgs(policy, "deny", "/bin/sh", ["-c", "printf test"], policy.workspaceDir, "none");
+  assert.ok(Array.isArray(original)); assert.ok(Array.isArray(none));
+  const withoutProc = [...original]; withoutProc.splice(withoutProc.indexOf("--proc"), 2);
+  assert.deepEqual(none, withoutProc);
+  for (const flag of ["--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--die-with-parent", "--new-session"]) assert.ok(none.includes(flag), flag);
+  assert.equal(none.includes("/proc"), false);
+  process.env.CROWNFORGE_SANDBOX_PROC_MODE = "none";
+  assert.equal(buildLinuxIsolationProbeArgs().includes("--proc"), false);
+  assert.equal(buildLinuxIsolationProbeArgs("deny", "private").includes("--proc"), true);
+});
+
+test("no-proc mode rejects root, proc paths, source aliases, and nested proc mounts", (t) => {
+  const f = linuxProcFixture(t); procModeEnvironment(t, "none");
+  const policy = compileFilesystemPolicy(f.workspace, { readPaths: ["."], writePaths: [] });
+  for (const rejected of ["/", "/proc", "/proc/self", "/proc/self/exe"]) {
+    assert.match(String(buildLinuxFilesystemSandboxArgs({ ...policy, readPaths: [rejected] }, "deny", "/bin/sh", [], policy.workspaceDir)), /rejects paths/);
+    assert.match(String(buildLinuxFilesystemSandboxArgs(policy, "deny", rejected, [], policy.workspaceDir)), /rejects paths/);
+  }
+  const alias = path.join(f.directory, "root-alias"); fs.symlinkSync("/", alias);
+  assert.match(String(buildLinuxFilesystemSandboxArgs({ ...policy, readPaths: [alias] }, "deny", "/bin/sh", [], policy.workspaceDir)), /rejects paths/);
+  const nested = path.join(f.workspace, "proc-alias"); fs.mkdirSync(nested);
+  fs.appendFileSync(f.metadata, `25 1 0:22 / ${nested} rw - proc proc rw\n`);
+  assert.match(String(buildLinuxFilesystemSandboxArgs(policy, "deny", "/bin/sh", [], policy.workspaceDir)), /rejects paths/);
+  fs.writeFileSync(f.metadata, "invalid metadata\n");
+  assert.match(String(buildLinuxFilesystemSandboxArgs(policy, "deny", "/bin/sh", [], policy.workspaceDir)), /could not verify/);
+});
+
+test("probe and execution freeze one Linux proc mode, and a failed probe never retries another mode", (t) => {
+  const f = linuxProcFixture(t); procModeEnvironment(t, "none");
+  const probes: string[][] = []; let failed = false;
+  t.mock.method(childProcess, "spawnSync", (_command: string, args: readonly string[]) => {
+    probes.push([...args]); process.env.CROWNFORGE_SANDBOX_PROC_MODE = "private";
+    return { pid: 0, output: [], stdout: "", stderr: failed ? "mount proc: Operation not permitted" : "", status: failed ? 1 : 0, signal: null };
+  });
+  const prepared = prepareWorkspaceProcess({ executable: "/bin/sh", args: ["-c", "printf test"], cwd: f.workspace, networkMode: "deny", filesystem: { readPaths: ["."], writePaths: [] } });
+  try {
+    assert.equal(probes.length, 1); assert.equal(probes[0].includes("--proc"), false);
+    assert.equal(prepared.args.includes("--proc"), false);
+    assert.equal(prepared.args.includes("--unshare-net"), true);
+  } finally { prepared.cleanup(); }
+  failed = true; probes.length = 0;
+  const capability = probeFilesystemIsolation("linux");
+  assert.equal(capability.available, false); assert.equal(capability.procMode, "private");
+  assert.equal(probes.length, 1); assert.equal(probes[0].includes("--proc"), true);
+  process.env.CROWNFORGE_SANDBOX_PROC_MODE = "none";
+  assert.throws(() => prepareWorkspaceProcess({ executable: "/proc/self/exe", args: [], cwd: f.workspace, networkMode: "deny", resourceLimitMode: "posix-shell", limits: { maxOpenFiles: 64 } }), /rejects paths/);
+});
 
 test("Linux capability probes include executable runtime mounts without exposing host root or config", () => {
   const args = buildLinuxIsolationProbeArgs();
@@ -324,4 +418,16 @@ test("explicit address-space limits are enforced where supported and fail closed
   } else {
     assert.match(output, new RegExp(`Address-space hard limits are unavailable through /bin/sh on ${process.platform}`, "i"));
   }
+});
+
+test("filesystem sandbox gives tools a private home without exposing the server home", (t) => {
+  const fixture = linuxProcFixture(t); procModeEnvironment(t, "none");
+  t.mock.method(childProcess, "spawnSync", (() => ({ pid: 1, output: [null, "", ""], status: 0, stdout: "", stderr: "", signal: null })) as unknown as typeof childProcess.spawnSync);
+  const prepared = prepareWorkspaceProcess({ executable: "/bin/sh", args: ["-c", "printf test"], cwd: fixture.workspace,
+    env: { HOME: "/server-home-must-not-be-inherited" }, networkMode: "deny",
+    filesystem: { readPaths: ["."], writePaths: ["."] } });
+  t.after(prepared.cleanup);
+  assert.equal(prepared.env.HOME, "/tmp");
+  assert.ok(prepared.args.includes("--tmpfs"));
+  assert.equal(prepared.args.includes("/server-home-must-not-be-inherited"), false);
 });

@@ -183,7 +183,7 @@ hosts that enforce it. Allow only the operations needed for the tested private
 namespaces and mounts; retain the remaining default denials. A profile must be
 validated against the actual kernel, Docker and bubblewrap versions. This
 repository does not ship an untested syscall allowlist or relax Compose by
-default. No ready-to-install profile has been validated against every canary on
+default. For private-proc execution, no ready-to-install profile has been validated against every canary on
 the affected Docker/AppArmor deployment. An experimental rule set that advances
 from a namespace error to a `/proc` mount error is still a failed deployment,
 not an approved configuration. Do not use `seccomp=unconfined`, `apparmor=unconfined`, `privileged`,
@@ -192,6 +192,16 @@ disable as a shortcut. Do not replace the private PID namespace's `/proc` with
 the parent container's `/proc`; that changes which processes and descriptors
 the Agent can inspect. Nested proc mount limitations are also documented in
 [bubblewrap's upstream container discussion](https://github.com/containers/bubblewrap/issues/284).
+
+An alternative explicitly selected by the operator is
+`CROWNFORGE_SANDBOX_PROC_MODE=none`, with the named profiles in
+[deploy/security](../../deploy/security/README.md). This omits procfs from the
+payload while retaining the private PID namespace and Docker's existing masks.
+It is never selected automatically after an error. The default is `private`;
+invalid values fail closed. Diagnostics expose `linux.procMode`, and the fixed
+canary requires `payloadProcAbsent` in none mode. npm config/cache lookup uses a
+private scratch home, never the server's home or credentials. Node RSS/memory
+queries and other proc-dependent tools remain unsupported in this mode.
 
 Run the fixed `runSandboxSelfTest()` command shown in the README **inside the
 deployed container as its service account**. It must prove that a real child

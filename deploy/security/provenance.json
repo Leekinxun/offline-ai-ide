@@ -1,0 +1,55 @@
+{
+  "upstream": "https://github.com/moby/moby",
+  "version": "docker-v29.1.3",
+  "commit": "fbf3ed25f893e6ce21336f1101590e40a13934f4",
+  "seccompSource": "vendor/github.com/moby/profiles/seccomp/default.json",
+  "seccompSourceSha256": "01536f1d1df938ae611eba20d6349e0de7a99b6ecdee1549427a0b01b8301e28",
+  "apparmorSource": "vendor/github.com/moby/profiles/apparmor/template.go",
+  "scope": "Opt-in CrownForge service profile; validated combinations are documented in README.md",
+  "delta": [
+    {
+      "names": [
+        "clone"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 268435456,
+          "valueTwo": 268435456,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ],
+      "includes": {
+        "arches": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "comment": "CrownForge canary: clone must create a new user namespace"
+    },
+    {
+      "names": [
+        "unshare"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 268435456,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "comment": "CrownForge canary: only a new user namespace"
+    },
+    {
+      "names": [
+        "mount",
+        "umount2",
+        "pivot_root"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "comment": "CrownForge canary: private mount setup; parent remains non-root and drops all capabilities"
+    }
+  ]
+}

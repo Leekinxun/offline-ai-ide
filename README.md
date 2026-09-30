@@ -444,6 +444,12 @@ cannot change these host/container restrictions. Keep non-root execution,
 [sandbox deployment runbook](docs/operations/operator-runbook.md#linux-container-sandbox-diagnostics)
 for evidence and acceptance requirements.
 
+For Docker hosts that reject a private procfs, an explicitly enabled
+[service-specific no-proc profile](deploy/security/README.md) is available. It
+keeps Docker's protected system paths and the Agent's user/PID/network/filesystem
+isolation. Its compatibility limits include Node process-memory queries; enable
+it only after validating the target image with the supplied canaries.
+
 ### Desktop app
 
 The desktop edition runs locally on each computer. Build targets cover Windows 10/11 x64, macOS 13+ on Intel and Apple silicon, and a separate legacy Windows 7 SP1 x64 package. See [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) for published installers and matching SHA-256 files, and the [desktop guide](docs/desktop-app.md) for build commands, first-run login, and platform limitations. The Windows 7 package uses unsupported Electron 22 and requires acceptance testing on Windows 7 hardware before a stable release.

@@ -51,9 +51,19 @@ export interface NetworkIsolationCapability {
   helper?: "sandbox-exec" | "bubblewrap";
   executable?: string;
   reason?: string;
-  reasonCode?: "root_user" | "helper_missing" | "unsupported_platform" | "namespace_permission_denied" | "namespace_unavailable" | "namespace_limit" | "mount_permission_denied" | "runtime_unavailable" | "probe_timeout" | "probe_failed";
+  reasonCode?: "root_user" | "helper_missing" | "unsupported_platform" | "namespace_permission_denied" | "namespace_unavailable" | "namespace_limit" | "mount_permission_denied" | "runtime_unavailable" | "probe_timeout" | "probe_failed" | "invalid_configuration";
+  procMode?: LinuxProcMode;
   exitCode?: number | null;
   stderr?: string;
+}
+
+export type LinuxProcMode = "private" | "none";
+
+/** Server/operator configuration only; never taken from a command's environment. */
+export function resolveLinuxProcMode(value = process.env.CROWNFORGE_SANDBOX_PROC_MODE): LinuxProcMode {
+  if (value === undefined || value === "private") return "private";
+  if (value === "none") return "none";
+  throw new Error("Invalid CROWNFORGE_SANDBOX_PROC_MODE; expected private or none");
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -101,29 +111,37 @@ function probeFailure(label: string, probe: ReturnType<typeof childProcess.spawn
 }
 
 /** A fixed true command with the same runtime mounts used by real Agent commands. */
-export function buildLinuxIsolationProbeArgs(networkMode: "inherit" | "deny" = "deny"): string[] {
-  const args = buildLinuxFilesystemSandboxArgs({ workspaceDir: "/tmp", readPaths: [], writePaths: [], protectedPaths: [] }, networkMode, "/bin/true", [], "/tmp");
+export function buildLinuxIsolationProbeArgs(networkMode: "inherit" | "deny" = "deny", procMode = resolveLinuxProcMode()): string[] {
+  const args = buildLinuxFilesystemSandboxArgs({ workspaceDir: "/tmp", readPaths: [], writePaths: [], protectedPaths: [] }, networkMode, "/bin/true", [], "/tmp", procMode);
   if (typeof args === "string") throw new Error(args);
   return args;
 }
 
-function probeIsolation(kind: "network" | "filesystem", platform: NodeJS.Platform): NetworkIsolationCapability {
+function probeIsolation(kind: "network" | "filesystem", platform: NodeJS.Platform, selectedProcMode?: LinuxProcMode): NetworkIsolationCapability {
+  let procMode: LinuxProcMode | undefined;
+  if (platform === "linux") {
+    try { procMode = selectedProcMode ?? resolveLinuxProcMode(); }
+    catch (error) { return { available: false, helper: "bubblewrap", reasonCode: "invalid_configuration", reason: (error as Error).message }; }
+  }
+  const modeMetadata = procMode ? { procMode } : {};
   if ((platform === "darwin" || platform === "linux") && typeof process.getuid === "function" && process.getuid() === 0) {
-    return { available: false, reasonCode: "root_user", reason: "sandboxed commands cannot run as root" };
+    return { ...modeMetadata, available: false, reasonCode: "root_user", reason: "sandboxed commands cannot run as root" };
   }
   const helper = platform === "darwin" ? "sandbox-exec" : platform === "linux" ? "bubblewrap" : undefined;
   if (!helper) return { available: false, reasonCode: "unsupported_platform", reason: `hard ${kind === "network" ? "network deny" : "filesystem isolation"} is unsupported on platform ${platform}` };
   const executable = helper === "sandbox-exec" ? "/usr/bin/sandbox-exec" : LINUX_BWRAP_CANDIDATES.find((candidate) => fs.existsSync(candidate));
-  if (!executable || !fs.existsSync(executable)) return { available: false, helper, reasonCode: "helper_missing", reason: `${helper} is not installed at ${helper === "sandbox-exec" ? "/usr/bin/sandbox-exec" : LINUX_BWRAP_CANDIDATES.join(" or ")}` };
-  const args = helper === "sandbox-exec"
-    ? ["-p", MACOS_SANDBOX_PROFILE, "/usr/bin/true"]
-    : buildLinuxIsolationProbeArgs(kind === "network" ? "deny" : "inherit");
+  if (!executable || !fs.existsSync(executable)) return { ...modeMetadata, available: false, helper, reasonCode: "helper_missing", reason: `${helper} is not installed at ${helper === "sandbox-exec" ? "/usr/bin/sandbox-exec" : LINUX_BWRAP_CANDIDATES.join(" or ")}` };
+  let args: string[];
+  try {
+    args = helper === "sandbox-exec" ? ["-p", MACOS_SANDBOX_PROFILE, "/usr/bin/true"]
+      : buildLinuxIsolationProbeArgs(kind === "network" ? "deny" : "inherit", procMode);
+  } catch (error) { return { ...modeMetadata, available: false, helper, executable, reasonCode: "invalid_configuration", reason: sanitizeIsolationDiagnostic((error as Error).message) }; }
   const probe = childProcess.spawnSync(executable, args, {
     encoding: "utf8", stdio: ["ignore", "ignore", "pipe"], timeout: ISOLATION_PROBE_TIMEOUT_MS,
     maxBuffer: 8_192, env: { PATH: "/usr/bin:/bin", LANG: "C" },
   });
-  if (probe.status !== 0 || probe.error) return { helper, executable, ...probeFailure(`${helper} ${kind} capability probe`, probe) };
-  return { available: true, helper, executable };
+  if (probe.status !== 0 || probe.error) return { ...modeMetadata, helper, executable, ...probeFailure(`${helper} ${kind} capability probe`, probe) };
+  return { ...modeMetadata, available: true, helper, executable };
 }
 
 function literalWorkspacePath(root: string, candidate: string): string {
@@ -259,10 +277,11 @@ function networkWrappedCommand(
   executable: string,
   args: readonly string[],
   mode: WorkspaceProcessOptions["networkMode"],
-  cwd: string
+  cwd: string,
+  procMode?: LinuxProcMode
 ): { executable: string; args: string[] } | string {
   if (mode !== "deny") return { executable, args: [...args] };
-  const capability = probeNetworkIsolation();
+  const capability = probeIsolation("network", process.platform, procMode);
   if (!capability.available || !capability.executable || !capability.helper) {
     return `Network isolation unavailable: ${capability.reason ?? "no supported hard network helper"}`;
   }
@@ -275,7 +294,7 @@ function networkWrappedCommand(
   // Callers without an explicit filesystem grant receive only workspace reads.
   // Building a complete mount tree is mandatory even for a network-only request.
   const policy = compileFilesystemPolicy(cwd, { readPaths: ["."], writePaths: [] });
-  const linuxArgs = buildLinuxFilesystemSandboxArgs(policy, "deny", executable, args, policy.workspaceDir);
+  const linuxArgs = buildLinuxFilesystemSandboxArgs(policy, "deny", executable, args, policy.workspaceDir, capability.procMode);
   return typeof linuxArgs === "string" ? linuxArgs : { executable: capability.executable, args: linuxArgs };
 }
 
@@ -317,21 +336,75 @@ function pathPrefixes(target: string): string[] {
   return result;
 }
 
+function pathContains(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`);
+}
+
+/** Parent mount metadata is read only by the supervisor, never mounted into the payload. */
+function parentProcMounts(): string[] {
+  if (process.platform !== "linux") return [];
+  const descriptor = fs.openSync("/proc/self/mountinfo", fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const bytes = Buffer.alloc(1_048_577);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = fs.readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    if (length === bytes.length) throw new Error("Parent mount metadata exceeds the sandbox inspection limit");
+    if (!length) throw new Error("Parent mount metadata is unavailable");
+    return bytes.subarray(0, length).toString("utf8").split("\n").filter(Boolean).flatMap((line) => {
+      const separator = line.indexOf(" - ");
+      if (separator < 0) throw new Error("Parent mount metadata is invalid");
+      if (line.slice(separator + 3).split(" ")[0] !== "proc") return [];
+      const mountpoint = line.slice(0, separator).split(" ")[4];
+      if (!mountpoint?.startsWith("/")) throw new Error("Parent mount metadata is invalid");
+      return [mountpoint.replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8)))];
+    });
+  } finally { fs.closeSync(descriptor); }
+}
+
+function procExposureReason(paths: readonly string[], procMounts: readonly string[]): string | undefined {
+  for (const candidate of paths) {
+    const lexical = path.resolve(candidate);
+    const canonical = fs.existsSync(lexical) ? fs.realpathSync.native(lexical) : lexical;
+    for (const target of [lexical, canonical]) {
+      if (pathContains(target, "/proc") || pathContains("/proc", target) ||
+        procMounts.some((mount) => pathContains(target, mount) || pathContains(mount, target))) {
+        return "No-proc sandbox mode rejects paths that expose a parent proc filesystem";
+      }
+    }
+  }
+  return undefined;
+}
+
 export function buildLinuxFilesystemSandboxArgs(
   policy: CompiledFilesystemPolicy,
   networkMode: WorkspaceProcessOptions["networkMode"],
   executable: string,
   args: readonly string[],
-  cwd: string
+  cwd: string,
+  procMode: LinuxProcMode = resolveLinuxProcMode()
 ): string[] | string {
+  if (procMode !== "private" && procMode !== "none") return "Invalid Linux sandbox proc mode";
+  const systemReads = [...LINUX_SYSTEM_READ_PATHS.filter((item) => fs.existsSync(item)), ...linuxTrustedRuntimeReadPaths()];
+  if (procMode === "none") {
+    try {
+      const rejected = procExposureReason([policy.workspaceDir, ...policy.readPaths, ...policy.writePaths, ...systemReads, executable, cwd], parentProcMounts());
+      if (rejected) return rejected;
+    } catch { return "No-proc sandbox mode could not verify parent filesystem mounts"; }
+  }
   for (const granted of policy.readPaths) if (!fs.existsSync(granted)) return `Filesystem read grant does not exist: ${granted}`;
   for (const granted of policy.writePaths) if (!fs.existsSync(granted)) return `Filesystem write grant does not exist: ${granted}`;
-  const systemReads = [...LINUX_SYSTEM_READ_PATHS.filter((item) => fs.existsSync(item)), ...linuxTrustedRuntimeReadPaths()];
   const mounts = Array.from(new Set([...systemReads, ...policy.readPaths, ...(fs.existsSync(executable) ? [executable] : [])]));
   const directories = Array.from(new Set([...mounts, cwd].flatMap(pathPrefixes))).sort((left, right) => left.length - right.length);
   const result = ["--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts"];
   if (networkMode === "deny") result.push("--unshare-net");
-  result.push("--tmpfs", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp");
+  result.push("--tmpfs", "/");
+  if (procMode === "private") result.push("--proc", "/proc");
+  result.push("--dev", "/dev", "--tmpfs", "/tmp");
   for (const directory of directories) result.push("--dir", directory);
   for (const item of systemReads) result.push("--ro-bind", item, item);
   if (fs.existsSync(executable) && !systemReads.some((item) => executable === item || executable.startsWith(`${item}${path.sep}`))) result.push("--ro-bind", executable, executable);
@@ -361,9 +434,10 @@ function sandboxWrappedCommand(
   cwd: string,
   networkMode: WorkspaceProcessOptions["networkMode"],
   filesystem: WorkspaceProcessOptions["filesystem"],
-  scratchDir?: string
+  scratchDir?: string,
+  procMode?: LinuxProcMode
 ): { executable: string; args: string[] } | string {
-  if (!filesystem) return networkWrappedCommand(executable, args, networkMode, cwd);
+  if (!filesystem) return networkWrappedCommand(executable, args, networkMode, cwd, procMode);
   let policy: CompiledFilesystemPolicy;
   try { policy = compileFilesystemPolicy(filesystem.workspaceDir || cwd, filesystem); }
   catch (error) { return error instanceof Error ? error.message : String(error); }
@@ -371,7 +445,7 @@ function sandboxWrappedCommand(
   try { canonicalCwd = fs.realpathSync.native(path.resolve(cwd)); }
   catch (error) { return `Process cwd is unavailable: ${error instanceof Error ? error.message : String(error)}`; }
   if (canonicalCwd !== policy.workspaceDir && !canonicalCwd.startsWith(`${policy.workspaceDir}${path.sep}`)) return "Process cwd escapes filesystem policy workspace";
-  const capability = probeFilesystemIsolation();
+  const capability = probeIsolation("filesystem", process.platform, procMode);
   if (!capability.available || !capability.executable || !capability.helper) {
     return `Filesystem isolation unavailable: ${capability.reason ?? "no supported hard filesystem helper"}`;
   }
@@ -379,7 +453,7 @@ function sandboxWrappedCommand(
     if (!scratchDir) return "Filesystem isolation scratch directory is unavailable";
     return { executable: capability.executable, args: ["-p", macosSandboxProfile(policy, networkMode, executable, scratchDir), executable, ...args] };
   }
-  const bwrapArgs = buildLinuxFilesystemSandboxArgs(policy, networkMode, executable, args, canonicalCwd);
+  const bwrapArgs = buildLinuxFilesystemSandboxArgs(policy, networkMode, executable, args, canonicalCwd, capability.procMode);
   return typeof bwrapArgs === "string" ? bwrapArgs : { executable: capability.executable, args: bwrapArgs };
 }
 
@@ -398,6 +472,11 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
   const args = options.args ?? [];
   if (!args.every((arg) => typeof arg === "string" && !arg.includes("\0"))) throw new Error("Invalid process arguments");
   if (options.signal?.aborted) throw new Error("Stopped before process execution");
+  const procMode = process.platform === "linux" && (options.filesystem || options.networkMode === "deny") ? resolveLinuxProcMode() : undefined;
+  if (procMode === "none") {
+    const rejected = procExposureReason([options.cwd, ...(path.isAbsolute(executable) ? [executable] : [])], parentProcMounts());
+    if (rejected) throw new Error(rejected);
+  }
 
   const limitError = validateLimits(options.limits);
   if (limitError) throw new Error(limitError);
@@ -413,13 +492,16 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
   if (typeof wrapped === "string") throw new Error(wrapped);
   let sandboxTempDir: string | undefined;
   if (options.filesystem && process.platform === "darwin") {
-    try { sandboxTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sandbox-")); env.TMPDIR = sandboxTempDir; env.TMP = sandboxTempDir; env.TEMP = sandboxTempDir; }
+    try { sandboxTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sandbox-")); env.TMPDIR = sandboxTempDir; env.TMP = sandboxTempDir; env.TEMP = sandboxTempDir; env.HOME = sandboxTempDir; }
     catch (error) { throw new Error(`Filesystem isolation scratch directory failed: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (options.filesystem && process.platform === "linux") {
     env.TMPDIR = "/tmp"; env.TMP = "/tmp"; env.TEMP = "/tmp";
+    // No host passwd database or user home is mounted. Tools such as npm need
+    // a home for config/cache resolution; keep it in the private scratch mount.
+    env.HOME = "/tmp";
   }
   const cleanupSandboxTemp = () => { if (sandboxTempDir) fs.rmSync(sandboxTempDir, { recursive: true, force: true }); };
-  const networkWrapped = sandboxWrappedCommand(wrapped.executable, wrapped.args, options.cwd, options.networkMode ?? "inherit", options.filesystem, sandboxTempDir);
+  const networkWrapped = sandboxWrappedCommand(wrapped.executable, wrapped.args, options.cwd, options.networkMode ?? "inherit", options.filesystem, sandboxTempDir, procMode);
   if (typeof networkWrapped === "string") { cleanupSandboxTemp(); throw new Error(networkWrapped); }
 
   return { ...networkWrapped, env, timeoutMs, maxOutputBytes, cleanup: cleanupSandboxTemp };
