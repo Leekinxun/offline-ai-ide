@@ -4,6 +4,5 @@ services:
     environment:
       CROWNFORGE_SANDBOX_PROC_MODE: none
     security_opt:
-      - no-new-privileges:true
       - "seccomp=${CROWNFORGE_SECCOMP_PROFILE:?Set the absolute host seccomp profile path}"
       - apparmor=crownforge-bwrap
