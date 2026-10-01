@@ -140,6 +140,21 @@ authRouter.get("/me", (req, res) => {
 
 // --- Workspace routes (protected) ---
 
+// POST /api/auth/session/window — a fresh API token for this browser document.
+authRouter.post("/session/window", authMiddleware, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const session = (req as any).userSession;
+  if (req.body?.path !== undefined && (typeof req.body.path !== "string" || !req.body.path.trim())) {
+    return res.status(400).json({ error: "Invalid workspace path" });
+  }
+  if (session.isolated) return res.status(403).json({ error: "Isolated Vibe windows cannot open an unlocked session" });
+  try {
+    return res.json({ ...sessionManager.createWindowSession(session.token, req.body?.path), desktop: process.env.CREWFORGE_DESKTOP === "1" });
+  } catch {
+    return res.status(403).json({ error: "Path not allowed" });
+  }
+});
+
 // POST /api/auth/workspace/change
 authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   const session = (req as any).userSession;
@@ -157,7 +172,7 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   if (!result) {
     return res.status(403).json({ error: "Path not allowed" });
   }
-  if (result.workspaceDir !== previousWorkspace) {
+  if (result.workspaceDir !== previousWorkspace && !sessionManager.hasOtherSessionAtWorkspace(previousWorkspace, session.token)) {
     try { stopDiagnosticsSession(previousWorkspace); } catch { /* no active watcher */ }
     if (getDebugSession(previousWorkspace)) {
       try { await stopDebugSession(previousWorkspace); } catch { /* already stopped */ }
@@ -186,7 +201,7 @@ authRouter.post("/workspace/pick", authMiddleware, async (req, res) => {
     if (!result) {
       return res.status(400).json({ error: "Selected folder is not an accessible directory" });
     }
-    if (result.workspaceDir !== previousWorkspace) {
+    if (result.workspaceDir !== previousWorkspace && !sessionManager.hasOtherSessionAtWorkspace(previousWorkspace, session.token)) {
       try { stopDiagnosticsSession(previousWorkspace); } catch { /* no active watcher */ }
       if (getDebugSession(previousWorkspace)) {
         try { await stopDebugSession(previousWorkspace); } catch { /* already stopped */ }

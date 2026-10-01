@@ -72,7 +72,7 @@ export async function runReadOnlyShellCommand(command: string, cwd: string, sign
   const executable = resolveReadOnlyExecutable(plan, cwd);
   if (!executable) return `Error: A trusted system executable is unavailable for the read-only query: ${plan.executableName}`;
   const grants = { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] };
-  if (plan.kind === "listing") return runInspectionCommand(command, cwd, signal, grants, executable);
+  if (plan.kind === "inspection") return runInspectionCommand(command, cwd, signal, grants, executable);
   return runWorkspaceProcess({ executable, args: plan.args, cwd, signal,
     limits: { wallTimeMs: 30_000, ...DEFAULT_COMPATIBILITY_SHELL_LIMITS }, resourceLimitMode: "posix-shell",
     networkMode: "deny", filesystem: grants });

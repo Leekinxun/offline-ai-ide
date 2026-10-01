@@ -1,8 +1,9 @@
 import crypto from "crypto";
-import path from "path";
+import path from "node:path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 import { isNetworkToolRequest } from "./networkAccess.js";
 import { planReadOnlyShell } from "./readOnlyShell.js";
+import { isLocalVerificationCommand } from "./localVerification.js";
 
 export type ToolRisk = "medium" | "high";
 export type ToolApprovalDecision = "allow_once" | "allow_session" | "deny";
@@ -35,6 +36,11 @@ const WORKSPACE_SIDE_EFFECT_TOOLS = new Set([
   "shutdown_request",
 ]);
 
+function workspaceSessionKey(prefix: string, workspaceDir?: string): string {
+  const workspaceKey = crypto.createHash("sha256").update(path.resolve(workspaceDir || "unknown-workspace")).digest("hex").slice(0, 16);
+  return `${prefix}:${workspaceKey}`;
+}
+
 export function classifyToolApproval(
   name: string,
   input: Record<string, unknown>,
@@ -56,8 +62,8 @@ export function classifyToolApproval(
       const policy = evaluateWorkspaceWrite(candidate);
       if (!policy.allowed) return { kind: "blocked", reason: policy.reason || "Workspace rename blocked" };
     }
-    return { kind: "approval", risk: "medium", reason: "Rename a workspace file without replacing an existing target", scope: `${source} → ${target}`, canAllowSession: true,
-      sessionKey: `rename_file:${path.posix.dirname(source.replace(/\\/g, "/"))}->${path.posix.dirname(target.replace(/\\/g, "/"))}` };
+    return { kind: "approval", risk: "medium", reason: "Rename an ordinary workspace file without replacing an existing target; session approval covers file changes in this conversation and workspace", scope: `${source} → ${target}`, canAllowSession: true,
+      sessionKey: workspaceSessionKey("workspace-files", options.workspaceDir) };
   }
   if (name === "write_file" || name === "edit_file") {
     const target = typeof input.path === "string" ? input.path : "";
@@ -65,14 +71,13 @@ export function classifyToolApproval(
     if (!policy.allowed) {
       return { kind: "blocked", reason: policy.reason || "Workspace write blocked" };
     }
-    const directory = path.posix.dirname(target.replace(/\\/g, "/")) || ".";
     return {
       kind: "approval",
       risk: "medium",
-      reason: name === "write_file" ? "Create or replace a workspace file" : "Modify a workspace file",
+      reason: name === "write_file" ? "Create or replace an ordinary workspace file; session approval covers file changes in this conversation and workspace" : "Modify an ordinary workspace file; session approval covers file changes in this conversation and workspace",
       scope: target,
       canAllowSession: true,
-      sessionKey: `${name}:${directory}`,
+      sessionKey: workspaceSessionKey("workspace-files", options.workspaceDir),
     };
   }
 
@@ -96,6 +101,11 @@ export function classifyToolApproval(
     const policy = evaluateShellCommand(command, { compatibilityShellAuthorized: true, networkAccessAuthorized: network, workspaceDir: options.workspaceDir });
     if (!policy.allowed) {
       return { kind: "blocked", reason: policy.reason || "Shell command blocked" };
+    }
+    if (!network && isLocalVerificationCommand(command)) {
+      return { kind: "approval", risk: "medium",
+        reason: "Run a local test, lint, type check, or build using project code in the workspace; session approval reuses this exact command",
+        scope: command, canAllowSession: true, sessionKey: workspaceSessionKey(`${name}:verification:${command.trim()}`, options.workspaceDir) };
     }
     return {
       kind: "approval",
@@ -168,14 +178,22 @@ interface PendingApproval {
   timer: NodeJS.Timeout;
 }
 
+export interface ToolApprovalGrants {
+  sessionAllowed: Set<string>;
+  conversationAllowed: Set<string>;
+}
+
+export function createToolApprovalGrants(): ToolApprovalGrants {
+  return { sessionAllowed: new Set(), conversationAllowed: new Set() };
+}
+
 export class ToolApprovalSession {
   private readonly pending = new Map<string, PendingApproval>();
-  private readonly sessionAllowed = new Set<string>();
-  private readonly conversationAllowed = new Set<string>();
 
   constructor(
     private readonly emitRequest: (request: ToolApprovalRequestEvent) => void,
-    private readonly timeoutMs = 5 * 60 * 1000
+    private readonly timeoutMs = 5 * 60 * 1000,
+    private readonly grants: ToolApprovalGrants = createToolApprovalGrants(),
   ) {}
 
   request(input: ToolApprovalRequestInput): Promise<ToolApprovalDecision> {
@@ -189,11 +207,11 @@ export class ToolApprovalSession {
       !network && input.name !== "submit_plan" &&
       input.risk !== "high" &&
       input.conversationId &&
-      this.conversationAllowed.has(input.conversationId)
+      this.grants.conversationAllowed.has(input.conversationId)
     ) {
       return Promise.resolve({ decision: "allow_once" });
     }
-    if (!network && input.name !== "submit_plan" && input.risk !== "high" && input.canAllowSession && input.sessionKey && this.sessionAllowed.has(input.sessionKey)) {
+    if (!network && input.name !== "submit_plan" && input.risk !== "high" && input.canAllowSession && input.sessionKey && this.grants.sessionAllowed.has(`${input.conversationId || ""}\0${input.sessionKey}`)) {
       return Promise.resolve({ decision: "allow_session" });
     }
 
@@ -232,7 +250,7 @@ export class ToolApprovalSession {
   allowConversation(conversationId: string): number {
     const normalized = conversationId.trim();
     if (!normalized) return 0;
-    this.conversationAllowed.add(normalized);
+    this.grants.conversationAllowed.add(normalized);
     let resolvedCount = 0;
     for (const [approvalId, pending] of this.pending) {
       if (pending.conversationId !== normalized || pending.risk === "high" || pending.request.name === "submit_plan" || pending.networkRequested) continue;
@@ -253,7 +271,7 @@ export class ToolApprovalSession {
     const acceptedDecision = decision === "allow_session" && pending.networkRequested
       ? "deny" : decision === "allow_session" && (!pending.canAllowSession || pending.risk === "high" || pending.request.name === "submit_plan") ? "allow_once" : decision;
     if (acceptedDecision === "allow_session" && pending.sessionKey) {
-      this.sessionAllowed.add(pending.sessionKey);
+      this.grants.sessionAllowed.add(`${pending.conversationId || ""}\0${pending.sessionKey}`);
     }
     pending.resolve({ decision: acceptedDecision,
       ...(acceptedDecision === "deny" ? { cause: decision === "deny" ? "user_denied" as const : "invalid_decision" as const } : {}) });

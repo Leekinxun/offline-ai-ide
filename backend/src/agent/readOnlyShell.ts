@@ -4,19 +4,20 @@ import { evaluateInspectionCommand, tokenizeInspectionCommand } from "./modeCapa
 import { linuxTrustedRuntimeReadPaths } from "./processSandbox.js";
 
 export interface ReadOnlyShellPlan {
-  kind: "listing" | "version";
+  kind: "inspection" | "version";
   command: string;
   executableName: string;
   args: string[];
 }
 
-/** A deliberately small syntax-only allowlist, shared by approval and execution. */
+/** Trusted argv inspection, shared by approval and execution. */
 export function planReadOnlyShell(command: unknown): ReadOnlyShellPlan | null {
-  if (typeof command !== "string" || !command.trim() || command.length > 4000 || /[;&|<>`$(){}*?\[\]\n\r\0]/.test(command)) return null;
+  if (typeof command !== "string" || !command.trim() || command.length > 4000 || /[;&|<>`$(){}\n\r\0]/.test(command)) return null;
   const tokens = tokenizeInspectionCommand(command.trim());
   const [name, ...args] = tokens;
-  if ((name === "pwd" || name === "ls") && evaluateInspectionCommand(command).allowed) {
-    return { kind: "listing", command: command.trim(), executableName: name, args };
+  if (name !== "find" && /[*?\[\]]/.test(command)) return null;
+  if (["pwd", "ls", "cat", "head", "tail", "wc", "sed", "find"].includes(name) && evaluateInspectionCommand(command).allowed) {
+    return { kind: "inspection", command: command.trim(), executableName: name, args };
   }
   if (["python", "python3", "node", "git", "ruff"].includes(name)
     && args.length === 1 && args[0] === "--version") {

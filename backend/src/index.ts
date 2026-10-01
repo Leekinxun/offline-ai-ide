@@ -38,7 +38,7 @@ import { handleMobileWs } from "./ws/mobile.js";
 import { getMobileSessionFromUpgrade } from "./mobile/pairing.js";
 import { stopRunsForSession } from "./chat/runCoordinator.js";
 import { sessionManager, type UserSession } from "./auth/sessionManager.js";
-import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam } from "./team/sessionBridge.js";
+import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "./team/sessionBridge.js";
 import { reloadExternalPlugins } from "./plugins/registry.js";
 
 const app = express();
@@ -180,7 +180,7 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
     if (originalTeamId) {
       try {
         const team = getTeamManager(session).getTeamDetails(originalTeamId, session.username);
-        if (team.workspaceDir !== originalWorkspace) { ws.close(1008, "Team access changed"); return; }
+        if (!teamWorkspaceContains(team.workspaceDir, originalWorkspace)) { ws.close(1008, "Team access changed"); return; }
       } catch { ws.close(1008, "Team access changed"); return; }
     }
     if (url.startsWith("/ws/terminal") && !canWriteActiveWorkspace(session)) ws.close(1008, "Terminal permission changed");

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { discoverRunTasks } from "../run/service.js";
+import { discoverRunTasks, hasDirectPythonTests } from "../run/service.js";
 import { getDiagnostics, getDiagnosticsWorkspaceVersion, type DiagnosticsResult, type WorkspaceDiagnostic } from "../diagnostics/service.js";
 import { normalizeContextPath, readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { buildFileVersion, listFileMutations } from "../files/mutationRegistry.js";
@@ -10,6 +10,8 @@ import { redactSecrets } from "./secretRedaction.js";
 import { safePath } from "../utils/safePath.js";
 import { contextDigest } from "./contextManifest.js";
 import { getEditorDiagnosticFeedback, type EditorDiagnosticSnapshot } from "../chat/editorDiagnostics.js";
+import { isLocalVerificationCommand } from "./localVerification.js";
+import { tokenizeInspectionCommand } from "./modeCapabilities.js";
 
 export interface EditorDiagnosticAdvisory extends WorkspaceDiagnostic {
   version: string;
@@ -55,8 +57,37 @@ export function requiresCodeValidation(changedFiles: readonly string[]): boolean
   return changedFiles.some((file) => !DOCUMENTATION.test(file));
 }
 const quote = (value: string) => /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\''`)}'`;
-const commandKey = (value: string) => value.trim().replace(/^npm\s+test$/, "npm run test");
+function commandKey(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (/^npm test$/.test(normalized)) return "npm run test";
+  // Normalize output-only flags without allowing a filtered test/module or a
+  // pipeline to stand in for full discovery. Match token boundaries, not prose.
+  if (isLocalVerificationCommand(value)) {
+    const scoped = /^cd\s+(.+?)\s+&&\s+(.+)$/.exec(value.trim());
+    if (scoped) return JSON.stringify(["cwd", tokenizeInspectionCommand(`cd ${scoped[1]}`)[1], commandKey(scoped[2])]);
+    const tokens = tokenizeInspectionCommand(value);
+    if (tokens[0] === "python" || tokens[0] === "python3") {
+      const moduleAt = tokens.indexOf("-m");
+      if (moduleAt > 0 && tokens[moduleAt + 1] === "unittest") {
+        const startup = tokens.slice(1, moduleAt).filter((arg) => arg !== "-B");
+        const args = tokens.slice(moduleAt + 2).filter((arg) => !["-v", "--verbose", "-q", "--quiet"].includes(arg));
+        return JSON.stringify(["python", ...startup, "-m", "unittest", ...(args.length ? args : ["discover"])]);
+      }
+    }
+  }
+  return normalized;
+}
 const diagnosticKey = (item: WorkspaceDiagnostic) => JSON.stringify([item.path, item.line, item.column, item.code, item.message]);
+
+function outputLooksLikeValidationFailure(output: string): boolean {
+  // Test bodies can deliberately log errors. Use runner summaries rather than
+  // treating any ERROR line in a successful test as a failed verification.
+  return /(?:^|\n)\s*FAILED\s*\((?:failures|errors)=\d+|(?:^|\n)Test Suites:\s*\d+ failed|={2,}[^\n]*\b\d+ failed\b[^\n]*={2,}|(?:^|\n)Tests failed\b/i.test(output);
+}
+
+function attemptedLocalVerification(command: string): boolean {
+  return isLocalVerificationCommand(command) || command.split(/&&|\|\||[|;]/).some((part) => isLocalVerificationCommand(part.trim()));
+}
 
 export class ResumeValidationScopeError extends Error {}
 export function resolveResumedValidation(workspaceDir: string, conversationId: string, resumedFromRunId?: string, owner?: string): { changedFiles: string[]; commands: string[]; error?: string } {
@@ -101,13 +132,18 @@ export function discoverValidationCommands(workspaceDir: string, changedFiles: r
   const scopes = new Set<string>();
   for (const changed of changedFiles.filter((file) => !DOCUMENTATION.test(file))) {
     let directory = path.posix.dirname(changed.replace(/\\/g, "/"));
+    if (/\.py$/i.test(changed) && path.posix.basename(directory) === "tests" && hasDirectPythonTests(safePath(directory, workspaceDir))) {
+      directory = path.posix.dirname(directory);
+    }
     while (true) {
       const full = safePath(directory, workspaceDir);
       if (["package.json", "Cargo.toml", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"].some((name) => fs.existsSync(path.join(full, name)))) { scopes.add(directory); break; }
+      if (/\.py$/i.test(changed) && (hasDirectPythonTests(full) || hasDirectPythonTests(path.join(full, "tests")))) { scopes.add(directory); break; }
       if (directory === ".") break;
       directory = path.posix.dirname(directory);
     }
   }
+  if (!scopes.size && changedFiles.some((file) => /\.py$/i.test(file) && !DOCUMENTATION.test(file))) scopes.add(".");
   const commands: string[] = [];
   for (const scope of scopes) {
     for (const name of ["package.json", "Cargo.toml", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"]) {
@@ -118,7 +154,8 @@ export function discoverValidationCommands(workspaceDir: string, changedFiles: r
       .filter((task) => task.kind !== "run" && task.id !== "python:compile" && !/watch|serve|dev|interactive/i.test(task.id))
       .sort((a, b) => {
         const rank = (id: string) => /typecheck|type-check|check/.test(id) ? 0 : /lint/.test(id) ? 1 : /test/.test(id) ? 2 : 3;
-        return rank(a.id) - rank(b.id) || a.id.localeCompare(b.id);
+        const conventional = (id: string) => /^(?:npm:(?:typecheck|type-check|check|lint|test|build)|python:(?:pytest|unittest)|cargo:(?:check|test))$/.test(id) ? 0 : 1;
+        return conventional(a.id) - conventional(b.id) || rank(a.id) - rank(b.id) || a.id.localeCompare(b.id);
       });
     // Prefer one static check and one test. Never launch commands here; the
     // model must request them through the existing tool permission boundary.
@@ -194,9 +231,12 @@ export class ValidationFeedback {
   }
 
   observeCommand(input: { command: string; toolCallId: string; output: string; isError: boolean; denied: boolean; changedFiles: readonly string[]; versions?: Record<string, string> }): void {
+    const failedByOutput = !input.isError && outputLooksLikeValidationFailure(input.output);
+    const emptyTests = /\bRan 0 tests?\b/.test(input.output);
+    const maskedCheck = !isLocalVerificationCommand(input.command) && attemptedLocalVerification(input.command);
     this.observations.push({
       command: input.command.trim(), toolCallId: input.toolCallId,
-      status: input.isError ? /timeout|timed out/i.test(input.output) ? "timed_out" : input.denied || /cancelled|stopped/i.test(input.output) ? "cancelled" : "failed" : "passed",
+      status: input.isError ? /timeout|timed out/i.test(input.output) ? "timed_out" : input.denied || /cancelled|stopped/i.test(input.output) ? "cancelled" : "failed" : failedByOutput ? "failed" : emptyTests || maskedCheck ? "pending" : "passed",
       denied: input.denied, versions: input.versions || validationFileVersions(this.workspaceDir, input.changedFiles), output: redactSecrets(input.output).slice(-4_000),
     });
   }
@@ -208,6 +248,11 @@ export class ValidationFeedback {
     let discoveryError: string | undefined;
     try { commands = discoverValidationCommands(this.workspaceDir, files, this.plannedCommands); }
     catch (error) { discoveryError = redactSecrets(error instanceof Error ? error.message : String(error)); }
+    if (!commands.length && this.plannedCommands === undefined) {
+      commands = [...new Set(this.observations
+        .filter((item) => attemptedLocalVerification(item.command) || (item.status === "failed" && outputLooksLikeValidationFailure(item.output)))
+        .map((item) => item.command))];
+    }
     const diagnostics = compareValidationDiagnostics(this.workspaceDir, this.baseline, getDiagnostics(this.workspaceDir), files);
     const editorSnapshots = this.editorOwner ? files.filter((file) => !DOCUMENTATION.test(file)).slice(0, 20).flatMap((file) => getEditorDiagnosticFeedback({ workspaceDir: this.workspaceDir, owner: this.editorOwner!, path: file, version: versions[file] })) : [];
     const editorErrors = compareEditorDiagnosticAdvisories(this.editorBaseline, editorSnapshots, versions);
@@ -219,7 +264,7 @@ export class ValidationFeedback {
       const item = observations[index];
       return item ? { command: redactSecrets(command), status: item.status, toolCallId: item.toolCallId, outputDigest: contextDigest(item.output) } : { command: redactSecrets(command), status: "pending" as const };
     });
-    const required = requiresCodeValidation(files) || Boolean(this.plannedCommands?.length);
+    const required = requiresCodeValidation(files) || Boolean(this.plannedCommands?.length) || commands.length > 0;
     const denied = this.observations.some((item) => item.denied && commands.some((command) => this.plannedCommands?.length ? item.command === command : commandKey(item.command) === commandKey(command)));
     const failed = verification.some((item) => item.status === "failed" || item.status === "timed_out") || diagnostics.newErrors.length > 0;
     const unavailable = Object.values(versions).includes("unavailable");

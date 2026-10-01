@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { CHECKPOINT_EXCLUDED_NAMES } from "../chat/checkpoints.js";
+import { CHECKPOINT_EXCLUDED_NAMES, isGeneratedCachePath } from "../chat/checkpoints.js";
 import { safePath } from "../utils/safePath.js";
 import { CollaborationStore } from "../collaboration/collaborationStore.js";
 
@@ -106,10 +106,14 @@ function generateTextHunks(relativePath: string, preimage: string, postimage: st
   });
 }
 
+function isCheckpointExcludedPath(parts: string[]): boolean {
+  return parts.some((part) => CHECKPOINT_EXCLUDED_NAMES.has(part)) || /\.(?:pyc|pyo)$/.test(parts.at(-1) || "");
+}
+
 export function safeMutationRelativePath(value: string): string | null {
   const normalized = value.replace(/\\/g, "/");
   const parts = normalized.split("/");
-  if (!normalized || normalized.includes("\0") || path.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized) || parts.some((part) => !part || part === "." || part === "..") || CHECKPOINT_EXCLUDED_NAMES.has(parts[0])) return null;
+  if (!normalized || normalized.includes("\0") || path.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized) || parts.some((part) => !part || part === "." || part === "..") || isCheckpointExcludedPath(parts)) return null;
   return normalized;
 }
 const safeRelativePath = safeMutationRelativePath;
@@ -672,7 +676,30 @@ function checkpointFiles(workspaceDir: string, checkpointId: string): Map<string
   if (!checkpoint) throw new Error("Checkpoint not found");
   const result = new Map<string, CapturedFile>();
   if (checkpoint.storageVersion === 2 || checkpoint.storageVersion === 3) {
-    const resolve = (id: string, visiting = new Set<string>()): Map<string, { path: string; sha256: string; size?: number }> => { if (visiting.has(id)) throw new Error("Checkpoint parent cycle detected"); const item = index.find((entry) => entry.id === id); if (!item) throw new Error("Checkpoint parent missing"); visiting.add(id); const manifest = JSON.parse(fs.readFileSync(item.manifest || path.join(workspaceDir, JOURNAL_DIR, "manifests", `${id}.json`), "utf8")) as any; const files = new Map<string, { path: string; sha256: string; size?: number }>(); if (manifest.version === 2) for (const file of manifest.files || []) if (safeRelativePath(file.path) && /^[a-f0-9]{64}$/.test(file.sha256)) files.set(file.path, file); else throw new Error("Invalid checkpoint entry"); else if (manifest.version === 3) { if (manifest.parentId) for (const [relative, file] of resolve(manifest.parentId, visiting)) files.set(relative, file); for (const change of manifest.changes || []) { const relative = safeRelativePath(change.path); if (!relative) throw new Error("Invalid checkpoint entry"); if (change.operation === "delete") files.delete(relative); else if (change.operation === "upsert" && /^[a-f0-9]{64}$/.test(change.sha256)) files.set(relative, change); else throw new Error("Invalid checkpoint entry"); } } else throw new Error("Invalid checkpoint manifest"); visiting.delete(id); return files; };
+    const resolve = (id: string, visiting = new Set<string>()): Map<string, { path: string; sha256: string; size?: number }> => {
+      if (visiting.has(id)) throw new Error("Checkpoint parent cycle detected");
+      const item = index.find((entry) => entry.id === id); if (!item) throw new Error("Checkpoint parent missing");
+      visiting.add(id);
+      const manifest = JSON.parse(fs.readFileSync(item.manifest || path.join(workspaceDir, JOURNAL_DIR, "manifests", `${id}.json`), "utf8")) as any;
+      const files = new Map<string, { path: string; sha256: string; size?: number }>();
+      if (manifest.version === 2) {
+        for (const file of manifest.files || []) {
+          if (isGeneratedCachePath(file.path)) continue;
+          if (!safeRelativePath(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error("Invalid checkpoint entry");
+          files.set(file.path, file);
+        }
+      } else if (manifest.version === 3) {
+        if (manifest.parentId) for (const [relative, file] of resolve(manifest.parentId, visiting)) files.set(relative, file);
+        for (const change of manifest.changes || []) {
+          if (isGeneratedCachePath(change.path)) continue;
+          const relative = safeRelativePath(change.path); if (!relative) throw new Error("Invalid checkpoint entry");
+          if (change.operation === "delete") files.delete(relative);
+          else if (change.operation === "upsert" && /^[a-f0-9]{64}$/.test(change.sha256)) files.set(relative, change);
+          else throw new Error("Invalid checkpoint entry");
+        }
+      } else throw new Error("Invalid checkpoint manifest");
+      visiting.delete(id); return files;
+    };
     for (const file of resolve(checkpointId).values()) result.set(file.path, readCapturedFile(blobPath(workspaceDir, file.sha256), file.size, file.sha256));
     return result;
   }
@@ -681,7 +708,7 @@ function checkpointFiles(workspaceDir: string, checkpointId: string): Map<string
 }
 function currentWorkspaceFiles(workspaceDir: string): Map<string, CapturedFile> {
   const result = new Map<string, CapturedFile>();
-  const visit = (directory: string, prefix = "") => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { if (CHECKPOINT_EXCLUDED_NAMES.has(entry.name) || entry.isSymbolicLink()) continue; const relative = prefix ? `${prefix}/${entry.name}` : entry.name; const absolute = path.join(directory, entry.name); if (entry.isDirectory()) visit(absolute, relative); else if (entry.isFile()) result.set(relative, readCapturedFile(absolute)); } };
+  const visit = (directory: string, prefix = "") => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const relative = prefix ? `${prefix}/${entry.name}` : entry.name; if (entry.isSymbolicLink() || isCheckpointExcludedPath(relative.split("/"))) continue; const absolute = path.join(directory, entry.name); if (entry.isDirectory()) visit(absolute, relative); else if (entry.isFile()) result.set(relative, readCapturedFile(absolute)); } };
   visit(path.resolve(workspaceDir)); return result;
 }
 /** Compare the workspace against a checkpoint and persist exact create/modify/delete mutation records. */

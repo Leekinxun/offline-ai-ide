@@ -27,6 +27,72 @@ test("validation discovery chooses bounded relevant task kinds, respects an appr
   assert.deepEqual(discoverValidationCommands(root, ["nested/app.ts"]), ["cd nested && npm run check"]);
 });
 
+test("validation discovery prefers conventional checks over unrelated alphabetically earlier scripts", (t) => {
+  const root = fixture(t, { "approval-check": "node approval.cjs", check: "node check.cjs" });
+  assert.deepEqual(discoverValidationCommands(root, ["app.ts"]), ["npm run check"]);
+});
+
+test("zero-test discovery and filtered unittest runs cannot satisfy a full-suite requirement", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-suite-evidence-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "app.py"), "value = 1\n");
+  for (const [command, output] of [
+    ["python3 -B -m unittest discover", "Ran 0 tests in 0.001s\nOK"],
+    ["python3 -m unittest tests.test_one", "Ran 1 test in 0.001s\nOK"],
+    ["python3 -m unittest discover -k one", "Ran 1 test in 0.001s\nOK"],
+    ["python3 -m unittest discover | tail -20", "Ran 1 test in 0.001s\nOK"],
+  ]) {
+    const validation = new ValidationFeedback(root);
+    validation.observeCommand({ command, toolCallId: "partial", output, isError: false, denied: false, changedFiles: ["app.py"] });
+    assert.equal(validation.assess(["app.py"]).report.status, "unverified", command);
+  }
+  const complete = new ValidationFeedback(root);
+  complete.observeCommand({ command: "python -B -m unittest discover -v", toolCallId: "full", output: "Ran 2 tests in 0.001s\nOK", isError: false, denied: false, changedFiles: ["app.py"] });
+  assert.equal(complete.assess(["app.py"]).report.status, "passed");
+});
+
+test("validation discovery falls back to unittest for plain Python source trees", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-unittest-discovery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "solution.py"), "def add(a, b): return a + b\n");
+  assert.deepEqual(discoverValidationCommands(root, ["solution.py"]), ["python3 -B -m unittest discover"]);
+});
+
+test("validation discovery falls back to unittest for Python files without project manifests", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-unittest-validation-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "tests"), { recursive: true });
+  fs.writeFileSync(path.join(root, "app.py"), "def value():\n    return 1\n");
+  fs.writeFileSync(path.join(root, "tests", "test_app.py"), "import unittest\n");
+
+  assert.deepEqual(discoverValidationCommands(root, ["app.py"]), ["python3 -B -m unittest discover -s tests"]);
+  const assessed = new ValidationFeedback(root).assess(["app.py"]);
+  assert.equal(assessed.report.status, "unverified");
+  assert.equal(assessed.report.verification[0].command, "python3 -B -m unittest discover -s tests");
+});
+
+test("plain nested Python projects discover their own non-package tests folder", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-nested-python-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "pkg/tests"), { recursive: true });
+  fs.writeFileSync(path.join(root, "pkg/app.py"), "value = 1\n");
+  fs.writeFileSync(path.join(root, "pkg/tests/test_app.py"), "import unittest\n");
+  assert.deepEqual(discoverValidationCommands(root, ["pkg/app.py", "pkg/tests/test_app.py"]), ["cd pkg && python3 -B -m unittest discover -s tests"]);
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "cd pkg && python -B -m unittest discover -s tests -v", toolCallId: "nested", output: "Ran 1 test in 0.01s\nOK", isError: false, denied: false, changedFiles: ["pkg/app.py"] });
+  assert.equal(validation.assess(["pkg/app.py"]).report.status, "passed");
+});
+
+test("intentional error logging in a successful test does not invalidate runner evidence", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "npm test", toolCallId: "logged", output: "ERROR: callback threw as expected\nTests: 3 passed\n", isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(validation.assess(["app.ts"]).report.status, "passed");
+  const composed = new ValidationFeedback(root);
+  composed.observeCommand({ command: "python3 -m unittest || echo done", toolCallId: "masked", output: "done", isError: false, denied: false, changedFiles: [] });
+  assert.equal(composed.assess([]).report.status, "unverified");
+});
+
 test("passing command evidence is invalidated by later edits and a fresh run restores validation", (t) => {
   const root = fixture(t);
   const validation = new ValidationFeedback(root);
@@ -66,6 +132,21 @@ test("failed validation feeds back at most twice and missing checks never become
   assert.equal(new ValidationFeedback(root).assess(["README.md"]).report.status, "not_required");
 });
 
+test("explicit local validation attempts count even when no files changed", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "python3 -m unittest discover | tail -20", toolCallId: "piped-fail", output: "FAILED (failures=1)", isError: false, denied: false, changedFiles: [] });
+  const failed = validation.assess([]);
+  assert.equal(failed.report.status, "failed");
+  assert.equal(failed.report.verification[0].toolCallId, "piped-fail");
+
+  const passed = new ValidationFeedback(root);
+  passed.observeCommand({ command: "python3 -B -m unittest discover -v", toolCallId: "unittest-pass", output: "Ran 3 tests in 0.01s\nOK", isError: false, denied: false, changedFiles: [] });
+  const result = passed.assess([]);
+  assert.equal(result.report.status, "passed");
+  assert.equal(result.report.verification[0].status, "passed");
+});
+
 test("diagnostics distinguish known baseline errors, new downstream errors and stale snapshots", (t) => {
   const root = fixture(t);
   const previousError = { path: "app.ts", line: 1, column: 1, severity: "error" as const, source: "tsc", message: "old error" };
@@ -91,6 +172,11 @@ test("diagnostic fingerprints ignore control metadata but continue scanning afte
   assert.notEqual(before, changed);
   fs.mkdirSync(path.join(root, ".history"));
   fs.writeFileSync(path.join(root, ".history/messages.json"), "{}");
+  assert.equal(getDiagnosticsWorkspaceVersion(root), changed);
+  fs.mkdirSync(path.join(root, "__pycache__"));
+  fs.writeFileSync(path.join(root, "__pycache__", "app.cpython-312.pyc"), "cache");
+  fs.mkdirSync(path.join(root, ".ruff_cache"));
+  fs.writeFileSync(path.join(root, ".ruff_cache", "state.json"), "{}");
   assert.equal(getDiagnosticsWorkspaceVersion(root), changed);
 });
 

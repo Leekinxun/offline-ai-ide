@@ -21,11 +21,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   const args = process.argv.slice(2);
-  if (args[0] !== "check" || args[1] !== "--output-format=json" || args[2] !== "--stdin-filename" || args[4] !== "-") process.exit(2);
+  if (args[0] !== "check" || args[1] !== "--no-cache" || args[2] !== "--output-format=json" || args[3] !== "--stdin-filename" || args[5] !== "-") process.exit(2);
   if (input !== "print(missing_name)\\n") process.exit(3);
   process.stdout.write(JSON.stringify([
-    { filename: args[3], location: { row: 1, column: 7 }, code: "F821", message: "Undefined name missing_name" },
-    { filename: args[3], location: { row: 2, column: 1 }, code: null, message: "invalid-syntax: Expected an expression" }
+    { filename: args[4], location: { row: 1, column: 7 }, code: "F821", message: "Undefined name missing_name" },
+    { filename: args[4], location: { row: 2, column: 1 }, code: null, message: "invalid-syntax: Expected an expression" }
   ]));
   process.exitCode = 1;
 });
@@ -69,6 +69,29 @@ test("diagnostics sessions expose a persistent lifecycle", async (t) => {
   assert.equal(stopDiagnosticsSession(workspace).session.status, "stopped");
 });
 
+test("diagnostics runs Ruff without writing its cache", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-diagnostics-ruff-cache-"));
+  const bin = path.join(workspace, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(workspace, "sample.py"), "value = 1\n");
+  const argsFile = path.join(workspace, "ruff-args.json");
+  fs.writeFileSync(path.join(bin, "ruff"), `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write("[]");
+`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  t.after(() => {
+    process.env.PATH = previousPath;
+    stopDiagnosticsSession(workspace);
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  await startDiagnosticsSession(workspace);
+  assert.deepEqual(JSON.parse(fs.readFileSync(argsFile, "utf8")), ["check", "--no-cache", "--output-format=json", "."]);
+});
+
 test("formats unsaved Python content through Ruff stdin", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-format-"));
   const fakeRuff = path.join(workspace, "fake-ruff");
@@ -78,7 +101,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   const args = process.argv.slice(2);
-  if (args[0] !== "format" || args[1] !== "--stdin-filename" || args[3] !== "-" || !args[2].endsWith("sample.py")) process.exit(2);
+  if (args[0] !== "format" || args[1] !== "--no-cache" || args[2] !== "--stdin-filename" || args[4] !== "-" || !args[3].endsWith("sample.py")) process.exit(2);
   if (input !== "value=[1,2]\\n") process.exit(3);
   process.stdout.write("value = [1, 2]\\n");
 });

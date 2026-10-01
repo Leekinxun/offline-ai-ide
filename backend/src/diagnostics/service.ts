@@ -135,7 +135,7 @@ export async function checkPythonDocument(
 
   const result = await run(
     executable,
-    ["check", "--output-format=json", "--stdin-filename", absolute, "-"],
+    ["check", "--no-cache", "--output-format=json", "--stdin-filename", absolute, "-"],
     root,
     content
   );
@@ -168,7 +168,7 @@ export async function formatPythonDocument(
     throw new DocumentFormatError("Ruff formatting supports Python files only", "UNSUPPORTED_FILE");
   }
 
-  const result = await run(executable, ["format", "--stdin-filename", absolute, "-"], root, content);
+  const result = await run(executable, ["format", "--no-cache", "--stdin-filename", absolute, "-"], root, content);
   if (result.missing) {
     throw new DocumentFormatError("Ruff formatter is not installed", "RUFF_MISSING");
   }
@@ -261,7 +261,7 @@ function hasPythonFiles(directory: string, depth = 0): boolean {
   if (depth > 4) return false;
   try {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if ([".git", ".checkpoints", "node_modules", "dist", "build", "target"].includes(entry.name)) continue;
+      if ([".git", ".checkpoints", "node_modules", "dist", "build", "target", ".pytest_cache", ".ruff_cache", "__pycache__"].includes(entry.name)) continue;
       if (entry.isFile() && entry.name.endsWith(".py")) return true;
       if (entry.isDirectory() && hasPythonFiles(path.join(directory, entry.name), depth + 1)) return true;
     }
@@ -296,7 +296,7 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
     tools.push("typescript");
   }
   if (hasPythonFiles(workspaceDir)) {
-    const result = await run("ruff", ["check", "--output-format=json", "."], workspaceDir);
+    const result = await run("ruff", ["check", "--no-cache", "--output-format=json", "."], workspaceDir);
     if (!result.missing) {
       diagnostics.push(...parseRuff(workspaceDir, result.stdout));
       tools.push("ruff");
@@ -340,7 +340,7 @@ export function runDiagnostics(workspaceDir: string): Promise<DiagnosticsResult>
 }
 
 const WATCH_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".json", ".toml"]);
-const WATCH_IGNORED = new Set([".git", ".history", ".checkpoints", ".team", ".tasks", ".codex", ".omx", ".crewforge", ".transcripts", "node_modules", "dist", "build", "target", ".venv"]);
+const WATCH_IGNORED = new Set([".git", ".history", ".checkpoints", ".team", ".tasks", ".codex", ".omx", ".crewforge", ".transcripts", "node_modules", "dist", "build", "target", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"]);
 
 function workspaceSignature(workspaceDir: string): string {
   let count = 0;
@@ -356,7 +356,9 @@ function workspaceSignature(workspaceDir: string): string {
       if (WATCH_IGNORED.has(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) { visit(full, depth + 1); continue; }
-      if (!entry.isFile() || !WATCH_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      if (!entry.isFile()) continue;
+      const extension = path.extname(entry.name).toLowerCase();
+      if (!WATCH_EXTENSIONS.has(extension) || extension === ".pyc" || extension === ".pyo") continue;
       try {
         const stat = fs.statSync(full);
         const value = `${path.relative(workspaceDir, full)}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;

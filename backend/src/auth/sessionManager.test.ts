@@ -88,6 +88,41 @@ test("keeps workspace selection isolated between sessions for the same user", as
   }
 });
 
+test("window sessions isolate workspace selection and expire with their login parent", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-window-session-"));
+  const projectA = path.join(root, "project-a");
+  const projectB = path.join(root, "project-b");
+  const configPath = path.join(root, "users.json");
+  await mkdir(projectA);
+  await mkdir(projectB);
+  await writeFile(configPath, JSON.stringify({
+    allowedRoots: [root],
+    users: [{ username: "alice", password: "secret", defaultWorkspace: projectA }],
+  }));
+
+  try {
+    const manager = new SessionManager(configPath);
+    const parent = manager.login("alice", "secret");
+    assert.ok(parent);
+    const first = manager.createWindowSession(parent.token);
+    const second = manager.createWindowSession(parent.token);
+    assert.notEqual(first.token, second.token);
+    assert.equal(first.workspaceDir, await realpath(projectA));
+    assert.equal(second.workspaceDir, await realpath(projectA));
+
+    assert.deepEqual(manager.changeWorkspace(first.token, projectB), { workspaceDir: await realpath(projectB) });
+    assert.equal(manager.getSession(first.token)?.workspaceDir, await realpath(projectB));
+    assert.equal(manager.getSession(second.token)?.workspaceDir, await realpath(projectA));
+    assert.equal(manager.getSession(parent.token)?.workspaceDir, await realpath(projectA));
+
+    manager.logout(parent.token);
+    assert.equal(manager.getSession(first.token), null);
+    assert.equal(manager.getSession(second.token), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lists allowed roots through platform-specific ancestor separators", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "crownforge-allowed-roots-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -383,4 +418,83 @@ test("web mode automatically permits default workspace and allows admin director
   assert.ok(bobSession);
   assert.equal(manager.listUserWorkspaceDirectories(bobSession.token, root), null);
   assert.equal(manager.changeWorkspaceWithinUserRoot(bobSession.token, workspaceB), null);
+});
+
+
+test("window sessions isolate selection, inherit roots and revoke with their login", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crewforge-window-session-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const nested = path.join(root, "nested");
+  await mkdir(nested);
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({ allowedRoots: [root], users: [{ username: "alice", password: "secret", defaultWorkspace: root }] }));
+  const manager = new SessionManager(configPath);
+  const login = manager.login("alice", "secret")!;
+  const a = manager.createWindowSession(login.token);
+  const b = manager.createWindowSession(login.token);
+  assert.notEqual(a.token, b.token);
+  assert.notEqual(a.token, login.token);
+  assert.equal(a.workspaceRoot, login.workspaceRoot);
+  assert.equal(a.expiresAt, login.expiresAt);
+  manager.changeWorkspaceWithinUserRoot(a.token, nested);
+  assert.equal(manager.getSession(a.token)?.workspaceDir, await realpath(nested));
+  assert.equal(manager.getSession(b.token)?.workspaceDir, await realpath(root));
+  assert.equal(manager.getSession(login.token)?.workspaceDir, await realpath(root));
+  const restored = manager.createWindowSession(login.token, nested);
+  assert.notEqual(restored.token, a.token);
+  assert.equal(restored.workspaceDir, await realpath(nested));
+  assert.equal(restored.workspaceRoot, login.workspaceRoot);
+  assert.throws(() => manager.createWindowSession(login.token, path.dirname(root)), /Path not allowed/);
+  assert.equal(manager.hasOtherSessionAtWorkspace(b.workspaceDir, b.token), true);
+  const revoked: string[] = [];
+  manager.onSessionRevoked((token) => revoked.push(token));
+  manager.logout(login.token);
+  for (const token of [login.token, a.token, b.token, restored.token]) {
+    assert.equal(manager.getSession(token), null);
+    assert.ok(revoked.includes(token));
+  }
+});
+
+test("child activity keeps the parent alive but never extends its absolute expiry", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crewforge-window-expiry-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({ allowedRoots: [root], users: [{ username: "alice", password: "secret", defaultWorkspace: root }] }));
+  const manager = new SessionManager(configPath);
+  const login = manager.login("alice", "secret")!;
+  const a = manager.createWindowSession(login.token);
+  const b = manager.createWindowSession(login.token);
+  const parent = manager.getSession(login.token)!;
+  parent.lastSeenAt = Date.now() - 11 * 60 * 60 * 1000;
+  const expiry = parent.expiresAt;
+  manager.getSession(a.token);
+  assert.ok(parent.lastSeenAt > Date.now() - 1000);
+  assert.equal(parent.expiresAt, expiry);
+  parent.expiresAt = Date.now() - 1;
+  assert.equal(manager.getSession(a.token), null);
+  assert.equal(manager.getSession(b.token), null);
+  assert.equal(manager.getSession(login.token), null);
+
+  const next = manager.login("alice", "secret")!;
+  const nextChild = manager.createWindowSession(next.token);
+  manager.getSession(next.token)!.lastSeenAt = Date.now() - 13 * 60 * 60 * 1000;
+  assert.equal(manager.getSession(nextChild.token), null);
+});
+
+test("password reset revokes derived sessions and isolated sessions cannot upgrade", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crewforge-window-password-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const worktree = path.join(root, ".crownforge-worktrees", "project", "vibe");
+  await mkdir(worktree, { recursive: true });
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({ allowedRoots: [root], users: [{ username: "alice", password: "secret", defaultWorkspace: root }] }));
+  const manager = new SessionManager(configPath);
+  const login = manager.login("alice", "secret")!;
+  const child = manager.createWindowSession(login.token);
+  const isolated = manager.createIsolatedSession(child.token, worktree);
+  assert.throws(() => manager.createWindowSession(isolated.token, root), /Isolated sessions/);
+  assert.equal(manager.changeWorkspace(isolated.token, root), null);
+  manager.updateUserPassword("alice", "new-secret");
+  for (const token of [login.token, child.token, isolated.token]) assert.equal(manager.getSession(token), null);
+  assert.ok(manager.login("alice", "new-secret"));
 });

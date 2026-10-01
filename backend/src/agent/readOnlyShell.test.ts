@@ -10,11 +10,15 @@ import { probeFilesystemIsolation } from "./processSandbox.js";
 import { evaluateShellCommand } from "./toolPolicy.js";
 
 test("only a small exact set of read-only queries bypasses approval", () => {
-  for (const command of ["pwd", "ls", "ls -la", "ls src", "python3 --version", "python --version", "python3 -m ruff --version", "python3 -I -B -m ruff --version", "node --version", "git --version", "ruff --version"]) {
+  for (const command of [
+    "pwd", "ls", "ls -la", "ls src", "cat README.md", "find src -maxdepth 2 -type f -print",
+    "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "sed -n '1,20p' README.md", "find src -name '*.ts' -print",
+    "python3 --version", "python --version", "python3 -m ruff --version", "python3 -I -B -m ruff --version", "node --version", "git --version", "ruff --version",
+  ]) {
     assert.ok(planReadOnlyShell(command), command);
     assert.equal(classifyToolApproval("bash", { command }).kind, "none", command);
   }
-  for (const command of ["npm test", "python3 test.py", "python3 -m pytest --version", "ls > result", "pwd; touch result", "ls .env", "ls ../other", "python3 --version && ls", "(pwd)", "PATH=. pwd", "/tmp/pwd", "echo $(pwd)"]) {
+  for (const command of ["npm test", "python3 test.py", "python3 -m pytest --version", "find . -delete", "cat .env", "ls > result", "pwd; touch result", "ls .env", "ls ../other", "python3 --version && ls", "(pwd)", "PATH=. pwd", "/tmp/pwd", "echo $(pwd)"]) {
     assert.equal(planReadOnlyShell(command), null, command);
     assert.notEqual(classifyToolApproval("bash", { command }).kind, "none", command);
   }
@@ -41,6 +45,13 @@ test("read-only runner executes argv safely and refuses to fall back to a writab
   const result = await runReadOnlyShellCommand("ls", root);
   if (!capability.available) { assert.match(result, /^Error:/); return; }
   assert.match(result, /sample\.md/);
+  assert.equal(await runReadOnlyShellCommand("cat sample.md", root), "keep");
+  assert.match(await runReadOnlyShellCommand("find . -name '*.md' -print", root), /sample\.md/);
+  fs.writeFileSync(path.join(root, ".env"), "private=value\n");
+  assert.match(await runReadOnlyShellCommand("cat .env", root), /^Error:/);
+  const nested = path.join(root, "nested"); fs.mkdirSync(nested);
+  fs.writeFileSync(path.join(nested, "credentials.json"), '{"token":"private"}');
+  assert.match(await runReadOnlyShellCommand("cat nested/credentials.json", root), /^Error:/);
   assert.equal(await runReadOnlyShellCommand("pwd", root), fs.realpathSync.native(root));
   assert.equal(fs.readFileSync(path.join(root, "sample.md"), "utf8"), "keep\n");
 });
@@ -57,7 +68,7 @@ test("ordinary parenthesized shell groups require approval while substitution an
 });
 
 test("network requests, process sessions, spelling changes, and composed commands never inherit automatic query approval", () => {
-  for (const command of ["pwd", "ls -la", "python3 --version", "python3 -m ruff --version"]) {
+  for (const command of ["pwd", "ls -la", "cat README.md", "find src -maxdepth 2 -type f -print", "python3 --version", "python3 -m ruff --version"]) {
     for (const allow_network of [true, "true", 1, null]) {
       assert.notEqual(classifyToolApproval("bash", { command, allow_network }).kind, "none", `${command}: ${allow_network}`);
     }

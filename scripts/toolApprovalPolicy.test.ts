@@ -12,6 +12,7 @@ const current = { conversationId: "conversation-a", runId: "run-a" };
 
 test("only ordinary medium-risk requests qualify for conversation approval", () => {
   assert.equal(canApproveToolInConversation(request()), true);
+  assert.equal(canApproveToolInConversation(request({ name: "bash", risk: "medium", input: { command: "python3 -m unittest" }, canAllowSession: true })), true);
   for (const overrides of [
     { name: "bash", risk: "high", input: { command: "pwd" } },
     { name: "process_start", risk: "high" },

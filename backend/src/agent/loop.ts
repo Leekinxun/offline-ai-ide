@@ -291,7 +291,7 @@ export async function runAgentLoop(
   // Build user content with file/selection context
   // Build message history
   let messages: OpenAIMessage[] = [
-    ...(history || []).slice(-10).map((h) => ({
+    ...(history || []).map((h) => ({
       role: h.role as "user" | "assistant",
       content: h.role === "user" ? userContentWithAttachments(h.content, h.attachments) : h.content,
     })),
@@ -577,12 +577,19 @@ export async function runAgentLoop(
 
   const compactContextIfNeeded = async (force = false) => {
     const preferences = activePreferences();
-    messages = microcompactMessages(messages);
-    const estimatedTokens = estimateMessageTokens(messages);
+    let estimatedTokens = estimateMessageTokens(messages);
     if (!force && estimatedTokens <= config.contextCompactThreshold) {
       emitContextState("ready");
       return;
     }
+
+    messages = microcompactMessages(messages);
+    estimatedTokens = estimateMessageTokens(messages);
+    if (!force && estimatedTokens <= config.contextCompactThreshold) {
+      emitContextState("ready");
+      return;
+    }
+
     const controlled = applyConversationControls(messages, preferences.excludes);
     messages = controlled.messages;
 

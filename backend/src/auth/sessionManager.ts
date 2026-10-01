@@ -5,7 +5,7 @@ import { TaskManager } from "../agent/taskManager.js";
 import { MessageBus } from "../agent/messageBus.js";
 import { TeammateManager } from "../agent/teammateManager.js";
 import { config } from "../config.js";
-import { setActiveTeamId } from "../team/sessionBridge.js";
+import { getTeamManager, setActiveTeamId } from "../team/sessionBridge.js";
 import { reconcileChangeSetReviewRuns } from "../chat/changeSetReviewRun.js";
 import { warmTypeScriptLanguageService } from "../utils/typescriptLanguageService.js";
 import { hashPassword, hashPasswordAsync, isPasswordHash, verifyPassword, verifyPasswordAsync } from "./password.js";
@@ -116,6 +116,8 @@ export function setCreateSessionSingletonsForTests(
 
 export class SessionManager {
   private sessions = new Map<string, UserSession>();
+  private sessionParents = new Map<string, string>();
+  private windowWorkspaceRoots = new Map<string, Set<string>>();
   private revokedListeners = new Set<(token: string) => void>();
   private loadedConfigFromFile = false;
   private configRevision = 0;
@@ -343,7 +345,14 @@ export class SessionManager {
   }
 
   private deleteSession(token: string): void {
-    if (!this.sessions.delete(token)) return;
+    const session = this.sessions.get(token);
+    if (!session || !this.sessions.delete(token)) return;
+    setActiveTeamId(session, null);
+    this.sessionParents.delete(token);
+    this.windowWorkspaceRoots.delete(token);
+    for (const [child, parent] of this.sessionParents) {
+      if (parent === token) this.deleteSession(child);
+    }
     for (const listener of this.revokedListeners) listener(token);
   }
 
@@ -404,10 +413,11 @@ export class SessionManager {
     username: string,
     workspaceDir: string,
     isAdmin: boolean,
-    isolated = false
+    isolated = false,
+    options: { trustedResolvedWorkspace?: boolean } = {}
   ): SessionSummary {
     const resolvedWorkspace = path.resolve(workspaceDir);
-    if (!isolated && !this.isAllowedPath(resolvedWorkspace)) {
+    if (!isolated && !options.trustedResolvedWorkspace && !this.isAllowedPath(resolvedWorkspace)) {
       throw new Error("Workspace is not within allowed roots");
     }
     fs.mkdirSync(resolvedWorkspace, { recursive: true });
@@ -421,7 +431,17 @@ export class SessionManager {
             return null;
           }
         })()
-      : this.resolveSelectableWorkspace(resolvedWorkspace);
+      : options.trustedResolvedWorkspace
+        ? (() => {
+            try {
+              return fs.statSync(resolvedWorkspace).isDirectory()
+                ? fs.realpathSync.native(resolvedWorkspace)
+                : null;
+            } catch {
+              return null;
+            }
+          })()
+        : this.resolveSelectableWorkspace(resolvedWorkspace);
     if (!canonicalWorkspace) {
       throw new Error(isolated
         ? "Workspace is not an accessible directory"
@@ -463,7 +483,63 @@ export class SessionManager {
     if (!resolved.includes(managedMarker)) {
       throw new Error("Isolated sessions require a managed worktree");
     }
-    return this.createSession(parent.username, resolved, parent.isAdmin, true);
+    const summary = this.createSession(parent.username, resolved, parent.isAdmin, true);
+    const rootToken = this.sessionParents.get(parentToken) || parentToken;
+    this.sessionParents.set(summary.token, rootToken);
+    const session = this.sessions.get(summary.token)!;
+    session.expiresAt = parent.expiresAt;
+    return { ...summary, expiresAt: session.expiresAt };
+  }
+
+  /** Each browser document receives its own mutable workspace selection. */
+  createWindowSession(parentToken: string, workspaceDir?: string): SessionSummary {
+    const parent = this.getSession(parentToken);
+    if (!parent) throw new Error("Parent session not found");
+    if (parent.isolated) throw new Error("Isolated sessions cannot open an unlocked window session");
+    const rootToken = this.sessionParents.get(parentToken) || parentToken;
+    const root = this.getSession(rootToken)!;
+    const requested = workspaceDir || parent.workspaceDir;
+    let workspaceRoot = root.workspaceRoot;
+    let resolved = root.isAdmin
+      ? this.resolveSelectableWorkspace(requested)
+      : this.resolveSelectableWorkspaceWithinRoot(requested, workspaceRoot);
+    if (!resolved && !root.isAdmin) {
+      for (const trustedRoot of this.windowWorkspaceRoots.get(rootToken) || []) {
+        resolved = this.resolveSelectableWorkspaceWithinRoot(requested, trustedRoot);
+        if (resolved) { workspaceRoot = trustedRoot; break; }
+      }
+      // Joining a team already authorizes its workspace, including on reload.
+      if (!resolved) {
+        const selectable = this.resolveSelectableWorkspace(requested);
+        if (selectable) {
+          for (const team of getTeamManager(root).listTeams(root.username)) {
+            if (!team.role) continue;
+            const authorizedRoot = this.resolveSelectableWorkspace(team.workspaceDir);
+            if (authorizedRoot && isSameOrDescendantPath(selectable, authorizedRoot)) {
+              resolved = selectable;
+              workspaceRoot = authorizedRoot;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!resolved) throw new Error("Path not allowed");
+    const summary = this.createSession(root.username, resolved, root.isAdmin, false, { trustedResolvedWorkspace: true });
+    const session = this.sessions.get(summary.token)!;
+    session.workspaceRoot = workspaceRoot;
+    session.expiresAt = root.expiresAt;
+    this.sessionParents.set(summary.token, rootToken);
+    return { ...summary, workspaceRoot, expiresAt: session.expiresAt };
+  }
+
+  hasOtherSessionAtWorkspace(workspaceDir: string, excludedToken: string): boolean {
+    for (const token of this.sessions.keys()) {
+      if (token === excludedToken) continue;
+      const session = this.getSession(token, { touch: false });
+      if (session && isSamePath(session.workspaceDir, workspaceDir)) return true;
+    }
+    return false;
   }
 
   login(
@@ -535,7 +611,7 @@ export class SessionManager {
     if (process.env.CREWFORGE_DESKTOP !== "1") return null;
     const now = Date.now();
     for (const session of this.sessions.values()) {
-      if (session.username === "admin" && !session.isolated) {
+      if (session.username === "admin" && !session.isolated && !this.sessionParents.has(session.token)) {
         if (session.expiresAt && now >= session.expiresAt) continue;
         session.lastSeenAt = now;
         return {
@@ -564,6 +640,11 @@ export class SessionManager {
     if ((session.expiresAt !== undefined && now >= session.expiresAt) ||
         (session.lastSeenAt !== undefined && now - session.lastSeenAt >= DESKTOP_SESSION_IDLE_MS) ||
         !this.getUser(session.username)) {
+      this.deleteSession(token);
+      return null;
+    }
+    const parentToken = this.sessionParents.get(token);
+    if (parentToken && !this.getSession(parentToken, options)) {
       this.deleteSession(token);
       return null;
     }
@@ -874,6 +955,11 @@ export class SessionManager {
     session.messageBus = singletons.messageBus;
     session.teammateManager = singletons.teammateManager;
     setActiveTeamId(session, null);
+
+    const rootToken = this.sessionParents.get(token) || token;
+    let roots = this.windowWorkspaceRoots.get(rootToken);
+    if (!roots) { roots = new Set(); this.windowWorkspaceRoots.set(rootToken, roots); }
+    roots.add(canonicalWorkspace);
 
     return { workspaceDir: canonicalWorkspace, workspaceRoot: canonicalWorkspace };
   }

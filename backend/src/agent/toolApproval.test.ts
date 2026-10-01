@@ -44,21 +44,68 @@ test("file writes can be allowed for the current directory session", async () =>
   assert.equal(requests.length, 1);
 });
 
-test("shell commands remain per-action approvals", async () => {
+test("arbitrary shell commands remain per-action approvals", async () => {
   let approvalId = "";
   const session = new ToolApprovalSession((request) => { approvalId = request.approvalId; }, 1000);
   const pending = session.request({
     requestId: "req",
     toolCallId: "call",
     name: "bash",
-    input: { command: "npm test" },
+    input: { command: "node scripts/custom-check.js" },
     risk: "high",
     reason: "execute",
-    scope: "npm test",
+    scope: "node scripts/custom-check.js",
     canAllowSession: false,
   });
   session.resolve(approvalId, "allow_session");
   assert.equal(await pending, "allow_once");
+});
+
+test("local validation shell approvals can be reused without covering arbitrary shell", async () => {
+  const approvalIds: string[] = [];
+  const validation = classifyToolApproval("bash", { command: "npm test" }, { workspaceDir: "/tmp/workspace-a" });
+  assert.equal(validation.kind, "approval");
+  assert.equal(validation.kind === "approval" && validation.risk, "medium");
+  assert.equal(validation.kind === "approval" && validation.canAllowSession, true);
+  const python = classifyToolApproval("process_start", { command: "python3 -m unittest discover" }, { workspaceDir: "/tmp/workspace-a" });
+  assert.equal(python.kind, "approval");
+  assert.equal(python.kind === "approval" && python.risk, "medium");
+  assert.notEqual(python.kind === "approval" && python.sessionKey, validation.kind === "approval" && validation.sessionKey);
+  const otherWorkspace = classifyToolApproval("bash", { command: "ruff check ." }, { workspaceDir: "/tmp/workspace-b" });
+  assert.equal(otherWorkspace.kind, "approval");
+  assert.notEqual(otherWorkspace.kind === "approval" && otherWorkspace.sessionKey, validation.kind === "approval" && validation.sessionKey);
+  const arbitrary = classifyToolApproval("bash", { command: "node scripts/custom-check.js" });
+  assert.equal(arbitrary.kind, "approval");
+  assert.equal(arbitrary.kind === "approval" && arbitrary.risk, "high");
+  for (const command of ["npm test && git status", "python3 -m unittest | cat"]) {
+    const composed = classifyToolApproval("bash", { command }, { workspaceDir: "/tmp/workspace-a" });
+    assert.equal(composed.kind, "approval", command);
+    assert.equal(composed.kind === "approval" && composed.risk, "high", command);
+    assert.equal(composed.kind === "approval" && composed.canAllowSession, false, command);
+  }
+  assert.equal(classifyToolApproval("bash", { command: "ruff check . > result.txt" }, { workspaceDir: "/tmp/workspace-a" }).kind, "blocked");
+
+  const session = new ToolApprovalSession((request) => approvalIds.push(request.approvalId), 1000);
+  const input = {
+    requestId: "req",
+    toolCallId: "call",
+    name: "bash",
+    input: { command: "npm test" },
+    risk: "medium" as const,
+    reason: "validate",
+    scope: "npm test",
+    canAllowSession: true,
+    sessionKey: validation.kind === "approval" ? validation.sessionKey : undefined,
+  };
+  const first = session.request(input);
+  session.resolve(approvalIds[0], "allow_session");
+  assert.equal(await first, "allow_session");
+  assert.equal(await session.request({ ...input, toolCallId: "call-2" }), "allow_session");
+
+  const high = session.request({ ...input, toolCallId: "call-3", input: { command: "node scripts/custom-check.js" }, risk: "high", canAllowSession: false, sessionKey: undefined });
+  assert.equal(approvalIds.length, 2);
+  session.resolve(approvalIds[1], "allow_once");
+  assert.equal(await high, "allow_once");
 });
 
 test("approves current and future medium-risk requests only for one conversation", async () => {
@@ -100,10 +147,10 @@ test("conversation approval never bypasses explicit bash or MCP approval", async
     requestId: "req-bash",
     toolCallId: "call-bash",
     name: "bash",
-    input: { command: "npm test" },
+    input: { command: "node scripts/custom-check.js" },
     risk: "high",
     reason: "compatibility shell",
-    scope: "npm test",
+    scope: "node scripts/custom-check.js",
     canAllowSession: false,
   });
   assert.equal(requests.length, 1);
@@ -180,7 +227,7 @@ test("pending approvals are exposed to the conversation completion gate", async 
 });
 
 test("approval outcomes distinguish timeout, explicit rejection, and cancellation without accepting late decisions", async () => {
-  const input = { conversationId: "conversation", requestId: "request", toolCallId: "call", name: "bash", input: { command: "npm test" }, risk: "high" as const, reason: "run test", scope: "npm test", canAllowSession: false };
+  const input = { conversationId: "conversation", requestId: "request", toolCallId: "call", name: "bash", input: { command: "node scripts/custom-check.js" }, risk: "high" as const, reason: "run script", scope: "node scripts/custom-check.js", canAllowSession: false };
   let approvalId = "";
   const session = new ToolApprovalSession((request) => { approvalId = request.approvalId; }, 10);
   const timeout = session.requestDetailed(input);
@@ -204,7 +251,7 @@ test("bulk conversation approval resolves ordinary actions but preserves high-ri
   const base = { conversationId: "conversation-a", requestId: "request", toolCallId: "write", name: "write_file", input: { path: "src/a.ts" } as Record<string, unknown>, risk: "medium" as const, reason: "action", scope: "action", canAllowSession: true };
   const write = session.requestDetailed(base);
   const pending = [
-    session.requestDetailed({ ...base, toolCallId: "high", name: "bash", input: { command: "npm test" }, risk: "high" }),
+    session.requestDetailed({ ...base, toolCallId: "high", name: "bash", input: { command: "node scripts/custom-check.js" }, risk: "high" }),
     session.requestDetailed({ ...base, toolCallId: "plan", name: "submit_plan", canAllowSession: false }),
     session.requestDetailed({ ...base, toolCallId: "network", name: "bash", input: { command: "curl https://example.test", allow_network: true } }),
     session.requestDetailed({ ...base, conversationId: "conversation-b", toolCallId: "other" }),
@@ -226,7 +273,7 @@ test("a cached directory grant cannot authorize high-risk actions or an explicit
   const base = { requestId: "request", toolCallId: "write", name: "write_file", input: { path: "src/a.ts" }, risk: "medium" as const, reason: "write", scope: "src", canAllowSession: true, sessionKey: "write_file:src" };
   const write = session.request(base); session.resolve(id, "allow_session");
   assert.equal(await write, "allow_session");
-  const high = session.request({ ...base, toolCallId: "high", name: "bash", risk: "high" });
+  const high = session.request({ ...base, toolCallId: "high", name: "bash", input: { command: "node scripts/custom-check.js" }, risk: "high" });
   const plan = session.request({ ...base, toolCallId: "plan", name: "submit_plan" });
   assert.equal(session.pendingCount(), 2);
   session.cancelAll();

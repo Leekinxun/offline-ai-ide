@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createCheckpoint } from "../chat/checkpoints.js";
+import { createCheckpoint, restoreCheckpoint } from "../chat/checkpoints.js";
 import { captureCheckpointMutationsDetailed, keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
+
+test("older snapshots containing binary caches remain restorable without creating validation gaps", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-old-cache-snapshot-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "app.py"), "value = 1\n");
+  const checkpoint = createCheckpoint(workspace);
+  const manifestPath = path.join(workspace, ".checkpoints/manifests", `${checkpoint.id}.json`);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const cache = Buffer.from([0, 1, 2]); const sha256 = crypto.createHash("sha256").update(cache).digest("hex");
+  fs.writeFileSync(path.join(workspace, ".checkpoints/blobs", sha256), cache);
+  manifest.changes.push({ operation: "upsert", path: "__pycache__/app.cpython-312.pyc", sha256, size: cache.length });
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  fs.writeFileSync(path.join(workspace, "app.py"), "value = 2\n");
+  const capture = captureCheckpointMutationsDetailed(workspace, { checkpointId: checkpoint.id, runId: "old-cache", toolCallId: "check" });
+  assert.deepEqual(capture.records.map((record) => record.path), ["app.py"]);
+  assert.deepEqual(capture.skipped, []);
+  assert.deepEqual(listMutationEvidenceGaps(workspace), []);
+  restoreCheckpoint(workspace, checkpoint.id);
+  assert.equal(fs.readFileSync(path.join(workspace, "app.py"), "utf8"), "value = 1\n");
+});
 
 test("mutation rollback refuses manual edits and can target a run tool and file", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mutations-"));
@@ -65,6 +86,37 @@ test("checkpoint mutation capture excludes protected runtime artifacts", (t) => 
   assert.equal(records[0].requestId, "turn-one");
   assert.deepEqual(listFileMutations(workspace, { path: ".history/runtime.json" }), []);
   assert.throws(() => recordFileMutation({ workspaceDir: workspace, path: ".history/runtime.json", source: "assistant_tool", postimageContent: "internal" }));
+});
+
+test("checkpoint mutation capture ignores Python and Ruff cache artifacts", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mutation-cache-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "source.py"), "before\n");
+  const baseline = createCheckpoint(workspace);
+  fs.writeFileSync(path.join(workspace, "source.py"), "after\n");
+  fs.mkdirSync(path.join(workspace, "__pycache__"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "__pycache__", "source.cpython-312.pyc"), Buffer.from([0, 1, 2]));
+  fs.mkdirSync(path.join(workspace, ".ruff_cache"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".ruff_cache", "cache.bin"), Buffer.from([0, 3, 4]));
+  const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", requestId: "turn-one", toolCallId: "tool" });
+  assert.deepEqual(result.records.map((record) => record.path), ["source.py"]);
+  assert.deepEqual(result.skipped, []);
+});
+
+test("checkpoint mutation capture ignores Python and Ruff cache artifacts", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mutation-cache-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "app.py"), "value = 1\n");
+  const baseline = createCheckpoint(workspace);
+  fs.mkdirSync(path.join(workspace, "pkg", "__pycache__"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".ruff_cache"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "app.py"), "value = 2\n");
+  fs.writeFileSync(path.join(workspace, "pkg", "__pycache__", "app.cpython-312.pyc"), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(workspace, ".ruff_cache", "CACHEDIR.TAG"), "cache");
+
+  const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" });
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.records.map((record) => record.path), ["app.py"]);
 });
 
 test("rollback refuses symlink-swapped files and parents without partial writes", (t) => {

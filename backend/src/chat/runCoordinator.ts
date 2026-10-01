@@ -1,12 +1,12 @@
 import { WebSocket } from "ws";
 import type { AgentMode, WsServerMessage } from "../agent/types.js";
-import { sessionManager, type UserSession } from "../auth/sessionManager.js";
-import { ToolApprovalSession, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
+import { isSameOrDescendantPath, sessionManager, type UserSession } from "../auth/sessionManager.js";
+import { ToolApprovalSession, createToolApprovalGrants, type ToolApprovalGrants, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
 import type { ChatAttachmentRef } from "./attachments.js";
 import type { ExecutionPlan } from "./executionPlans.js";
 import type { AgentRunRecorder } from "./runHistory.js";
 import { redactSecrets } from "../agent/secretRedaction.js";
-import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam } from "../team/sessionBridge.js";
+import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "../team/sessionBridge.js";
 import { subscribeTeamAccessChanges } from "../team/teamManager.js";
 import { stopAgentProcesses } from "../agent/processTools.js";
 import fs from "node:fs";
@@ -108,6 +108,18 @@ export interface RunCommandResult {
 type EventListener = (event: ChatRunEvent) => void;
 const runs = new Map<string, ActiveChatRun>();
 const listeners = new Map<string, Set<EventListener>>();
+// Authorization survives continuation runs, but is never shared across login
+// sessions, workspaces, or conversations. Keep the in-memory cache bounded.
+const approvalGrants = new Map<string, { token: string; grants: ToolApprovalGrants }>();
+
+function conversationApprovalGrants(token: string, workspace: string, conversation: string): ToolApprovalGrants {
+  const grantKey = `${token}\0${canonicalWorkspace(workspace)}\0${conversation}`;
+  const entry = approvalGrants.get(grantKey) || { token, grants: createToolApprovalGrants() };
+  approvalGrants.delete(grantKey);
+  approvalGrants.set(grantKey, entry);
+  if (approvalGrants.size > 512) approvalGrants.delete(approvalGrants.keys().next().value!);
+  return entry.grants;
+}
 
 subscribeAgentQuestionChanges((change) => {
   const run = runs.get(key(change.workspaceDir, change.conversationId));
@@ -179,7 +191,9 @@ export function assertPrimaryWriteAvailable(workspaceDir: string, conversationId
   if (mode !== "code") return;
   const workspace = canonicalWorkspace(workspaceDir);
   const conflict = [...runs.values()].find((run) => (run.conversationId !== conversationId || run.workspaceDir !== workspaceDir)
-    && run.currentRecorder.snapshot().mode === "code" && canonicalWorkspace(run.workspaceDir) === workspace);
+    && run.currentRecorder.snapshot().mode === "code"
+    && (isSameOrDescendantPath(canonicalWorkspace(run.workspaceDir), workspace)
+      || isSameOrDescendantPath(workspace, canonicalWorkspace(run.workspaceDir))));
   if (conflict) throw new Error("Another Code task is writing this workspace. Wait for it to finish, or open an isolated window/worktree before starting another Code task. Ask, Plan and Review can run in parallel.");
 }
 
@@ -220,7 +234,7 @@ export class ActiveChatRun {
     this.queueSteering = input.queueSteering;
     this.approvals = new ToolApprovalSession((request) => {
       this.emit({ type: "tool_approval_request", ...request });
-    });
+    }, undefined, conversationApprovalGrants(this.ownerSessionToken, this.workspaceDir, this.conversationId));
     // The agent only uses readyState and send. The transport survives browser
     // disconnects so a run can finish and be observed by another device.
     this.transport = {
@@ -260,7 +274,7 @@ export class ActiveChatRun {
     if (this.teamId) {
       try {
         const team = getTeamManager(this.ownerSession).getTeamDetails(this.teamId, this.ownerUsername);
-        if (team.workspaceDir === this.workspaceDir && team.role !== "viewer") return;
+        if (teamWorkspaceContains(team.workspaceDir, this.workspaceDir) && team.role !== "viewer") return;
       } catch { /* The owner is no longer a team member. */ }
       this.forceStop("Team permission changed; stopping current AI run...");
     }
@@ -327,7 +341,7 @@ export class ActiveChatRun {
     if (this.teamId) {
       try {
         const team = getTeamManager(session).getTeamDetails(this.teamId, session.username);
-        if (team.workspaceDir !== this.workspaceDir || team.role === "viewer") return { ok: false, code: "forbidden" };
+        if (!teamWorkspaceContains(team.workspaceDir, this.workspaceDir) || team.role === "viewer") return { ok: false, code: "forbidden" };
       } catch { return { ok: false, code: "forbidden" }; }
     }
     if (command.type === "stop") {
@@ -388,6 +402,9 @@ export async function dispatchRunCommand(session: UserSession, command: RunComma
 
 /** Called when a desktop session is explicitly revoked (logout, password reset, expiry). */
 export function stopRunsForSession(token: string): number {
+  for (const [grantKey, entry] of approvalGrants) {
+    if (entry.token === token) approvalGrants.delete(grantKey);
+  }
   let stopped = 0;
   for (const run of runs.values()) {
     if (run.ownerSessionToken === token && run.forceStop("Session ended; stopping current AI run...")) stopped += 1;
