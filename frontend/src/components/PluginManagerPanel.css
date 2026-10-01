@@ -98,3 +98,256 @@
     grid-template-columns: 1fr;
   }
 }
+
+.settings-plugin-install-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-panel);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-plugin-install-hint code {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-workbench);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.settings-plugin-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings-plugin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-plugin-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.settings-plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-plugin-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+
+.settings-plugin-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-plugin-side {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.settings-plugin-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-plugin-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-plugin-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-status-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-status-badge.loaded,
+.settings-status-badge.enabled {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+}
+
+.settings-status-badge.failed {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.settings-status-badge.disabled,
+.settings-status-badge.disabled-state {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+}
+
+.settings-status-badge.detected,
+.settings-status-badge.neutral {
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+}
+
+.settings-status-badge.overridden {
+  background: var(--status-purple-bg);
+  color: var(--status-purple-fg);
+}
+
+.settings-plugin-version {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.settings-plugin-toggle {
+  min-width: 92px;
+}
+
+.settings-plugin-toggle.enabled {
+  border-color: rgba(255, 149, 0, 0.28);
+}
+
+.settings-plugin-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-plugin-restore {
+  min-width: 88px;
+}
+
+.settings-plugin-description {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.settings-plugin-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-workbench);
+  border: 1px solid var(--line-subtle);
+}
+
+.settings-plugin-commands-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.settings-plugin-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-plugin-command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-panel);
+  border: 1px solid var(--line-subtle);
+}
+
+.settings-plugin-command-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-plugin-command-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-plugin-command-id,
+.settings-plugin-command-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.settings-plugin-command-description {
+  font-family: var(--font-sans);
+}
+
+.settings-plugin-command-run {
+  min-width: 84px;
+}
+
+.settings-plugin-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+  border: 1px solid var(--status-info-bg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-plugin-message.error {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  border-color: var(--status-danger-bg);
+}
+
+.settings-plugin-empty {
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-subtle);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.settings-plugin-empty.subtle {
+  padding: 14px;
+}

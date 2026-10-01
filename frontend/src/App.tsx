@@ -3561,7 +3561,8 @@ function AuthenticatedApp({
           onKeyDown={(e) => handlePanelResizeKeyDown("sidebar", e)}
         />
 
-        <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
+        <div className="workbench-center-viewport">
+          <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
           <TabBar
             openFiles={openFiles}
             activeFilePath={activeFilePath}
@@ -3891,36 +3892,7 @@ function AuthenticatedApp({
               />
             )}
           </div>
-          {terminalVisible && (
-            <div
-              className={`terminal-resize-handle${draggingPanel === "terminal" ? " dragging" : ""}`}
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label={t("terminal.resize")}
-              aria-valuemin={140}
-              aria-valuemax={680}
-              aria-valuenow={terminalHeight}
-              tabIndex={0}
-              onMouseDown={handleTerminalResizeStart}
-              onKeyDown={handleTerminalResizeKeyDown}
-            />
-          )}
-          <Terminal
-            key={workspaceDir}
-            visible={terminalVisible}
-            style={{ height: terminalHeight }}
-            token={token}
-            disabled={readOnlyWorkspace}
-            disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
-            drawerMode={isMobileViewport}
-            onClose={() => setTerminalVisible(false)}
-          />
         </div>
-
-        <div
-          className={`resize-handle${!chatVisible || workspaceView === "chat" ? " hidden" : ""}${draggingPanel === "chat" ? " dragging" : ""}`}
-          onMouseDown={(e) => handleResizeStart("chat", e)}
-        />
 
         <ChatPanel
           token={token}
@@ -4016,6 +3988,32 @@ function AuthenticatedApp({
           onPlanAmendmentDecision={chat.decidePlanAmendment}
           style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
         />
+
+        {terminalVisible && (
+          <div
+            className={`terminal-resize-handle${draggingPanel === "terminal" ? " dragging" : ""}`}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={t("terminal.resize")}
+            aria-valuemin={140}
+            aria-valuemax={680}
+            aria-valuenow={terminalHeight}
+            tabIndex={0}
+            onMouseDown={handleTerminalResizeStart}
+            onKeyDown={handleTerminalResizeKeyDown}
+          />
+        )}
+        <Terminal
+          key={workspaceDir}
+          visible={terminalVisible}
+          style={{ height: terminalHeight }}
+          token={token}
+          disabled={readOnlyWorkspace}
+          disabledReason={readOnlyWorkspace ? t("terminal.readOnlyDisabled") : null}
+          drawerMode={isMobileViewport}
+          onClose={() => setTerminalVisible(false)}
+        />
+      </div>
         {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
