@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveModelSampling } from "../config.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { OpenAIMessage } from "./types.js";
 import { redactSecrets } from "./secretRedaction.js";
@@ -204,6 +205,7 @@ export async function compactMessages(options: {
     serialized,
   ].join("\n");
 
+  const modelSampling = resolveModelSampling(options.model);
   const processed = await processModelTurn({
     apiUrl: options.apiUrl,
     apiKey: options.apiKey,
@@ -213,7 +215,10 @@ export async function compactMessages(options: {
     messages: [{ role: "user", content: prompt }],
     fallbackMaxOutputTokens: 2000,
     maxOutputTokens: 2000,
-    temperature: 0.1,
+    temperature: modelSampling.temperature,
+    topP: modelSampling.topP,
+    frequencyPenalty: modelSampling.frequencyPenalty,
+    presencePenalty: modelSampling.presencePenalty,
     signal: options.signal,
     contextAudit: {
       storeWorkspaceDir: options.contextAudit?.storeWorkspaceDir || options.workspaceDir,
