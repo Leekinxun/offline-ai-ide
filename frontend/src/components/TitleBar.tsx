@@ -2,16 +2,18 @@ import React from "react";
 import {
   Command,
   FolderOpen,
-  LayoutGrid,
   LogOut,
   Maximize2,
   MessageSquare,
   Minimize2,
+  Minus,
   Moon,
   PanelLeft,
+  Plus,
   Settings,
   Smartphone,
   Sun,
+  ZoomIn,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { BrandMark } from "./BrandMark";
@@ -46,8 +48,10 @@ export interface TitleBarProps {
   teamRole?: string | null;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  density: "compact" | "normal";
-  onToggleDensity: () => void;
+  zoomPercent: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
   onOpenSettings: () => void;
   desktopApp?: boolean;
   onOpenMobilePairing?: () => void;
@@ -77,8 +81,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   teamRole,
   theme,
   onToggleTheme,
-  density,
-  onToggleDensity,
+  zoomPercent,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
   onOpenSettings,
   desktopApp,
   onOpenMobilePairing,
@@ -196,10 +202,42 @@ export const TitleBar: React.FC<TitleBarProps> = ({
               </span>
               <span className="user-popover-hint">{theme === "light" ? "深色" : "浅色"}</span>
             </button>
-            <button type="button" onClick={onToggleDensity}>
-              <LayoutGrid size={15} />
-              <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
-            </button>
+            <div className="user-popover-zoom-row">
+              <span className="user-popover-zoom-label">
+                <ZoomIn size={15} />
+                <span>缩放 ({zoomPercent}%)</span>
+              </span>
+              <div className="user-popover-zoom-actions">
+                <button
+                  type="button"
+                  className="user-popover-zoom-btn"
+                  onClick={onZoomOut}
+                  title="缩小 (Ctrl -)"
+                  aria-label="缩小"
+                >
+                  <Minus size={11} strokeWidth={2.2} />
+                </button>
+                {zoomPercent !== 100 && (
+                  <button
+                    type="button"
+                    className="user-popover-zoom-btn reset"
+                    onClick={onResetZoom}
+                    title="重置 (Ctrl 0)"
+                  >
+                    重置
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="user-popover-zoom-btn"
+                  onClick={onZoomIn}
+                  title="放大 (Ctrl +)"
+                  aria-label="放大"
+                >
+                  <Plus size={11} strokeWidth={2.2} />
+                </button>
+              </div>
+            </div>
             <button type="button" onClick={onOpenSettings}>
               <Settings size={15} />
               <span>{t("app.settings")}</span>

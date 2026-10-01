@@ -37,6 +37,9 @@ export interface WorkbenchModalsProps {
   editorFont: string;
   editorFontOptions: { label: string; family: string }[];
   onEditorFontChange: (font: string) => void;
+  zoomLevel?: number;
+  onZoomChange?: (level: number) => void;
+  onResetZoom?: () => void;
 
   // Mobile Pairing
   mobilePairingVisible: boolean;
@@ -98,6 +101,9 @@ export const WorkbenchModals: React.FC<WorkbenchModalsProps> = ({
   editorFont,
   editorFontOptions,
   onEditorFontChange,
+  zoomLevel,
+  onZoomChange,
+  onResetZoom,
 
   mobilePairingVisible,
   desktopApp,
@@ -152,6 +158,9 @@ export const WorkbenchModals: React.FC<WorkbenchModalsProps> = ({
             editorFont={editorFont}
             editorFontOptions={editorFontOptions}
             onEditorFontChange={onEditorFontChange}
+            zoomLevel={zoomLevel}
+            onZoomChange={onZoomChange}
+            onResetZoom={onResetZoom}
             onClose={onCloseSettings}
             onShowToast={showToast}
           />

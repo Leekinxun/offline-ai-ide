@@ -126,34 +126,7 @@
   --focus-ring: 0 0 0 3px rgba(122, 162, 255, 0.2);
 }
 
-/* 紧凑密度模式 (可由小屏自适应触发或用户手动切换) */
-[data-density="compact"] {
-  --titlebar-height: 40px;
-  --statusbar-height: 22px;
-  --tabbar-height: 32px;
-  --control-height: 26px;
-  --panel-header-height: 34px;
-  --font-size-base: 12.5px;
-  --font-size-meta: 11px;
-  --activity-rail-width: 46px;
-  --sidebar-workbench-width: 240px;
-  --chat-width: 340px;
-}
-
-@media (max-height: 740px), (max-width: 1180px) {
-  :root {
-    --titlebar-height: 40px;
-    --statusbar-height: 22px;
-    --tabbar-height: 32px;
-    --control-height: 26px;
-    --panel-header-height: 34px;
-    --font-size-base: 12.5px;
-    --font-size-meta: 11px;
-    --activity-rail-width: 46px;
-    --sidebar-workbench-width: 240px;
-    --chat-width: 340px;
-  }
-}
+/* 全局缩放与操作系统字系微调 */
 
 /* 针对不同操作系统的首选字系微调 */
 [data-os="windows"] {
@@ -170,6 +143,16 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  max-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -312,7 +295,10 @@ body {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
+  max-height: 100%;
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
   background: var(--surface-workbench);
 }
@@ -417,6 +403,7 @@ body {
 .main-layout {
   display: flex;
   flex: 1;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   background: var(--bg-primary);

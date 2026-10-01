@@ -28,7 +28,7 @@ import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
 import { usePlatformEnvironment } from "./hooks/usePlatformEnvironment";
-import { useViewportBreakpoint } from "./hooks/useViewportBreakpoint";
+import { useGlobalZoom } from "./hooks/useGlobalZoom";
 import {
   usePanelLayout,
   FILES_ACTIVITY_WIDTH,
@@ -146,7 +146,6 @@ function DesktopApp() {
   const { t } = useI18n();
   const auth = useAuth();
   const platform = usePlatformEnvironment(auth.user?.desktop);
-  const viewport = useViewportBreakpoint();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
     return (saved as "light" | "dark") || "light";
@@ -160,30 +159,16 @@ function DesktopApp() {
   );
   const [sessionExpired, setSessionExpired] = useState(false);
 
-  const [userDensityOverride, setUserDensityOverride] = useState<"normal" | "compact" | null>(() => {
-    return (localStorage.getItem("user-density") as "normal" | "compact" | null) || null;
-  });
-  const currentDensity = userDensityOverride || viewport.recommendedDensity;
-
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-os", platform.os);
     document.documentElement.setAttribute("data-platform", platform.host);
-    document.documentElement.setAttribute("data-density", currentDensity);
     localStorage.setItem("theme", theme);
-  }, [theme, platform.os, platform.host, currentDensity]);
+  }, [theme, platform.os, platform.host]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
-
-  const toggleDensity = useCallback(() => {
-    setUserDensityOverride((prev) => {
-      const next = (prev || viewport.recommendedDensity) === "compact" ? "normal" : "compact";
-      localStorage.setItem("user-density", next);
-      return next;
-    });
-  }, [viewport.recommendedDensity]);
 
   const changeEditorFont = useCallback((fontFamily: string) => {
     setEditorFont(fontFamily);
@@ -274,8 +259,6 @@ function DesktopApp() {
       onPickDesktopWorkspace={auth.pickDesktopWorkspace}
       theme={theme}
       onToggleTheme={toggleTheme}
-      density={currentDensity}
-      onToggleDensity={toggleDensity}
       editorFont={editorFont}
       editorFontOptions={EDITOR_FONT_OPTIONS}
       onEditorFontChange={changeEditorFont}
@@ -296,8 +279,6 @@ interface AuthenticatedAppProps {
   onPickDesktopWorkspace: () => Promise<DesktopFolderPickResult>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  density: "normal" | "compact";
-  onToggleDensity: () => void;
   editorFont: string;
   editorFontOptions: typeof EDITOR_FONT_OPTIONS;
   onEditorFontChange: (fontFamily: string) => void;
@@ -328,15 +309,12 @@ function AuthenticatedApp({
   onPickDesktopWorkspace,
   theme,
   onToggleTheme,
-  density,
-  onToggleDensity,
   editorFont,
   editorFontOptions,
   onEditorFontChange,
 }: AuthenticatedAppProps) {
   const { t } = useI18n();
   const platform = usePlatformEnvironment(desktopApp);
-  const viewport = useViewportBreakpoint();
   const editorProblems = useEditorProblems();
   // --- State ---
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
@@ -466,6 +444,8 @@ function AuthenticatedApp({
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  const { zoomLevel, zoomPercent, zoomIn, zoomOut, resetZoom, setZoom } = useGlobalZoom(showToast);
 
   const team = useTeam(token, workspaceDir, (nextWorkspace) => {
     if (nextWorkspace !== workspaceDir) {
@@ -1315,7 +1295,6 @@ function AuthenticatedApp({
       className="app"
       data-os={platform.os}
       data-platform={platform.host}
-      data-density={viewport.recommendedDensity}
     >
       {/* Title Bar */}
       <TitleBar
@@ -1340,8 +1319,10 @@ function AuthenticatedApp({
         teamRole={team.activeTeam?.role || null}
         theme={theme}
         onToggleTheme={onToggleTheme}
-        density={density}
-        onToggleDensity={onToggleDensity}
+        zoomPercent={zoomPercent}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onResetZoom={resetZoom}
         onOpenSettings={() => setSettingsVisible(true)}
         desktopApp={desktopApp}
         onOpenMobilePairing={() => setMobilePairingVisible(true)}
@@ -1395,7 +1376,10 @@ function AuthenticatedApp({
           onOpenMobilePairing={() => setMobilePairingVisible(true)}
           onOpenSettings={() => setSettingsVisible(true)}
           onToggleTheme={onToggleTheme}
-          onToggleDensity={onToggleDensity}
+          zoomPercent={zoomPercent}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onResetZoom={resetZoom}
           onPickDesktopWorkspace={() => void onPickDesktopWorkspace()}
           onLogout={onLogout}
           changedFilesCount={chat.currentRunSummary?.changedFiles.length || 0}
@@ -1404,7 +1388,6 @@ function AuthenticatedApp({
           desktopApp={desktopApp}
           platform={platform}
           theme={theme}
-          density={density}
           username={username}
           isAdmin={isAdmin}
           teamRole={team.activeTeam?.role || null}
@@ -1785,6 +1768,9 @@ function AuthenticatedApp({
         editorFont={editorFont}
         editorFontOptions={editorFontOptions}
         onEditorFontChange={onEditorFontChange}
+        zoomLevel={zoomLevel}
+        onZoomChange={setZoom}
+        onResetZoom={resetZoom}
         mobilePairingVisible={mobilePairingVisible}
         desktopApp={desktopApp}
         onCloseMobilePairing={() => setMobilePairingVisible(false)}

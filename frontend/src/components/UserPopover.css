@@ -224,3 +224,106 @@
 .user-popover-shell button.user-popover-logout:hover svg {
   color: var(--danger);
 }
+
+/* 缩放控制微卡片 */
+.user-popover-zoom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 6px 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background var(--transition);
+}
+
+.user-popover-zoom-row:hover {
+  background: var(--bg-hover);
+}
+
+.user-popover-zoom-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color var(--transition);
+}
+
+.user-popover-zoom-row:hover .user-popover-zoom-label {
+  color: var(--text-primary);
+}
+
+.user-popover-zoom-label svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: color var(--transition);
+}
+
+.user-popover-zoom-row:hover .user-popover-zoom-label svg {
+  color: var(--text-primary);
+}
+
+.user-popover-zoom-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid var(--line-subtle);
+  border-radius: 5px;
+  padding: 1px;
+}
+
+.user-popover-shell .user-popover-zoom-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: all var(--transition) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn svg {
+  color: var(--text-secondary) !important;
+  transition: color var(--transition) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn:hover svg {
+  color: var(--text-primary) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn:active {
+  background: var(--bg-active) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn.reset {
+  width: auto !important;
+  padding: 0 5px !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  color: var(--text-tertiary) !important;
+}
+
+.user-popover-shell .user-popover-zoom-btn.reset:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+

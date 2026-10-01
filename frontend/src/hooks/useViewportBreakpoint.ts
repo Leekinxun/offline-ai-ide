@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 
 export type BreakpointCategory = "compact" | "laptop" | "desktop" | "ultrawide";
-export type LayoutDensity = "normal" | "compact";
 
 export interface ViewportBreakpointState {
   width: number;
@@ -9,7 +8,6 @@ export interface ViewportBreakpointState {
   breakpoint: BreakpointCategory;
   isCompactWidth: boolean;
   isShortHeight: boolean;
-  recommendedDensity: LayoutDensity;
 }
 
 function getBreakpointCategory(width: number): BreakpointCategory {
@@ -27,7 +25,6 @@ function getViewportState(): ViewportBreakpointState {
       breakpoint: "laptop",
       isCompactWidth: false,
       isShortHeight: false,
-      recommendedDensity: "normal",
     };
   }
 
@@ -36,7 +33,6 @@ function getViewportState(): ViewportBreakpointState {
   const breakpoint = getBreakpointCategory(width);
   const isCompactWidth = width < 1200;
   const isShortHeight = height < 750;
-  const recommendedDensity: LayoutDensity = (isShortHeight || width < 1200) ? "compact" : "normal";
 
   return {
     width,
@@ -44,7 +40,6 @@ function getViewportState(): ViewportBreakpointState {
     breakpoint,
     isCompactWidth,
     isShortHeight,
-    recommendedDensity,
   };
 }
 

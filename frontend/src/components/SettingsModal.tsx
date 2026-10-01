@@ -43,6 +43,7 @@ import { ModelGovernancePanel } from "./ModelGovernancePanel";
 import { ActionConfirmDialog } from "./ActionConfirmDialog";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import { ZOOM_PRESET_OPTIONS } from "../hooks/useGlobalZoom";
 
 export type SettingsTabId =
   | "general"
@@ -65,6 +66,9 @@ interface SettingsModalProps {
   editorFont: string;
   editorFontOptions: EditorFontOption[];
   onEditorFontChange: (fontFamily: string) => void;
+  zoomLevel?: number;
+  onZoomChange?: (level: number) => void;
+  onResetZoom?: () => void;
   onClose: () => void;
   onShowToast: (message: string) => void;
   initialTab?: SettingsTabId;
@@ -231,6 +235,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   editorFont,
   editorFontOptions,
   onEditorFontChange,
+  zoomLevel = 1.0,
+  onZoomChange,
+  onResetZoom,
   onClose,
   onShowToast,
   initialTab,
@@ -1111,7 +1118,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           options={editorFontOptions.map((option) => ({ value: option.family, label: option.label }))}
                         />
                       </div>
-                      <div className="settings-help-text">{t("settings.languageHelp")}</div>
+                      {onZoomChange && (
+                        <div className="settings-field settings-field-wide">
+                          <span>界面全局缩放 (Zoom)</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
+                            <WorkbenchSelect
+                              label="界面全局缩放"
+                              value={String(zoomLevel)}
+                              onChange={(val) => onZoomChange(Number(val))}
+                              options={ZOOM_PRESET_OPTIONS.map((opt) => ({
+                                value: String(opt.value),
+                                label: opt.label,
+                              }))}
+                            />
+                            {zoomLevel !== 1.0 && onResetZoom && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                onClick={onResetZoom}
+                                style={{
+                                  whiteSpace: "nowrap",
+                                  padding: "4px 10px",
+                                  fontSize: "12px",
+                                  cursor: "pointer",
+                                  height: "32px",
+                                }}
+                              >
+                                重置 (100%)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      <div className="settings-help-text">支持快捷键 Ctrl + / - 任意缩放，Ctrl + 0 重置为 100%</div>
                     </div>
                   </section>
 
