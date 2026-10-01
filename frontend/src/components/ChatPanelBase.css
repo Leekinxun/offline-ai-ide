@@ -1262,3 +1262,132 @@
   display: none;
 }
 
+/* ==================== Tool Call Steps / Thinking ==================== */
+.chat-thinking-block {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  margin: 4px 0;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.chat-thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+
+.chat-thinking-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.chat-thinking-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+  color: var(--text-tertiary);
+}
+
+.chat-thinking-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.chat-thinking-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.chat-thinking-preview {
+  color: var(--text-tertiary);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-thinking-body {
+  padding: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid var(--border-light);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ==================== Message Attachments ==================== */
+.chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  margin: 7px 0 0;
+}
+
+.chat-message.user .chat-message-attachments,
+.editor-assistant-message.user .chat-message-attachments {
+  justify-content: flex-end;
+}
+
+.editor-assistant-message .chat-message-attachments {
+  margin-left: 0;
+}
+
+.chat-message-attachment {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-message-attachment-image {
+  display: block;
+  width: auto;
+  max-width: min(100%, 240px);
+  max-height: 180px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.chat-message-attachment > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 27px;
+  padding: 4px 7px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: var(--surface-quiet);
+  color: var(--ink);
+  cursor: pointer;
+  font: 10px var(--font-sans);
+}
+
+.chat-message-attachment > button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-message-attachment > button small {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.settings-model-input-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 8px;
+}
+
