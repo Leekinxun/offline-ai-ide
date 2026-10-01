@@ -1,10 +1,8 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type * as monaco from "monaco-editor";
-import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorToolbar } from "./components/EditorToolbar";
 import { ChatPanel } from "./components/ChatPanel";
-import { TaskSidebar } from "./components/TaskSidebar";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import type { DetailTab } from "./components/RunDetailsPanel";
 import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
@@ -16,6 +14,7 @@ import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityRail } from "./components/ActivityRail";
+import { WorkbenchLeftDock } from "./components/WorkbenchLeftDock";
 import "./components/UserPopover.css";
 import "./components/ActivityRail.css";
 import "./components/Sidebar.css";
@@ -26,12 +25,6 @@ import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
 import { ActionConfirmDialog } from "./components/ActionConfirmDialog";
 import { useModalDialogFocus } from "./components/useModalDialogFocus";
-import { GitPanel } from "./components/GitPanel";
-import { AgentBoard } from "./components/AgentBoard";
-import { CheckpointPanel } from "./components/CheckpointPanel";
-import { ProblemsPanel } from "./components/ProblemsPanel";
-import { RunCenterPanel } from "./components/RunCenterPanel";
-import { DebugPanel } from "./components/DebugPanel";
 import { ReferencePanel } from "./components/ReferencePanel";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
@@ -121,9 +114,6 @@ const SettingsModal = lazy(() =>
 );
 const Editor = lazy(() =>
   import("./components/Editor").then((module) => ({ default: module.Editor }))
-);
-const TeamPanel = lazy(() =>
-  import("./components/TeamPanel").then((module) => ({ default: module.TeamPanel }))
 );
 const DiffViewerModal = lazy(() =>
   import("./components/DiffViewerModal").then((module) => ({ default: module.DiffViewerModal }))
@@ -1454,268 +1444,79 @@ function AuthenticatedApp({
           teamRole={team.activeTeam?.role || null}
         />
         {isLeftDockOpen && (
-          <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
-            {gitVisible ? (
-              <GitPanel
-                key={`git:${workspaceDir}`}
-                visible={true}
-                token={token}
-                workspaceDir={workspaceDir}
-                theme={theme}
-                drawerMode={compactWorkspace}
-                readOnly={readOnlyWorkspace}
-                conversationId={chat.currentConversationId}
-                runId={chat.runState?.runId || null}
-                requestedDiffPath={gitDiffRequest?.path}
-                requestedDiffId={gitDiffRequest?.id}
-                onOpenFile={openFile}
-                onAskReview={handleGitReview}
-                onFollowUpCreated={(result) => { showToast(`${t("delivery.taskCreated", { id: result.taskId })} · ${result.followUpRunId.slice(0, 12)}`); }}
-                onOpenFollowUpRun={async (followUpRunId) => {
-                  await chat.loadRun(followUpRunId);
-                  setRunDetailsTab("delivery");
-                  setRunDetailsVisible(true);
-                  if (compactWorkspace) setGitVisible(false);
-                }}
-                onClose={() => setGitVisible(false)}
-              />
-            ) : agentsVisible ? (
-              <AgentBoard
-                key={`agents:${workspaceDir}`}
-                visible={true}
-                token={token}
-                drawerMode={compactWorkspace}
-                onClose={() => setAgentsVisible(false)}
-              />
-            ) : teamVisible ? (
-              <div className="team-sidebar workspace-drawer-host" style={{ height: "100%", width: "100%" }}>
-                <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-                  <TeamPanel
-                    teams={team.teams}
-                    activeTeam={team.activeTeam}
-                    currentUsername={username}
-                    connected={team.connected}
-                    loading={team.loading}
-                    error={team.error}
-                    activeFilePath={activeFilePath}
-                    collaboration={team.collaboration}
-                    drawerMode={compactWorkspace}
-                    onClose={() => setTeamVisible(false)}
-                    onRefresh={team.refresh}
-                    onCreateTeam={async (name) => {
-                      try {
-                        await team.createTeam(name);
-                        showToast(t("team.createdToast", { name }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onJoinTeam={async (code) => {
-                      try {
-                        const joined = await team.joinTeam(code);
-                        showToast(t("team.joinedToast", { name: joined.name }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onSwitchTeam={async (teamId) => {
-                      try {
-                        const switched = await team.switchTeam(teamId);
-                        showToast(t("team.switchedToast", { name: switched.name }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onCreateInvite={async (teamId, role: TeamRole) => {
-                      try {
-                        const invite = await team.createInvite(teamId, role);
-                        showToast(t("team.inviteCreatedToast", { code: invite.code }));
-                        return invite.code;
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onUpdateMemberRole={async (memberUsername, role) => {
-                      if (!team.activeTeam) return;
-                      try {
-                        await team.updateMemberRole(team.activeTeam.id, memberUsername, role);
-                        showToast(
-                          t("team.roleUpdatedToast", {
-                            username: memberUsername,
-                            role,
-                          })
-                        );
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onTransferOwnership={async (memberUsername) => {
-                      if (!team.activeTeam) return;
-                      try {
-                        await team.transferOwnership(team.activeTeam.id, memberUsername);
-                        showToast(t("team.ownerTransferredToast", { username: memberUsername }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onRemoveMember={async (memberUsername) => {
-                      if (!team.activeTeam) return;
-                      try {
-                        await team.removeMember(team.activeTeam.id, memberUsername);
-                        showToast(t("team.memberRemovedToast", { username: memberUsername }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onLeaveTeam={async () => {
-                      if (!team.activeTeam) return;
-                      const leavingTeamName = team.activeTeam.name;
-                      try {
-                        await team.leaveTeam(team.activeTeam.id);
-                        showToast(t("team.leftTeamToast", { name: leavingTeamName }));
-                      } catch (error) {
-                        showToast(error instanceof Error ? error.message : t("sidebar.operationFailed"));
-                        throw error;
-                      }
-                    }}
-                    onToggleClaim={async (path, claimed) => {
-                      if (!team.activeTeam) return;
-                      await team.setClaim(team.activeTeam.id, path, claimed);
-                      showToast(
-                        claimed
-                          ? t("team.claimedToast", { path })
-                          : t("team.releasedToast", { path })
-                      );
-                    }}
-                    onAddComment={team.addCollaborationComment}
-                    onCreateReview={team.createCollaborationReview}
-                    onCreateMergePreview={team.createMergePreview}
-                    onDecideMerge={team.decideMerge}
-                  />
-                </Suspense>
-              </div>
-            ) : checkpointsVisible ? (
-              <CheckpointPanel
-                key={`checkpoints:${workspaceDir}`}
-                visible={true}
-                token={token}
-                workspaceDir={workspaceDir}
-                conversationId={chat.currentConversationId}
-                runId={chat.runState?.runId || null}
-                readOnly={readOnlyWorkspace}
-                onClose={() => setCheckpointsVisible(false)}
-                onRestored={handleWorkspaceRestored}
-                onOpenWorktree={async (path) => {
-                  await handleChangeWorkspace(path);
-                }}
-                onNotify={showToast}
-              />
-            ) : problemsVisible ? (
-              <ProblemsPanel
-                key={`problems:${workspaceDir}`}
-                visible={true}
-                token={token}
-                editorProblems={editorProblems.problems}
-                onCountsChange={setProblemCounts}
-                onOpenLocation={(problem) => void handleNavigateToLocation(problem.path, {
-                  startLine: problem.line,
-                  startColumn: problem.column,
-                  endLine: problem.line,
-                  endColumn: problem.column + 1,
-                })}
-                onClose={() => setProblemsVisible(false)}
-              />
-            ) : runCenterVisible ? (
-              <RunCenterPanel
-                key={`run:${workspaceDir}`}
-                visible={true}
-                token={token}
-                onRunningChange={setActiveRunLabel}
-                onOpenLocation={(failure) => void handleNavigateToLocation(failure.path, {
-                  startLine: failure.line,
-                  startColumn: failure.column,
-                  endLine: failure.line,
-                  endColumn: failure.column + 1,
-                })}
-                onClose={() => setRunCenterVisible(false)}
-              />
-            ) : debugVisible ? (
-              <DebugPanel
-                key={`debug:${workspaceDir}`}
-                visible={true}
-                token={token}
-                activeFilePath={activeFilePath}
-                cursorLine={cursorPos.line}
-                breakpointsByPath={breakpointsByPath}
-                onToggleBreakpoint={toggleBreakpoint}
-                startRequest={debugStartRequest}
-                onOpenLocation={(frame) => void handleNavigateToLocation(frame.path, {
-                  startLine: frame.line,
-                  startColumn: frame.column,
-                  endLine: frame.line,
-                  endColumn: frame.column + 1,
-                })}
-                onActiveFrameChange={setDebugActiveFrame}
-                onClose={() => setDebugVisible(false)}
-              />
-            ) : workspaceView === "chat" ? (
-              <TaskSidebar
-                workspaceLabel={workspaceLabel}
-                workspaceDir={workspaceDir}
-                conversations={chat.conversations}
-                currentConversationId={chat.currentConversationId}
-                contextState={chat.contextState}
-                loading={chat.historyLoading}
-                loadingId={chat.historyLoadingId}
-                isStreaming={chat.isStreaming}
-                onNewTask={() => {
-                  setNewConversationRequest((value) => value + 1);
-                  setChatFocusNonce((value) => value + 1);
-                }}
-                onLoadConversation={loadChatConversation}
-                onDeleteConversation={chat.deleteConversation}
-                onRefresh={chat.refreshConversations}
-              />
-            ) : (
-              <Sidebar
-                tree={fileTree}
-                activeFilePath={activeFilePath}
-                visible={true}
-                onFileSelect={openFile}
-                onCreateEntry={handleCreateEntry}
-                onCopyEntry={handleCopyEntry}
-                onMoveEntry={handleMoveEntry}
-                onDeleteEntry={handleDeleteEntry}
-                onDeleteEntries={handleDeleteEntries}
-                onRenameEntry={handleRenameEntry}
-                onDownloadEntry={handleDownloadEntry}
-                onUploadEntries={handleUploadEntries}
-                onRefreshTree={loadTree}
-                workspaceDir={workspaceDir}
-                workspaceLocked={isolatedWindow}
-                desktopApp={desktopApp}
-                folderPickerBusy={pickingWorkspace}
-                onPickDesktopWorkspace={handlePickDesktopWorkspace}
-                folderOpenRequestId={folderOpenRequestId}
-                onChangeWorkspace={handleChangeWorkspace}
-                onSearchInPath={(path) => {
-                  setWorkspaceSearchScope(path);
-                  setWorkspaceSearchVisible(true);
-                }}
-                onSearchContent={fs.searchWorkspace}
-                onCancelContentSearch={fs.cancelWorkspaceSearch}
-                token={token}
-                activeTeam={team.activeTeam}
-              />
-            )}
-          </aside>
+          <WorkbenchLeftDock
+            gitVisible={gitVisible}
+            agentsVisible={agentsVisible}
+            teamVisible={teamVisible}
+            checkpointsVisible={checkpointsVisible}
+            problemsVisible={problemsVisible}
+            runCenterVisible={runCenterVisible}
+            debugVisible={debugVisible}
+            workspaceView={workspaceView}
+            token={token}
+            workspaceDir={workspaceDir}
+            workspaceLabel={workspaceLabel}
+            theme={theme}
+            compactWorkspace={compactWorkspace}
+            readOnlyWorkspace={readOnlyWorkspace}
+            isolatedWindow={isolatedWindow}
+            desktopApp={desktopApp}
+            username={username}
+            activeFilePath={activeFilePath}
+            openFile={openFile}
+            onNavigateToLocation={handleNavigateToLocation}
+            onShowToast={showToast}
+            gitDiffRequest={gitDiffRequest}
+            onGitReview={handleGitReview}
+            onOpenFollowUpRun={async (followUpRunId) => {
+              await chat.loadRun(followUpRunId);
+              setRunDetailsTab("delivery");
+              setRunDetailsVisible(true);
+              if (compactWorkspace) setGitVisible(false);
+            }}
+            onCloseGit={() => setGitVisible(false)}
+            onCloseAgents={() => setAgentsVisible(false)}
+            team={team}
+            onCloseTeam={() => setTeamVisible(false)}
+            onCloseCheckpoints={() => setCheckpointsVisible(false)}
+            onWorkspaceRestored={handleWorkspaceRestored}
+            onChangeWorkspace={handleChangeWorkspace}
+            editorProblems={editorProblems.problems}
+            onProblemCountsChange={setProblemCounts}
+            onCloseProblems={() => setProblemsVisible(false)}
+            onRunningChange={setActiveRunLabel}
+            onCloseRunCenter={() => setRunCenterVisible(false)}
+            cursorPos={cursorPos}
+            breakpointsByPath={breakpointsByPath}
+            onToggleBreakpoint={toggleBreakpoint}
+            debugStartRequest={debugStartRequest}
+            onActiveFrameChange={setDebugActiveFrame}
+            onCloseDebug={() => setDebugVisible(false)}
+            chat={chat}
+            onNewTask={() => {
+              setNewConversationRequest((value) => value + 1);
+              setChatFocusNonce((value) => value + 1);
+            }}
+            onLoadConversation={loadChatConversation}
+            fileTree={fileTree}
+            onCreateEntry={handleCreateEntry}
+            onCopyEntry={handleCopyEntry}
+            onMoveEntry={handleMoveEntry}
+            onDeleteEntry={handleDeleteEntry}
+            onDeleteEntries={handleDeleteEntries}
+            onRenameEntry={handleRenameEntry}
+            onDownloadEntry={handleDownloadEntry}
+            onUploadEntries={handleUploadEntries}
+            onRefreshTree={loadTree}
+            pickingWorkspace={pickingWorkspace}
+            onPickDesktopWorkspace={handlePickDesktopWorkspace}
+            folderOpenRequestId={folderOpenRequestId}
+            onSearchInPath={(path) => {
+              setWorkspaceSearchScope(path);
+              setWorkspaceSearchVisible(true);
+            }}
+            fs={fs}
+          />
         )}
 
         <div
