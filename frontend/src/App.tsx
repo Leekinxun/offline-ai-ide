@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type * as monaco from "monaco-editor";
 import { ChatPanel } from "./components/ChatPanel";
-import { RunDetailsPanel } from "./components/RunDetailsPanel";
+import { WorkbenchRightDock } from "./components/WorkbenchRightDock";
+import { WorkbenchModals } from "./components/WorkbenchModals";
 import type { DetailTab } from "./components/RunDetailsPanel";
-import { EditorAssistantPanel } from "./components/EditorAssistantPanel";
 import { WorkbenchSelect } from "./components/WorkbenchSelect";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
@@ -19,9 +19,7 @@ import "./components/ActivityRail.css";
 import "./components/Sidebar.css";
 import "./components/CreateEntryDialog.css";
 import { PRODUCT_NAME } from "./brand";
-import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
-import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
-import { ActionConfirmDialog } from "./components/ActionConfirmDialog";
+import type { CommandPaletteMode } from "./components/CommandPalette";
 import { useModalDialogFocus } from "./components/useModalDialogFocus";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
@@ -106,17 +104,8 @@ import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
-const SettingsModal = lazy(() =>
-  import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
-);
-const DiffViewerModal = lazy(() =>
-  import("./components/DiffViewerModal").then((module) => ({ default: module.DiffViewerModal }))
-);
 const MobileApp = lazy(() =>
   import("./mobile/MobileApp").then((module) => ({ default: module.MobileApp }))
-);
-const DesktopMobilePairing = lazy(() =>
-  import("./mobile/DesktopMobilePairing").then((module) => ({ default: module.DesktopMobilePairing }))
 );
 
 const EDITOR_FONT_OPTIONS = [
@@ -1360,23 +1349,6 @@ function AuthenticatedApp({
         onLogout={onLogout}
       />
 
-      <Suspense fallback={null}>
-        <SettingsModal
-          token={token}
-          currentUsername={username}
-          isAdmin={isAdmin}
-          teamRole={team.activeTeam?.role || null}
-          readOnlyWorkspace={readOnlyWorkspace}
-          workspaceId={workspaceDir}
-          visible={settingsVisible}
-          editorFont={editorFont}
-          editorFontOptions={editorFontOptions}
-          onEditorFontChange={onEditorFontChange}
-          onClose={() => setSettingsVisible(false)}
-          onShowToast={showToast}
-        />
-        {mobilePairingVisible && !desktopApp && <DesktopMobilePairing token={token} onClose={() => setMobilePairingVisible(false)} onSessionExpired={onSessionExpired} />}
-      </Suspense>
 
       {/* Main Layout */}
       <div
@@ -1744,87 +1716,35 @@ function AuthenticatedApp({
             onKeyDown={(e) => handlePanelResizeKeyDown("assistant", e)}
           />
         )}
-        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
-          <aside
-            className="workbench-right-dock"
-            aria-label={runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
-          >
-            {runDetailsVisible ? (
-              <RunDetailsPanel
-                token={token}
-                workspaceDir={workspaceDir}
-                visible={runDetailsVisible}
-                summary={chat.currentRunSummary}
-                runState={chat.runState}
-                errorCount={problemCounts.errors}
-                warningCount={problemCounts.warnings}
-                contextManifest={chat.contextManifest}
-                activeTab={runDetailsTab}
-                onTabChange={setRunDetailsTab}
-                onOpenFile={openFile}
-                onOpenDiff={handleOpenGitDiff}
-                onClose={() => {
-                  setRunDetailsVisible(false);
-                  if (workspaceView === "files" && window.innerWidth > 1180) setEditorAssistantVisible(true);
-                }}
-              />
-            ) : (
-              <EditorAssistantPanel
-                token={token}
-                visible={true}
-                activeFilePath={activeFilePath}
-                activeFileDirty={Boolean(activeFile?.modified)}
-                messages={chat.messages}
-                connected={chat.connected}
-                isStreaming={chat.isStreaming}
-                agentMode={chat.agentMode}
-                runtimeOptions={chat.runtimeOptions}
-                selectedModelName={chat.selectedModelName}
-                draftText={chatDraftText}
-                onDraftTextChange={setChatDraftText}
-                attachmentDraft={chatAttachmentDraft}
-                attachmentWarning={attachmentWarning}
-                attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
-                onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
-                attachmentSubmissionError={attachmentSubmissionError}
-                attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-                runState={chat.runState}
-                currentRunSummary={chat.currentRunSummary}
-                contextManifest={chat.contextManifest}
-                contextReadOnly={readOnlyWorkspace}
-                pendingApprovals={chat.pendingApprovals}
-                onAgentModeChange={chat.setAgentMode}
-                onModelNameChange={chat.setSelectedModelName}
-                onSend={handleChatSend}
-                onSteer={handleChatSteer}
-                onStop={chat.stopCurrentRun}
-                onResume={chat.resumeConversation}
-                onNewConversation={clearChatConversation}
-                onToolApproval={chat.respondToToolApproval}
-                onApproveConversationTools={chat.approveConversationTools}
-                onPlanAmendmentDecision={chat.decidePlanAmendment}
-                onClose={() => setEditorAssistantVisible(false)}
-              />
-            )}
-          </aside>
-        )}
-        {workspaceView === "chat" && runDetailsVisible && (
-          <RunDetailsPanel
-            token={token}
-            workspaceDir={workspaceDir}
-            visible={runDetailsVisible}
-            summary={chat.currentRunSummary}
-            runState={chat.runState}
-            errorCount={problemCounts.errors}
-            warningCount={problemCounts.warnings}
-            contextManifest={chat.contextManifest}
-            activeTab={runDetailsTab}
-            onTabChange={setRunDetailsTab}
-            onOpenFile={openFile}
-            onOpenDiff={handleOpenGitDiff}
-            onClose={() => setRunDetailsVisible(false)}
-          />
-        )}
+        <WorkbenchRightDock
+          workspaceView={workspaceView}
+          editorAssistantVisible={editorAssistantVisible}
+          runDetailsVisible={runDetailsVisible}
+          setEditorAssistantVisible={setEditorAssistantVisible}
+          setRunDetailsVisible={setRunDetailsVisible}
+          runDetailsTab={runDetailsTab}
+          setRunDetailsTab={setRunDetailsTab}
+          token={token}
+          workspaceDir={workspaceDir}
+          chat={chat}
+          problemCounts={problemCounts}
+          openFile={openFile}
+          onOpenGitDiff={handleOpenGitDiff}
+          activeFilePath={activeFilePath}
+          activeFile={activeFile}
+          chatDraftText={chatDraftText}
+          setChatDraftText={setChatDraftText}
+          chatAttachmentDraft={chatAttachmentDraft}
+          attachmentWarning={attachmentWarning}
+          pendingAttachmentVerificationIds={pendingAttachmentVerificationIds}
+          attachmentSubmissionError={attachmentSubmissionError}
+          attachmentSubmissionNotice={attachmentSubmissionNotice}
+          editedRetryNotice={editedRetryNotice}
+          readOnlyWorkspace={readOnlyWorkspace}
+          onSend={handleChatSend}
+          onSteer={handleChatSteer}
+          onNewConversation={clearChatConversation}
+        />
       </div>
 
       {/* Status Bar */}
@@ -1852,69 +1772,87 @@ function AuthenticatedApp({
       {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
 
-      {diffViewerFile && diffViewerFile.remoteContent !== undefined && (
-        <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-          <DiffViewerModal
-            file={diffViewerFile}
-            conflictSourceMessage={getConflictSourceMessage(diffViewerFile)}
-            theme={theme}
-            editorFont={editorFont}
-            onClose={() => setDiffViewerPath(null)}
-            onApplyMerge={(mergedContent) => {
-              setOpenFiles((prev) =>
-                prev.map((file) =>
-                  file.path === diffViewerFile.path
-                    ? {
-                        ...file,
-                        content: mergedContent,
-                        modified: true,
-                        version: diffViewerFile.remoteVersion ?? file.version,
-                        updatedAt: diffViewerFile.remoteUpdatedAt ?? file.updatedAt,
-                        ...buildClearedRemoteState(),
-                      }
-                    : file
-                )
-              );
-              setDiffViewerPath(null);
-              showToast(t("app.mergeApplied"));
-            }}
-            onKeepLocalVersion={handleKeepLocalVersion}
-            onReloadRemoteVersion={handleReloadRemoteVersion}
-            onForceSave={
-              diffViewerFile.remoteConflictReason === "save"
-                ? () => void handleForceSaveAfterVersionConflict()
-                : undefined
-            }
-          />
-        </Suspense>
-      )}
-
-      <ActionConfirmDialog
-        intent={claimSaveConfirmation ? { id: `claim-save:${claimSaveConfirmation.file.path}:${claimSaveConfirmation.username}`, title: t("team.confirmAction"), description: t("team.claimConflictConfirm", { username: claimSaveConfirmation.username }), confirmLabel: t("common.confirm"), tone: "danger" } : null}
-        busy={claimSaveBusy}
-        error={claimSaveError}
-        onClose={() => { setClaimSaveConfirmation(null); setClaimSaveError(null); showToast(t("team.claimConflictCancelled")); }}
-        onConfirm={() => forceSaveClaimedFile()}
-      />
-
-      <CommandPalette
-        visible={commandPaletteVisible}
-        mode={commandPaletteMode}
-        tree={fileTree}
-        onClose={() => setCommandPaletteVisible(false)}
+      <WorkbenchModals
+        token={token}
+        username={username}
+        isAdmin={isAdmin}
+        teamRole={team.activeTeam?.role || null}
+        readOnlyWorkspace={readOnlyWorkspace}
+        workspaceDir={workspaceDir}
+        showToast={showToast}
+        settingsVisible={settingsVisible}
+        onCloseSettings={() => setSettingsVisible(false)}
+        editorFont={editorFont}
+        editorFontOptions={editorFontOptions}
+        onEditorFontChange={onEditorFontChange}
+        mobilePairingVisible={mobilePairingVisible}
+        desktopApp={desktopApp}
+        onCloseMobilePairing={() => setMobilePairingVisible(false)}
+        onSessionExpired={onSessionExpired}
+        diffViewerFile={diffViewerFile}
+        conflictSourceMessage={diffViewerFile ? getConflictSourceMessage(diffViewerFile) : null}
+        theme={theme}
+        onCloseDiffViewer={() => setDiffViewerPath(null)}
+        onApplyMerge={(mergedContent) => {
+          setOpenFiles((prev) =>
+            prev.map((file) =>
+              file.path === diffViewerFile?.path
+                ? {
+                    ...file,
+                    content: mergedContent,
+                    modified: true,
+                    version: diffViewerFile.remoteVersion ?? file.version,
+                    updatedAt: diffViewerFile.remoteUpdatedAt ?? file.updatedAt,
+                    ...buildClearedRemoteState(),
+                  }
+                : file
+            )
+          );
+          setDiffViewerPath(null);
+          showToast(t("app.mergeApplied"));
+        }}
+        onKeepLocalVersion={handleKeepLocalVersion}
+        onReloadRemoteVersion={handleReloadRemoteVersion}
+        onForceSave={
+          diffViewerFile?.remoteConflictReason === "save"
+            ? () => void handleForceSaveAfterVersionConflict()
+            : undefined
+        }
+        confirmIntent={
+          claimSaveConfirmation
+            ? {
+                id: `claim-save:${claimSaveConfirmation.file.path}:${claimSaveConfirmation.username}`,
+                title: t("team.confirmAction"),
+                description: t("team.claimConflictConfirm", {
+                  username: claimSaveConfirmation.username,
+                }),
+                confirmLabel: t("common.confirm"),
+                tone: "danger",
+              }
+            : null
+        }
+        confirmBusy={claimSaveBusy}
+        confirmError={claimSaveError}
+        onCloseConfirm={() => {
+          setClaimSaveConfirmation(null);
+          setClaimSaveError(null);
+          showToast(t("team.claimConflictCancelled"));
+        }}
+        onConfirmAction={() => forceSaveClaimedFile()}
+        commandPaletteVisible={commandPaletteVisible}
+        commandPaletteMode={commandPaletteMode}
+        fileTree={fileTree}
+        onCloseCommandPalette={() => setCommandPaletteVisible(false)}
         onOpenFile={openFile}
-        onRunCommand={runPaletteCommand}
+        onRunPaletteCommand={runPaletteCommand}
         canFormatDocument={Boolean(activeFile?.language === "python" && !readOnlyWorkspace)}
-      />
-      <WorkspaceSearchPanel
-        visible={workspaceSearchVisible}
-        tree={fileTree}
-        scopePath={workspaceSearchScope}
-        onClose={() => setWorkspaceSearchVisible(false)}
-        onClearScope={() => setWorkspaceSearchScope("")}
-        onSearch={fs.searchWorkspace}
-        onCancelSearch={fs.cancelWorkspaceSearch}
-        onOpenResult={openSearchResult}
+        workspaceSearchVisible={workspaceSearchVisible}
+        workspaceSearchScope={workspaceSearchScope}
+        onCloseWorkspaceSearch={() => setWorkspaceSearchVisible(false)}
+        onClearWorkspaceSearchScope={() => setWorkspaceSearchScope("")}
+        onSearchWorkspace={fs.searchWorkspace}
+        onCancelWorkspaceSearch={fs.cancelWorkspaceSearch}
+        onOpenSearchResult={openSearchResult}
       />
     </div>
   );
