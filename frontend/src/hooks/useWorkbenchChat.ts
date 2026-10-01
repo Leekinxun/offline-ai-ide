@@ -308,7 +308,7 @@ export function useWorkbenchChat({
       setAttachmentRetryRequests([]);
     }
     previousChatConversationIdRef.current = chat.currentConversationId;
-  }, [chat.currentConversationId, chatAttachmentDraft]);
+  }, [chat.currentConversationId]);
 
   useEffect(() => {
     chatAttachmentDraft.clear();
@@ -318,7 +318,7 @@ export function useWorkbenchChat({
     setAttachmentSubmissionNotice(null);
     setPendingAttachmentVerificationIds(new Set());
     setAttachmentRetryRequests([]);
-  }, [workspaceDir, chatAttachmentDraft]);
+  }, [workspaceDir]);
 
   useEffect(() => {
     if (workspaceView !== "files" || chat.pendingApprovals.length === 0) return;

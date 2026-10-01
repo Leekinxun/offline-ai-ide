@@ -173,8 +173,8 @@ body {
 }
 
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
 }
 
 *::-webkit-scrollbar-track {
@@ -182,13 +182,13 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: var(--border);
-  transition: background-color 0.2s ease;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  transition: background-color 0.15s ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+  background: color-mix(in srgb, var(--text-tertiary) 90%, transparent);
 }
 
 *::-webkit-scrollbar-corner {
@@ -208,9 +208,9 @@ body {
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
-  border-radius: 3px !important;
-  background: var(--border) !important;
-  transition: background-color 0.2s ease !important;
+  border-radius: 5px !important;
+  background: color-mix(in srgb, var(--border) 80%, transparent) !important;
+  transition: background-color 0.15s ease !important;
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover {
@@ -218,11 +218,11 @@ body {
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar.vertical > .slider {
-  width: 6px !important;
+  width: 9px !important;
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar.horizontal > .slider {
-  height: 6px !important;
+  height: 9px !important;
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar.vertical .shadow,
@@ -1559,6 +1559,23 @@ select:focus-visible,
   grid-template-columns: 56px var(--chat-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(420px, 1fr) 324px;
 }
 
+.main-layout.workbench-view-chat.with-editor-assistant {
+  grid-template-columns: 56px var(--chat-sidebar-width, 286px) var(--files-sidebar-handle-width, 6px) minmax(420px, 1fr) 6px var(--files-assistant-width, 400px);
+}
+
+.workbench-view-chat > .workbench-right-dock {
+  grid-column: 6;
+  grid-row: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.workbench-view-chat > .assistant-resize-handle {
+  grid-column: 5;
+  grid-row: 1;
+  display: block;
+}
+
 .workbench-view-chat > .activity-rail {
   grid-column: 1;
   grid-row: 1;
@@ -2436,7 +2453,8 @@ html {
 }
 
 .workbench-view-files > .resize-handle.sidebar-resize-handle:not(.hidden),
-.workbench-view-files > .resize-handle.assistant-resize-handle {
+.workbench-view-files > .resize-handle.assistant-resize-handle,
+.workbench-view-chat > .resize-handle.assistant-resize-handle {
   display: block;
   width: 6px;
   grid-row: 1;
@@ -2448,18 +2466,21 @@ html {
   grid-column: 3;
 }
 
-.workbench-view-files > .assistant-resize-handle {
+.workbench-view-files > .assistant-resize-handle,
+.workbench-view-chat > .assistant-resize-handle {
   grid-column: 5;
 }
 
 .workbench-view-files > .sidebar-resize-handle::after,
-.workbench-view-files > .assistant-resize-handle::after {
+.workbench-view-files > .assistant-resize-handle::after,
+.workbench-view-chat > .assistant-resize-handle::after {
   left: -5px;
   width: 16px;
 }
 
 .workbench-view-files > .sidebar-resize-handle::before,
-.workbench-view-files > .assistant-resize-handle::before {
+.workbench-view-files > .assistant-resize-handle::before,
+.workbench-view-chat > .assistant-resize-handle::before {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -2473,7 +2494,9 @@ html {
 .workbench-view-files > .sidebar-resize-handle:hover::before,
 .workbench-view-files > .sidebar-resize-handle:focus-visible::before,
 .workbench-view-files > .assistant-resize-handle:hover::before,
-.workbench-view-files > .assistant-resize-handle:focus-visible::before {
+.workbench-view-files > .assistant-resize-handle:focus-visible::before,
+.workbench-view-chat > .assistant-resize-handle:hover::before,
+.workbench-view-chat > .assistant-resize-handle:focus-visible::before {
   left: 2px;
   width: 2px;
   border-radius: 999px;
@@ -2482,7 +2505,8 @@ html {
 }
 
 .workbench-view-files > .sidebar-resize-handle.dragging::before,
-.workbench-view-files > .assistant-resize-handle.dragging::before {
+.workbench-view-files > .assistant-resize-handle.dragging::before,
+.workbench-view-chat > .assistant-resize-handle.dragging::before {
   left: 2px;
   width: 2px;
   border-radius: 999px;
@@ -3135,8 +3159,5 @@ html {
 .plan-revision-input { display: grid; gap: 8px; padding: 8px; }
 .plan-revision-input textarea { width: 100%; min-height: 70px; box-sizing: border-box; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; }
 .plan-revision-input button { min-height: 36px; cursor: pointer; }
-
-.undo-turn-control { padding: 6px 10px; flex: 0 0 auto; }
-.undo-turn-control p { margin: 6px 0; color: var(--error-color, #c43d48); font-size: 12px; }
 
 .tool-approval-network { border-left: 3px solid var(--warning-color, #ad6500); padding: 8px; }

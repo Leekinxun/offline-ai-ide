@@ -103,7 +103,7 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
 
   return (
     <>
-      {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
+      {(workspaceView === "files" ? (editorAssistantVisible || runDetailsVisible || webPreviewVisible) : webPreviewVisible) && (
         <aside
           className="workbench-right-dock"
           aria-label={
@@ -120,14 +120,11 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
               workspaceDir={workspaceDir}
               readOnly={readOnlyWorkspace}
               key={workspaceDir}
-              onClose={() => {
-                setWebPreviewVisible?.(false);
-                setEditorAssistantVisible(true);
-              }}
+              onClose={() => setWebPreviewVisible?.(false)}
               onFeedback={(text) => {
                 setChatDraftText([chatDraftText, text].filter(Boolean).join("\n\n"));
                 setWebPreviewVisible?.(false);
-                setEditorAssistantVisible(true);
+                if (workspaceView === "files") setEditorAssistantVisible(true);
               }}
               onOpenSource={(path, line, column) =>
                 void onNavigateToLocation?.(path, {
@@ -193,6 +190,11 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
               currentRunSummary={chat.currentRunSummary}
               contextManifest={chat.contextManifest}
               contextReadOnly={readOnlyWorkspace}
+              contextState={chat.contextState}
+              conversations={chat.conversations}
+              currentConversationId={chat.currentConversationId}
+              onLoadConversation={chat.loadConversation}
+              onDeleteConversation={chat.deleteConversation}
               pendingApprovals={chat.pendingApprovals}
               onAgentModeChange={chat.setAgentMode}
               onModelNameChange={chat.setSelectedModelName}

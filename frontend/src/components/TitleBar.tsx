@@ -14,6 +14,7 @@ import {
   Smartphone,
   Sun,
   ZoomIn,
+  Globe,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { BrandMark } from "./BrandMark";
@@ -43,6 +44,8 @@ export interface TitleBarProps {
   editorAssistantVisible: boolean;
   chatVisible: boolean;
   onToggleAiAssistant: () => void;
+  webPreviewVisible?: boolean;
+  onToggleWebPreview?: () => void;
   username: string;
   isAdmin?: boolean;
   teamRole?: string | null;
@@ -76,6 +79,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   editorAssistantVisible,
   chatVisible,
   onToggleAiAssistant,
+  webPreviewVisible = false,
+  onToggleWebPreview,
   username,
   isAdmin,
   teamRole,
@@ -175,6 +180,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         >
           <MessageSquare size={16} />
         </button>
+        {onToggleWebPreview && (
+          <button
+            type="button"
+            className={`titlebar-btn${webPreviewVisible ? " active" : ""}`}
+            onClick={onToggleWebPreview}
+            title={t("preview.title")}
+            aria-label={t("preview.title")}
+            aria-pressed={webPreviewVisible}
+          >
+            <Globe size={16} />
+          </button>
+        )}
         <details className="titlebar-user-menu">
           <summary className="titlebar-btn titlebar-user-btn" title={username} aria-label={username}>
             <span className="user-avatar" aria-hidden="true">

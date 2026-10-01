@@ -44,7 +44,7 @@
 }
 .editor-change-review-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .editor-change-review-actions button:disabled { opacity: .45; cursor: not-allowed; }
-.editor-change-review-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-change-review-actions button:focus-visible { outline: none; box-shadow: 0 0 0 1.5px var(--accent); }
 .editor-change-review-deleted {
   overflow: auto;
   margin: 0;

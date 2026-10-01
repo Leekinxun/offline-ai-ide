@@ -669,7 +669,8 @@
   min-width: 0;
   flex: 0 0 auto;
   margin: 0 10px 10px;
-  overflow: hidden;
+  position: relative;
+  overflow: visible;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: var(--surface-panel-strong);
@@ -787,12 +788,12 @@
 /* 底部一体化扁平单行操作栏（完全消除内部多道分割线，紧凑精炼） */
 .editor-assistant-composer-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 2px 10px 8px;
+  gap: 4px;
+  padding: 3px 8px 8px;
   background: transparent !important;
   border: none !important;
   border-top: none !important;
@@ -802,19 +803,17 @@
 .editor-assistant-composer-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  flex: 1 1 100px;
-  max-width: 100%;
+  flex: 0 0 auto;
 }
 
 .editor-assistant-composer-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  max-width: 100%;
-  flex: 1 1 160px;
+  flex: 0 1 auto;
   justify-content: flex-end;
 }
 
@@ -839,6 +838,31 @@
 }
 
 .editor-assistant-plus-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* @ 引用按钮 */
+.editor-assistant-at-btn {
+  display: grid;
+  width: 24px;
+  height: 26px;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.editor-assistant-at-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.editor-assistant-at-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
@@ -895,28 +919,37 @@
   color: var(--text-primary) !important;
 }
 
-/* 模型选择器：无外框沉浸式文字下拉 */
+/* 模型选择器：紧凑无外框沉浸式文字下拉 */
 .editor-assistant-composer-model {
   min-width: 0;
-  max-width: 180px;
-  flex: 1 1 80px;
+  max-width: 105px;
+  flex: 0 1 auto;
 }
 
-.editor-assistant-composer-model .model-selector-trigger {
-  height: 26px !important;
-  min-height: 26px !important;
+.editor-assistant-composer-model .workbench-select-trigger {
+  height: 24px !important;
+  min-height: 24px !important;
   padding: 0 4px !important;
   border: none !important;
-  border-radius: 5px !important;
+  border-radius: 4px !important;
   background: transparent !important;
-  color: var(--text-secondary) !important;
+  color: var(--ink-muted, var(--text-secondary)) !important;
   font-size: 11px !important;
   box-shadow: none !important;
+  gap: 3px !important;
+  max-width: 105px !important;
 }
 
-.editor-assistant-composer-model .model-selector-trigger:hover {
+.editor-assistant-composer-model .workbench-select-trigger:hover {
   background: var(--bg-hover) !important;
-  color: var(--text-primary) !important;
+  color: var(--ink, var(--text-primary)) !important;
+}
+
+.editor-assistant-composer-model .workbench-select-value {
+  max-width: 78px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 /* 当前上下文跟随文件微胶囊 */
@@ -925,10 +958,10 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  max-width: 120px;
-  height: 26px;
-  padding: 0 5px;
-  border-radius: 5px;
+  max-width: 90px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-tertiary);
   font-size: 10px;
@@ -936,7 +969,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 0 1 120px;
+  flex: 0 1 90px;
 }
 
 .editor-assistant-inline-context > span {
@@ -956,30 +989,195 @@
   flex-shrink: 0;
 }
 
-/* 发送按钮：参考图片的 26px 高亮圆角按钮 */
+/* 发送按钮：24px 高对比微卡按钮，兼容亮暗主题 */
 .editor-assistant-send-btn {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border: 0;
   border-radius: 6px;
-  background: #d8dde4;
-  color: #121316;
+  background: var(--accent);
+  color: #ffffff;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all var(--transition);
+  transition: all 0.12s ease;
 }
 
 .editor-assistant-send-btn:hover:not(:disabled) {
-  background: #ffffff;
-  color: #000000;
+  filter: brightness(1.12);
   transform: translateY(-1px);
 }
 
 .editor-assistant-send-btn:disabled {
   cursor: default;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.25);
+  background: color-mix(in srgb, var(--surface-quiet, #888) 65%, transparent);
+  color: color-mix(in srgb, var(--ink, #888) 35%, transparent);
   transform: none;
+}
+
+/* 顶部操作区历史会话 */
+.editor-assistant-history-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.editor-assistant-history-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.editor-assistant-history-btn:hover,
+.editor-assistant-history-btn.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-assistant-history-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--bg-surface, #1e1e1e);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  z-index: 60;
+  overflow: hidden;
+  animation: contextMenuPop 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.editor-assistant-history-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+}
+
+.editor-assistant-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editor-assistant-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  transition: background 0.1s ease;
+}
+
+.editor-assistant-history-item:hover {
+  background: var(--bg-hover);
+}
+
+.editor-assistant-history-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.editor-assistant-history-item-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.editor-assistant-history-item.active .editor-assistant-history-item-icon {
+  color: var(--accent);
+}
+
+.editor-assistant-history-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-assistant-history-item-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.1s ease;
+}
+
+.editor-assistant-history-item:hover .editor-assistant-history-item-delete {
+  opacity: 1;
+}
+
+.editor-assistant-history-item-delete:hover {
+  background: color-mix(in srgb, var(--error-color, #e05252) 18%, transparent);
+  color: var(--error-color, #e05252);
+}
+
+.editor-assistant-history-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 底部极简纯环形上下文指示器 */
+.editor-assistant-context-ring-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease;
+}
+
+.editor-assistant-context-ring-btn:hover {
+  background: var(--bg-hover);
+}
+
+.editor-assistant-context-svg {
+  display: block;
+}
+
+.editor-assistant-context-ring-bg {
+  stroke: color-mix(in srgb, var(--ink-muted, #888) 28%, transparent);
+}
+
+.editor-assistant-context-ring-val {
+  transition: stroke-dashoffset 0.25s ease, stroke 0.2s ease;
 }

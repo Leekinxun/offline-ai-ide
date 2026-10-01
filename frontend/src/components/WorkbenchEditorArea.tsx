@@ -50,6 +50,8 @@ export interface WorkbenchEditorAreaProps {
   onSelectPreviewMode: (mode: FilePreviewMode) => void;
   editorAssistantVisible: boolean;
   onToggleEditorAssistant: () => void;
+  webPreviewVisible?: boolean;
+  onToggleWebPreview?: () => void;
   terminalVisible: boolean;
   onToggleTerminal: (forceOpen?: boolean) => void;
   runDetailsVisible: boolean;
@@ -145,6 +147,8 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
   onSelectPreviewMode,
   editorAssistantVisible,
   onToggleEditorAssistant,
+  webPreviewVisible,
+  onToggleWebPreview,
   terminalVisible,
   onToggleTerminal,
   runDetailsVisible,
@@ -231,6 +235,8 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
           onSelectPreviewMode={onSelectPreviewMode}
           editorAssistantVisible={editorAssistantVisible}
           onToggleEditorAssistant={onToggleEditorAssistant}
+          webPreviewVisible={webPreviewVisible}
+          onToggleWebPreview={onToggleWebPreview}
           terminalVisible={terminalVisible}
           onToggleTerminal={onToggleTerminal}
           runDetailsVisible={runDetailsVisible}

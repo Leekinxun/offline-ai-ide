@@ -1,15 +1,322 @@
-.context-reference-picker { position: relative; min-width: 0; max-width: 100%; padding: 4px 0; font-size: 11px; }
-.context-reference-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); overflow-wrap: anywhere; }
-.context-reference-toolbar button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
-.context-reference-chips { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-.context-reference-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
-.context-reference-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.context-reference-chip > svg, .context-reference-menu > button > svg { flex: 0 0 auto; }
-.context-reference-chip button { display: inline-flex; flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
-.context-reference-menu { position: absolute; bottom: 100%; left: 0; right: 0; min-width: 0; max-width: 100%; max-height: 270px; overflow-y: auto; overflow-x: hidden; z-index: 40; padding: 4px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-primary, #1e1e1e); box-shadow: 0 8px 24px #0003; }
-.context-reference-menu > button { display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
-.context-reference-menu > button > span { min-width: 0; }
-.context-reference-menu > button[aria-selected="true"], .context-reference-menu > button:hover { background: var(--bg-hover, #ffffff12); }
-.context-reference-menu > button:disabled { opacity: .55; cursor: default; }
-.context-reference-menu small { display: block; margin-top: 2px; font-size: 10px; color: var(--text-muted); }
-.context-reference-empty { padding: 12px; color: var(--text-muted); }
+/* ==========================================================================
+   上下文引用容器与胶囊（Chips）& 浮动弹出菜单（ContextReferencePicker）
+   遵循 CrownForge UI 纯色阶明暗律、磨砂蓝微光聚焦规范与就近样式隔离契约
+   ========================================================================== */
+
+/* 上下文引用容器（不设 position:relative，以便弹出层锚定于输入框外壳） */
+.context-reference-picker {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+}
+
+/* 选中胶囊容器：仅在有引用时展示 */
+.context-reference-chips {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 14px 2px;
+}
+
+.context-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel-strong, #ffffff));
+  color: var(--ink, var(--text-primary, #17181a));
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: all 0.15s ease;
+}
+
+.context-reference-chip:hover {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-panel-strong, #ffffff));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.context-reference-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-reference-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-muted, var(--text-tertiary, #888));
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+
+.context-reference-chip-remove:hover {
+  background: color-mix(in srgb, var(--danger, #e05252) 18%, transparent);
+  color: var(--danger, #e05252);
+}
+
+.context-ref-icon {
+  flex-shrink: 0;
+}
+
+.context-ref-icon.selection { color: #58a6ff; }
+.context-ref-icon.problems { color: #d29922; }
+.context-ref-icon.terminal { color: #3fb950; }
+.context-ref-icon.symbol { color: #a371f7; }
+.context-ref-icon.file { color: var(--ink-muted, var(--text-secondary, #666)); }
+.context-ref-icon.folder { color: #e3b341; }
+
+.context-reference-limit-notice {
+  padding: 4px 10px;
+  margin: 4px 14px 2px;
+  font-size: 11px;
+  color: #d29922;
+  background: color-mix(in srgb, #d29922 10%, transparent);
+  border-radius: 4px;
+}
+
+/* ==========================================================================
+   浮动菜单（仿现代 IDE 分组微卡，如 ZCode / Cursor）
+   ========================================================================== */
+.context-reference-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(500px, 100%);
+  max-width: 100%;
+  max-height: min(340px, 46vh);
+  display: flex;
+  flex-direction: column;
+  z-index: 90;
+  border-radius: 10px;
+  background: var(--surface-panel-strong, var(--elevated-surface, #ffffff));
+  border: 1px solid var(--line-strong, rgba(128, 128, 128, 0.22));
+  box-shadow:
+    0 16px 42px -6px rgba(0, 0, 0, 0.26),
+    0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  animation: contextMenuPop 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  color: var(--ink, var(--text-primary, #17181a));
+}
+
+@keyframes contextMenuPop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.context-reference-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-subtle, rgba(128, 128, 128, 0.12));
+  background: color-mix(in srgb, var(--surface-quiet, #f0f0f0) 45%, transparent);
+  font-size: 11.5px;
+}
+
+.context-reference-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  color: var(--ink, var(--text-primary, #17181a));
+}
+
+.context-reference-menu-query {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.context-reference-menu-query code {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 4px;
+}
+
+.context-reference-menu-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink, #888) 25%, transparent) transparent;
+}
+
+.context-reference-menu-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.context-reference-menu-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink, #888) 25%, transparent);
+  border-radius: 999px;
+}
+
+.context-reference-menu-body::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink, #888) 45%, transparent);
+}
+
+.context-reference-menu-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 分类分组 */
+.context-reference-group {
+  margin-bottom: 6px;
+}
+
+.context-reference-group:last-child {
+  margin-bottom: 0;
+}
+
+.context-reference-group-title {
+  padding: 6px 8px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--ink-muted, var(--text-tertiary, #888));
+}
+
+/* 选项条目 */
+.context-reference-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  margin: 1px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink, var(--text-primary, #17181a));
+  text-align: left;
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: all 0.12s ease;
+}
+
+.context-reference-option-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-quiet, #888) 60%, transparent);
+  flex-shrink: 0;
+}
+
+.context-reference-option-content {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.context-reference-option-label {
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--ink, var(--text-primary, #17181a));
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.context-reference-option.active .context-reference-option-label {
+  color: var(--accent);
+}
+
+.context-reference-option-sub {
+  font-size: 11px;
+  color: var(--ink-muted, var(--text-secondary, #777));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.context-reference-option-disabled-hint {
+  font-size: 10.5px;
+  color: var(--ink-muted, var(--text-tertiary, #999));
+  opacity: 0.8;
+  font-style: italic;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.context-reference-option.active,
+.context-reference-option:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.context-reference-option.active .context-reference-option-icon,
+.context-reference-option:hover:not(:disabled) .context-reference-option-icon {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.context-reference-option:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.context-reference-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--ink-muted, var(--text-muted, #888));
+  font-size: 11.5px;
+}
+
+/* 底部操作快捷键说明 */
+.context-reference-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line-subtle, rgba(128, 128, 128, 0.12));
+  background: color-mix(in srgb, var(--surface-quiet, #f0f0f0) 45%, transparent);
+  font-size: 10.5px;
+  color: var(--ink-muted, var(--text-tertiary, #888));
+}
+
+.context-reference-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.context-reference-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

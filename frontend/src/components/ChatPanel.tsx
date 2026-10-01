@@ -46,6 +46,7 @@ import {
   X,
   Layers,
   History,
+  AtSign,
 } from "lucide-react";
 import "./ChatPanel.css";
 import { BrandMark } from "./BrandMark";
@@ -822,8 +823,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               selectionInfo
                 ? t("chat.askSelectedCode")
                 : messages.length === 0
-                  ? t("workbench.describeTask")
-                  : t("workbench.followUpTask")
+                  ? `${t("workbench.describeTask")} (键入 @ 引用上下文)`
+                  : `${t("workbench.followUpTask")} (键入 @ 引用上下文)`
             }
             value={input}
             onChange={handleInputChange}
@@ -903,6 +904,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 aria-label={t("chat.attachFiles")}
               >
                 <Plus size={15} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="chat-composer-at-btn"
+                onClick={() => {
+                  const textarea = textareaRef.current;
+                  if (textarea) {
+                    const start = textarea.selectionStart ?? input.length;
+                    const end = textarea.selectionEnd ?? input.length;
+                    const next = input.slice(0, start) + "@" + input.slice(end);
+                    setInput(next);
+                    requestAnimationFrame(() => {
+                      textarea.focus();
+                      textarea.setSelectionRange(start + 1, start + 1);
+                    });
+                  }
+                }}
+                disabled={isStreaming || !connected}
+                title="添加上下文引用 (@)"
+                aria-label="添加上下文引用"
+              >
+                <AtSign size={14} aria-hidden="true" />
               </button>
               <div className="chat-composer-mode-select">
                 <span className="sr-only">{t("workbench.workMode")}</span>
@@ -1019,7 +1042,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   onChange={onModelNameChange}
                   disabled={isStreaming || runtimeOptions.models.length === 0}
                   models={runtimeOptions.models}
-                  automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+                  automaticLabel={modeModelName || "自动"}
                   label={t("workbench.model")}
                 />
               </div>

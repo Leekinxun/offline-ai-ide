@@ -420,6 +420,24 @@ function AuthenticatedApp({
   const [workspaceSearchScope, setWorkspaceSearchScope] = useState("");
   const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number; runId?: string } | null>(null);
   const [webPreviewVisible, setWebPreviewVisible] = useState(false);
+
+  const handleToggleWebPreview = useCallback(() => {
+    setWebPreviewVisible((prev) => {
+      const next = !prev;
+      if (next && workspaceView === "files") {
+        setEditorAssistantVisible(false);
+        setRunDetailsVisible(false);
+      }
+      return next;
+    });
+  }, [workspaceView, setEditorAssistantVisible, setRunDetailsVisible]);
+
+  const handleToggleAiAssistantWithMutualExclusion = useCallback(() => {
+    if (workspaceView === "files") {
+      setWebPreviewVisible(false);
+    }
+    handleToggleAiAssistant();
+  }, [workspaceView, handleToggleAiAssistant]);
   const [confirmWorkspaceSwitch, setConfirmWorkspaceSwitch] = useState(false);
   const [breakpointsByPath, setBreakpointsByPath] = useState<Record<string, number[]>>({});
   const [debugStartRequest, setDebugStartRequest] = useState<{ id: number; path: string } | null>(null);
@@ -1403,7 +1421,9 @@ function AuthenticatedApp({
         workspaceView={workspaceView}
         editorAssistantVisible={editorAssistantVisible}
         chatVisible={chatVisible}
-        onToggleAiAssistant={handleToggleAiAssistant}
+        onToggleAiAssistant={handleToggleAiAssistantWithMutualExclusion}
+        webPreviewVisible={webPreviewVisible}
+        onToggleWebPreview={handleToggleWebPreview}
         username={username}
         isAdmin={isAdmin}
         teamRole={team.activeTeam?.role || null}
@@ -1424,7 +1444,12 @@ function AuthenticatedApp({
       {/* Main Layout */}
       <div
         ref={mainLayoutRef}
-        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && (editorAssistantVisible || webPreviewVisible) && !runDetailsVisible ? " with-editor-assistant" : ""}`}
+        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${
+          ((workspaceView === "files" && (editorAssistantVisible || webPreviewVisible) && !runDetailsVisible) ||
+           (workspaceView === "chat" && webPreviewVisible))
+            ? " with-editor-assistant"
+            : ""
+        }`}
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,
@@ -1444,7 +1469,6 @@ function AuthenticatedApp({
           workspaceView={workspaceView}
           sidebarVisible={sidebarVisible}
           gitVisible={gitVisible}
-          webPreviewVisible={webPreviewVisible}
           agentsVisible={agentsVisible}
           teamVisible={teamVisible}
           checkpointsVisible={checkpointsVisible}
@@ -1457,15 +1481,6 @@ function AuthenticatedApp({
           compactWorkspace={compactWorkspace}
           onFocusChat={focusChat}
           onToggleExplorer={toggleExplorerPanel}
-          onToggleWebPreview={() => {
-            const opening = workspaceView !== "files" || !webPreviewVisible;
-            setWebPreviewVisible(opening);
-            if (opening) {
-              setWorkspaceView("files");
-              setRunDetailsVisible(false);
-              setEditorAssistantVisible(false);
-            }
-          }}
           onOpenWorkspaceSearch={() => {
             setWorkspaceSearchScope("");
             setWorkspaceSearchVisible(true);
@@ -1601,13 +1616,17 @@ function AuthenticatedApp({
             editorAssistantVisible={editorAssistantVisible}
             onToggleEditorAssistant={() => {
               setRunDetailsVisible(false);
+              setWebPreviewVisible(false);
               setEditorAssistantVisible((prev) => !prev);
             }}
+            webPreviewVisible={webPreviewVisible}
+            onToggleWebPreview={handleToggleWebPreview}
             terminalVisible={terminalVisible}
             onToggleTerminal={toggleTerminalPanel}
             runDetailsVisible={runDetailsVisible}
             onOpenChanges={() => {
               setEditorAssistantVisible(false);
+              setWebPreviewVisible(false);
               setRunDetailsTab("changes");
               setRunDetailsVisible(true);
             }}
@@ -1793,7 +1812,8 @@ function AuthenticatedApp({
           onClose={() => setTerminalVisible(false)}
         />
       </div>
-        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
+        {((workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible)) ||
+          (workspaceView === "chat" && webPreviewVisible)) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
             role="separator"

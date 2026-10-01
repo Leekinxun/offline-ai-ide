@@ -220,7 +220,17 @@ export function useChatAttachmentDraft(token: string): ChatAttachmentDraftContro
 
   const readyRefs = useMemo(() => attachments.flatMap((attachment) => attachment.status === "ready" && attachment.ref ? [attachment.ref] : []), [attachments]);
   const blocked = attachments.some((attachment) => attachment.status !== "ready");
-  return { attachments, readyRefs, blocked, add, remove, retry, restore, removeRefs, clear };
+  return useMemo(() => ({
+    attachments,
+    readyRefs,
+    blocked,
+    add,
+    remove,
+    retry,
+    restore,
+    removeRefs,
+    clear,
+  }), [attachments, readyRefs, blocked, add, remove, retry, restore, removeRefs, clear]);
 }
 
 function AttachmentIcon({ kind }: { kind?: ChatAttachmentRef["kind"] }) {

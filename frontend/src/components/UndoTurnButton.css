@@ -1,0 +1,37 @@
+/* 撤销上一步操作控件样式 */
+.undo-turn-control {
+  padding: 4px 10px;
+  flex: 0 0 auto;
+}
+
+.undo-turn-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.undo-turn-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.undo-turn-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.undo-turn-control p {
+  margin: 4px 0 0;
+  color: var(--error-color, #c43d48);
+  font-size: 11px;
+}

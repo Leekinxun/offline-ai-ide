@@ -366,6 +366,31 @@
   cursor: not-allowed;
 }
 
+/* @ 上下文按钮 */
+.chat-composer-at-btn {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.chat-composer-at-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.chat-composer-at-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* 模式与思考级别选择器 */
 .chat-composer-mode-select,
 .chat-composer-thinking-select {
@@ -418,10 +443,11 @@
 /* 模型选择器 */
 .chat-composer-model-select {
   min-width: 0;
-  max-width: 220px;
-  flex: 0 1 220px;
+  max-width: 140px;
+  flex: 0 1 auto;
 }
 
+.chat-composer-model-select .workbench-select-trigger,
 .chat-composer-model-select .model-selector-trigger {
   height: 26px !important;
   min-height: 26px !important;
@@ -432,11 +458,20 @@
   color: var(--text-secondary) !important;
   font-size: 11.5px !important;
   box-shadow: none !important;
+  max-width: 140px !important;
 }
 
+.chat-composer-model-select .workbench-select-trigger:hover,
 .chat-composer-model-select .model-selector-trigger:hover {
   background: var(--bg-hover) !important;
   color: var(--text-primary) !important;
+}
+
+.chat-composer-model-select .workbench-select-value {
+  max-width: 105px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 /* 发送与停止按钮 */
@@ -462,8 +497,8 @@
 
 .chat-composer-send-btn:disabled {
   cursor: default;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.25);
+  background: color-mix(in srgb, var(--surface-quiet, #888) 65%, transparent);
+  color: color-mix(in srgb, var(--ink, #888) 35%, transparent);
   transform: none;
 }
 
