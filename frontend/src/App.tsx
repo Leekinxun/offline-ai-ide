@@ -1,7 +1,5 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type * as monaco from "monaco-editor";
-import { TabBar } from "./components/TabBar";
-import { EditorToolbar } from "./components/EditorToolbar";
 import { ChatPanel } from "./components/ChatPanel";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import type { DetailTab } from "./components/RunDetailsPanel";
@@ -15,17 +13,16 @@ import { BrandMark } from "./components/BrandMark";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityRail } from "./components/ActivityRail";
 import { WorkbenchLeftDock } from "./components/WorkbenchLeftDock";
+import { WorkbenchEditorArea } from "./components/WorkbenchEditorArea";
 import "./components/UserPopover.css";
 import "./components/ActivityRail.css";
 import "./components/Sidebar.css";
 import "./components/CreateEntryDialog.css";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
-import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { WorkspaceSearchPanel } from "./components/WorkspaceSearchPanel";
 import { ActionConfirmDialog } from "./components/ActionConfirmDialog";
 import { useModalDialogFocus } from "./components/useModalDialogFocus";
-import { ReferencePanel } from "./components/ReferencePanel";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useFileSystem } from "./hooks/useFileSystem";
@@ -111,9 +108,6 @@ import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
 const SettingsModal = lazy(() =>
   import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
-);
-const Editor = lazy(() =>
-  import("./components/Editor").then((module) => ({ default: module.Editor }))
 );
 const DiffViewerModal = lazy(() =>
   import("./components/DiffViewerModal").then((module) => ({ default: module.DiffViewerModal }))
@@ -1533,8 +1527,8 @@ function AuthenticatedApp({
         />
 
         <div className="workbench-center-viewport">
-          <div className={`editor-area${workspaceView === "chat" ? " workbench-surface-hidden" : ""}`}>
-          <TabBar
+          <WorkbenchEditorArea
+            workspaceView={workspaceView}
             openFiles={openFiles}
             activeFilePath={activeFilePath}
             workspaceDir={workspaceDir}
@@ -1544,326 +1538,77 @@ function AuthenticatedApp({
             onCloseTabsToTheRight={closeTabsToTheRight}
             onCloseAllTabs={closeAllTabs}
             onShowToast={showToast}
+            activeFile={activeFile}
+            workspaceLabel={workspaceLabel}
+            activePreviewRenderer={activePreviewRenderer}
+            activePreviewMode={activePreviewMode}
+            onSelectPreviewMode={setActivePreviewMode}
+            editorAssistantVisible={editorAssistantVisible}
+            onToggleEditorAssistant={() => {
+              setRunDetailsVisible(false);
+              setEditorAssistantVisible((prev) => !prev);
+            }}
+            terminalVisible={terminalVisible}
+            onToggleTerminal={toggleTerminalPanel}
+            runDetailsVisible={runDetailsVisible}
+            onOpenChanges={() => {
+              setEditorAssistantVisible(false);
+              setRunDetailsTab("changes");
+              setRunDetailsVisible(true);
+            }}
+            onRunCurrent={() => void runCurrentFile()}
+            readOnlyWorkspace={readOnlyWorkspace}
+            compareFilePath={compareFilePath}
+            onSelectCompareFile={(value) => setCompareFilePath(value)}
+            compareFile={compareFile}
+            compareScrollLinked={compareScrollLinked}
+            onToggleCompareScrollLinked={() => setCompareScrollLinked((linked) => !linked)}
+            onCloseCompare={() => setCompareFilePath(null)}
+            activeConflictFile={activeConflictFile}
+            activeConflictSourceMessage={activeConflictSourceMessage}
+            onViewDiff={(path) => setDiffViewerPath(path)}
+            onKeepLocalVersion={handleKeepLocalVersion}
+            onReloadRemoteVersion={handleReloadRemoteVersion}
+            onForceSaveAfterVersionConflict={handleForceSaveAfterVersionConflict}
+            activeClaim={activeClaim}
+            username={username}
+            activeCollaborators={activeCollaborators}
+            team={team}
+            theme={theme}
+            editorFont={editorFont}
+            treeRefreshNonce={treeRefreshNonce}
+            editorViewStatesRef={editorViewStatesRef}
+            onEditorViewStateChange={handleEditorViewStateChange}
+            onEditorChange={handleEditorChange}
+            onSaveFile={() => void saveFile()}
+            onFormatDocument={formatPythonDocument}
+            fs={fs}
+            breakpointsByPath={breakpointsByPath}
+            debugActiveFrame={debugActiveFrame}
+            onToggleBreakpoint={(path, line) => toggleBreakpoint(path, line)}
+            onSelectionChange={handleSelectionChange}
+            onNavigateToLocation={handleNavigateToLocation}
+            onFindDefinition={handleFindDefinition}
+            onFindReferences={handleFindReferences}
+            onReferencesFound={handleReferencesFound}
+            editorRef={editorRef}
+            compareEditorRef={compareEditorRef}
+            onCompareEditorReady={handleCompareEditorReady}
+            editorNavigationTarget={editorNavigationTarget}
+            editorHighlightTarget={editorHighlightTarget}
+            onNavigationComplete={handleNavigationComplete}
+            onHighlightComplete={handleHighlightComplete}
+            previewPaneRef={previewPaneRef}
+            activePreviewContent={activePreviewContent}
+            fileTree={fileTree}
+            onQuickOpen={() => openCommandPalette("files")}
+            onOpenFolder={handleOpenFolder}
+            folderPickerBusy={pickingWorkspace}
+            onFocusChat={focusChat}
+            onOpenFile={openFile}
+            referenceResult={referenceResult}
+            onCloseReference={() => setReferenceResult(null)}
           />
-          {activeFile && (
-            <EditorToolbar
-              activeFile={activeFile}
-              workspaceLabel={workspaceLabel}
-              hasPreview={Boolean(activePreviewRenderer)}
-              activePreviewMode={activePreviewMode}
-              onSelectPreviewMode={setActivePreviewMode}
-              editorAssistantVisible={editorAssistantVisible}
-              onToggleEditorAssistant={() => {
-                setRunDetailsVisible(false);
-                setEditorAssistantVisible((prev) => !prev);
-              }}
-              terminalVisible={terminalVisible}
-              onToggleTerminal={toggleTerminalPanel}
-              runDetailsVisible={runDetailsVisible}
-              onOpenChanges={() => {
-                setEditorAssistantVisible(false);
-                setRunDetailsTab("changes");
-                setRunDetailsVisible(true);
-              }}
-              canRunCurrent={isDebuggablePath(activeFile.path)}
-              onRunCurrent={() => void runCurrentFile()}
-              readOnlyWorkspace={readOnlyWorkspace}
-              openFiles={openFiles}
-              compareFilePath={compareFilePath}
-              onSelectCompareFile={(value) => setCompareFilePath(value)}
-              compareFileActive={Boolean(compareFile)}
-              compareScrollLinked={compareScrollLinked}
-              onToggleCompareScrollLinked={() => setCompareScrollLinked((linked) => !linked)}
-              onCloseCompare={() => setCompareFilePath(null)}
-            />
-          )}
-          <div className="editor-main">
-            {activeConflictFile && (
-              <div className="editor-conflict-banner">
-                <div className="editor-conflict-copy">
-                  <strong>{t("app.remoteConflictTitle")}</strong>
-                  <span>
-                    {activeConflictFile.remoteConflictReason === "save"
-                      ? t("app.saveVersionConflictMessage")
-                      : t("app.remoteConflictMessage")}
-                  </span>
-                  {activeConflictSourceMessage && (
-                    <span className="editor-conflict-source">
-                      {activeConflictSourceMessage}
-                    </span>
-                  )}
-                </div>
-                <div className="editor-conflict-actions">
-                  <button
-                    className="editor-conflict-btn"
-                    onClick={() => setDiffViewerPath(activeConflictFile.path)}
-                  >
-                    {t("app.viewDiff")}
-                  </button>
-                  <button
-                    className="editor-conflict-btn"
-                    onClick={handleKeepLocalVersion}
-                  >
-                    {t("app.keepLocalVersion")}
-                  </button>
-                  <button
-                    className="editor-conflict-btn primary"
-                    onClick={handleReloadRemoteVersion}
-                  >
-                    {t("app.loadRemoteVersion")}
-                  </button>
-                  {activeConflictFile.remoteConflictReason === "save" && (
-                    <button
-                      className="editor-conflict-btn danger"
-                      onClick={() => void handleForceSaveAfterVersionConflict()}
-                    >
-                      {t("app.overwriteRemoteVersion")}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            {!activeConflictFile &&
-              ((activeClaim && activeClaim.username !== username) ||
-                activeCollaborators.length > 0) &&
-              activeFilePath && (
-                <div className="editor-collaboration-banner">
-                  <div className="editor-conflict-copy">
-                    <strong>{t("team.collaborationNoticeTitle")}</strong>
-                    <span>
-                      {activeClaim && activeClaim.username !== username
-                        ? t("team.collaborationClaimNotice", {
-                            username: activeClaim.username,
-                          })
-                        : activeCollaborators.length > 0
-                          ? t("team.collaborationPresenceNotice", {
-                              usernames: activeCollaborators
-                                .map((entry) => entry.username)
-                                .join(", "),
-                            })
-                          : t("team.unclaimed")}
-                    </span>
-                  </div>
-                </div>
-              )}
-            <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-            {activeFile ? (
-              compareFile ? (
-                <div className="editor-compare-workbench" aria-label={t("editor.compareView")}>
-                  <section className="editor-compare-pane" aria-label={t("editor.comparePrimary")}>
-                    <div className="editor-compare-pane-header">
-                      <span>{t("editor.comparePrimary")}</span>
-                      <strong title={activeFile.path}>{activeFile.name}</strong>
-                    </div>
-                    <Editor
-                      key={`editor:${activeFile.path}`}
-                      content={activeFile.content}
-                      language={activeFile.language}
-                      path={activeFile.path}
-                      collaboration={team.collaboration}
-                      theme={theme}
-                      fontFamily={editorFont}
-                      readOnly={readOnlyWorkspace}
-                      openFiles={openFiles}
-                      refreshNonce={treeRefreshNonce}
-                      viewState={editorViewStatesRef.current[activeFile.path] || null}
-                      onViewStateChange={handleEditorViewStateChange}
-                      onChange={handleEditorChange}
-                      onSave={saveFile}
-                      onFormat={formatPythonDocument}
-                      onValidateDocument={fs.checkPythonDocument}
-                      breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
-                      debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
-                      onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
-                      onSelectionChange={handleSelectionChange}
-                      onNavigateToLocation={handleNavigateToLocation}
-                      onFindDefinition={handleFindDefinition}
-                      editorRef={editorRef}
-                      onEditorReady={handleCompareEditorReady}
-                      navigationTarget={
-                        editorNavigationTarget?.path === activeFile.path
-                          ? editorNavigationTarget
-                          : null
-                      }
-                      highlightTarget={
-                        editorHighlightTarget?.path === activeFile.path
-                          ? editorHighlightTarget
-                          : null
-                      }
-                      onNavigationComplete={handleNavigationComplete}
-                      onHighlightComplete={handleHighlightComplete}
-                    />
-                  </section>
-                  <div className="editor-compare-divider" aria-hidden="true" />
-                  <section className="editor-compare-pane" aria-label={t("editor.compareReference")}>
-                    <div className="editor-compare-pane-header">
-                      <span>{t("editor.compareReference")}</span>
-                      <strong title={compareFile.path}>{compareFile.name}</strong>
-                    </div>
-                    <Editor
-                      key={`compare:${compareFile.path}`}
-                      content={compareFile.content}
-                      language={compareFile.language}
-                      path={compareFile.path}
-                      collaboration={team.collaboration}
-                      theme={theme}
-                      fontFamily={editorFont}
-                      readOnly
-                      openFiles={openFiles}
-                      refreshNonce={treeRefreshNonce}
-                      viewState={editorViewStatesRef.current[compareFile.path] || null}
-                      onViewStateChange={handleEditorViewStateChange}
-                      onChange={() => undefined}
-                      onSave={() => undefined}
-                      onFormat={formatPythonDocument}
-                      onValidateDocument={fs.checkPythonDocument}
-                      debugExecutionLine={debugActiveFrame?.path === compareFile.path ? debugActiveFrame.line : undefined}
-                      onSelectionChange={() => undefined}
-                      onNavigateToLocation={handleNavigateToLocation}
-                      onFindDefinition={handleFindDefinition}
-                      editorRef={compareEditorRef}
-                      onEditorReady={handleCompareEditorReady}
-                      navigationTarget={
-                        editorNavigationTarget?.path === compareFile.path
-                          ? editorNavigationTarget
-                          : null
-                      }
-                      highlightTarget={
-                        editorHighlightTarget?.path === compareFile.path
-                          ? editorHighlightTarget
-                          : null
-                      }
-                      onNavigationComplete={handleNavigationComplete}
-                      onHighlightComplete={handleHighlightComplete}
-                    />
-                  </section>
-                </div>
-              ) : activePreviewRenderer ? (
-                <div className="editor-workbench">
-                  <div
-                    className={`editor-workbench-body mode-${activePreviewMode}`}
-                  >
-                    {activePreviewMode !== "preview" && (
-                      <div className="editor-workbench-pane">
-                        <Editor
-                          key={`editor:${activeFile.path}`}
-                          content={activeFile.content}
-                          language={activeFile.language}
-                          path={activeFile.path}
-                          collaboration={team.collaboration}
-                          theme={theme}
-                          fontFamily={editorFont}
-                          readOnly={readOnlyWorkspace}
-                          openFiles={openFiles}
-                          refreshNonce={treeRefreshNonce}
-                          viewState={
-                            editorViewStatesRef.current[activeFile.path] || null
-                          }
-                          onViewStateChange={handleEditorViewStateChange}
-                          onChange={handleEditorChange}
-                          onSave={saveFile}
-                          onFormat={formatPythonDocument}
-                          onValidateDocument={fs.checkPythonDocument}
-                          breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
-                          debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
-                          onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
-                          onSelectionChange={handleSelectionChange}
-                          onNavigateToLocation={handleNavigateToLocation}
-                          onFindDefinition={handleFindDefinition}
-                          editorRef={editorRef}
-                          navigationTarget={
-                            editorNavigationTarget?.path === activeFile.path
-                              ? editorNavigationTarget
-                              : null
-                          }
-                          highlightTarget={
-                            editorHighlightTarget?.path === activeFile.path
-                              ? editorHighlightTarget
-                              : null
-                          }
-                          onNavigationComplete={handleNavigationComplete}
-                          onHighlightComplete={handleHighlightComplete}
-                        />
-                      </div>
-                    )}
-                    {activePreviewMode === "split" && (
-                      <div className="editor-workbench-divider" />
-                    )}
-                    {activePreviewMode !== "edit" && (
-                      <div
-                        className="editor-workbench-pane editor-preview-pane"
-                        ref={previewPaneRef}
-                      >
-                        {activePreviewContent}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <Editor
-                  key={`editor:${activeFile.path}`}
-                  content={activeFile.content}
-                  language={activeFile.language}
-                  path={activeFile.path}
-                  collaboration={team.collaboration}
-                  theme={theme}
-                  fontFamily={editorFont}
-                  readOnly={readOnlyWorkspace}
-                  openFiles={openFiles}
-                  refreshNonce={treeRefreshNonce}
-                  viewState={editorViewStatesRef.current[activeFile.path] || null}
-                  onViewStateChange={handleEditorViewStateChange}
-                  onChange={handleEditorChange}
-                  onSave={saveFile}
-                  onFormat={formatPythonDocument}
-                  onValidateDocument={fs.checkPythonDocument}
-                  breakpoints={isDebuggablePath(activeFile.path) ? breakpointsByPath[activeFile.path] || [] : []}
-                  debugExecutionLine={debugActiveFrame?.path === activeFile.path ? debugActiveFrame.line : undefined}
-                  onToggleBreakpoint={isDebuggablePath(activeFile.path) && !readOnlyWorkspace ? (line) => toggleBreakpoint(activeFile.path, line) : undefined}
-                  onSelectionChange={handleSelectionChange}
-                  onNavigateToLocation={handleNavigateToLocation}
-                  onFindDefinition={handleFindDefinition}
-                  onFindReferences={handleFindReferences}
-                  onReferencesFound={handleReferencesFound}
-                  editorRef={editorRef}
-                  navigationTarget={
-                    editorNavigationTarget?.path === activeFile.path
-                      ? editorNavigationTarget
-                      : null
-                  }
-                  highlightTarget={
-                    editorHighlightTarget?.path === activeFile.path
-                      ? editorHighlightTarget
-                      : null
-                  }
-                  onNavigationComplete={handleNavigationComplete}
-                  onHighlightComplete={handleHighlightComplete}
-                />
-              )
-            ) : (
-              <WorkspaceWelcome
-                workspaceDir={workspaceDir}
-                tree={fileTree}
-                openFiles={openFiles}
-                onQuickOpen={() => openCommandPalette("files")}
-                onOpenFolder={handleOpenFolder}
-                folderPickerBusy={pickingWorkspace}
-                onFocusChat={focusChat}
-                onOpenTerminal={() => toggleTerminalPanel(true)}
-                onOpenFile={openFile}
-              />
-            )}
-            </Suspense>
-            {referenceResult && (
-              <ReferencePanel
-                symbol={referenceResult.symbol}
-                references={referenceResult.references}
-                onNavigate={(path, selection) => void handleNavigateToLocation(path, selection)}
-                onClose={() => setReferenceResult(null)}
-              />
-            )}
-          </div>
-        </div>
 
         <ChatPanel
           token={token}

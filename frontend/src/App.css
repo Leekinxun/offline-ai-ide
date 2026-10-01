@@ -501,78 +501,7 @@ select:focus-visible,
 
 /* .editor-reference-* 专属样式已物理隔离抽离至 components/ReferencePanel.css (遵循 AGENTS.md 增量止血与样式解耦准则) */
 
-.editor-conflict-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--status-warning-bg);
-  color: var(--status-warning-fg);
-  border-bottom: 1px solid rgba(255, 149, 0, 0.2);
-}
-
-.editor-collaboration-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--status-info-bg);
-  color: var(--status-info-fg);
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.editor-conflict-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.editor-conflict-copy strong {
-  font-size: 12.5px;
-}
-
-.editor-conflict-copy span {
-  font-size: 12px;
-}
-
-.editor-conflict-source {
-  opacity: 0.9;
-}
-
-.editor-conflict-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.editor-conflict-btn {
-  border: 1px solid rgba(255, 149, 0, 0.25);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  border-radius: var(--radius-xs);
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.editor-conflict-btn.danger {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-}
-
-.editor-conflict-btn.danger:hover {
-  filter: brightness(0.96);
-}
-
-.editor-conflict-btn.primary {
-  background: var(--warning);
-  border-color: var(--warning);
-  color: #fff;
-}
+/* .editor-conflict-* 与 .editor-collaboration-* 专属样式已解耦抽离至 components/WorkbenchEditorArea.css */
 
 .editor-context-bar {
   display: flex;
@@ -681,56 +610,7 @@ select:focus-visible,
   color: var(--accent);
 }
 
-.editor-compare-workbench {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  background: var(--bg-primary);
-}
-
-.editor-compare-pane {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.editor-compare-pane-header {
-  display: flex;
-  flex: 0 0 30px;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border-light);
-  background: var(--surface-workbench);
-}
-
-.editor-compare-pane-header span {
-  flex: 0 0 auto;
-  color: var(--text-tertiary);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.editor-compare-pane-header strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.editor-compare-divider {
-  flex: 0 0 1px;
-  background: var(--border);
-}
+/* .editor-compare-* 专属样式已解耦抽离至 components/WorkbenchEditorArea.css */
 
 .editor-context-status {
   padding: 2px 6px;
@@ -795,88 +675,7 @@ select:focus-visible,
   filter: drop-shadow(0 0 1px color-mix(in srgb, #6f5400 80%, transparent));
 }
 
-.editor-workbench {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--bg-primary);
-}
-
-.editor-workbench-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border-light);
-  background: var(--surface-workbench);
-}
-
-.editor-workbench-segmented {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-panel-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.editor-workbench-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition);
-}
-
-.editor-workbench-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.editor-workbench-btn.active {
-  background: var(--accent);
-  color: #ffffff;
-}
-
-.editor-workbench-body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  background: var(--bg-primary);
-}
-
-.editor-workbench-pane {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-primary);
-}
-
-.editor-workbench-pane > .editor-container {
-  flex: 1;
-}
-
-.editor-workbench-divider {
-  width: 1px;
-  flex-shrink: 0;
-  background: var(--border-light);
-}
-
-.editor-preview-pane {
-  background: var(--bg-primary);
-  overflow: auto;
-  min-height: 0;
-  flex: 1 1 0;
-}
+/* .editor-workbench-* 与 .editor-preview-pane 专属样式已解耦抽离至 components/WorkbenchEditorArea.css */
 
 .file-preview-surface {
   min-height: 100%;
@@ -1708,36 +1507,7 @@ select:focus-visible,
     align-items: flex-start;
   }
 
-  .editor-workbench-toolbar {
-    justify-content: stretch;
-  }
-
-  .editor-workbench-segmented {
-    width: 100%;
-  }
-
-  .editor-workbench-btn {
-    flex: 1 1 0;
-  }
-
-  .editor-workbench-body.mode-split {
-    flex-direction: column;
-  }
-
-  .editor-workbench-body.mode-split .editor-workbench-divider {
-    width: auto;
-    height: 1px;
-  }
-
-  .editor-compare-workbench {
-    flex-direction: column;
-  }
-
-  .editor-compare-divider {
-    flex: 0 0 1px;
-    width: auto;
-    height: 1px;
-  }
+  /* .editor-workbench-* 与 .editor-compare-* 响应式规则已解耦至 WorkbenchEditorArea.css */
 
   .editor-compare-picker > span {
     display: none;
