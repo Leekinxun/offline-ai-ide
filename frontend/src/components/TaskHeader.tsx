@@ -22,10 +22,11 @@ interface TaskHeaderProps {
   hasMessages: boolean;
   historyOpen: boolean;
   changesOpen: boolean;
-  detailsCollapsed: boolean;
+  changedFilesCount?: number;
+  detailsCollapsed?: boolean;
   onToggleHistory: () => void;
   onToggleChanges: () => void;
-  onToggleDetails: () => void;
+  onToggleDetails?: () => void;
   onClear: () => void;
   onOpenIsolatedWindow: () => void;
   creatingIsolatedWindow: boolean;
@@ -44,7 +45,8 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   hasMessages,
   historyOpen,
   changesOpen,
-  detailsCollapsed,
+  changedFilesCount = 0,
+  detailsCollapsed = true,
   onToggleHistory,
   onToggleChanges,
   onToggleDetails,
@@ -75,9 +77,7 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
         : " warning";
 
   return (
-    <header
-      className={`chat-header task-header${detailsCollapsed ? " collapsed" : ""}`}
-    >
+    <header className="chat-header task-header">
       <div className="task-header-main">
         <div className="task-header-title-row">
           <span className="task-header-icon" aria-hidden="true">
@@ -106,7 +106,13 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
 
       <div className="chat-header-actions task-header-actions">
         <div className="task-header-view-tabs" role="tablist" aria-label={t("workbench.contentView")}>
-          <button type="button" role="tab" aria-selected="true" className="active">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!changesOpen}
+            className={!changesOpen ? "active" : ""}
+            onClick={() => { if (changesOpen) onToggleChanges(); }}
+          >
             {t("workbench.details.chat")}
           </button>
           <button
@@ -114,34 +120,24 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             role="tab"
             aria-selected={changesOpen}
             className={changesOpen ? "active" : ""}
-            onClick={onToggleChanges}
+            onClick={() => { if (!changesOpen) onToggleChanges(); }}
           >
-            {t("chat.changes")}
+            <span>{t("chat.changes")}</span>
+            {changedFilesCount > 0 && (
+              <span className="task-header-changes-badge">{changedFilesCount}</span>
+            )}
           </button>
         </div>
-        {!detailsCollapsed && (
-          <>
-            <button
-              type="button"
-              className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
-              title={t("chat.tasks")}
-              aria-label={t("chat.tasks")}
-              onClick={onToggleHistory}
-              disabled={isStreaming}
-            >
-              <History size={14} />
-            </button>
-            <button
-              type="button"
-              className={`sidebar-action-btn${changesOpen ? " active" : ""}`}
-              title={t("chat.changes")}
-              aria-label={t("chat.changes")}
-              onClick={onToggleChanges}
-            >
-              <GitCompare size={14} />
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          className={`sidebar-action-btn${historyOpen ? " active" : ""}`}
+          title={t("chat.tasks")}
+          aria-label={t("chat.tasks")}
+          onClick={onToggleHistory}
+          disabled={isStreaming}
+        >
+          <History size={14} />
+        </button>
         <button
           type="button"
           className="sidebar-action-btn"
@@ -152,7 +148,7 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
         >
           <PanelsTopLeft size={14} />
         </button>
-        {hasMessages && !detailsCollapsed && (
+        {hasMessages && (
           <button
             type="button"
             className="sidebar-action-btn"
@@ -164,16 +160,6 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
             <Trash2 size={14} />
           </button>
         )}
-        <button
-          type="button"
-          className="sidebar-action-btn task-header-collapse"
-          title={t(detailsCollapsed ? "chat.showDetails" : "chat.hideDetails")}
-          aria-label={t(detailsCollapsed ? "chat.showDetails" : "chat.hideDetails")}
-          aria-expanded={!detailsCollapsed}
-          onClick={onToggleDetails}
-        >
-          {detailsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-        </button>
       </div>
     </header>
   );

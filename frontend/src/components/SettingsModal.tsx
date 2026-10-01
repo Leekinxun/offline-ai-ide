@@ -14,7 +14,17 @@ import {
   Type,
   UserPlus,
   X,
+  Database,
+  Search,
+  Bot,
+  Cpu,
+  Server,
+  Puzzle,
+  Sliders,
+  Users,
+  type LucideIcon,
 } from "lucide-react";
+import "./SettingsModal.css";
 import { useAdminSettings } from "../hooks/useAdminSettings";
 import { useI18n } from "../i18n";
 import {
@@ -34,6 +44,16 @@ import { ActionConfirmDialog } from "./ActionConfirmDialog";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 
+export type SettingsTabId =
+  | "general"
+  | "models"
+  | "governance"
+  | "mcp"
+  | "plugins"
+  | "knowledge"
+  | "agents"
+  | "users";
+
 interface SettingsModalProps {
   token: string;
   currentUsername: string;
@@ -47,6 +67,7 @@ interface SettingsModalProps {
   onEditorFontChange: (fontFamily: string) => void;
   onClose: () => void;
   onShowToast: (message: string) => void;
+  initialTab?: SettingsTabId;
 }
 
 interface EditorFontOption {
@@ -212,9 +233,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onEditorFontChange,
   onClose,
   onShowToast,
+  initialTab,
 }) => {
   const { locale, locales, setLocale, t } = useI18n();
   const adminSettings = useAdminSettings(token);
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(() => initialTab || "general");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingLlm, setSavingLlm] = useState(false);
@@ -353,8 +384,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       mcpForm.serversJson !== JSON.stringify(saved.servers || [], null, 2)
     );
   }, [mcpForm, settings?.mcp]);
-
-  if (!visible) return null;
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -826,13 +855,140 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     && formDefaultEndpoint.models[0]?.modelName.trim() === settings.llm.modelName);
   const displayedModelCapabilities = capabilitiesMatchSavedDefault ? modelCapabilities : null;
 
+  interface NavItem {
+    id: SettingsTabId;
+    label: string;
+    description: string;
+    icon: LucideIcon;
+    adminOnly?: boolean;
+    badge?: number;
+  }
+
+  interface NavGroup {
+    label: string;
+    items: NavItem[];
+  }
+
+  const navGroups: NavGroup[] = useMemo(() => {
+    const isZh = locale === "zh-CN";
+    const groups: NavGroup[] = [
+      {
+        label: isZh ? "偏好与工作区" : "Preferences",
+        items: [
+          {
+            id: "general",
+            label: isZh ? "常规偏好" : "General",
+            description: isZh ? "界面语言、编辑器字体与上传限额" : "Interface, editor font & upload limits",
+            icon: Sliders,
+          },
+          {
+            id: "plugins",
+            label: isZh ? "扩展与插件" : "Plugins",
+            description: isZh ? "管理已安装插件与市场生态" : "Installed plugins & marketplace",
+            icon: Puzzle,
+          },
+          {
+            id: "knowledge",
+            label: isZh ? "知识库与记忆" : "Knowledge Base",
+            description: isZh ? "管理知识库向量索引与上下文记忆" : "Vector index & memory context",
+            icon: Database,
+          },
+        ],
+      },
+      {
+        label: isZh ? "模型与智能体" : "AI & Runtime",
+        items: [
+          {
+            id: "models",
+            label: isZh ? "模型与端点" : "Models & LLM",
+            description: isZh ? "配置大模型 API、采样参数与能力检测" : "API endpoints, sampling & capabilities",
+            icon: Cpu,
+            adminOnly: true,
+          },
+          {
+            id: "governance",
+            label: isZh ? "模型治理与限流" : "Model Governance",
+            description: isZh ? "审计模型调用、限流与成本策略" : "Audit, rate limiting & policy",
+            icon: Shield,
+          },
+          {
+            id: "mcp",
+            label: isZh ? "MCP 协议服务" : "MCP Servers",
+            description: isZh ? "管理 Model Context Protocol 工具服务" : "Model Context Protocol connections",
+            icon: Server,
+            adminOnly: true,
+          },
+          {
+            id: "agents",
+            label: isZh ? "智能体人设" : "Agent Profiles",
+            description: isZh ? "配置智能体角色定义与系统提示词" : "Role overrides & custom prompts",
+            icon: Bot,
+            adminOnly: true,
+          },
+        ],
+      },
+      {
+        label: isZh ? "安全与组织" : "Administration",
+        items: [
+          {
+            id: "users",
+            label: isZh ? "用户与权限" : "User Management",
+            description: isZh ? "注册审核、团队权限与重置密码" : "Registrations, roles & security",
+            icon: Users,
+            adminOnly: true,
+            badge: settings?.pendingRegistrations?.length || undefined,
+          },
+        ],
+      },
+    ];
+
+    return groups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !item.adminOnly || isAdmin),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [locale, isAdmin, settings?.pendingRegistrations?.length]);
+
+  const filteredNavGroups = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return navGroups;
+    return navGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) =>
+            item.label.toLowerCase().includes(q) ||
+            item.description.toLowerCase().includes(q) ||
+            item.id.toLowerCase().includes(q)
+        ),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [navGroups, searchQuery]);
+
+  const currentTabItem = useMemo(() => {
+    for (const group of navGroups) {
+      const found = group.items.find((item) => item.id === activeTab);
+      if (found) return found;
+    }
+    return navGroups[0]?.items[0] || null;
+  }, [navGroups, activeTab]);
+
+  useEffect(() => {
+    if (!currentTabItem && navGroups[0]?.items[0]) {
+      setActiveTab(navGroups[0].items[0].id);
+    }
+  }, [currentTabItem, navGroups]);
+
+  if (!visible) return null;
+
   return (
     <>
       <div className="settings-modal-overlay" onClick={onClose}>
         <div ref={modalRef} className="settings-modal panel-shell" role="dialog" aria-modal={nestedModalOpen ? undefined : true} inert={passwordTarget || confirmation ? true : undefined} aria-hidden={passwordTarget || confirmation ? true : undefined} aria-labelledby="settings-modal-title" onClick={(e) => e.stopPropagation()}>
           <div className="settings-modal-header">
             <div className="settings-modal-title">
-              <Settings size={18} />
+              <Settings size={20} />
               <div>
                 <span id="settings-modal-title">{t("settings.title")}</span>
                 <small>{t("settings.subtitle")}</small>
@@ -845,74 +1001,207 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {error && <div className="settings-error-banner">{error}</div>}
 
-          <div className="settings-grid">
-            <section className="settings-card">
-              <div className="settings-card-header">
-                <div className="settings-card-title">
-                  <Languages size={16} />
-                  <span>{t("settings.interface")}</span>
-                </div>
-                <span className="settings-card-meta">
-                  {t("settings.interfaceMeta")}
-                </span>
+          <div className="settings-layout">
+            <aside className="settings-sidebar">
+              <div className="settings-search-wrapper">
+                <Search size={14} className="settings-search-icon" />
+                <input
+                  type="search"
+                  className="settings-search-input"
+                  placeholder={locale === "zh-CN" ? "搜索设置项..." : "Search settings..."}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className="settings-search-clear"
+                    onClick={() => setSearchQuery("")}
+                    aria-label="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
               </div>
 
-              <div className="settings-form">
-                <div className="settings-field settings-field-wide">
-                  <span>{t("settings.language")}</span>
-                  <WorkbenchSelect
-                    label={t("settings.language")}
-                    value={locale}
-                    onChange={setLocale}
-                    options={locales.map((option) => ({ value: option.code, label: option.label }))}
-                  />
-                </div>
-                <div className="settings-field settings-field-wide">
-                  <span>{t("settings.editorFont")}</span>
-                  <WorkbenchSelect
-                    label={t("settings.editorFont")}
-                    value={editorFont}
-                    onChange={onEditorFontChange}
-                    options={editorFontOptions.map((option) => ({ value: option.family, label: option.label }))}
-                  />
-                </div>
-                <div className="settings-help-text">{t("settings.languageHelp")}</div>
-              </div>
-            </section>
+              <nav className="settings-nav" aria-label="Settings Categories">
+                {filteredNavGroups.map((group) => (
+                  <div key={group.label} className="settings-nav-section">
+                    <div className="settings-nav-section-title">{group.label}</div>
+                    <div className="settings-nav-section-items">
+                      {group.items.map((item) => {
+                        const Icon = item.icon;
+                        const isActive = activeTab === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`settings-nav-item${isActive ? " active" : ""}`}
+                            onClick={() => setActiveTab(item.id)}
+                            aria-selected={isActive}
+                          >
+                            <span className="settings-nav-icon">
+                              <Icon size={15} />
+                            </span>
+                            <span className="settings-nav-label">{item.label}</span>
+                            {item.badge ? (
+                              <span className="settings-nav-badge" title={`${item.badge} pending`}>
+                                {item.badge}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {filteredNavGroups.length === 0 && (
+                  <div className="settings-nav-empty">
+                    {locale === "zh-CN" ? "未找到匹配的设置分类" : "No matching settings found"}
+                  </div>
+                )}
+              </nav>
+            </aside>
 
-            <PluginManagerPanel
-              visible={visible}
-              token={token}
-              isAdmin={isAdmin}
-              teamRole={teamRole}
-              readOnly={readOnlyWorkspace}
-              onShowToast={onShowToast}
-            />
+            <main className="settings-main" role="tabpanel">
+              {currentTabItem && (
+                <header className="settings-main-header">
+                  <div className="settings-main-breadcrumb">
+                    <span>{t("settings.title")}</span>
+                    <span className="settings-main-breadcrumb-sep">/</span>
+                    <span className="current">{currentTabItem.label}</span>
+                  </div>
+                  <h2 className="settings-main-title">
+                    {React.createElement(currentTabItem.icon, { size: 18 })}
+                    <span>{currentTabItem.label}</span>
+                  </h2>
+                  <p className="settings-main-desc">{currentTabItem.description}</p>
+                </header>
+              )}
 
-            <ModelGovernancePanel
-              token={token}
-              visible={visible}
-              modelName={llmForm.endpoints[0]?.models[0]?.modelName || settings?.llm.modelName || ""}
-              workspaceId={workspaceId}
-              readOnly={readOnlyWorkspace}
-              onShowToast={onShowToast}
-            />
-
-            <KnowledgeManagerPanel
-              visible={visible}
-              token={token}
-              isAdmin={isAdmin}
-              onShowToast={onShowToast}
-            />
-
-
-            {isAdmin && (
-              loading && !settings ? (
-                <section className="settings-card">
-                  <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
-                </section>
-              ) : (
+              {activeTab === "general" && (
                 <>
+                  <section className="settings-card">
+                    <div className="settings-card-header">
+                      <div className="settings-card-title">
+                        <Languages size={16} />
+                        <span>{t("settings.interface")}</span>
+                      </div>
+                      <span className="settings-card-meta">
+                        {t("settings.interfaceMeta")}
+                      </span>
+                    </div>
+
+                    <div className="settings-form">
+                      <div className="settings-field settings-field-wide">
+                        <span>{t("settings.language")}</span>
+                        <WorkbenchSelect
+                          label={t("settings.language")}
+                          value={locale}
+                          onChange={setLocale}
+                          options={locales.map((option) => ({ value: option.code, label: option.label }))}
+                        />
+                      </div>
+                      <div className="settings-field settings-field-wide">
+                        <span>{t("settings.editorFont")}</span>
+                        <WorkbenchSelect
+                          label={t("settings.editorFont")}
+                          value={editorFont}
+                          onChange={onEditorFontChange}
+                          options={editorFontOptions.map((option) => ({ value: option.family, label: option.label }))}
+                        />
+                      </div>
+                      <div className="settings-help-text">{t("settings.languageHelp")}</div>
+                    </div>
+                  </section>
+
+                  {isAdmin && (
+                    <section className="settings-card">
+                      <div className="settings-card-header">
+                        <div className="settings-card-title">
+                          <Type size={16} />
+                          <span>{t("settings.appConfiguration")}</span>
+                        </div>
+                        <span className="settings-card-meta">
+                          {t("settings.appMeta")}
+                        </span>
+                      </div>
+
+                      <form className="settings-form" onSubmit={handleSaveApp}>
+                        <label className="settings-field settings-field-wide">
+                          <span>{t("settings.uploadMaxFileSizeMb")}</span>
+                          <input
+                            className="settings-input"
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={appForm.uploadMaxFileSizeMb}
+                            onChange={(e) =>
+                              setAppForm((prev) => ({
+                                ...prev,
+                                uploadMaxFileSizeMb: e.target.value,
+                              }))
+                            }
+                            placeholder="250"
+                          />
+                        </label>
+
+                        <div className="settings-form-footer">
+                          <span className="settings-help-text">
+                            {t("settings.uploadMaxFileSizeHelp")}
+                          </span>
+                          <button
+                            className="dialog-btn primary"
+                            type="submit"
+                            disabled={savingApp}
+                          >
+                            <Save size={14} />
+                            {savingApp ? t("settings.saving") : t("settings.saveAppSettings")}
+                          </button>
+                        </div>
+                      </form>
+                    </section>
+                  )}
+                </>
+              )}
+
+              {activeTab === "plugins" && (
+                <PluginManagerPanel
+                  visible={visible}
+                  token={token}
+                  isAdmin={isAdmin}
+                  teamRole={teamRole}
+                  readOnly={readOnlyWorkspace}
+                  onShowToast={onShowToast}
+                />
+              )}
+
+              {activeTab === "knowledge" && (
+                <KnowledgeManagerPanel
+                  visible={visible}
+                  token={token}
+                  isAdmin={isAdmin}
+                  onShowToast={onShowToast}
+                />
+              )}
+
+              {activeTab === "governance" && (
+                <ModelGovernancePanel
+                  token={token}
+                  visible={visible}
+                  modelName={llmForm.endpoints[0]?.models[0]?.modelName || settings?.llm.modelName || ""}
+                  workspaceId={workspaceId}
+                  readOnly={readOnlyWorkspace}
+                  onShowToast={onShowToast}
+                />
+              )}
+
+              {isAdmin && activeTab === "users" && (
+                loading && !settings ? (
+                  <section className="settings-card">
+                    <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
+                  </section>
+                ) : (
               <section className="settings-card">
                 <div className="settings-card-header">
                   <div className="settings-card-title">
@@ -1115,9 +1404,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   ))}
                 </div>
               </section>
+                )
+              )}
 
-              <section className="settings-card">
-                <div className="settings-card-header">
+              {isAdmin && activeTab === "mcp" && (
+                loading && !settings ? (
+                  <section className="settings-card">
+                    <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
+                  </section>
+                ) : (
+                  <section className="settings-card">
+                    <div className="settings-card-header">
                   <div className="settings-card-title">
                     <PlugZap size={16} />
                     <span>{t("settings.mcpConfiguration")}</span>
@@ -1270,13 +1567,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
               </section>
+                )
+              )}
 
-              <section className="settings-card">
-                <div className="settings-card-header">
-                  <div className="settings-card-title">
-                    <Shield size={16} />
-                    <span>{t("settings.agentProfiles")}</span>
-                  </div>
+              {isAdmin && activeTab === "agents" && (
+                loading && !settings ? (
+                  <section className="settings-card">
+                    <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
+                  </section>
+                ) : (
+                  <section className="settings-card">
+                    <div className="settings-card-header">
+                      <div className="settings-card-title">
+                        <Shield size={16} />
+                        <span>{t("settings.agentProfiles")}</span>
+                      </div>
                   <span className="settings-card-meta">{t("settings.agentProfilesMeta")}</span>
                 </div>
                 <form className="settings-form" onSubmit={handleSaveAgentProfiles}>
@@ -1300,59 +1605,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </form>
               </section>
+                )
+              )}
 
-              <section className="settings-card">
-                <div className="settings-card-header">
-                  <div className="settings-card-title">
-                    <Type size={16} />
-                    <span>{t("settings.appConfiguration")}</span>
-                  </div>
-                  <span className="settings-card-meta">
-                    {t("settings.appMeta")}
-                  </span>
-                </div>
-
-                <form className="settings-form" onSubmit={handleSaveApp}>
-                  <label className="settings-field settings-field-wide">
-                    <span>{t("settings.uploadMaxFileSizeMb")}</span>
-                    <input
-                      className="settings-input"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={appForm.uploadMaxFileSizeMb}
-                      onChange={(e) =>
-                        setAppForm((prev) => ({
-                          ...prev,
-                          uploadMaxFileSizeMb: e.target.value,
-                        }))
-                      }
-                      placeholder="250"
-                    />
-                  </label>
-
-                  <div className="settings-form-footer">
-                    <span className="settings-help-text">
-                      {t("settings.uploadMaxFileSizeHelp")}
-                    </span>
-                    <button
-                      className="dialog-btn primary"
-                      type="submit"
-                      disabled={savingApp}
-                    >
-                      <Save size={14} />
-                      {savingApp ? t("settings.saving") : t("settings.saveAppSettings")}
-                    </button>
-                  </div>
-                </form>
-              </section>
-
-              <section className="settings-card">
-                <div className="settings-card-header">
-                  <div className="settings-card-title">
-                    <Save size={16} />
-                    <span>{t("settings.llmConfiguration")}</span>
-                  </div>
+              {isAdmin && activeTab === "models" && (
+                loading && !settings ? (
+                  <section className="settings-card">
+                    <div className="settings-loading">{t("settings.loadingAdminSettings")}</div>
+                  </section>
+                ) : (
+                  <section className="settings-card">
+                    <div className="settings-card-header">
+                      <div className="settings-card-title">
+                        <Cpu size={16} />
+                        <span>{t("settings.llmConfiguration")}</span>
+                      </div>
                   <span className="settings-card-meta">
                     {t("settings.llmMeta")}
                   </span>
@@ -1627,9 +1894,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </form>
               </section>
-                </>
-              )
-            )}
+                )
+              )}
+            </main>
           </div>
         </div>
       </div>

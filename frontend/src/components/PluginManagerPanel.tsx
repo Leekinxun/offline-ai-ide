@@ -14,6 +14,7 @@ import { runRegisteredPluginCommand } from "../plugins/runtime";
 import type { PluginManagerEntry } from "../hooks/usePlugins";
 import { useExtensionPolicy } from "../hooks/useExtensionPolicy";
 import type { PermissionExplanation, RegisteredExtensionPolicyPlugin, TeamRole } from "../types";
+import "./PluginManagerPanel.css";
 
 const permissionExplanationKey = (permission: string, hookId?: string) => hookId ? `hook:${hookId}:${permission}` : `plugin:${permission}`;
 

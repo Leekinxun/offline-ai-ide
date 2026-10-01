@@ -1,0 +1,209 @@
+/* ==========================================================================
+   ModelGovernancePanel Component Styles - Physical Isolation & Form Controls
+   ========================================================================== */
+
+.model-governance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.governance-capability-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  padding-bottom: 2px;
+}
+
+.governance-capability-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.governance-suitability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.governance-suitability-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  font-size: 11.5px;
+}
+
+.governance-suitability-grid .unsuitable {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line-subtle));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-panel));
+}
+
+.governance-budget,
+.governance-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--surface-panel);
+}
+
+.governance-budget > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.governance-budget-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.governance-budget-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.governance-budget-form input,
+.governance-preflight input {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-subtle);
+  background: var(--surface-workbench);
+  color: var(--text-primary);
+  font: 12px var(--font-sans);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.governance-budget-form input:focus,
+.governance-preflight input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-subtle));
+  background: color-mix(in srgb, var(--surface-panel) 88%, var(--accent) 4%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 3px 12px -2px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+/* 主操作按钮：深邃磨砂深蓝微卡 */
+.governance-btn-primary {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 82%, #1d4ed8);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  color: #ffffff;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.governance-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 92%, #2563eb);
+  border-color: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.governance-btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 派发预检区域 */
+.governance-preflight {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.governance-preflight strong {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 次要/幽灵按钮：磨砂透气蓝微卡 */
+.governance-btn-secondary {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.governance-btn-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+
+.governance-btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.governance-dispatch-warning {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--status-warning-fg, #b5811e);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
+@media (max-width: 780px) {
+  .governance-suitability-grid {
+    grid-template-columns: 1fr;
+  }
+  .governance-budget-form {
+    grid-template-columns: 1fr;
+  }
+  .governance-preflight {
+    grid-template-columns: 1fr;
+  }
+  .governance-btn-primary,
+  .governance-btn-secondary {
+    width: 100%;
+  }
+}
