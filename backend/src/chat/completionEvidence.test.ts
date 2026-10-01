@@ -13,6 +13,20 @@ import { ValidationFeedback } from "../agent/validationFeedback.js";
 const message = (toolCalls: PersistedChatMessage["toolCalls"]): PersistedChatMessage => ({ role: "assistant", content: "", timestamp: 1, toolCalls });
 const bash = (toolCallId: string, command: string, result = "ok", isError = false) => ({ toolCallId, name: "bash", input: { command }, result, isError });
 
+test("a redirected zero-test run cannot become completed with an empty ledger", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-zero-completion-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const command = "python3 -B -m unittest discover -s empty_tests 2>&1 | tail -10";
+  const output = "Ran 0 tests in 0.000s\n\nNO TESTS RAN";
+  const validation = new ValidationFeedback(workspace);
+  validation.observeCommand({ command, toolCallId: "zero", output, isError: false, denied: false, changedFiles: [] });
+  const runtimeValidation = validation.assess([], false).report;
+  const result = deriveCompletionEvidence({ messages: [{ ...message([bash("zero", command, output)]), runtimeValidation }] });
+  assert.equal(result.outcome, "needs_attention");
+  assert.equal(result.ledger.verification[0].status, "pending");
+  assert.ok(result.ledger.blockers.includes("check"));
+});
+
 test("records changed files and successful exact command evidence", () => {
   const result = deriveCompletionEvidence({ plan: { verificationCommands: ["npm test"], acceptanceCriteria: ["Tests pass"] }, messages: [message([
     { ...bash("b1", "npm test"), fileUpdate: { path: "src/a.ts", content: "x" } },

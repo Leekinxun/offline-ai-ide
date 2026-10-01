@@ -99,6 +99,29 @@ test("denied verification stops asking and produces needs_attention, not a false
   assert.equal(deriveCompletionEvidence({ messages: result.result }).outcome, "needs_attention");
 });
 
+test("a real pipe masking a zero-test runner exit preserves unverified completion", async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, "check.cjs"), 'console.error("Ran 0 tests in 0.000s\\n\\nNO TESTS RAN"); process.exitCode = 5;');
+  const result = await run(t, f, [tool("masked-zero", "bash", { command: "npm run test 2>&1 | tail -10" }), stop(), stop(), stop()]);
+  const step = result.result[0].toolCalls?.find((item) => item.toolCallId === "masked-zero");
+  assert.equal(step?.isError, false, "tail exits zero, while the test runner exits five");
+  assert.match(step?.result || "", /Ran 0 tests/);
+  assert.equal(result.result[0].runtimeValidation?.status, "unverified");
+  assert.equal(result.result[0].runtimeValidation?.verification[0].status, "pending");
+  assert.equal(deriveCompletionEvidence({ messages: result.result }).outcome, "needs_attention");
+});
+
+test("one successful safe check chain satisfies runtime checks without a redundant repair round", async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, "package.json"), JSON.stringify({ scripts: { lint: "node lint.cjs", test: "node check.cjs" } }));
+  fs.writeFileSync(path.join(f.root, "lint.cjs"), "console.log('LINT_PASSED');\n");
+  const result = await run(t, f, [edit("edit", 1, 3), tool("checks", "bash", { command: "npm run lint && npm test" }), stop()]);
+  assert.equal(result.bodies.length, 3);
+  assert.equal(result.result[0].runtimeValidation?.status, "passed");
+  assert.equal(result.result[0].runtimeValidation?.repairAttempts, 0);
+  assert.deepEqual(result.result[0].runtimeValidation?.verification.map((item) => item.toolCallId), ["checks", "checks"]);
+});
+
 test("two failed repair feedback rounds are bounded even when the model repeatedly claims completion", async (t) => {
   const f = fixture(t);
   const result = await run(t, f, [edit("edit", 1, 2), tool("failed-check", "bash", { command: "npm run test" }), stop(), stop(), stop()]);

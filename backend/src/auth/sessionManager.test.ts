@@ -498,3 +498,27 @@ test("password reset revokes derived sessions and isolated sessions cannot upgra
   for (const token of [login.token, child.token, isolated.token]) assert.equal(manager.getSession(token), null);
   assert.ok(manager.login("alice", "new-secret"));
 });
+
+test("approval scope follows verified login parents but never a worktree's supplied flags", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crewforge-approval-scope-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const worktree = path.join(root, ".crownforge-worktrees", "project", "vibe");
+  await mkdir(worktree, { recursive: true });
+  const configPath = path.join(root, "users.json");
+  await writeFile(configPath, JSON.stringify({ allowedRoots: [root], users: [{ username: "alice", password: "secret", defaultWorkspace: root, isAdmin: true }] }));
+  const manager = new SessionManager(configPath);
+  const login = manager.login("alice", "secret")!;
+  const a = manager.createWindowSession(login.token);
+  const b = manager.createWindowSession(login.token);
+  const isolated = manager.createIsolatedSession(a.token, worktree);
+  assert.equal(manager.getApprovalScopeToken(manager.getSession(a.token)!), login.token);
+  assert.equal(manager.getApprovalScopeToken(manager.getSession(b.token)!), login.token);
+  assert.equal(manager.getApprovalScopeToken({ ...manager.getSession(isolated.token)!, isolated: false }), isolated.token);
+  assert.equal(manager.getApprovalScopeToken({ ...manager.getSession(a.token)!, username: "bob" }), null);
+  const aSnapshot = { ...manager.getSession(a.token)! };
+  manager.logout(a.token);
+  assert.equal(manager.getApprovalScopeToken(aSnapshot), null);
+  assert.equal(manager.getApprovalScopeToken(manager.getSession(b.token)!), login.token);
+  manager.logout(login.token);
+  assert.equal(manager.getSession(isolated.token), null);
+});

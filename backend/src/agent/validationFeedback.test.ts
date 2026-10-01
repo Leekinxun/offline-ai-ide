@@ -147,6 +147,66 @@ test("explicit local validation attempts count even when no files changed", (t) 
   assert.equal(result.report.verification[0].status, "passed");
 });
 
+test("masked zero-test summaries enter verification even without changed files", (t) => {
+  const root = fixture(t);
+  for (const [command, output] of [
+    ["python3 -B -m unittest discover -s empty_tests 2>&1 | tail -10", "Ran 0 tests in 0.000s\n\nNO TESTS RAN"],
+    ["python3 -m unittest discover -s empty_tests 2>&1 | tail -10", "Ran 0 tests in 0.000s\n\nOK"],
+    ["python3 -m pytest empty_tests 2>&1 | tail -10", "no tests ran in 0.01s"],
+    ["npm test 2>&1 | tail -10", "No tests found, exiting with code 0"],
+  ]) {
+    const validation = new ValidationFeedback(root);
+    validation.observeCommand({ command, toolCallId: "zero", output, isError: false, denied: false, changedFiles: [] });
+    const report = validation.assess([], false).report;
+    assert.equal(report.status, "unverified", command);
+    assert.deepEqual(report.verification.map((item) => ({ command: item.command, status: item.status, toolCallId: item.toolCallId })), [{ command, status: "pending", toolCallId: "zero" }]);
+  }
+});
+
+test("reading a zero-test example is not treated as executing verification", (t) => {
+  const validation = new ValidationFeedback(fixture(t));
+  validation.observeCommand({ command: "cat README.md", toolCallId: "read", output: "Ran 0 tests in 0.00s\nOK", isError: false, denied: false, changedFiles: [] });
+  assert.equal(validation.assess([], false).report.status, "not_required");
+});
+
+test("successful safe check chains certify their full checks without equating partial modules to discovery", (t) => {
+  const root = fixture(t, { lint: "node lint.cjs", test: "node check.cjs" });
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "npm run lint && npm test", toolCallId: "chain", output: "lint passed\ntests passed", isError: false, denied: false, changedFiles: ["app.ts"] });
+  const report = validation.assess(["app.ts"], false).report;
+  assert.equal(report.status, "passed");
+  assert.deepEqual(report.verification.map((item) => item.toolCallId), ["chain", "chain"]);
+
+  const failed = new ValidationFeedback(root);
+  failed.observeCommand({ command: "npm run lint && npm test", toolCallId: "failed", output: "Error: Process exited with code 1", isError: true, denied: false, changedFiles: ["app.ts"] });
+  assert.notEqual(failed.assess(["app.ts"], false).report.status, "passed");
+
+  fs.mkdirSync(path.join(root, "python"));
+  fs.writeFileSync(path.join(root, "python/app.py"), "value = 1\n");
+  fs.writeFileSync(path.join(root, "python/test_one.py"), "import unittest\n");
+  for (const [command, status] of [
+    ["cd python && python -B -m unittest discover -v && ruff check .", "passed"],
+    ["cd python && python -B -m unittest test_one -v && ruff check .", "unverified"],
+    ["cd python && python -B -m unittest discover -v 2>&1 | tail -10", "unverified"],
+  ]) {
+    const checks = new ValidationFeedback(root);
+    checks.observeCommand({ command, toolCallId: "python-chain", output: "Ran 1 test in 0.00s\nOK", isError: false, denied: false, changedFiles: ["python/app.py"] });
+    assert.equal(checks.assess(["python/app.py"], false).report.status, status, command);
+  }
+});
+
+test("a safe chain satisfies literal planned checks without broadening their scope", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root, ["npm run lint", "npm test"]);
+  validation.observeCommand({ command: "npm run lint && npm test", toolCallId: "planned-chain", output: "checks passed", isError: false, denied: false, changedFiles: ["app.ts"] });
+  const report = validation.assess(["app.ts"], false).report;
+  assert.equal(report.status, "passed");
+  assert.deepEqual(report.verification.map((item) => item.toolCallId), ["planned-chain", "planned-chain"]);
+  const exact = new ValidationFeedback(root, ["python3 -B -m unittest discover"]);
+  exact.observeCommand({ command: "python3 -B -m unittest test_one && ruff check .", toolCallId: "partial", output: "Ran 1 test in 0.00s\nOK", isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(exact.assess(["app.ts"], false).report.status, "unverified");
+});
+
 test("diagnostics distinguish known baseline errors, new downstream errors and stale snapshots", (t) => {
   const root = fixture(t);
   const previousError = { path: "app.ts", line: 1, column: 1, severity: "error" as const, source: "tsc", message: "old error" };

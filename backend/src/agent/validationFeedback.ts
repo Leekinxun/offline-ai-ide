@@ -10,8 +10,9 @@ import { redactSecrets } from "./secretRedaction.js";
 import { safePath } from "../utils/safePath.js";
 import { contextDigest } from "./contextManifest.js";
 import { getEditorDiagnosticFeedback, type EditorDiagnosticSnapshot } from "../chat/editorDiagnostics.js";
-import { isLocalVerificationCommand } from "./localVerification.js";
+import { isLocalVerificationCommand, planLocalVerificationCommand } from "./localVerification.js";
 import { tokenizeInspectionCommand } from "./modeCapabilities.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
 
 export interface EditorDiagnosticAdvisory extends WorkspaceDiagnostic {
   version: string;
@@ -48,6 +49,7 @@ interface CommandObservation {
   toolCallId: string;
   status: RuntimeValidationReport["verification"][number]["status"];
   denied: boolean;
+  verificationAttempt: boolean;
   versions: Record<string, string>;
   output: string;
 }
@@ -62,10 +64,11 @@ function commandKey(value: string): string {
   if (/^npm test$/.test(normalized)) return "npm run test";
   // Normalize output-only flags without allowing a filtered test/module or a
   // pipeline to stand in for full discovery. Match token boundaries, not prose.
-  if (isLocalVerificationCommand(value)) {
-    const scoped = /^cd\s+(.+?)\s+&&\s+(.+)$/.exec(value.trim());
-    if (scoped) return JSON.stringify(["cwd", tokenizeInspectionCommand(`cd ${scoped[1]}`)[1], commandKey(scoped[2])]);
-    const tokens = tokenizeInspectionCommand(value);
+  const plan = planLocalVerificationCommand(value);
+  if (plan) {
+    if (plan.cwd && plan.cwd !== ".") return JSON.stringify(["cwd", plan.cwd, commandKey(plan.commands.join(" && "))]);
+    if (plan.commands.length > 1) return JSON.stringify(["checks", ...plan.commands.map(commandKey)]);
+    const tokens = tokenizeInspectionCommand(plan.commands[0]);
     if (tokens[0] === "python" || tokens[0] === "python3") {
       const moduleAt = tokens.indexOf("-m");
       if (moduleAt > 0 && tokens[moduleAt + 1] === "unittest") {
@@ -77,12 +80,29 @@ function commandKey(value: string): string {
   }
   return normalized;
 }
+
+function observationMatchesCommand(item: CommandObservation, command: string, exact: boolean): boolean {
+  if (exact ? item.command === command : commandKey(item.command) === commandKey(command)) return true;
+  // Exit zero for a strict && chain proves every check ran successfully. A
+  // failed chain cannot certify later checks, and a pipeline cannot certify
+  // its runner exit status, so neither may supply individual passing evidence.
+  if (item.status !== "passed" || item.denied) return false;
+  const plan = planLocalVerificationCommand(item.command);
+  return Boolean(plan?.commands.some((part) => {
+    const scoped = plan.cwd && plan.cwd !== "." ? `cd ${quote(plan.cwd)} && ${part}` : part;
+    return exact ? scoped === command : commandKey(scoped) === commandKey(command);
+  }));
+}
 const diagnosticKey = (item: WorkspaceDiagnostic) => JSON.stringify([item.path, item.line, item.column, item.code, item.message]);
 
 function outputLooksLikeValidationFailure(output: string): boolean {
   // Test bodies can deliberately log errors. Use runner summaries rather than
   // treating any ERROR line in a successful test as a failed verification.
   return /(?:^|\n)\s*FAILED\s*\((?:failures|errors)=\d+|(?:^|\n)Test Suites:\s*\d+ failed|={2,}[^\n]*\b\d+ failed\b[^\n]*={2,}|(?:^|\n)Tests failed\b/i.test(output);
+}
+
+function outputIndicatesNoTests(output: string): boolean {
+  return /(?:^|\n)\s*(?:Ran 0 tests?\b|no tests ran\b|no tests found\b|Tests:\s*0 total\b)/i.test(output);
 }
 
 function attemptedLocalVerification(command: string): boolean {
@@ -232,12 +252,17 @@ export class ValidationFeedback {
 
   observeCommand(input: { command: string; toolCallId: string; output: string; isError: boolean; denied: boolean; changedFiles: readonly string[]; versions?: Record<string, string> }): void {
     const failedByOutput = !input.isError && outputLooksLikeValidationFailure(input.output);
-    const emptyTests = /\bRan 0 tests?\b/.test(input.output);
+    const emptyTests = outputIndicatesNoTests(input.output);
     const maskedCheck = !isLocalVerificationCommand(input.command) && attemptedLocalVerification(input.command);
+    // Permission recognition is intentionally narrow. A runner's zero-test or
+    // failure summary must still enter the ledger when stderr redirection or a
+    // wrapper hides that syntax. Ordinary file inspection remains inspection.
+    const verificationAttempt = attemptedLocalVerification(input.command)
+      || (!planReadOnlyShell(input.command) && (emptyTests || outputLooksLikeValidationFailure(input.output)));
     this.observations.push({
       command: input.command.trim(), toolCallId: input.toolCallId,
       status: input.isError ? /timeout|timed out/i.test(input.output) ? "timed_out" : input.denied || /cancelled|stopped/i.test(input.output) ? "cancelled" : "failed" : failedByOutput ? "failed" : emptyTests || maskedCheck ? "pending" : "passed",
-      denied: input.denied, versions: input.versions || validationFileVersions(this.workspaceDir, input.changedFiles), output: redactSecrets(input.output).slice(-4_000),
+      denied: input.denied, verificationAttempt, versions: input.versions || validationFileVersions(this.workspaceDir, input.changedFiles), output: redactSecrets(input.output).slice(-4_000),
     });
   }
 
@@ -250,7 +275,7 @@ export class ValidationFeedback {
     catch (error) { discoveryError = redactSecrets(error instanceof Error ? error.message : String(error)); }
     if (!commands.length && this.plannedCommands === undefined) {
       commands = [...new Set(this.observations
-        .filter((item) => attemptedLocalVerification(item.command) || (item.status === "failed" && outputLooksLikeValidationFailure(item.output)))
+        .filter((item) => item.verificationAttempt)
         .map((item) => item.command))];
     }
     const diagnostics = compareValidationDiagnostics(this.workspaceDir, this.baseline, getDiagnostics(this.workspaceDir), files);
@@ -259,7 +284,7 @@ export class ValidationFeedback {
     const editorFeedback = editorErrors.filter((item) => item.classification !== "pre_existing" && !this.notifiedEditorVersions.has(`${item.path}\0${item.version}`));
     const current = JSON.stringify(versions);
     const observations = commands.map((command) => [...this.observations].reverse().find((item) =>
-      (this.plannedCommands?.length ? item.command === command : commandKey(item.command) === commandKey(command)) && JSON.stringify(item.versions) === current));
+      observationMatchesCommand(item, command, Boolean(this.plannedCommands?.length)) && JSON.stringify(item.versions) === current));
     const verification = commands.map((command, index) => {
       const item = observations[index];
       return item ? { command: redactSecrets(command), status: item.status, toolCallId: item.toolCallId, outputDigest: contextDigest(item.output) } : { command: redactSecrets(command), status: "pending" as const };

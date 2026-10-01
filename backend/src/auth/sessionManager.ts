@@ -5,7 +5,7 @@ import { TaskManager } from "../agent/taskManager.js";
 import { MessageBus } from "../agent/messageBus.js";
 import { TeammateManager } from "../agent/teammateManager.js";
 import { config } from "../config.js";
-import { getTeamManager, setActiveTeamId } from "../team/sessionBridge.js";
+import { canWriteActiveWorkspace, getTeamManager, setActiveTeamId } from "../team/sessionBridge.js";
 import { reconcileChangeSetReviewRuns } from "../chat/changeSetReviewRun.js";
 import { warmTypeScriptLanguageService } from "../utils/typescriptLanguageService.js";
 import { hashPassword, hashPasswordAsync, isPasswordHash, verifyPassword, verifyPasswordAsync } from "./password.js";
@@ -650,6 +650,18 @@ export class SessionManager {
     }
     if (options.touch !== false) session.lastSeenAt = now;
     return session;
+  }
+
+  /** Grants follow a verified login, while window tokens retain run ownership. */
+  getApprovalScopeToken(session: UserSession): string | null {
+    const registered = this.getSession(session.token, { touch: false });
+    if (!registered || registered.username !== session.username || !canWriteActiveWorkspace(session)) return null;
+    // A worktree window never inherits its ordinary parent's approval grants.
+    if (registered.isolated) return registered.token;
+    const parentToken = this.sessionParents.get(registered.token);
+    if (!parentToken) return registered.token;
+    const parent = this.getSession(parentToken, { touch: false });
+    return parent && parent.username === registered.username && !parent.isolated ? parent.token : null;
   }
 
   logout(token: string): void {

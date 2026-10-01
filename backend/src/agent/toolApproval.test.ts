@@ -77,7 +77,12 @@ test("local validation shell approvals can be reused without covering arbitrary 
   const arbitrary = classifyToolApproval("bash", { command: "node scripts/custom-check.js" });
   assert.equal(arbitrary.kind, "approval");
   assert.equal(arbitrary.kind === "approval" && arbitrary.risk, "high");
-  for (const command of ["npm test && git status", "python3 -m unittest | cat"]) {
+  const chained = classifyToolApproval("bash", { command: "python -m unittest -v test_calc.py && ruff check calc.py test_calc.py" }, { workspaceDir: "/tmp/workspace-a" });
+  assert.equal(chained.kind, "approval");
+  assert.equal(chained.kind === "approval" && chained.risk, "medium");
+  assert.equal(chained.kind === "approval" && chained.canAllowSession, true);
+
+  for (const command of ["npm test && git status", "python3 -m unittest | cat", "python -m unittest -v test_calc.py || ruff check calc.py", "python -m unittest -v test_calc.py && ruff check --fix calc.py"]) {
     const composed = classifyToolApproval("bash", { command }, { workspaceDir: "/tmp/workspace-a" });
     assert.equal(composed.kind, "approval", command);
     assert.equal(composed.kind === "approval" && composed.risk, "high", command);

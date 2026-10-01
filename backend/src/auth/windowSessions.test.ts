@@ -209,3 +209,67 @@ test("login revocation stops all derived window runs through the existing sessio
   manager.logout(login.token);
   for (const run of runs) assert.equal(run.controlState.stopped, true);
 });
+
+test("real WS bulk approval continues after child token refresh but ends with the parent login", async (t) => {
+  const { a, manager } = fixture(t);
+  const server = await serve(t);
+  const unsubscribe = manager.onSessionRevoked(stopRunsForSession);
+  t.after(unsubscribe);
+  const login = manager.login("alice", "secret")!;
+  const firstResponse = await server.request("/api/auth/session/window", login.token, {});
+  const firstWindow = await firstResponse.json() as { token: string };
+  const conversation = "refresh-approved-task";
+  await appendConversationMessage(a, conversation, { role: "user", content: "seed", timestamp: Date.now() });
+  const active: ReturnType<typeof createActiveRun>[] = [];
+  t.after(() => { for (const run of active) { run.forceStop(); run.finish(); } });
+  let count = 0;
+  const create = (token: string) => {
+    const run = createActiveRun({ session: { ...manager.getSession(token)! },
+      recorder: new AgentRunRecorder(a, `refresh-grants-${++count}`, conversation, "code"),
+      queueSteering: async () => ({ ok: true, code: "accepted" }),
+    });
+    active.push(run); return run;
+  };
+  const edit = (run: ReturnType<typeof createActiveRun>) => run.approvals.requestDetailed({
+    conversationId: conversation, requestId: "edit", toolCallId: "edit", name: "edit_file",
+    input: { path: "calc.py" }, risk: "medium", reason: "Add docstring", scope: "calc.py", canAllowSession: true,
+  });
+  const clientA = await server.connect("/ws/chat", firstWindow.token);
+  clientA.socket.send(JSON.stringify({ type: "subscribe_run", conversationId: conversation }));
+  await waitUntil(() => clientA.frames.some((frame) => frame.type === "conversation_snapshot"));
+  const first = create(firstWindow.token);
+  const initial = edit(first);
+  await waitUntil(() => clientA.frames.some((frame) => frame.type === "tool_approval_request"));
+  clientA.socket.send(JSON.stringify({ type: "tool_approval_all", conversationId: conversation, runId: first.runId }));
+  assert.equal((await initial).decision, "allow_once");
+  await waitUntil(() => clientA.frames.some((frame) => frame.type === "tool_approval_all_result"));
+  first.finish(); clientA.socket.terminate();
+  const refreshResponse = await server.request("/api/auth/session/window", login.token, { path: a });
+  const refreshedWindow = await refreshResponse.json() as { token: string; workspaceDir: string };
+  assert.notEqual(refreshedWindow.token, firstWindow.token);
+  assert.equal(refreshedWindow.workspaceDir, a);
+  assert.equal(manager.getSession(login.token)?.token, login.token);
+  const refreshedClient = await server.connect("/ws/chat", refreshedWindow.token);
+  refreshedClient.socket.send(JSON.stringify({ type: "subscribe_run", conversationId: conversation }));
+  await waitUntil(() => refreshedClient.frames.some((frame) => frame.type === "conversation_snapshot"));
+  const continued = create(refreshedWindow.token);
+  assert.equal(continued.ownerSessionToken, refreshedWindow.token);
+  assert.equal((await edit(continued)).decision, "allow_once");
+  assert.equal(continued.approvals.pendingCount(), 0);
+  assert.equal(refreshedClient.frames.some((frame) => frame.type === "tool_approval_request"), false);
+  assert.equal((await server.request("/api/auth/logout", refreshedWindow.token, {})).status, 200);
+  assert.equal(continued.controlState.stopped, true); continued.finish();
+  const afterChildLogout = await server.request("/api/auth/session/window", login.token, { path: a });
+  const thirdWindow = await afterChildLogout.json() as { token: string };
+  const third = create(thirdWindow.token);
+  assert.equal((await edit(third)).decision, "allow_once");
+  assert.equal((await server.request("/api/auth/logout", login.token, {})).status, 200);
+  assert.equal(third.controlState.stopped, true); third.finish();
+  assert.equal((await server.request("/api/auth/session/window", login.token, {})).status, 401);
+  const nextLogin = manager.login("alice", "secret")!;
+  const nextWindow = manager.createWindowSession(nextLogin.token);
+  const next = create(nextWindow.token);
+  const nextApproval = edit(next);
+  assert.equal(next.approvals.pendingCount(), 1);
+  next.approvals.cancelAll(); assert.equal((await nextApproval).decision, "deny"); next.finish();
+});

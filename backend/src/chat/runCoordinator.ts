@@ -228,13 +228,21 @@ export class ActiveChatRun {
     this.ownerUsername = input.session.username;
     this.ownerSessionToken = input.ownerSessionToken || input.session.token;
     this.ownerSession = input.session;
-    this.ownerSessionRegistered = Boolean(sessionManager.getSession(this.ownerSessionToken, { touch: false }));
+    const registeredOwner = sessionManager.getSession(this.ownerSessionToken, { touch: false });
+    const registeredExecution = sessionManager.getSession(input.session.token, { touch: false });
+    if (registeredOwner && registeredOwner.username !== input.session.username) throw new Error("Run owner does not match the authenticated session");
+    if (registeredExecution && this.ownerSessionToken !== input.session.token) throw new Error("Run owner token does not match the authenticated session");
+    if (!registeredOwner && input.session.createdAt !== undefined) throw new Error("Run owner session expired");
+    this.ownerSessionRegistered = Boolean(registeredOwner);
+    const approvalScopeToken = sessionManager.getApprovalScopeToken(input.session);
     this.teamId = resolveActiveTeam(input.session)?.id || null;
     this.recorder = input.recorder;
     this.queueSteering = input.queueSteering;
     this.approvals = new ToolApprovalSession((request) => {
       this.emit({ type: "tool_approval_request", ...request });
-    }, undefined, conversationApprovalGrants(this.ownerSessionToken, this.workspaceDir, this.conversationId));
+    }, undefined, approvalScopeToken
+      ? conversationApprovalGrants(approvalScopeToken, this.workspaceDir, this.conversationId)
+      : createToolApprovalGrants());
     // The agent only uses readyState and send. The transport survives browser
     // disconnects so a run can finish and be observed by another device.
     this.transport = {
