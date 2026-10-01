@@ -100,14 +100,17 @@ export function useEditorSync(options: UseEditorSyncOptions): void {
   // 3. 对比编辑器滚动镜像绑定
   useEffect(() => {
     if (!compareFile || !compareScrollLinked) return;
-    const primary = editorRef.current;
-    const reference = compareEditorRef.current;
-    if (!primary || !reference) return;
+
+    let disposed = false;
+    let pollTimer: number | null = null;
+    let primaryScroll: monaco.IDisposable | null = null;
+    let referenceScroll: monaco.IDisposable | null = null;
 
     const expectedScroll = new Map<
       monaco.editor.IStandaloneCodeEditor,
       { scrollTop?: number; scrollLeft?: number }
     >();
+
     const mirrorScroll = (
       source: monaco.editor.IStandaloneCodeEditor,
       target: monaco.editor.IStandaloneCodeEditor,
@@ -154,39 +157,63 @@ export function useEditorSync(options: UseEditorSyncOptions): void {
       }
       mirrorScroll(source, target, event.scrollTopChanged, event.scrollLeftChanged);
     });
-    const primaryScroll = listen(primary, reference);
-    const referenceScroll = listen(reference, primary);
-    mirrorScroll(primary, reference, true, true);
+
+    let attempts = 0;
+    const tryAttach = () => {
+      if (disposed) return;
+      const primary = editorRef.current;
+      const reference = compareEditorRef.current;
+      if (!primary || !reference) {
+        if (attempts++ < 30) {
+          pollTimer = window.setTimeout(tryAttach, 60);
+        }
+        return;
+      }
+      primaryScroll = listen(primary, reference);
+      referenceScroll = listen(reference, primary);
+      mirrorScroll(primary, reference, true, true);
+    };
+
+    tryAttach();
+
     return () => {
-      primaryScroll.dispose();
-      referenceScroll.dispose();
+      disposed = true;
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+      primaryScroll?.dispose();
+      referenceScroll?.dispose();
     };
   }, [compareEditorMountVersion, compareEditorRef, compareFile, compareScrollLinked, editorRef]);
 
-  // 4. 预览分栏模式双向同步滚动（支持 Markdown 与 JSON 视觉解析器）
+  // 4. 预览分栏模式双向同步滚动（支持 Markdown 与 JSON 视觉解析器，带挂载重试自愈）
   useEffect(() => {
     if (activePreviewMode !== "split" || !activeFile) {
       return;
     }
 
-    const editor = editorRef.current;
-    const previewContainer = previewPaneRef.current;
-    if (!editor || !previewContainer) {
-      return;
-    }
+    let disposed = false;
+    let pollTimer: number | null = null;
+    let editorScrollDisposable: monaco.IDisposable | null = null;
+    let attachedContainer: HTMLElement | null = null;
+    let previewScrollHandler: ((e: Event) => void) | null = null;
 
-    const findScrollableElement = (): HTMLElement | null => {
-      if (!previewContainer) return null;
+    const clearSyncTimer = () => {
+      if (syncScrollTimerRef.current !== null) {
+        window.cancelAnimationFrame(syncScrollTimerRef.current);
+        syncScrollTimerRef.current = null;
+      }
+    };
+
+    const findScrollableElement = (container: HTMLElement): HTMLElement | null => {
       const candidates = [
-        previewContainer.querySelector<HTMLElement>(".json-preview-tree"),
-        previewContainer.querySelector<HTMLElement>(".external-markdown-preview"),
-        previewContainer.querySelector<HTMLElement>(".file-preview-surface"),
-        previewContainer.querySelector<HTMLElement>("[data-scroll-container]"),
+        container.querySelector<HTMLElement>(".external-markdown-preview"),
+        container.querySelector<HTMLElement>(".json-preview-tree"),
+        container.querySelector<HTMLElement>("[data-scroll-container]"),
+        container.querySelector<HTMLElement>(".file-preview-surface"),
       ];
       for (const el of candidates) {
         if (el && el.scrollHeight > el.clientHeight) return el;
       }
-      const all = previewContainer.querySelectorAll<HTMLElement>("*");
+      const all = container.querySelectorAll<HTMLElement>("*");
       for (let i = 0; i < all.length; i++) {
         const el = all[i];
         if (el.scrollHeight > el.clientHeight + 2) {
@@ -196,83 +223,110 @@ export function useEditorSync(options: UseEditorSyncOptions): void {
           }
         }
       }
-      if (previewContainer.scrollHeight > previewContainer.clientHeight) {
-        return previewContainer;
+      if (container.scrollHeight > container.clientHeight) {
+        return container;
       }
-      return candidates.find(Boolean) || (previewContainer.firstElementChild as HTMLElement) || previewContainer;
+      return candidates.find(Boolean) || (container.firstElementChild as HTMLElement) || container;
     };
 
-    let scrollEl = findScrollableElement();
+    let attempts = 0;
+    const tryAttach = () => {
+      if (disposed) return;
+      const editor = editorRef.current;
+      const previewContainer = previewPaneRef.current;
 
-    const clearSyncTimer = () => {
-      if (syncScrollTimerRef.current !== null) {
-        window.cancelAnimationFrame(syncScrollTimerRef.current);
-        syncScrollTimerRef.current = null;
+      if (!editor || !previewContainer) {
+        if (attempts++ < 30) {
+          pollTimer = window.setTimeout(tryAttach, 60);
+        }
+        return;
+      }
+
+      let scrollEl = findScrollableElement(previewContainer);
+
+      // Monaco 编辑器滚动 -> 驱动预览侧滚动
+      editorScrollDisposable = editor.onDidScrollChange((event) => {
+        if (!event.scrollTopChanged) return;
+        if (isSyncingScrollRef.current === "preview") return;
+
+        if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) {
+          scrollEl = findScrollableElement(previewContainer);
+        }
+        if (!scrollEl) return;
+
+        const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+        const previewScrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
+        if (editorScrollable <= 0 || previewScrollable <= 0) return;
+
+        const ratio = editor.getScrollTop() / editorScrollable;
+        const targetScrollTop = ratio * previewScrollable;
+
+        if (Math.abs(scrollEl.scrollTop - targetScrollTop) > 1) {
+          isSyncingScrollRef.current = "editor";
+          scrollEl.scrollTop = targetScrollTop;
+          clearSyncTimer();
+          syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+            isSyncingScrollRef.current = null;
+          });
+        }
+      });
+
+      // 预览侧滚动 -> 驱动 Monaco 编辑器滚动
+      const handlePreviewScroll = (e: Event) => {
+        if (isSyncingScrollRef.current === "editor") return;
+        const eventTarget = e.target as HTMLElement | null;
+        if (!eventTarget || eventTarget === editor.getDomNode()?.parentElement) return;
+
+        const target = (eventTarget.scrollHeight > eventTarget.clientHeight ? eventTarget : null)
+          || scrollEl
+          || findScrollableElement(previewContainer);
+        if (!target) return;
+
+        const previewScrollable = target.scrollHeight - target.clientHeight;
+        const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+        if (previewScrollable <= 0 || editorScrollable <= 0) return;
+
+        const ratio = target.scrollTop / previewScrollable;
+        const targetScrollTop = ratio * editorScrollable;
+
+        if (Math.abs(editor.getScrollTop() - targetScrollTop) > 1) {
+          isSyncingScrollRef.current = "preview";
+          editor.setScrollTop(targetScrollTop);
+          clearSyncTimer();
+          syncScrollTimerRef.current = window.requestAnimationFrame(() => {
+            isSyncingScrollRef.current = null;
+          });
+        }
+      };
+
+      previewContainer.addEventListener("scroll", handlePreviewScroll, {
+        capture: true,
+        passive: true,
+      });
+      attachedContainer = previewContainer;
+      previewScrollHandler = handlePreviewScroll;
+
+      // 绑定成功后执行一次初始同步
+      const initialScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      if (initialScrollable > 0 && scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight) {
+        const ratio = editor.getScrollTop() / initialScrollable;
+        scrollEl.scrollTop = ratio * (scrollEl.scrollHeight - scrollEl.clientHeight);
       }
     };
 
-    // Monaco 编辑器滚动 -> 驱动预览侧滚动
-    const handleEditorScroll = editor.onDidScrollChange((event) => {
-      if (!event.scrollTopChanged) return;
-      if (isSyncingScrollRef.current === "preview") return;
-
-      if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) {
-        scrollEl = findScrollableElement();
-      }
-      if (!scrollEl) return;
-
-      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
-      const previewScrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
-      if (editorScrollable <= 0 || previewScrollable <= 0) return;
-
-      const ratio = editor.getScrollTop() / editorScrollable;
-      const targetScrollTop = ratio * previewScrollable;
-
-      if (Math.abs(scrollEl.scrollTop - targetScrollTop) > 1) {
-        isSyncingScrollRef.current = "editor";
-        scrollEl.scrollTop = targetScrollTop;
-        clearSyncTimer();
-        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
-          isSyncingScrollRef.current = null;
-        });
-      }
-    });
-
-    // 预览侧滚动 -> 驱动 Monaco 编辑器滚动
-    const handlePreviewScroll = (e: Event) => {
-      if (isSyncingScrollRef.current === "editor") return;
-      const target = (e.target as HTMLElement) || scrollEl;
-      if (!target || target === editor.getDomNode()?.parentElement) return;
-
-      const previewScrollable = target.scrollHeight - target.clientHeight;
-      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
-      if (previewScrollable <= 0 || editorScrollable <= 0) return;
-
-      const ratio = target.scrollTop / previewScrollable;
-      const targetScrollTop = ratio * editorScrollable;
-
-      if (Math.abs(editor.getScrollTop() - targetScrollTop) > 1) {
-        isSyncingScrollRef.current = "preview";
-        editor.setScrollTop(targetScrollTop);
-        clearSyncTimer();
-        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
-          isSyncingScrollRef.current = null;
-        });
-      }
-    };
-
-    previewContainer.addEventListener("scroll", handlePreviewScroll, {
-      capture: true,
-      passive: true,
-    });
+    tryAttach();
 
     return () => {
-      handleEditorScroll.dispose();
-      previewContainer.removeEventListener("scroll", handlePreviewScroll, {
-        capture: true,
-      });
+      disposed = true;
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+      editorScrollDisposable?.dispose();
+      if (attachedContainer && previewScrollHandler) {
+        attachedContainer.removeEventListener("scroll", previewScrollHandler, {
+          capture: true,
+        });
+      }
       clearSyncTimer();
       isSyncingScrollRef.current = null;
     };
-  }, [activeFile, activePreviewMode, editorRef, previewPaneRef]);
+  }, [activeFile, activePreviewMode, compareEditorMountVersion, editorRef, previewPaneRef]);
 }

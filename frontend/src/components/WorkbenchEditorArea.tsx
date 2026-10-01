@@ -447,6 +447,7 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
                         onNavigateToLocation={onNavigateToLocation}
                         onFindDefinition={onFindDefinition}
                         editorRef={editorRef}
+                        onEditorReady={onCompareEditorReady}
                         navigationTarget={
                           editorNavigationTarget?.path === activeFile.path
                             ? editorNavigationTarget
@@ -502,6 +503,7 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
                 onFindReferences={onFindReferences}
                 onReferencesFound={onReferencesFound}
                 editorRef={editorRef}
+                onEditorReady={onCompareEditorReady}
                 navigationTarget={
                   editorNavigationTarget?.path === activeFile.path
                     ? editorNavigationTarget
