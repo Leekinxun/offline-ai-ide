@@ -15,6 +15,7 @@ import {
 import { PRODUCT_NAME, PRODUCT_VERSION } from "../brand";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "../i18n";
+import "./LandingPage.css";
 
 type Theme = "light" | "dark";
 type Mode = "ask" | "code" | "review" | "plan";
