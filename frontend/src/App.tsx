@@ -92,13 +92,6 @@ import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
-import {
-  applyHunkSelections,
-  buildConflictHunks,
-  countRemoteSelections,
-  formatLineRange,
-} from "./utils/conflicts";
-
 const SettingsModal = lazy(() =>
   import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
 );
@@ -108,8 +101,8 @@ const Editor = lazy(() =>
 const TeamPanel = lazy(() =>
   import("./components/TeamPanel").then((module) => ({ default: module.TeamPanel }))
 );
-const DiffEditor = lazy(() =>
-  import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
+const DiffViewerModal = lazy(() =>
+  import("./components/DiffViewerModal").then((module) => ({ default: module.DiffViewerModal }))
 );
 const MobileApp = lazy(() =>
   import("./mobile/MobileApp").then((module) => ({ default: module.MobileApp }))
@@ -515,9 +508,6 @@ function AuthenticatedApp({
   const [claimSaveConfirmation, setClaimSaveConfirmation] = useState<{ file: OpenFile; username: string } | null>(null);
   const [claimSaveBusy, setClaimSaveBusy] = useState(false);
   const [claimSaveError, setClaimSaveError] = useState<string | null>(null);
-  const [mergeSelections, setMergeSelections] = useState<Record<string, "local" | "remote">>(
-    {}
-  );
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
@@ -1026,7 +1016,6 @@ function AuthenticatedApp({
       }
       if (diffViewerPath) {
         setDiffViewerPath(null);
-        setMergeSelections({});
         return;
       }
       if (checkpointsVisible) {
@@ -2340,7 +2329,6 @@ function AuthenticatedApp({
       )
     );
     setDiffViewerPath(null);
-    setMergeSelections({});
     showToast(t("app.remoteVersionLoaded"));
   }, [activeFilePath, showToast, t]);
 
@@ -2357,7 +2345,6 @@ function AuthenticatedApp({
       )
     );
     setDiffViewerPath(null);
-    setMergeSelections({});
     showToast(t("app.localVersionKept"));
   }, [activeFilePath, showToast, t]);
 
@@ -2381,7 +2368,6 @@ function AuthenticatedApp({
         )
       );
       setDiffViewerPath(null);
-      setMergeSelections({});
     } catch {
       showToast(t("app.failedToSaveFile"));
     }
@@ -2904,83 +2890,11 @@ function AuthenticatedApp({
     activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
   const diffViewerFile =
     diffViewerPath ? openFiles.find((file) => file.path === diffViewerPath) || null : null;
-  const closeDiffViewer = useCallback(() => {
-    setDiffViewerPath(null);
-    setMergeSelections({});
-  }, []);
-  const diffDialogRef = useModalDialogFocus<HTMLDivElement>({
-    open: Boolean(diffViewerFile?.remoteContent !== undefined),
-    onClose: closeDiffViewer,
-  });
-  const conflictSourceMessage = diffViewerFile ? getConflictSourceMessage(diffViewerFile) : null;
-  const conflictHunks = useMemo(
-    () =>
-      diffViewerFile?.remoteContent !== undefined
-        ? buildConflictHunks(diffViewerFile.content, diffViewerFile.remoteContent)
-        : [],
-    [diffViewerFile?.content, diffViewerFile?.remoteContent]
-  );
   const activeConflictSourceMessage = activeConflictFile
     ? getConflictSourceMessage(activeConflictFile)
     : null;
   const workspaceLabel = workspaceDir.split(/[\\/]/).filter(Boolean).pop() || workspaceDir;
 
-  useEffect(() => {
-    if (!diffViewerFile || diffViewerFile.remoteContent === undefined) {
-      setMergeSelections({});
-      return;
-    }
-
-    setMergeSelections((current) => {
-      const next: Record<string, "local" | "remote"> = {};
-      for (const hunk of conflictHunks) {
-        next[hunk.id] = current[hunk.id] || "local";
-      }
-      return next;
-    });
-  }, [conflictHunks, diffViewerFile]);
-
-  const mergedConflictContent =
-    diffViewerFile && diffViewerFile.remoteContent !== undefined
-      ? applyHunkSelections(diffViewerFile.content, conflictHunks, mergeSelections)
-      : null;
-  const remoteSelectedCount = countRemoteSelections(conflictHunks, mergeSelections);
-  const handleUseAllRemoteBlocks = useCallback(() => {
-    setMergeSelections(
-      Object.fromEntries(
-        conflictHunks.map((hunk) => [hunk.id, "remote" as const])
-      )
-    );
-  }, [conflictHunks]);
-
-  const handleKeepAllLocalBlocks = useCallback(() => {
-    setMergeSelections(
-      Object.fromEntries(
-        conflictHunks.map((hunk) => [hunk.id, "local" as const])
-      )
-    );
-  }, [conflictHunks]);
-
-  const handleApplyMergedResult = useCallback(() => {
-    if (!diffViewerFile || mergedConflictContent === null) return;
-    setOpenFiles((prev) =>
-      prev.map((file) =>
-        file.path === diffViewerFile.path
-          ? {
-              ...file,
-              content: mergedConflictContent,
-              modified: true,
-              version: diffViewerFile.remoteVersion ?? file.version,
-              updatedAt: diffViewerFile.remoteUpdatedAt ?? file.updatedAt,
-              ...buildClearedRemoteState(),
-            }
-          : file
-      )
-    );
-    setDiffViewerPath(null);
-    setMergeSelections({});
-    showToast(t("app.mergeApplied"));
-  }, [diffViewerFile, mergedConflictContent, showToast, t]);
 
   const activeConversation = chat.currentConversationId
     ? chat.conversations.find((conversation) => conversation.id === chat.currentConversationId)
@@ -4137,173 +4051,40 @@ function AuthenticatedApp({
       {toast && <div className="toast">{toast}</div>}
 
       {diffViewerFile && diffViewerFile.remoteContent !== undefined && (
-          <div
-            className="settings-modal-overlay"
-          onClick={closeDiffViewer}
-        >
-          <div
-            ref={diffDialogRef}
-            tabIndex={-1}
-            className="settings-modal diff-modal panel-shell"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="diff-modal-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-header">
-              <div className="settings-modal-title">
-                <h2 id="diff-modal-title">{t("app.diffViewerTitle")}</h2>
-              </div>
-              <button
-                className="settings-modal-close"
-                aria-label={t("common.close")}
-                title={t("common.close")}
-                onClick={closeDiffViewer}
-              >
-                ×
-              </button>
-            </div>
-            <div className="diff-modal-meta">
-              <span>{diffViewerFile.path}</span>
-              {conflictSourceMessage && (
-                <span className="diff-modal-source">{conflictSourceMessage}</span>
-              )}
-            </div>
-            <div className="diff-modal-body">
-              <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-                <DiffEditor
-                  height="100%"
-                  original={diffViewerFile.remoteContent}
-                  modified={diffViewerFile.content}
-                  language={diffViewerFile.language}
-                  theme={getEditorThemeName(theme)}
-                  options={{
-                    readOnly: true,
-                    renderSideBySide: true,
-                    minimap: { enabled: false },
-                    ...DEFAULT_EDITOR_FONT_OPTIONS,
-                    fontFamily: editorFont,
-                    automaticLayout: true,
-                  }}
-                />
-              </Suspense>
-            </div>
-            <div className="diff-merge-panel">
-              <div className="diff-merge-header">
-                <div>
-                  <strong>{t("app.mergeConflictBlocks")}</strong>
-                  <p>{t("app.mergeConflictBlocksHint")}</p>
-                </div>
-                <div className="diff-merge-summary">
-                  <span className="diff-merge-count">
-                    {t("app.mergeRemoteSelectedCount", {
-                      count: remoteSelectedCount,
-                      total: conflictHunks.length,
-                    })}
-                  </span>
-                  {conflictHunks.length > 0 && (
-                    <div className="diff-merge-bulk-actions">
-                      <button className="dialog-btn" onClick={handleKeepAllLocalBlocks}>
-                        {t("app.mergeKeepAllLocal")}
-                      </button>
-                      <button className="dialog-btn" onClick={handleUseAllRemoteBlocks}>
-                        {t("app.mergeUseAllRemote")}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {conflictHunks.length === 0 ? (
-                <div className="diff-merge-empty">{t("app.mergeNoBlocks")}</div>
-              ) : (
-                <div className="diff-merge-list">
-                  {conflictHunks.map((hunk, index) => {
-                    const selection = mergeSelections[hunk.id] || "local";
-                    return (
-                      <div key={hunk.id} className="diff-hunk-card">
-                        <div className="diff-hunk-head">
-                          <span className="diff-hunk-index">#{index + 1}</span>
-                          <span className="diff-hunk-selection">
-                            {selection === "remote"
-                              ? t("app.mergeBlockRemote")
-                              : t("app.mergeBlockLocal")}
-                          </span>
-                        </div>
-                        <div className="diff-hunk-columns">
-                          <div className="diff-hunk-side">
-                            <div className="diff-hunk-label">
-                              {t("app.mergeLocalSnippet", {
-                                range: formatLineRange(hunk.localStart, hunk.localEnd),
-                              })}
-                            </div>
-                            <pre className="diff-hunk-code">
-                              {hunk.localLines.join("\n") || " "}
-                            </pre>
-                            <button
-                              className={`dialog-btn${
-                                selection === "local" ? " primary" : ""
-                              }`}
-                              onClick={() =>
-                                setMergeSelections((prev) => ({
-                                  ...prev,
-                                  [hunk.id]: "local",
-                                }))
-                              }
-                            >
-                              {t("app.mergeKeepLocalBlock")}
-                            </button>
-                          </div>
-                          <div className="diff-hunk-side">
-                            <div className="diff-hunk-label">
-                              {t("app.mergeRemoteSnippet", {
-                                range: formatLineRange(hunk.remoteStart, hunk.remoteEnd),
-                              })}
-                            </div>
-                            <pre className="diff-hunk-code">
-                              {hunk.remoteLines.join("\n") || " "}
-                            </pre>
-                            <button
-                              className={`dialog-btn${
-                                selection === "remote" ? " primary" : ""
-                              }`}
-                              onClick={() =>
-                                setMergeSelections((prev) => ({
-                                  ...prev,
-                                  [hunk.id]: "remote",
-                                }))
-                              }
-                            >
-                              {t("app.mergeUseRemoteBlock")}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <div className="dialog-actions diff-modal-actions">
-              <button className="dialog-btn primary" onClick={handleApplyMergedResult}>
-                {t("app.mergeApplyResult")}
-              </button>
-              <button className="dialog-btn" onClick={handleKeepLocalVersion}>
-                {t("app.keepLocalVersion")}
-              </button>
-              <button className="dialog-btn" onClick={handleReloadRemoteVersion}>
-                {t("app.loadRemoteVersion")}
-              </button>
-              {diffViewerFile.remoteConflictReason === "save" && (
-                <button
-                  className="dialog-btn primary"
-                  onClick={() => void handleForceSaveAfterVersionConflict()}
-                >
-                  {t("app.overwriteRemoteVersion")}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+          <DiffViewerModal
+            file={diffViewerFile}
+            conflictSourceMessage={getConflictSourceMessage(diffViewerFile)}
+            theme={theme}
+            editorFont={editorFont}
+            onClose={() => setDiffViewerPath(null)}
+            onApplyMerge={(mergedContent) => {
+              setOpenFiles((prev) =>
+                prev.map((file) =>
+                  file.path === diffViewerFile.path
+                    ? {
+                        ...file,
+                        content: mergedContent,
+                        modified: true,
+                        version: diffViewerFile.remoteVersion ?? file.version,
+                        updatedAt: diffViewerFile.remoteUpdatedAt ?? file.updatedAt,
+                        ...buildClearedRemoteState(),
+                      }
+                    : file
+                )
+              );
+              setDiffViewerPath(null);
+              showToast(t("app.mergeApplied"));
+            }}
+            onKeepLocalVersion={handleKeepLocalVersion}
+            onReloadRemoteVersion={handleReloadRemoteVersion}
+            onForceSave={
+              diffViewerFile.remoteConflictReason === "save"
+                ? () => void handleForceSaveAfterVersionConflict()
+                : undefined
+            }
+          />
+        </Suspense>
       )}
 
       <ActionConfirmDialog
