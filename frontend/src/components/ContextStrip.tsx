@@ -2,6 +2,7 @@ import React from "react";
 import { CollaborationState, ContextIndexState, ContextManifest, ContextState, KnowledgeState, McpState } from "../types";
 import { useI18n } from "../i18n";
 import { Database, Search, Users } from "lucide-react";
+import "./ContextStrip.css";
 
 interface ContextStripProps {
   contextState: ContextState;

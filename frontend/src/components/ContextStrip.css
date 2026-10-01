@@ -1,0 +1,104 @@
+/* ==========================================================================
+   ContextStrip Component Styles - Physical Isolation
+   ========================================================================== */
+
+.context-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.16fr) minmax(0, 0.92fr) minmax(0, 0.92fr);
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--surface-workbench);
+}
+
+.context-strip-card {
+  display: flex;
+  min-width: 0;
+  min-height: 54px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 78%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.context-strip-action {
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), transform var(--transition);
+}
+
+.context-strip-action:hover {
+  border-color: color-mix(in srgb, var(--accent-crown) 44%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent-crown) 8%, var(--surface-panel-strong));
+  transform: translateY(-1px);
+}
+
+.context-strip-card-head,
+.context-strip-label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+}
+
+.context-strip-card-head {
+  justify-content: space-between;
+}
+
+.context-strip-label {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.context-strip-value,
+.context-strip-card strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-strip-detail {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-strip-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-quiet);
+}
+
+.context-strip-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-crown);
+  transition: width 0.25s ease;
+}
+
+.context-strip-card.context-warning .context-strip-progress span,
+.context-strip-card.mcp-warning .context-strip-label {
+  background: var(--warning);
+  color: var(--status-warning-fg);
+}
+
+.context-strip-card.context-compacting .context-strip-progress span {
+  background: var(--accent-forge);
+}

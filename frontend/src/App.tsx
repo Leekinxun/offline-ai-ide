@@ -53,6 +53,8 @@ import {
 } from "./hooks/usePanelLayout";
 import { useWorkbenchShortcuts } from "./hooks/useWorkbenchShortcuts";
 import { useEditorTabs } from "./hooks/useEditorTabs";
+import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
+import { useEditorSync } from "./hooks/useEditorSync";
 import {
   normalizeWorkspaceRelativePath,
   isSameWorkspacePath,
@@ -160,13 +162,6 @@ const EDITOR_FONT_OPTIONS = [
     family: "'Monaco', 'Menlo', 'Courier New', monospace",
   },
 ];
-
-async function sha256Text(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 
 export default function App() {
   if (window.location.pathname === "/mobile" || window.location.pathname.startsWith("/mobile/")) {
@@ -372,7 +367,6 @@ function AuthenticatedApp({
   const viewport = useViewportBreakpoint();
   const editorProblems = useEditorProblems();
   // --- State ---
-  const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
   const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -436,16 +430,10 @@ function AuthenticatedApp({
   const [editorHighlightTarget, setEditorHighlightTarget] =
     useState<EditorHighlightTarget | null>(null);
   const [referenceResult, setReferenceResult] = useState<{ symbol: string; references: ReferenceLocation[] } | null>(null);
-  const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
-  const lastWorkspaceMtimeRef = useRef(0);
-  const savedBufferContentRef = useRef<Record<string, string>>({});
-  const collaborationBufferVersionRef = useRef<Record<string, number>>({});
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const previewPaneRef = useRef<HTMLDivElement | null>(null);
-  const isSyncingScrollRef = useRef<"editor" | "preview" | null>(null);
-  const syncScrollTimerRef = useRef<number | null>(null);
   const navigationRequestRef = useRef(0);
   const highlightRequestRef = useRef(0);
   const editorViewStatesRef = useRef<
@@ -606,6 +594,35 @@ function AuthenticatedApp({
           : prev
       );
     }, []),
+  });
+
+  const {
+    fileTree,
+    setFileTree,
+    treeRefreshNonce,
+    setTreeRefreshNonce,
+    lastWorkspaceMtimeRef,
+    loadTree,
+    handleCreateEntry,
+    handleCopyEntry,
+    handleDeleteEntry,
+    handleDeleteEntries,
+    updateMovedPathsInEditor,
+    handleRenameEntry,
+    handleMoveEntry,
+    handleDownloadEntry,
+    handleUploadEntries,
+  } = useWorkspaceFiles({
+    fs,
+    showToast,
+    t,
+    setOpenFiles,
+    setActiveFilePath,
+    setDiffViewerPath,
+    setPreviewModes,
+    setEditorNavigationTarget,
+    setEditorHighlightTarget,
+    removeDeletedEntriesFromState,
   });
 
   useEffect(() => {
@@ -1039,31 +1056,6 @@ function AuthenticatedApp({
   );
 
 
-
-  // --- Load file tree ---
-  const loadTree = useCallback(async () => {
-    try {
-      const tree = await fs.fetchTree();
-      setFileTree(tree);
-      const visiblePaths = collectVisiblePaths(tree);
-      setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
-      setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setPreviewModes((prev) => {
-        const next: Record<string, FilePreviewMode> = {};
-        for (const [path, mode] of Object.entries(prev)) {
-          if (visiblePaths.has(path)) {
-            next[path] = mode;
-          }
-        }
-        return next;
-      });
-      lastWorkspaceMtimeRef.current = Date.now();
-      setTreeRefreshNonce((prev) => prev + 1);
-    } catch {
-      showToast(t("app.failedToLoadFileTree"));
-    }
-  }, [fs, showToast, t]);
 
   useEffect(() => {
     loadTree();
@@ -1587,135 +1579,6 @@ function AuthenticatedApp({
     [fs, showToast, t]
   );
 
-  const handleCreateEntry = useCallback(
-    async (path: string, isDirectory: boolean) => {
-      await fs.createEntry(path, isDirectory);
-    },
-    [fs]
-  );
-
-  const handleCopyEntry = useCallback(
-    async (sourcePath: string, targetDirectory: string) => {
-      const result = await fs.copyEntry(sourcePath, targetDirectory);
-      showToast(t("app.copiedEntry", { path: result.path }));
-      return result;
-    },
-    [fs, showToast, t]
-  );
-
-  const handleDeleteEntry = useCallback(
-    async (path: string) => {
-      const deletedPaths: string[] = [];
-      try {
-        await fs.deleteEntry(path);
-        deletedPaths.push(path);
-      } finally {
-        if (deletedPaths.length > 0) {
-          removeDeletedEntriesFromState(deletedPaths);
-        }
-      }
-    },
-    [fs, removeDeletedEntriesFromState]
-  );
-
-  const handleDeleteEntries = useCallback(
-    async (paths: string[]) => {
-      const targets = pruneNestedPaths(paths);
-      const deletedPaths: string[] = [];
-
-      try {
-        for (const path of targets) {
-          await fs.deleteEntry(path);
-          deletedPaths.push(path);
-        }
-      } finally {
-        if (deletedPaths.length > 0) {
-          removeDeletedEntriesFromState(deletedPaths);
-        }
-      }
-    },
-    [fs, removeDeletedEntriesFromState]
-  );
-
-  const updateMovedPathsInEditor = useCallback((oldPath: string, newPath: string) => {
-      setPreviewModes((current) => {
-        let changed = false;
-        const next: typeof current = {};
-        for (const [previewPath, mode] of Object.entries(current)) {
-          const remappedPath = remapMovedPath(previewPath, oldPath, newPath);
-          next[remappedPath] = mode;
-          changed ||= remappedPath !== previewPath;
-        }
-        return changed ? next : current;
-      });
-      setOpenFiles((prev) =>
-        prev.map((file) => {
-          const path = remapMovedPath(file.path, oldPath, newPath);
-          return path !== file.path
-            ? {
-                ...file,
-                path,
-                name: path.split("/").pop() || path,
-                language: getLanguage(path.split("/").pop() || ""),
-              }
-            : file;
-        })
-      );
-      setActiveFilePath((current) =>
-        current ? remapMovedPath(current, oldPath, newPath) : current
-      );
-      setEditorNavigationTarget((current) =>
-        current
-          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
-          : current
-      );
-      setEditorHighlightTarget((current) =>
-        current
-          ? { ...current, path: remapMovedPath(current.path, oldPath, newPath) }
-          : current
-      );
-    }, []);
-
-  const handleRenameEntry = useCallback(
-    async (oldPath: string, newPath: string) => {
-      await fs.renameEntry(oldPath, newPath);
-      updateMovedPathsInEditor(oldPath, newPath);
-    },
-    [fs, updateMovedPathsInEditor]
-  );
-
-  const handleMoveEntry = useCallback(
-    async (sourcePath: string, targetDirectory: string) => {
-      const result = await fs.moveEntry(sourcePath, targetDirectory);
-      if (result.sourcePath !== result.path) {
-        updateMovedPathsInEditor(result.sourcePath, result.path);
-        showToast(t("app.movedEntry", { path: result.path }));
-      }
-      return result;
-    },
-    [fs, showToast, t, updateMovedPathsInEditor]
-  );
-
-  const handleDownloadEntry = useCallback(
-    async (path: string, type: FileNode["type"]) => {
-      const filename = await fs.downloadEntry(path, type);
-      showToast(t("app.downloaded", { filename }));
-    },
-    [fs, showToast, t]
-  );
-
-  const handleUploadEntries = useCallback(
-    async (
-      files: { path: string; file: File }[],
-      options?: { overwrite?: boolean; targetPath?: string }
-    ) => {
-      const result = await fs.uploadEntries(files, options);
-      showToast(t("app.uploaded", { count: result.uploaded }));
-      return result;
-    },
-    [fs, showToast, t]
-  );
-
   // --- Selection tracking ---
   const handleSelectionChange = useCallback(
     (selection: SelectionInfo | null) => {
@@ -1999,46 +1862,6 @@ function AuthenticatedApp({
     closeWorkspaceDrawers,
   });
 
-  useEffect(() => {
-    if (!activeFile || readOnlyWorkspace || !activeFile.version) return;
-    if (!activeFile.modified) {
-      savedBufferContentRef.current[activeFile.path] = activeFile.content;
-      const registeredVersion = collaborationBufferVersionRef.current[activeFile.path];
-      if (registeredVersion !== undefined) {
-        team.closeBuffer(activeFile.path, registeredVersion);
-        delete collaborationBufferVersionRef.current[activeFile.path];
-      }
-      return;
-    }
-    const savedContent = savedBufferContentRef.current[activeFile.path];
-    if (savedContent === undefined) return;
-    const timer = window.setTimeout(() => {
-      const version = (collaborationBufferVersionRef.current[activeFile.path] || 0) + 1;
-      void Promise.all([sha256Text(activeFile.content), sha256Text(savedContent)]).then(([digest, savedDigest]) => {
-        if (team.registerBuffer({ path: activeFile.path, version, digest, savedDigest, baseDigest: savedDigest, revision: activeFile.version! })) {
-          collaborationBufferVersionRef.current[activeFile.path] = version;
-        }
-      }).catch((reason) => showToast(reason instanceof Error ? reason.message : t("collaboration.bufferFailed")));
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [activeFile?.content, activeFile?.modified, activeFile?.path, activeFile?.version, readOnlyWorkspace, showToast, t, team.closeBuffer, team.registerBuffer]);
-
-  useEffect(() => {
-    if (!activeFile) return;
-    const timer = window.setTimeout(() => {
-      void chat.contextManifest.preview({
-        path: activeFile.path,
-        content: activeFile.content,
-        language: activeFile.language,
-        selection: selectionInfo?.text,
-        dirty: activeFile.modified,
-        selectionRange: selectionInfo
-          ? { startLine: selectionInfo.startLine, endLine: selectionInfo.endLine }
-          : undefined,
-      });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [activeFile?.language, activeFile?.modified, activeFile?.path, chat.contextManifest.preview, selectionInfo?.endLine, selectionInfo?.startLine, selectionInfo?.text]);
   const toggleBreakpoint = useCallback((path: string, line: number) => {
     setBreakpointsByPath((previous) => {
       const current = previous[path] || [];
@@ -2069,71 +1892,6 @@ function AuthenticatedApp({
     },
     []
   );
-
-  useEffect(() => {
-    if (!compareFile || !compareScrollLinked) return;
-    const primary = editorRef.current;
-    const reference = compareEditorRef.current;
-    if (!primary || !reference) return;
-
-    const expectedScroll = new Map<
-      monaco.editor.IStandaloneCodeEditor,
-      { scrollTop?: number; scrollLeft?: number }
-    >();
-    const mirrorScroll = (
-      source: monaco.editor.IStandaloneCodeEditor,
-      target: monaco.editor.IStandaloneCodeEditor,
-      syncVertical: boolean,
-      syncHorizontal: boolean
-    ) => {
-      const sourceLayout = source.getLayoutInfo();
-      const targetLayout = target.getLayoutInfo();
-      const sourceVerticalRange = Math.max(0, source.getScrollHeight() - sourceLayout.height);
-      const targetVerticalRange = Math.max(0, target.getScrollHeight() - targetLayout.height);
-      const sourceHorizontalRange = Math.max(0, source.getScrollWidth() - sourceLayout.contentWidth);
-      const targetHorizontalRange = Math.max(0, target.getScrollWidth() - targetLayout.contentWidth);
-      const position = {
-        ...(syncVertical
-          ? { scrollTop: sourceVerticalRange > 0
-              ? (source.getScrollTop() / sourceVerticalRange) * targetVerticalRange
-              : 0 }
-          : {}),
-        ...(syncHorizontal
-          ? { scrollLeft: sourceHorizontalRange > 0
-              ? (source.getScrollLeft() / sourceHorizontalRange) * targetHorizontalRange
-              : 0 }
-          : {}),
-      };
-      const changesVertical = position.scrollTop !== undefined &&
-        Math.abs(position.scrollTop - target.getScrollTop()) > 0.5;
-      const changesHorizontal = position.scrollLeft !== undefined &&
-        Math.abs(position.scrollLeft - target.getScrollLeft()) > 0.5;
-      if (!changesVertical && !changesHorizontal) return;
-      expectedScroll.set(target, position);
-      target.setScrollPosition(position);
-    };
-
-    const listen = (
-      source: monaco.editor.IStandaloneCodeEditor,
-      target: monaco.editor.IStandaloneCodeEditor
-    ) => source.onDidScrollChange((event) => {
-      const expected = expectedScroll.get(source);
-      if (expected) {
-        const matchesTop = expected.scrollTop === undefined || Math.abs(expected.scrollTop - event.scrollTop) <= 0.5;
-        const matchesLeft = expected.scrollLeft === undefined || Math.abs(expected.scrollLeft - event.scrollLeft) <= 0.5;
-        expectedScroll.delete(source);
-        if (matchesTop && matchesLeft) return;
-      }
-      mirrorScroll(source, target, event.scrollTopChanged, event.scrollLeftChanged);
-    });
-    const primaryScroll = listen(primary, reference);
-    const referenceScroll = listen(reference, primary);
-    mirrorScroll(primary, reference, true, true);
-    return () => {
-      primaryScroll.dispose();
-      referenceScroll.dispose();
-    };
-  }, [compareEditorMountVersion, compareFile, compareScrollLinked]);
 
   useEffect(() => {
     if (compareFilePath && !compareFile) {
@@ -2189,118 +1947,23 @@ function AuthenticatedApp({
         })
       : null;
 
-  // 预览分栏模式双向同步滚动（支持 Markdown 与 JSON 视觉解析器）
-  useEffect(() => {
-    if (activePreviewMode !== "split" || !activeFile) {
-      return;
-    }
+  useEditorSync({
+    activeFile,
+    readOnlyWorkspace,
+    team,
+    chat,
+    selectionInfo,
+    showToast,
+    t,
+    editorRef,
+    compareEditorRef,
+    previewPaneRef,
+    compareFile,
+    compareScrollLinked,
+    compareEditorMountVersion,
+    activePreviewMode,
+  });
 
-    const editor = editorRef.current;
-    const previewContainer = previewPaneRef.current;
-    if (!editor || !previewContainer) {
-      return;
-    }
-
-    const findScrollableElement = (): HTMLElement | null => {
-      if (!previewContainer) return null;
-      const candidates = [
-        previewContainer.querySelector<HTMLElement>(".json-preview-tree"),
-        previewContainer.querySelector<HTMLElement>(".external-markdown-preview"),
-        previewContainer.querySelector<HTMLElement>(".file-preview-surface"),
-        previewContainer.querySelector<HTMLElement>("[data-scroll-container]"),
-      ];
-      for (const el of candidates) {
-        if (el && el.scrollHeight > el.clientHeight) return el;
-      }
-      const all = previewContainer.querySelectorAll<HTMLElement>("*");
-      for (let i = 0; i < all.length; i++) {
-        const el = all[i];
-        if (el.scrollHeight > el.clientHeight + 2) {
-          const style = window.getComputedStyle(el);
-          if (style.overflowY === "auto" || style.overflowY === "scroll") {
-            return el;
-          }
-        }
-      }
-      if (previewContainer.scrollHeight > previewContainer.clientHeight) {
-        return previewContainer;
-      }
-      return candidates.find(Boolean) || (previewContainer.firstElementChild as HTMLElement) || previewContainer;
-    };
-
-    let scrollEl = findScrollableElement();
-
-    const clearSyncTimer = () => {
-      if (syncScrollTimerRef.current !== null) {
-        window.cancelAnimationFrame(syncScrollTimerRef.current);
-        syncScrollTimerRef.current = null;
-      }
-    };
-
-    // 1. Monaco 编辑器滚动 -> 驱动预览侧滚动
-    const handleEditorScroll = editor.onDidScrollChange((event) => {
-      if (!event.scrollTopChanged) return;
-      if (isSyncingScrollRef.current === "preview") return;
-
-      if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) {
-        scrollEl = findScrollableElement();
-      }
-      if (!scrollEl) return;
-
-      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
-      const previewScrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
-      if (editorScrollable <= 0 || previewScrollable <= 0) return;
-
-      const ratio = editor.getScrollTop() / editorScrollable;
-      const targetScrollTop = ratio * previewScrollable;
-
-      if (Math.abs(scrollEl.scrollTop - targetScrollTop) > 1) {
-        isSyncingScrollRef.current = "editor";
-        scrollEl.scrollTop = targetScrollTop;
-        clearSyncTimer();
-        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
-          isSyncingScrollRef.current = null;
-        });
-      }
-    });
-
-    // 2. 预览侧滚动 -> 驱动 Monaco 编辑器滚动 (使用 capture 监听捕获子元素滚动)
-    const handlePreviewScroll = (e: Event) => {
-      if (isSyncingScrollRef.current === "editor") return;
-      const target = (e.target as HTMLElement) || scrollEl;
-      if (!target || target === editor.getDomNode()?.parentElement) return;
-
-      const previewScrollable = target.scrollHeight - target.clientHeight;
-      const editorScrollable = editor.getScrollHeight() - editor.getLayoutInfo().height;
-      if (previewScrollable <= 0 || editorScrollable <= 0) return;
-
-      const ratio = target.scrollTop / previewScrollable;
-      const targetScrollTop = ratio * editorScrollable;
-
-      if (Math.abs(editor.getScrollTop() - targetScrollTop) > 1) {
-        isSyncingScrollRef.current = "preview";
-        editor.setScrollTop(targetScrollTop);
-        clearSyncTimer();
-        syncScrollTimerRef.current = window.requestAnimationFrame(() => {
-          isSyncingScrollRef.current = null;
-        });
-      }
-    };
-
-    previewContainer.addEventListener("scroll", handlePreviewScroll, {
-      capture: true,
-      passive: true,
-    });
-
-    return () => {
-      handleEditorScroll.dispose();
-      previewContainer.removeEventListener("scroll", handlePreviewScroll, {
-        capture: true,
-      });
-      clearSyncTimer();
-      isSyncingScrollRef.current = null;
-    };
-  }, [activeFile?.path, activeFile?.content, activePreviewMode, editorRef]);
   const activeConflictFile =
     activeFile && activeFile.remoteUpdated && activeFile.modified ? activeFile : null;
   const diffViewerFile =

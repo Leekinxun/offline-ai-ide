@@ -1,0 +1,162 @@
+/* ==========================================================================
+   ToolApprovalStack & ToolApprovalCard Component Styles
+   ========================================================================== */
+
+.tool-approval-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+}
+
+.tool-approval-bulk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tool-approval-bulk button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-approval-card {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 48%, var(--line-strong));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-panel-strong));
+  box-shadow: var(--shadow-sm);
+}
+
+.tool-approval-card.risk-high {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-panel-strong));
+}
+
+.tool-approval-heading,
+.tool-approval-heading > div,
+.tool-approval-scope {
+  display: flex;
+}
+
+.tool-approval-heading {
+  align-items: center;
+  gap: 9px;
+}
+
+.tool-approval-heading > div {
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-approval-heading strong {
+  font-size: 12px;
+}
+
+.tool-approval-heading span,
+.tool-approval-card p,
+.tool-approval-scope {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tool-approval-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.risk-high .tool-approval-icon {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.tool-approval-card p {
+  margin: 9px 0 7px;
+  line-height: 1.45;
+}
+
+.tool-approval-scope {
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tool-approval-scope code {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-approval-details {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tool-approval-details summary {
+  cursor: pointer;
+}
+
+.tool-approval-details pre {
+  max-height: 150px;
+  margin: 7px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: 10px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 11px;
+}
+
+.tool-approval-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.tool-approval-actions .tool-approval-allow {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.tool-approval-actions .tool-approval-deny {
+  color: var(--danger);
+}

@@ -3,6 +3,7 @@ import { ShieldCheck } from "lucide-react";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "../types";
 import { useI18n } from "../i18n";
 import { ToolApprovalCard } from "./ToolApprovalCard";
+import "./ToolApprovalStack.css";
 
 interface ToolApprovalStackProps {
   requests: ToolApprovalRequest[];

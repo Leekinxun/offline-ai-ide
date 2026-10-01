@@ -1,0 +1,89 @@
+/* ==========================================================================
+   TaskHeader Component Styles - Physical Isolation
+   ========================================================================== */
+
+.task-header {
+  min-height: 66px;
+  align-items: flex-start;
+  padding: 11px 12px 10px;
+  gap: 10px;
+  background: var(--surface-panel-strong);
+  border-bottom-color: var(--line-subtle);
+}
+
+.task-header-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.task-header-title-row,
+.task-header-status {
+  display: flex;
+  align-items: center;
+}
+
+.task-header-title-row {
+  gap: 8px;
+}
+
+.task-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent-crown) 28%, var(--line-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-crown) 12%, transparent);
+  color: var(--accent-crown);
+}
+
+.task-header-status {
+  min-width: 0;
+  gap: 6px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.task-header-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.task-header-status-dot.connected {
+  background: var(--success);
+}
+
+.task-header-status-dot.warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
+.task-header-status-dot.running {
+  background: var(--accent-crown);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-crown) 16%, transparent);
+  animation: chat-run-pulse 1.5s ease-in-out infinite;
+}
+
+.task-header-continuing {
+  overflow: hidden;
+  max-width: 96px;
+  margin-left: 2px;
+  padding-left: 7px;
+  border-left: 1px solid var(--line-subtle);
+  color: var(--accent-crown);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-header-actions {
+  align-self: flex-start;
+  gap: 3px;
+}

@@ -2,6 +2,8 @@
    ChatPanel Component Styles - Physical Isolation & 2026 Modern IDE Redesign
    ========================================================================== */
 
+@import "./ChatPanelBase.css";
+
 /* 确保详情折叠时严格不占位 */
 .chat-details-region[hidden] {
   display: none !important;

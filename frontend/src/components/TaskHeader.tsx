@@ -11,6 +11,7 @@ import {
 import { useI18n } from "../i18n";
 import { CompletionEvidence, ExecutionContract } from "../types";
 import type { AiHealthInfo } from "../hooks/useChat";
+import "./TaskHeader.css";
 
 interface TaskHeaderProps {
   taskTitle: string;
