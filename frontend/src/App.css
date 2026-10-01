@@ -3897,33 +3897,6 @@ select:focus-visible,
   font-size: 13px;
 }
 
-/* ==================== Settings Modal ==================== */
-.settings-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay-scrim);
-  backdrop-filter: blur(8px);
-  z-index: 1100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.settings-modal {
-  width: min(1080px, 100%);
-  max-height: min(760px, calc(100vh - 48px));
-  background: var(--surface-panel);
-  border: 1px solid var(--elevated-stroke);
-  border-radius: 18px;
-  box-shadow: var(--shadow-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-
-
 /* ==========================================================================
    已全面解耦迁移模块说明：
    1. 设置模态框基础与表单卡片 -> components/SettingsModal.css

@@ -52,6 +52,18 @@ import {
   FILES_ASSISTANT_MAX_WIDTH,
 } from "./hooks/usePanelLayout";
 import { useWorkbenchShortcuts } from "./hooks/useWorkbenchShortcuts";
+import { useEditorTabs } from "./hooks/useEditorTabs";
+import {
+  normalizeWorkspaceRelativePath,
+  isSameWorkspacePath,
+  isPathEqualOrDescendant,
+  remapMovedPath,
+  pruneNestedPaths,
+  collectVisiblePaths,
+  isReadOnlyTeamRole,
+  isDebuggablePath,
+  buildClearedRemoteState,
+} from "./utils/workspacePaths";
 import {
   DefinitionLocation,
   FileNode,
@@ -334,98 +346,7 @@ interface EditorHighlightTarget extends FileSelectionRange {
   requestId: number;
 }
 
-/**
- * 规范化工作区相对路径：
- * 1. 统一正反斜杠；
- * 2. 若误传工作区绝对路径，自动剥离工作区前缀；
- * 3. 剔除前导 `./` 和多余的正斜杠 `/`，保证全局使用纯净唯一的相对路径。
- */
-function normalizeWorkspaceRelativePath(rawPath: string, workspaceDir?: string): string {
-  if (!rawPath) return "";
-  let normalized = rawPath.replace(/\\/g, "/").trim();
-  if (workspaceDir) {
-    const wsNormalized = workspaceDir.replace(/\\/g, "/").replace(/\/+$/, "");
-    if (normalized.toLowerCase().startsWith(wsNormalized.toLowerCase() + "/")) {
-      normalized = normalized.slice(wsNormalized.length + 1);
-    }
-  }
-  return normalized.replace(/^\.\//, "").replace(/^\/+/, "");
-}
 
-function isSameWorkspacePath(left: string | null | undefined, right: string | null | undefined, workspaceDir?: string): boolean {
-  if (!left || !right) return left === right;
-  return normalizeWorkspaceRelativePath(left, workspaceDir) === normalizeWorkspaceRelativePath(right, workspaceDir);
-}
-
-function isPathEqualOrDescendant(candidate: string, target: string): boolean {
-  return candidate === target || candidate.startsWith(`${target}/`);
-}
-
-function remapMovedPath(candidate: string, oldPath: string, newPath: string): string {
-  if (candidate === oldPath) return newPath;
-  return candidate.startsWith(`${oldPath}/`)
-    ? `${newPath}${candidate.slice(oldPath.length)}`
-    : candidate;
-}
-
-function pruneNestedPaths(paths: string[]): string[] {
-  const uniquePaths = Array.from(new Set(paths.filter(Boolean))).sort(
-    (left, right) => left.length - right.length || left.localeCompare(right)
-  );
-  const pruned: string[] = [];
-
-  for (const currentPath of uniquePaths) {
-    if (pruned.some((path) => isPathEqualOrDescendant(currentPath, path))) {
-      continue;
-    }
-    pruned.push(currentPath);
-  }
-
-  return pruned;
-}
-
-function collectVisiblePaths(nodes: FileNode[]): Set<string> {
-  const paths = new Set<string>();
-  const visit = (entries: FileNode[]) => {
-    for (const node of entries) {
-      paths.add(node.path);
-      if (node.children) {
-        visit(node.children);
-      }
-    }
-  };
-  visit(nodes);
-  return paths;
-}
-
-function isReadOnlyTeamRole(role: TeamRole | null | undefined): boolean {
-  return role === "viewer";
-}
-
-function isDebuggablePath(path: string): boolean {
-  return /\.(?:js|mjs|cjs|py|pyw)$/i.test(path);
-}
-
-function buildClearedRemoteState(): Pick<
-  OpenFile,
-  | "remoteUpdated"
-  | "remoteContent"
-  | "remoteVersion"
-  | "remoteUpdatedAt"
-  | "remoteConflictReason"
-  | "remoteConflictSource"
-  | "remoteConflictActor"
-> {
-  return {
-    remoteUpdated: false,
-    remoteContent: undefined,
-    remoteVersion: undefined,
-    remoteUpdatedAt: undefined,
-    remoteConflictReason: undefined,
-    remoteConflictSource: undefined,
-    remoteConflictActor: undefined,
-  };
-}
 
 function AuthenticatedApp({
   token,
@@ -452,9 +373,6 @@ function AuthenticatedApp({
   const editorProblems = useEditorProblems();
   // --- State ---
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
-  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
-  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [compareFilePath, setCompareFilePath] = useState<string | null>(null);
   const [compareScrollLinked, setCompareScrollLinked] = useState(true);
   const [compareEditorMountVersion, setCompareEditorMountVersion] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -508,19 +426,11 @@ function AuthenticatedApp({
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [mobilePairingVisible, setMobilePairingVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
-  const [claimSaveConfirmation, setClaimSaveConfirmation] = useState<{ file: OpenFile; username: string } | null>(null);
-  const [claimSaveBusy, setClaimSaveBusy] = useState(false);
-  const [claimSaveError, setClaimSaveError] = useState<string | null>(null);
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
   const [toast, setToast] = useState<string | null>(null);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const pickingWorkspaceRef = useRef(false);
-  const openingPathsRef = useRef<Set<string>>(new Set());
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-
-  const [previewModes, setPreviewModes] = useState<Record<string, FilePreviewMode>>(
-    {}
-  );
   const [editorNavigationTarget, setEditorNavigationTarget] =
     useState<EditorNavigationTarget | null>(null);
   const [editorHighlightTarget, setEditorHighlightTarget] =
@@ -562,15 +472,145 @@ function AuthenticatedApp({
     setDebugStartRequest(null);
   }, [workspaceDir]);
 
-  useEffect(() => {
-    setReferenceResult(null);
-  }, [activeFilePath]);
-
   // --- Toast ---
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  const team = useTeam(token, workspaceDir, (nextWorkspace) => {
+    if (nextWorkspace !== workspaceDir) {
+      void onChangeWorkspace(nextWorkspace);
+    }
+  });
+  const readOnlyWorkspace = isReadOnlyTeamRole(team.activeTeam?.role);
+
+  const inferConflictSource = useCallback(
+    (
+      path: string,
+      options?: {
+        preferredActor?: string;
+        knownRemoteUpdatedAt?: number;
+      }
+    ): { source: "team_member" | "external" | "unknown"; actor?: string } => {
+      const preferredActor = options?.preferredActor?.trim();
+      if (preferredActor && preferredActor !== username) {
+        return { source: "team_member", actor: preferredActor };
+      }
+
+      const activeTeam = team.activeTeam;
+      if (!activeTeam) {
+        return { source: "external", actor: undefined };
+      }
+
+      const matchingClaim = activeTeam.claims.find(
+        (claim) => claim.path === path && claim.username !== username
+      );
+      if (matchingClaim) {
+        return { source: "team_member", actor: matchingClaim.username };
+      }
+
+      const matchingPresence = activeTeam.presence.find(
+        (entry) =>
+          entry.online &&
+          entry.username !== username &&
+          entry.activeFilePath === path
+      );
+      if (matchingPresence) {
+        return { source: "team_member", actor: matchingPresence.username };
+      }
+
+      const matchingActivity = activeTeam.activity.find((entry) => {
+        const payloadPath =
+          entry.payload && typeof entry.payload.path === "string"
+            ? entry.payload.path
+            : undefined;
+        return (
+          entry.type === "file_saved" &&
+          entry.username !== username &&
+          payloadPath === path &&
+          (typeof options?.knownRemoteUpdatedAt !== "number" ||
+            Math.abs(entry.createdAt - options.knownRemoteUpdatedAt) < 10_000)
+        );
+      });
+      if (matchingActivity) {
+        return { source: "team_member", actor: matchingActivity.username };
+      }
+
+      const hasOtherOnlineMembers = activeTeam.presence.some(
+        (entry) => entry.online && entry.username !== username
+      );
+      if (hasOtherOnlineMembers) {
+        return { source: "unknown", actor: undefined };
+      }
+
+      return { source: "external", actor: undefined };
+    },
+    [team.activeTeam, username]
+  );
+
+  const {
+    openFiles,
+    setOpenFiles,
+    activeFilePath,
+    setActiveFilePath,
+    compareFilePath,
+    setCompareFilePath,
+    previewModes,
+    setPreviewModes,
+    activeFile,
+    activeClaim,
+    activeCollaborators,
+    openFile,
+    closeTab,
+    closeOtherTabs,
+    closeTabsToTheRight,
+    closeAllTabs,
+    handleEditorChange,
+    saveFile,
+    claimSaveConfirmation,
+    setClaimSaveConfirmation,
+    claimSaveBusy,
+    claimSaveError,
+    setClaimSaveError,
+    forceSaveClaimedFile,
+    removeDeletedEntriesFromState,
+  } = useEditorTabs({
+    workspaceDir,
+    fs,
+    team,
+    readOnlyWorkspace,
+    username,
+    showToast,
+    t,
+    inferConflictSource,
+    setDiffViewerPath,
+    setWorkspaceView,
+    setEditorAssistantVisible,
+    onDeletedPaths: useCallback((deletedPaths: string[]) => {
+      setEditorNavigationTarget((prev) =>
+        prev &&
+        deletedPaths.some((deletedPath) =>
+          isPathEqualOrDescendant(prev.path, deletedPath)
+        )
+          ? null
+          : prev
+      );
+
+      setEditorHighlightTarget((prev) =>
+        prev &&
+        deletedPaths.some((deletedPath) =>
+          isPathEqualOrDescendant(prev.path, deletedPath)
+        )
+          ? null
+          : prev
+      );
+    }, []),
+  });
+
+  useEffect(() => {
+    setReferenceResult(null);
+  }, [activeFilePath]);
 
   const compactWorkspace = viewportWidth <= 1100;
   const narrowWorkspace = viewportWidth <= 860;
@@ -1306,89 +1346,7 @@ function AuthenticatedApp({
     },
     [chat, loadChatConversation]
   );
-  const team = useTeam(token, workspaceDir, (nextWorkspace) => {
-    if (nextWorkspace !== workspaceDir) {
-      void onChangeWorkspace(nextWorkspace);
-    }
-  });
-  const readOnlyWorkspace = isReadOnlyTeamRole(team.activeTeam?.role);
-  const activeClaim =
-    activeFilePath && team.activeTeam
-      ? team.activeTeam.claims.find((claim) => claim.path === activeFilePath) || null
-      : null;
-  const activeCollaborators =
-    activeFilePath && team.activeTeam
-      ? team.activeTeam.presence.filter(
-          (entry) =>
-            entry.online &&
-            entry.username !== username &&
-            entry.activeFilePath === activeFilePath
-        )
-      : [];
 
-  const inferConflictSource = useCallback(
-    (
-      path: string,
-      options?: {
-        preferredActor?: string;
-        knownRemoteUpdatedAt?: number;
-      }
-    ): { source: "team_member" | "external" | "unknown"; actor?: string } => {
-      const preferredActor = options?.preferredActor?.trim();
-      if (preferredActor && preferredActor !== username) {
-        return { source: "team_member", actor: preferredActor };
-      }
-
-      const activeTeam = team.activeTeam;
-      if (!activeTeam) {
-        return { source: "external", actor: undefined };
-      }
-
-      const matchingClaim = activeTeam.claims.find(
-        (claim) => claim.path === path && claim.username !== username
-      );
-      if (matchingClaim) {
-        return { source: "team_member", actor: matchingClaim.username };
-      }
-
-      const matchingPresence = activeTeam.presence.find(
-        (entry) =>
-          entry.online &&
-          entry.username !== username &&
-          entry.activeFilePath === path
-      );
-      if (matchingPresence) {
-        return { source: "team_member", actor: matchingPresence.username };
-      }
-
-      const matchingActivity = activeTeam.activity.find((entry) => {
-        const payloadPath =
-          entry.payload && typeof entry.payload.path === "string"
-            ? entry.payload.path
-            : undefined;
-        return (
-          entry.type === "file_saved" &&
-          entry.username !== username &&
-          payloadPath === path &&
-          (typeof options?.knownRemoteUpdatedAt !== "number" ||
-            Math.abs(entry.createdAt - options.knownRemoteUpdatedAt) < 10_000)
-        );
-      });
-      if (matchingActivity) {
-        return { source: "team_member", actor: matchingActivity.username };
-      }
-
-      const hasOtherOnlineMembers = activeTeam.presence.some(
-        (entry) => entry.online && entry.username !== username
-      );
-      if (hasOtherOnlineMembers) {
-        return { source: "unknown", actor: undefined };
-      }
-
-      return { source: "external", actor: undefined };
-    },
-    [team.activeTeam, username]
-  );
 
   const getConflictSourceMessage = useCallback(
     (file: OpenFile): string | null => {
@@ -1567,59 +1525,7 @@ function AuthenticatedApp({
     };
   }, [activeFilePath, fs, inferConflictSource, loadTree, openFiles]);
 
-  // --- File operations ---
-  const openFile = useCallback(
-    async (rawPath: string) => {
-      setWorkspaceView("files");
-      if (window.innerWidth > 1180) setEditorAssistantVisible(true);
-      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
-      if (!canonicalPath) return;
 
-      // 1. 若文件已在打开列表中，直接激活并聚焦
-      const existing = openFiles.find((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
-      if (existing) {
-        setActiveFilePath(existing.path);
-        return;
-      }
-
-      // 2. 检查是否有针对该文件的网络拉取正在进行中（防并发双击/多重触发）
-      if (openingPathsRef.current.has(canonicalPath)) {
-        return;
-      }
-
-      openingPathsRef.current.add(canonicalPath);
-      try {
-        const next = await fs.readFileWithMeta(canonicalPath);
-        const name = canonicalPath.split("/").pop() || canonicalPath;
-        const language = getLanguage(name);
-        const newFile: OpenFile = {
-          path: canonicalPath,
-          name,
-          content: next.content,
-          language,
-          modified: false,
-          version: next.version,
-          updatedAt: next.updatedAt,
-          ...buildClearedRemoteState(),
-        };
-
-        // 3. 终极防线：原子更新二次去重，坚决杜绝重复标签与僵尸 DOM 节点
-        setOpenFiles((prev) => {
-          const alreadyOpen = prev.some((f) => isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
-          if (alreadyOpen) {
-            return prev;
-          }
-          return [...prev, newFile];
-        });
-        setActiveFilePath(canonicalPath);
-      } catch {
-        showToast(t("app.failedToOpenFile"));
-      } finally {
-        openingPathsRef.current.delete(canonicalPath);
-      }
-    },
-    [fs, openFiles, showToast, t, workspaceDir]
-  );
 
   const handleNavigateToLocation = useCallback(
     async (path: string, selection: FileSelectionRange) => {
@@ -1663,88 +1569,7 @@ function AuthenticatedApp({
     setReferenceResult({ symbol, references });
   }, []);
 
-  const closeTab = useCallback(
-    (rawPath: string) => {
-      const canonicalPath = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
-      setOpenFiles((prev) => {
-        const filtered = prev.filter((f) => !isSameWorkspacePath(f.path, canonicalPath, workspaceDir));
-        setPreviewModes((current) => {
-          const next = { ...current };
-          for (const key of Object.keys(next)) {
-            if (isSameWorkspacePath(key, canonicalPath, workspaceDir)) {
-              delete next[key];
-            }
-          }
-          return next;
-        });
-        if (isSameWorkspacePath(activeFilePath, canonicalPath, workspaceDir)) {
-          setActiveFilePath(
-            filtered.length > 0 ? filtered[filtered.length - 1].path : null
-          );
-        }
-        if (isSameWorkspacePath(compareFilePath, canonicalPath, workspaceDir)) {
-          setCompareFilePath(null);
-        }
-        return filtered;
-      });
-    },
-    [activeFilePath, compareFilePath, workspaceDir]
-  );
 
-  const closeOtherTabs = useCallback(
-    (keepPath: string) => {
-      const canonicalKeep = normalizeWorkspaceRelativePath(keepPath, workspaceDir);
-      setOpenFiles((prev) => {
-        const filtered = prev.filter((f) => isSameWorkspacePath(f.path, canonicalKeep, workspaceDir));
-        setActiveFilePath(canonicalKeep);
-        if (compareFilePath && !isSameWorkspacePath(compareFilePath, canonicalKeep, workspaceDir)) {
-          setCompareFilePath(null);
-        }
-        return filtered;
-      });
-    },
-    [compareFilePath, workspaceDir]
-  );
-
-  const closeTabsToTheRight = useCallback(
-    (targetPath: string) => {
-      const canonicalTarget = normalizeWorkspaceRelativePath(targetPath, workspaceDir);
-      setOpenFiles((prev) => {
-        const targetIndex = prev.findIndex((f) => isSameWorkspacePath(f.path, canonicalTarget, workspaceDir));
-        if (targetIndex === -1) return prev;
-        const filtered = prev.slice(0, targetIndex + 1);
-        if (!filtered.some((f) => isSameWorkspacePath(f.path, activeFilePath, workspaceDir))) {
-          setActiveFilePath(canonicalTarget);
-        }
-        if (compareFilePath && !filtered.some((f) => isSameWorkspacePath(f.path, compareFilePath, workspaceDir))) {
-          setCompareFilePath(null);
-        }
-        return filtered;
-      });
-    },
-    [activeFilePath, compareFilePath, workspaceDir]
-  );
-
-  const closeAllTabs = useCallback(() => {
-    setOpenFiles([]);
-    setActiveFilePath(null);
-    setCompareFilePath(null);
-  }, []);
-
-  const handleEditorChange = useCallback(
-    (value: string) => {
-      if (readOnlyWorkspace) return;
-      if (!activeFilePath) return;
-      setOpenFiles((prev) =>
-        prev.map((f) =>
-          f.path === activeFilePath
-            ? { ...f, content: value, modified: true }
-            : f
-        )
-      );
-    },
-    [activeFilePath, readOnlyWorkspace]
-  );
 
   const formatPythonDocument = useCallback(
     async (path: string, content: string): Promise<string> => {
@@ -1762,120 +1587,6 @@ function AuthenticatedApp({
     [fs, showToast, t]
   );
 
-  const saveFile = useCallback(async (): Promise<boolean> => {
-    if (readOnlyWorkspace) {
-      showToast(t("team.readOnlySaveBlocked"));
-      return false;
-    }
-    const file = openFiles.find((f) => f.path === activeFilePath);
-    if (!file) return false;
-    if (activeClaim && activeClaim.username !== username) {
-      setClaimSaveConfirmation({ file, username: activeClaim.username });
-      return false;
-    }
-    try {
-      const result = await fs.writeFile(
-        file.path,
-        file.content,
-        Boolean(activeClaim && activeClaim.username !== username),
-        file.version
-      );
-      setOpenFiles((prev) =>
-        prev.map((f) =>
-          f.path === activeFilePath
-            ? {
-                ...f,
-                modified: false,
-                version: result.version,
-                updatedAt: result.updatedAt,
-                ...buildClearedRemoteState(),
-              }
-            : f
-        )
-      );
-      return true;
-    } catch (error) {
-      const claimError = error as Error & {
-        code?: string;
-        claim?: { username: string };
-        current?: {
-          content: string;
-          version: string;
-          updatedAt: number;
-          source?: "team_member" | "external" | "assistant_tool" | "unknown";
-          actor?: string;
-        };
-      };
-      if (claimError.code === "FILE_VERSION_CONFLICT" && claimError.current) {
-        const sourceInfo =
-          claimError.current.source === "team_member" ||
-          claimError.current.source === "assistant_tool" ||
-          claimError.current.source === "external" ||
-          claimError.current.source === "unknown"
-            ? {
-                source: claimError.current.source,
-                actor: claimError.current.actor,
-              }
-            : inferConflictSource(file.path, {
-                knownRemoteUpdatedAt: claimError.current?.updatedAt,
-              });
-        setOpenFiles((prev) =>
-          prev.map((entry) =>
-            entry.path === file.path
-              ? {
-                  ...entry,
-                  remoteUpdated: true,
-                  remoteContent: claimError.current?.content ?? entry.remoteContent,
-                  remoteVersion: claimError.current?.version ?? entry.remoteVersion,
-                  remoteUpdatedAt: claimError.current?.updatedAt ?? entry.remoteUpdatedAt,
-                  remoteConflictReason: "save",
-                  remoteConflictSource: sourceInfo.source,
-                  remoteConflictActor: sourceInfo.actor,
-                }
-              : entry
-          )
-        );
-        setDiffViewerPath(file.path);
-        showToast(t("app.remoteConflictTitle"));
-        return false;
-      }
-      if (claimError.code === "TEAM_CLAIM_CONFLICT" && claimError.claim?.username) {
-        setClaimSaveConfirmation({ file, username: claimError.claim.username });
-        return false;
-      }
-      showToast(t("app.failedToSaveFile"));
-      return false;
-    }
-  }, [
-    activeClaim,
-    activeFilePath,
-    fs,
-    inferConflictSource,
-    openFiles,
-    readOnlyWorkspace,
-    showToast,
-    t,
-    username,
-  ]);
-
-  const forceSaveClaimedFile = useCallback(async () => {
-    const pending = claimSaveConfirmation;
-    if (!pending) return;
-    setClaimSaveBusy(true);
-    setClaimSaveError(null);
-    try {
-      const result = await fs.writeFile(pending.file.path, pending.file.content, true, pending.file.version);
-      setOpenFiles((current) => current.map((file) => file.path === pending.file.path ? { ...file, modified: false, version: result.version, updatedAt: result.updatedAt, ...buildClearedRemoteState() } : file));
-      setClaimSaveConfirmation(null);
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : t("app.failedToSaveFile");
-      setClaimSaveError(message);
-      showToast(message);
-    } finally {
-      setClaimSaveBusy(false);
-    }
-  }, [claimSaveConfirmation, fs, showToast, t]);
-
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
       await fs.createEntry(path, isDirectory);
@@ -1891,67 +1602,6 @@ function AuthenticatedApp({
     },
     [fs, showToast, t]
   );
-
-  const removeDeletedEntriesFromState = useCallback((deletedPaths: string[]) => {
-    setOpenFiles((prev) => {
-      const filtered = prev.filter(
-        (file) =>
-          !deletedPaths.some((deletedPath) =>
-            isPathEqualOrDescendant(file.path, deletedPath)
-          )
-      );
-
-      setPreviewModes((current) => {
-        const next = { ...current };
-        let changed = false;
-
-        for (const previewPath of Object.keys(next)) {
-          if (
-            deletedPaths.some((deletedPath) =>
-              isPathEqualOrDescendant(previewPath, deletedPath)
-            )
-          ) {
-            delete next[previewPath];
-            changed = true;
-          }
-        }
-
-        return changed ? next : current;
-      });
-
-      setActiveFilePath((previousPath) => {
-        if (
-          previousPath &&
-          deletedPaths.some((deletedPath) =>
-            isPathEqualOrDescendant(previousPath, deletedPath)
-          )
-        ) {
-          return filtered.length > 0 ? filtered[filtered.length - 1].path : null;
-        }
-        return previousPath;
-      });
-
-      return filtered;
-    });
-
-    setEditorNavigationTarget((prev) =>
-      prev &&
-      deletedPaths.some((deletedPath) =>
-        isPathEqualOrDescendant(prev.path, deletedPath)
-      )
-        ? null
-        : prev
-    );
-
-    setEditorHighlightTarget((prev) =>
-      prev &&
-      deletedPaths.some((deletedPath) =>
-        isPathEqualOrDescendant(prev.path, deletedPath)
-      )
-        ? null
-        : prev
-    );
-  }, []);
 
   const handleDeleteEntry = useCallback(
     async (path: string) => {
@@ -2309,9 +1959,6 @@ function AuthenticatedApp({
       setFolderOpenRequestId((current) => current + 1);
     }
   }, [closeUtilityPanels, desktopApp, handlePickDesktopWorkspace, isolatedWindow]);
-
-  // --- Derived ---
-  const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
 
   // --- Global keyboard shortcuts & Escape cascade ---
   useWorkbenchShortcuts({
