@@ -153,6 +153,7 @@ test("masked zero-test summaries enter verification even without changed files",
     ["python3 -B -m unittest discover -s empty_tests 2>&1 | tail -10", "Ran 0 tests in 0.000s\n\nNO TESTS RAN"],
     ["python3 -m unittest discover -s empty_tests 2>&1 | tail -10", "Ran 0 tests in 0.000s\n\nOK"],
     ["python3 -m pytest empty_tests 2>&1 | tail -10", "no tests ran in 0.01s"],
+    ["pytest empty_tests 2>&1 | tail -10", "====================== no tests ran in 0.01s ======================"],
     ["npm test 2>&1 | tail -10", "No tests found, exiting with code 0"],
   ]) {
     const validation = new ValidationFeedback(root);

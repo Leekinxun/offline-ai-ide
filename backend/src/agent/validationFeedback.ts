@@ -102,7 +102,7 @@ function outputLooksLikeValidationFailure(output: string): boolean {
 }
 
 function outputIndicatesNoTests(output: string): boolean {
-  return /(?:^|\n)\s*(?:Ran 0 tests?\b|no tests ran\b|no tests found\b|Tests:\s*0 total\b)/i.test(output);
+  return /(?:^|\n)\s*(?:=+\s*)?(?:Ran 0 tests?\b|no tests ran\b|no tests found\b|Tests:\s*0 total\b)/i.test(output);
 }
 
 function attemptedLocalVerification(command: string): boolean {
