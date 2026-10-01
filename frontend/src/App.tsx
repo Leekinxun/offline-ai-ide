@@ -15,6 +15,7 @@ import { LoginPage } from "./components/LoginPage";
 import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
 import { TitleBar } from "./components/TitleBar";
+import { ActivityRail } from "./components/ActivityRail";
 import "./components/UserPopover.css";
 import "./components/ActivityRail.css";
 import "./components/Sidebar.css";
@@ -95,7 +96,6 @@ import {
   FileCode2,
   Files,
   ShieldCheck,
-  TestTube2,
   Bug,
   Users,
   X,
@@ -103,11 +103,9 @@ import {
   Unlink2,
   Play,
   Search,
-  Smartphone,
   Maximize2,
   Minimize2,
   FolderOpen,
-  LayoutGrid,
 } from "lucide-react";
 import { useI18n } from "./i18n";
 import {
@@ -1415,219 +1413,46 @@ function AuthenticatedApp({
             onClick={closeWorkspaceDrawers}
           />
         )}
-        <nav className="activity-rail" data-compact-modal-background inert={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-hidden={compactWorkspace && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined} aria-label={t("app.workspace")}>
-          <button
-            type="button"
-            className={`activity-rail-btn${workspaceView === "chat" ? " active" : ""}`}
-            onClick={focusChat}
-            title={t("workbench.aiTasks")}
-            aria-label={t("workbench.aiTasks")}
-            aria-pressed={workspaceView === "chat"}
-            data-drawer-trigger="chat"
-          >
-            <MessageSquare size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${workspaceView === "files" && sidebarVisible ? " active" : ""}`}
-            onClick={toggleExplorerPanel}
-            title={t("sidebar.explorer")}
-            aria-label={t("sidebar.explorer")}
-            aria-pressed={workspaceView === "files" && sidebarVisible}
-            data-drawer-trigger="sidebar"
-          >
-            <Files size={18} />
-          </button>
-          <button
-            type="button"
-            className="activity-rail-btn"
-            onClick={() => {
-              setWorkspaceSearchScope("");
-              setWorkspaceSearchVisible(true);
-            }}
-            title={`${t("search.title")} (${platform.isMacOS ? "⇧⌘F" : "Ctrl+Shift+F"})`}
-            aria-label={t("search.title")}
-          >
-            <Search size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${gitVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("git")}
-            title={t("git.title")}
-            aria-label={t("git.title")}
-            aria-pressed={gitVisible}
-            data-drawer-trigger="git"
-          >
-            <GitBranch size={18} />
-            {(chat.currentRunSummary?.changedFiles.length || 0) > 0 && (
-              <span className="activity-rail-badge">{chat.currentRunSummary?.changedFiles.length}</span>
-            )}
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${agentsVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("agents")}
-            title={t("agents.title")}
-            aria-label={t("agents.title")}
-            aria-pressed={agentsVisible}
-            data-drawer-trigger="agents"
-          >
-            <Bot size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${teamVisible ? " active" : ""}`}
-            onClick={() => toggleTeamPanel()}
-            title={t("team.title")}
-            aria-label={t("team.title")}
-            aria-pressed={teamVisible}
-            data-drawer-trigger="team"
-          >
-            <Users size={18} />
-            {team.activeTeam && team.activeTeam.onlineCount > 0 && (
-              <span className="activity-rail-badge">{team.activeTeam.onlineCount}</span>
-            )}
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${checkpointsVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("checkpoints")}
-            title={t("checkpoint.aria")}
-            aria-label={t("checkpoint.aria")}
-            aria-pressed={checkpointsVisible}
-            data-drawer-trigger="checkpoints"
-          >
-            <ShieldCheck size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${problemsVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("problems")}
-            title={t("problems.title")}
-            aria-label={t("problems.title")}
-            aria-pressed={problemsVisible}
-            data-drawer-trigger="problems"
-          >
-            <CircleAlert size={18} />
-            {(problemCounts.errors + problemCounts.warnings) > 0 && <span className="activity-rail-badge">{problemCounts.errors + problemCounts.warnings}</span>}
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${runCenterVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("run-center")}
-            title={t("runCenter.aria")}
-            aria-label={t("runCenter.aria")}
-            aria-pressed={runCenterVisible}
-            data-drawer-trigger="run-center"
-          >
-            <TestTube2 size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${debugVisible ? " active" : ""}`}
-            onClick={() => toggleUtilityPanel("debug")}
-            title={t("debug.aria")}
-            aria-label={t("debug.aria")}
-            aria-pressed={debugVisible}
-            data-drawer-trigger="debug"
-          >
-            <Bug size={18} />
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${terminalVisible ? " active" : ""}`}
-            onClick={() => toggleTerminalPanel()}
-            title={t("app.toggleTerminal")}
-            aria-label={t("app.toggleTerminal")}
-            aria-pressed={terminalVisible}
-            data-drawer-trigger="terminal"
-          >
-            <TerminalSquare size={18} />
-          </button>
-          <span className="activity-rail-spacer" />
-          {!desktopApp && <button
-            type="button"
-            className={`activity-rail-btn${mobilePairingVisible ? " active" : ""}`}
-            onClick={() => setMobilePairingVisible(true)}
-            title="手机控制台"
-            aria-label="手机控制台"
-            aria-pressed={mobilePairingVisible}
-          >
-            <Smartphone size={18} />
-          </button>}
-          <button
-            type="button"
-            className="activity-rail-btn"
-            onClick={onToggleTheme}
-            title={t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
-            aria-label={t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}
-          >
-            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-          </button>
-          <button
-            type="button"
-            className={`activity-rail-btn${settingsVisible ? " active" : ""}`}
-            onClick={() => setSettingsVisible(true)}
-            title={t("app.settings")}
-            aria-label={t("app.settings")}
-            aria-pressed={settingsVisible}
-          >
-            <Settings size={18} />
-          </button>
-          <details className="activity-user-menu">
-            <summary className="activity-user-avatar" title={username} aria-label={username}>
-              {username.slice(0, 1).toUpperCase()}
-            </summary>
-            <div className="activity-user-popover user-popover-shell">
-              <div className="user-popover-header">
-                <div className="user-popover-avatar">
-                  {username.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="user-popover-info">
-                  <div className="user-popover-name-row">
-                    <span className="user-popover-name">{username}</span>
-                    <span className="user-popover-badge">{isAdmin ? "管理员" : (team.activeTeam?.role || "成员")}</span>
-                  </div>
-                  <span className="user-popover-sub">本地离线编码环境</span>
-                </div>
-              </div>
-              <div className="user-popover-divider" />
-              <button type="button" onClick={onToggleTheme}>
-                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
-                <span>{t(theme === "light" ? "app.switchToDarkTheme" : "app.switchToLightTheme")}</span>
-                <span className="user-popover-hint">{theme === "light" ? "深色" : "浅色"}</span>
-              </button>
-              <button type="button" onClick={onToggleDensity}>
-                <LayoutGrid size={15} />
-                <span>{density === "compact" ? "标准视图模式" : "紧凑密度模式"}</span>
-              </button>
-              <button type="button" onClick={() => setSettingsVisible(true)}>
-                <Settings size={15} />
-                <span>{t("app.settings")}</span>
-                <kbd className="user-popover-kbd">Ctrl+,</kbd>
-              </button>
-              {!desktopApp && (
-                <button type="button" onClick={() => setMobilePairingVisible(true)}>
-                  <Smartphone size={15} />
-                  <span>手机控制台</span>
-                </button>
-              )}
-              <div className="user-popover-divider" />
-              {desktopApp ? (
-                <button type="button" onClick={() => void onPickDesktopWorkspace()}>
-                  <FolderOpen size={15} />
-                  <span>打开工作区…</span>
-                </button>
-              ) : (
-                <button type="button" className="user-popover-logout" onClick={onLogout}>
-                  <LogOut size={15} />
-                  <span>{t("app.logout")}</span>
-                </button>
-              )}
-            </div>
-          </details>
-        </nav>
+        <ActivityRail
+          workspaceView={workspaceView}
+          sidebarVisible={sidebarVisible}
+          gitVisible={gitVisible}
+          agentsVisible={agentsVisible}
+          teamVisible={teamVisible}
+          checkpointsVisible={checkpointsVisible}
+          problemsVisible={problemsVisible}
+          runCenterVisible={runCenterVisible}
+          debugVisible={debugVisible}
+          terminalVisible={terminalVisible}
+          mobilePairingVisible={mobilePairingVisible}
+          settingsVisible={settingsVisible}
+          compactWorkspace={compactWorkspace}
+          onFocusChat={focusChat}
+          onToggleExplorer={toggleExplorerPanel}
+          onOpenWorkspaceSearch={() => {
+            setWorkspaceSearchScope("");
+            setWorkspaceSearchVisible(true);
+          }}
+          onToggleUtilityPanel={toggleUtilityPanel}
+          onToggleTeamPanel={() => toggleTeamPanel()}
+          onToggleTerminalPanel={() => toggleTerminalPanel()}
+          onOpenMobilePairing={() => setMobilePairingVisible(true)}
+          onOpenSettings={() => setSettingsVisible(true)}
+          onToggleTheme={onToggleTheme}
+          onToggleDensity={onToggleDensity}
+          onPickDesktopWorkspace={() => void onPickDesktopWorkspace()}
+          onLogout={onLogout}
+          changedFilesCount={chat.currentRunSummary?.changedFiles.length || 0}
+          onlineMembersCount={team.activeTeam && team.activeTeam.onlineCount > 0 ? team.activeTeam.onlineCount : 0}
+          problemCounts={problemCounts}
+          desktopApp={desktopApp}
+          platform={platform}
+          theme={theme}
+          density={density}
+          username={username}
+          isAdmin={isAdmin}
+          teamRole={team.activeTeam?.role || null}
+        />
         {isLeftDockOpen && (
           <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
             {gitVisible ? (
