@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { recordRequestOutcome, type RequestOutcome } from "../utils/requestOutcome";
 import {
   ChatMessage,
   ChatAttachmentRef,
@@ -19,9 +20,13 @@ import {
   ExecutionContract,
   ExecutionPlan,
   CompletionEvidence,
+  ContextReference,
 } from "../types";
 import { useI18n } from "../i18n";
 import { useContextManifest } from "./useContextManifest";
+import { updateAssistantMessage } from "../utils/assistantActivity";
+import { applyToolApprovalSnapshot, canApproveToolInConversation } from "../utils/toolApprovalPolicy";
+import { acceptsConversationEvent, canBindAcceptedRequest, type ChatRequestScope, type ConversationActivity } from "../utils/chatScope";
 
 interface ConversationsResponse {
   conversations?: ConversationSummary[];
@@ -121,6 +126,12 @@ export function useChat(
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeRequestIds, setActiveRequestIds] = useState<string[]>([]);
+  const [conversationActivity, setConversationActivity] = useState<Record<string, ConversationActivity>>({});
+  const requestScopesRef = useRef(new Map<string, ChatRequestScope>());
+  const cancelledRequestIdsRef = useRef(new Set<string>());
+  const loadingConversationRef = useRef(false);
+  const currentRunIdRef = useRef<string | null>(null);
+  const [requestOutcomes, setRequestOutcomes] = useState<Record<string, RequestOutcome>>({});
   const [connected, setConnected] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(
     null
@@ -166,6 +177,7 @@ export function useChat(
   const pendingAttachmentSendsRef = useRef(new Map<string, PendingAttachmentSend>());
   const uncertainAttachmentSendsRef = useRef(new Map<string, PendingAttachmentSend>());
   const outboundRequestIdsRef = useRef(new Set<string>());
+  const preserveComposerModeRef = useRef(false);
   const reconcilingAttachmentsRef = useRef(false);
   const reconcileAgainRef = useRef(false);
   const currentConversationIdRef = useRef(currentConversationId);
@@ -344,6 +356,8 @@ export function useChat(
 
   const refreshRunHistory = useCallback(
     async (conversationId?: string | null) => {
+      const viewEpoch = conversationLoadTokenRef.current;
+      const isCurrent = () => viewEpoch === conversationLoadTokenRef.current && (conversationId || null) === currentConversationIdRef.current;
       setRunHistoryLoading(true);
       setRunHistoryError(null);
       try {
@@ -362,13 +376,14 @@ export function useChat(
         const hydrated = await Promise.all(runs.map(async (run) =>
           run.executionPlan || !run.executionPlanId ? run : { ...run, executionPlan: await fetchExecutionPlan(run.executionPlanId) }
         ));
-        setRunHistory(hydrated);
+        if (isCurrent()) setRunHistory(hydrated);
       } catch (error) {
+        if (!isCurrent()) return;
         setRunHistoryError(
           error instanceof Error ? error.message : "Failed to load agent runs"
         );
       } finally {
-        setRunHistoryLoading(false);
+        if (isCurrent()) setRunHistoryLoading(false);
       }
     },
     [fetchExecutionPlan, token]
@@ -379,30 +394,7 @@ export function useChat(
       requestId: string | undefined,
       updater: (msg: ChatMessage) => ChatMessage
     ) => {
-      setMessages((prev) => {
-        const updated = [...prev];
-        if (requestId) {
-          for (let index = updated.length - 1; index >= 0; index -= 1) {
-            const candidate = updated[index];
-            if (
-              candidate.role === "assistant" &&
-              candidate.requestId === requestId
-            ) {
-              updated[index] = updater(candidate);
-              return updated;
-            }
-          }
-        }
-
-        for (let index = updated.length - 1; index >= 0; index -= 1) {
-          const candidate = updated[index];
-          if (candidate.role === "assistant") {
-            updated[index] = updater(candidate);
-            return updated;
-          }
-        }
-        return updated;
-      });
+      setMessages((prev) => updateAssistantMessage(prev, requestId, updater));
     },
     []
   );
@@ -437,7 +429,9 @@ export function useChat(
             if (!uncertainAttachmentSendsRef.current.has(requestId)) return;
             if (result.status === "accepted") {
               const conversationId = result.conversationId || pending.conversationId;
-              if (conversationId) {
+              const scope = requestScopesRef.current.get(requestId);
+              const canRestore = canBindAcceptedRequest(scope, currentConversationIdRef.current, conversationLoadTokenRef.current);
+              if (conversationId && canRestore) {
                 if (currentConversationIdRef.current === null) {
                   currentConversationIdRef.current = conversationId;
                   setCurrentConversationId(conversationId);
@@ -451,11 +445,13 @@ export function useChat(
                     const detail = await detailResponse.json() as ConversationDetailResponse;
                     const historicalMessages = Array.isArray(detail.messages) ? detail.messages : [];
                     if (uncertainAttachmentSendsRef.current.has(requestId)
+                      && scope?.viewEpoch === conversationLoadTokenRef.current
                       && historicalMessages.some((message) => message.role === "user" && message.requestId === requestId)
                       && (currentConversationIdRef.current === conversationId || currentConversationIdRef.current === null)) {
                       currentConversationIdRef.current = conversationId;
                       setCurrentConversationId(conversationId);
                       setMessages(historicalMessages);
+                      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "subscribe_run", conversationId }));
                     }
                   }
                 } catch {
@@ -551,7 +547,46 @@ export function useChat(
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      if (data.type === "background_run_state") {
+        setConversationActivity((current) => ({ ...current, [data.conversationId]: {
+          running: ["running", "queued", "stopping"].includes(data.status), waiting: Boolean(data.waiting),
+          unread: data.conversationId !== currentConversationIdRef.current,
+          updatedAt: Number(data.updatedAt) || Date.now(), runId: data.runId,
+        } }));
+        setConversations((current) => current.map((conversation) => conversation.id === data.conversationId
+          ? { ...conversation, status: data.status === "stopping" ? "running" : data.status, updatedAt: Number(data.updatedAt) || conversation.updatedAt } : conversation));
+        if (data.requestId && data.outcome) setRequestOutcomes((current) => recordRequestOutcome(current, data.requestId, data.outcome === "cancelled" ? "stopped" : data.outcome));
+        if (!["running", "queued", "stopping"].includes(data.status)) void refreshConversations();
+        return;
+      }
+      if (data.type === "error" && data.requestId) setRequestOutcomes((current) => recordRequestOutcome(current, data.requestId, "failed"));
+      if (!["conversation", "conversation_updated", "request_accepted"].includes(data.type)
+        && !acceptsConversationEvent(data, { conversationId: currentConversationIdRef.current, runId: currentRunIdRef.current, viewEpoch: conversationLoadTokenRef.current }, requestScopesRef.current.get(data.requestId))) {
+        if (data.type === "error" && !data.requestId && !data.conversationId) setHistoryError(String(data.content || "Chat request failed"));
+        return;
+      }
       switch (data.type) {
+        case "conversation_snapshot": {
+          const loaded = Array.isArray(data.messages) ? data.messages as ChatMessage[] : [];
+          for (const requestId of data.activeRequestIds || []) {
+            if (!loaded.some((message) => message.role === "assistant" && message.requestId === requestId)) loaded.push({ role: "assistant", requestId, content: "", timestamp: Date.now() });
+          }
+          for (const message of loaded) if (message.requestId) requestScopesRef.current.set(message.requestId, {
+            conversationId: data.conversationId, viewEpoch: conversationLoadTokenRef.current, runId: data.runId,
+          });
+          currentRunIdRef.current = data.run?.runId || null;
+          setMessages(loaded);
+          setActiveRequestIds(Array.isArray(data.activeRequestIds) ? data.activeRequestIds : []);
+          setPendingApprovals(Array.isArray(data.pendingApprovals) ? data.pendingApprovals : []);
+          setRunState(data.run || null);
+          setCurrentRunSummary(data.run?.summary || null);
+          if (data.run?.mode && !preserveComposerModeRef.current) setAgentMode(data.run.mode);
+          setConversationActivity((current) => ({ ...current, [data.conversationId]: {
+            running: ["running", "queued"].includes(data.run?.status), waiting: Boolean(data.waitingForInput), unread: false,
+            updatedAt: Number(data.run?.updatedAt) || Date.now(), runId: data.runId,
+          } }));
+          break;
+        }
         case "conversation":
           if (typeof data.conversationId === "string" && data.conversationId) {
             if (currentConversationIdRef.current === data.conversationId) {
@@ -566,17 +601,23 @@ export function useChat(
           break;
 
         case "request_accepted": {
+          const scope = requestScopesRef.current.get(data.requestId);
+          const bindToView = canBindAcceptedRequest(scope, currentConversationIdRef.current, conversationLoadTokenRef.current);
           const pending = data.requestId
             ? pendingAttachmentSendsRef.current.get(data.requestId) || uncertainAttachmentSendsRef.current.get(data.requestId)
             : undefined;
           const conversationId = typeof data.conversationId === "string" ? data.conversationId : "";
+          if (scope && conversationId) requestScopesRef.current.set(data.requestId, { ...scope, conversationId, runId: data.runId || scope.runId });
+          if (cancelledRequestIdsRef.current.delete(data.requestId) && conversationId && data.runId) {
+            ws.send(JSON.stringify({ type: "stop", conversationId, runId: data.runId, requestId: data.requestId }));
+          }
           if (pending) {
             pending.accepted = true;
             if (conversationId) pending.conversationId = conversationId;
           }
-          if (conversationId && data.requestId && outboundRequestIdsRef.current.has(data.requestId)
-            && (currentConversationIdRef.current === null || currentConversationIdRef.current === conversationId)) {
+          if (conversationId && data.requestId && bindToView) {
               currentConversationIdRef.current = conversationId;
+              currentRunIdRef.current = data.runId || currentRunIdRef.current;
               setCurrentConversationId(conversationId);
           }
           if (data.replayed === true && data.requestId) {
@@ -592,7 +633,7 @@ export function useChat(
                 status: "persisted",
               });
             }
-            if (conversationId) {
+            if (conversationId && bindToView) {
               const loadToken = conversationLoadTokenRef.current;
               void (async () => {
                 try {
@@ -609,6 +650,7 @@ export function useChat(
                     currentConversationIdRef.current = conversationId;
                     setCurrentConversationId(conversationId);
                     setMessages(historicalMessages);
+                    ws.send(JSON.stringify({ type: "subscribe_run", conversationId }));
                   }
                 } finally {
                   void refreshConversations();
@@ -620,7 +662,7 @@ export function useChat(
         }
 
         case "conversation_state":
-          setAgentMode(data.mode || "code");
+          if (!preserveComposerModeRef.current) setAgentMode(data.mode || "code");
           setConversations((prev) =>
             prev.map((conversation) =>
               conversation.id === data.conversationId
@@ -631,8 +673,12 @@ export function useChat(
           break;
 
         case "run_state": {
+          currentRunIdRef.current = data.runId;
           const event = data.event as AgentRunEvent | undefined;
-          if (data.mode) setAgentMode(data.mode);
+          if (data.status === "running" && event?.kind === "model_call") {
+            updateAssistantByRequestId(data.requestId || event.requestId, (message) => ({ ...message, activity: { phase: "waiting", waitingFor: "model", updatedAt: Date.now() } }));
+          }
+          if (data.mode && !preserveComposerModeRef.current) setAgentMode(data.mode);
           if (data.requestId && data.status === "running") {
             setMessages((previous) => {
               if (previous.some((message) =>
@@ -683,13 +729,15 @@ export function useChat(
             };
           });
           if (data.status !== "running" && data.status !== "queued") {
+            setActiveRequestIds([]);
+            setPendingApprovals([]);
             void refreshRunHistory(data.conversationId);
           }
           break;
         }
 
         case "summary":
-          if (data.conversationId === currentConversationId || !currentConversationId) {
+          if (data.conversationId === currentConversationIdRef.current) {
             setCurrentRunSummary(data as ConversationRunSummary);
           }
           break;
@@ -738,6 +786,7 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             content: msg.content + data.content,
+            activity: { phase: "responding", updatedAt: Date.now() },
           }));
           break;
 
@@ -745,6 +794,7 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             thinking: (msg.thinking || "") + data.content,
+            activity: { phase: "reasoning", updatedAt: Date.now() },
           }));
           break;
 
@@ -752,13 +802,14 @@ export function useChat(
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
             toolCalls: [
-              ...(msg.toolCalls || []),
+              ...(msg.toolCalls || []).filter((step) => step.toolCallId !== data.toolCallId),
               {
                 toolCallId: data.toolCallId,
                 name: data.name,
                 input: data.input,
               },
             ],
+            activity: { phase: "tool", toolCallId: data.toolCallId, updatedAt: Date.now() },
           }));
           break;
 
@@ -769,22 +820,24 @@ export function useChat(
           ]);
           break;
 
+        case "tool_approval_all_result":
+          setPendingApprovals((previous) => applyToolApprovalSnapshot(previous, data, {
+            conversationId: currentConversationIdRef.current,
+            runId: currentRunIdRef.current,
+          }));
+          break;
+
         case "tool_result":
           setPendingApprovals((previous) =>
             previous.filter((item) => item.toolCallId !== data.toolCallId)
           );
           updateAssistantByRequestId(data.requestId, (msg) => ({
             ...msg,
-            toolCalls: (msg.toolCalls || []).map((tc) =>
-              tc.toolCallId === data.toolCallId
-                ? {
-                    ...tc,
-                    result: data.result,
-                    isError: data.isError,
-                    fileUpdate: data.fileUpdate,
-                  }
-                : tc
-            ),
+            toolCalls: [
+              ...(msg.toolCalls || []).filter((step) => step.toolCallId !== data.toolCallId),
+              { ...(msg.toolCalls || []).find((step) => step.toolCallId === data.toolCallId), toolCallId: data.toolCallId, name: data.name, input: (msg.toolCalls || []).find((step) => step.toolCallId === data.toolCallId)?.input || {}, result: data.result, isError: data.isError, fileUpdate: data.fileUpdate },
+            ],
+            activity: { phase: "tool", toolCallId: data.toolCallId, updatedAt: Date.now() },
           }));
           if (data.fileUpdate && !data.isError) {
             onFileUpdateRef.current?.(data.fileUpdate);
@@ -792,6 +845,7 @@ export function useChat(
           break;
 
         case "done":
+          if (data.requestId) setRequestOutcomes((current) => recordRequestOutcome(current, data.requestId, "completed"));
           if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
           if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
           setPendingApprovals((previous) =>
@@ -802,6 +856,7 @@ export function useChat(
           break;
 
         case "stopped":
+          if (data.requestId) setRequestOutcomes((current) => recordRequestOutcome(current, data.requestId, "stopped"));
           if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
           if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
           setPendingApprovals((previous) =>
@@ -825,6 +880,7 @@ export function useChat(
           break;
 
         case "error": {
+          if (data.requestId) setRequestOutcomes((current) => recordRequestOutcome(current, data.requestId, "failed"));
           if (data.requestId) outboundRequestIdsRef.current.delete(data.requestId);
           const pendingAttachmentSend = data.requestId
             ? pendingAttachmentSendsRef.current.get(data.requestId)
@@ -868,18 +924,21 @@ export function useChat(
   }, [connect]);
 
   useEffect(() => {
-    if (!currentConversationId) return;
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "subscribe_run", conversationId: currentConversationId }));
-    }
-  }, [currentConversationId]);
+    const timer = window.setInterval(() => { if (connected) void refreshConversations(); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [connected, refreshConversations]);
 
   useEffect(() => {
     conversationLoadTokenRef.current += 1;
     pendingAttachmentSendsRef.current.clear();
     uncertainAttachmentSendsRef.current.clear();
     outboundRequestIdsRef.current.clear();
+    preserveComposerModeRef.current = false;
+    requestScopesRef.current.clear();
+    cancelledRequestIdsRef.current.clear();
+    loadingConversationRef.current = false;
+    currentRunIdRef.current = null;
+    setConversationActivity({});
     currentConversationIdRef.current = null;
     setMessages([]);
     setCurrentConversationId(null);
@@ -909,11 +968,13 @@ export function useChat(
   }, [currentConversationId, refreshRunHistory]);
 
   const sendMessage = useCallback(
-    (content: string, context?: FileContext, modeOverride?: AgentMode, attachments: ChatAttachmentRef[] = [], retryRequestId?: string): boolean => {
+    (content: string, context?: FileContext, modeOverride?: AgentMode, attachments: ChatAttachmentRef[] = [], retryRequestId?: string, contextReferences: ContextReference[] = [], options?: { requestId?: string; preserveMode?: boolean; modelName?: string }): boolean => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-      const requestId = retryRequestId || createRequestId();
+      if (!ws || ws.readyState !== WebSocket.OPEN || loadingConversationRef.current) return false;
+      const requestId = retryRequestId || options?.requestId || createRequestId();
+      if (options?.requestId && (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(options.requestId) || outboundRequestIdsRef.current.has(options.requestId) || messages.some((message) => message.requestId === options.requestId))) return false;
       const requestedMode = modeOverride || agentMode;
+      requestScopesRef.current.set(requestId, { conversationId: currentConversationIdRef.current, viewEpoch: conversationLoadTokenRef.current });
 
       const userMsg: ChatMessage = {
         requestId,
@@ -921,12 +982,14 @@ export function useChat(
         content,
         timestamp: Date.now(),
         ...(attachments.length ? { attachments } : {}),
+        ...(contextReferences.length ? { contextReferences } : {}),
       };
       const assistantMsg: ChatMessage = {
         requestId,
         role: "assistant",
         content: "",
         timestamp: Date.now(),
+        activity: { phase: "waiting", waitingFor: "acceptance", updatedAt: Date.now() },
       };
 
       const history = messages.slice(-10).map((m) => ({
@@ -941,15 +1004,19 @@ export function useChat(
           message: content,
           attachments: attachments.map((attachment) => attachment.id),
           context,
+          contextReferences,
+          referenceWorkspaceDir: workspaceDir,
           history,
-          conversationId: currentConversationId,
+          conversationId: currentConversationIdRef.current,
           mode: requestedMode,
-          ...(selectedModelName ? { modelName: selectedModelName } : {}),
+          ...((options?.modelName || selectedModelName) ? { modelName: options?.modelName || selectedModelName } : {}),
         }));
       } catch {
         return false;
       }
       setMessages((prev) => [...prev.filter((message) => message.requestId !== requestId), userMsg, assistantMsg]);
+      setRequestOutcomes((current) => { const next = { ...current }; delete next[requestId]; return next; });
+      preserveComposerModeRef.current = options?.preserveMode === true;
       outboundRequestIdsRef.current.add(requestId);
       if (attachments.length) pendingAttachmentSendsRef.current.set(requestId, { content, attachments, conversationId: currentConversationId, accepted: false });
       setActiveRequestIds((prev) =>
@@ -957,14 +1024,15 @@ export function useChat(
       );
       return true;
     },
-    [agentMode, currentConversationId, messages, selectedModelName]
+    [agentMode, currentConversationId, messages, selectedModelName, workspaceDir]
   );
 
   const sendSteering = useCallback(
-    (content: string, context?: FileContext, attachments: ChatAttachmentRef[] = []): boolean => {
+    (content: string, context?: FileContext, attachments: ChatAttachmentRef[] = [], contextReferences: ContextReference[] = []): boolean => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      if (!ws || ws.readyState !== WebSocket.OPEN || loadingConversationRef.current) return false;
       const requestId = createRequestId();
+      requestScopesRef.current.set(requestId, { conversationId: currentConversationIdRef.current, viewEpoch: conversationLoadTokenRef.current, runId: currentRunIdRef.current || undefined });
 
       const userMsg: ChatMessage = {
         requestId,
@@ -972,12 +1040,14 @@ export function useChat(
         content,
         timestamp: Date.now(),
         ...(attachments.length ? { attachments } : {}),
+        ...(contextReferences.length ? { contextReferences } : {}),
       };
       const assistantMsg: ChatMessage = {
         requestId,
         role: "assistant",
         content: "",
         timestamp: Date.now(),
+        activity: { phase: "waiting", waitingFor: "acceptance", updatedAt: Date.now() },
       };
 
       try {
@@ -987,7 +1057,9 @@ export function useChat(
           message: content,
           attachments: attachments.map((attachment) => attachment.id),
           context,
-          conversationId: currentConversationId,
+          contextReferences,
+          referenceWorkspaceDir: workspaceDir,
+          conversationId: currentConversationIdRef.current,
           mode: agentMode,
           ...(selectedModelName ? { modelName: selectedModelName } : {}),
         }));
@@ -1002,33 +1074,51 @@ export function useChat(
       );
       return true;
     },
-    [agentMode, currentConversationId, selectedModelName]
+    [agentMode, currentConversationId, selectedModelName, workspaceDir]
   );
 
+  const stopRequest = useCallback((requestId: string): boolean => {
+    const scope = requestScopesRef.current.get(requestId);
+    if (!scope) return false;
+    setRequestOutcomes((current) => recordRequestOutcome(current, requestId, "stopped"));
+    if (!scope.conversationId || !scope.runId) {
+      cancelledRequestIdsRef.current.add(requestId);
+      return true;
+    }
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ type: "stop", requestId, conversationId: scope.conversationId, runId: scope.runId }));
+    if (scope.conversationId === currentConversationIdRef.current && scope.runId === currentRunIdRef.current) {
+      setActiveRequestIds([]);
+      setPendingApprovals([]);
+    }
+    return true;
+  }, []);
+
   const stopCurrentRun = useCallback(() => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const conversationId = currentConversationIdRef.current;
+    const runId = currentRunIdRef.current;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!conversationId || !runId) {
+      for (const requestId of activeRequestIds) stopRequest(requestId);
+      return;
+    }
     const latestRequestId = activeRequestIds[activeRequestIds.length - 1];
-    wsRef.current.send(
-      JSON.stringify({
-        type: "stop",
-        requestId: latestRequestId,
-      })
-    );
+    ws.send(JSON.stringify({ type: "stop", conversationId, runId, requestId: latestRequestId }));
+    setRequestOutcomes((current) => activeRequestIds.reduce((outcomes, id) => recordRequestOutcome(outcomes, id, "stopped"), current));
     setActiveRequestIds([]);
     setPendingApprovals([]);
-    if (latestRequestId) {
-      updateAssistantByRequestId(latestRequestId, (msg) => ({
-        ...msg,
-        content: msg.content || t("chat.stopping"),
-      }));
-    }
-  }, [activeRequestIds, t, updateAssistantByRequestId]);
+    if (latestRequestId) updateAssistantByRequestId(latestRequestId, (msg) => ({ ...msg, content: msg.content || t("chat.stopping") }));
+  }, [activeRequestIds, stopRequest, t, updateAssistantByRequestId]);
 
   const clearMessages = useCallback(() => {
     conversationLoadTokenRef.current += 1;
-    pendingAttachmentSendsRef.current.clear();
-    uncertainAttachmentSendsRef.current.clear();
-    outboundRequestIdsRef.current.clear();
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "unsubscribe_run", conversationId: currentConversationIdRef.current }));
+    currentRunIdRef.current = null;
+    loadingConversationRef.current = false;
+    preserveComposerModeRef.current = false;
     currentConversationIdRef.current = null;
     setMessages([]);
     setCurrentConversationId(null);
@@ -1052,16 +1142,20 @@ export function useChat(
   const respondToToolApproval = useCallback(
     (approvalId: string, decision: ToolApprovalDecision) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const approval = pendingApprovals.find((item) => item.approvalId === approvalId);
+      if (!approval || approval.conversationId !== currentConversationIdRef.current || !currentRunIdRef.current) return;
       wsRef.current.send(JSON.stringify({
         type: "tool_approval",
         approvalId,
         decision,
+        conversationId: currentConversationIdRef.current,
+        runId: currentRunIdRef.current,
       }));
       setPendingApprovals((previous) =>
         previous.filter((item) => item.approvalId !== approvalId)
       );
     },
-    []
+    [pendingApprovals]
   );
 
   const decidePlanAmendment = useCallback(async (planId: string, amendmentId: string, decision: "approved" | "rejected") => {
@@ -1084,20 +1178,21 @@ export function useChat(
   }, [currentConversationId, refreshRunHistory, token]);
 
   const approveConversationTools = useCallback((conversationId: string) => {
-    if (!conversationId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!conversationId || conversationId !== currentConversationIdRef.current || !currentRunIdRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!pendingApprovals.some((request) => request.conversationId === conversationId && canApproveToolInConversation(request))) return;
     wsRef.current.send(JSON.stringify({
       type: "tool_approval_all",
       conversationId,
+      runId: currentRunIdRef.current,
     }));
-    setPendingApprovals((previous) =>
-      previous.filter((item) => item.conversationId !== conversationId)
-    );
-  }, []);
+    // High-risk requests remain pending, and even eligible requests stay visible
+    // until the server confirms its authoritative remaining queue.
+  }, [pendingApprovals]);
 
   const retryLast = useCallback(() => {
     const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
     if (!lastUserMessage) return;
-    sendMessage(lastUserMessage.content, undefined, undefined, lastUserMessage.attachments || []);
+    sendMessage(lastUserMessage.content, undefined, undefined, lastUserMessage.attachments || [], undefined, lastUserMessage.contextReferences || []);
   }, [messages, sendMessage]);
 
   const fetchHydratedRun = useCallback(async (runId: string): Promise<AgentRunState> => {
@@ -1116,11 +1211,19 @@ export function useChat(
   const loadConversation = useCallback(
     async (conversationId: string) => {
       const loadToken = ++conversationLoadTokenRef.current;
-      pendingAttachmentSendsRef.current.clear();
-      uncertainAttachmentSendsRef.current.clear();
-      outboundRequestIdsRef.current.clear();
       const previousConversationId = currentConversationIdRef.current;
       currentConversationIdRef.current = conversationId;
+      currentRunIdRef.current = null;
+      loadingConversationRef.current = true;
+      preserveComposerModeRef.current = false;
+      setCurrentConversationId(conversationId);
+      setMessages([]);
+      setActiveRequestIds([]);
+      setPendingApprovals([]);
+      setContextState({ estimatedTokens: 0, threshold: 60000, status: "ready", compactionCount: 0 });
+      setMcpState({ status: "ready", serverCount: 0, toolCount: 0 });
+      setKnowledgeState({ memoryFiles: 0, skillCount: 0 });
+      setConversationActivity((current) => current[conversationId] ? { ...current, [conversationId]: { ...current[conversationId], unread: false } } : current);
       const isCurrentLoad = () => conversationLoadTokenRef.current === loadToken;
       setHistoryLoadingId(conversationId);
       setHistoryError(null);
@@ -1145,7 +1248,9 @@ export function useChat(
 
         const payload = (await response.json()) as ConversationDetailResponse;
         if (!isCurrentLoad()) return;
+        if (payload.id && payload.id !== conversationId) throw new Error("Conversation response does not match the selected task");
         setMessages(Array.isArray(payload.messages) ? payload.messages : []);
+        for (const message of payload.messages || []) if (message.requestId) requestScopesRef.current.set(message.requestId, { conversationId, viewEpoch: loadToken, runId: payload.lastRunId });
         currentConversationIdRef.current = payload.id || conversationId;
         setCurrentConversationId(payload.id || conversationId);
         setAgentMode(payload.mode || "code");
@@ -1154,22 +1259,27 @@ export function useChat(
           const run = await fetchHydratedRun(payload.lastRunId);
           if (!isCurrentLoad()) return;
           if (run.conversationId === (payload.id || conversationId)) {
+            currentRunIdRef.current = run.runId;
             setRunState(run);
             if (run.summary) {
               setCurrentRunSummary(run.executionPlan ? { ...run.summary, executionPlan: run.executionPlan } : run.summary);
             }
           }
         }
+        const ws = wsRef.current;
+        if (isCurrentLoad() && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "subscribe_run", conversationId }));
       } catch (error) {
         if (!isCurrentLoad()) return;
         currentConversationIdRef.current = previousConversationId;
+        setCurrentConversationId(previousConversationId);
+        if (previousConversationId && wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "subscribe_run", conversationId: previousConversationId }));
         setHistoryError(
           error instanceof Error
             ? error.message
             : t("chat.failedToLoadConversation")
         );
       } finally {
-        if (isCurrentLoad()) setHistoryLoadingId(null);
+        if (isCurrentLoad()) { loadingConversationRef.current = false; setHistoryLoadingId(null); }
       }
     },
     [fetchHydratedRun, t, token]
@@ -1242,11 +1352,14 @@ export function useChat(
 
   const loadRun = useCallback(
     async (runId: string) => {
+      const viewEpoch = conversationLoadTokenRef.current;
       try {
         const hydrated = await fetchHydratedRun(runId);
-        if (hydrated.conversationId !== currentConversationId) {
+        if (viewEpoch !== conversationLoadTokenRef.current) return;
+        if (hydrated.conversationId !== currentConversationIdRef.current) {
           await loadConversation(hydrated.conversationId);
         }
+        if (hydrated.conversationId !== currentConversationIdRef.current) return;
         setRunState(hydrated);
         if (hydrated.summary) setCurrentRunSummary(hydrated.executionPlan ? { ...hydrated.summary, executionPlan: hydrated.executionPlan } : hydrated.summary);
       } catch (error) {
@@ -1297,7 +1410,9 @@ export function useChat(
       if (conversationId !== currentConversationId) {
         await loadConversation(conversationId);
       }
+      if (currentConversationIdRef.current !== conversationId || wsRef.current?.readyState !== WebSocket.OPEN) return;
       const requestId = createRequestId();
+      requestScopesRef.current.set(requestId, { conversationId, viewEpoch: conversationLoadTokenRef.current });
       const resumeMessage =
         "Continue the interrupted task from the last recorded state. Do not repeat completed steps; inspect the current workspace and resume from the next step.";
       setMessages((prev) => [
@@ -1322,14 +1437,18 @@ export function useChat(
     sendSteering,
     recheckAttachmentSends: reconcileUncertainAttachmentSends,
     stopCurrentRun,
+    stopRequest,
     clearMessages,
     retryLast,
-    isStreaming: activeRequestIds.length > 0,
+    isStreaming: activeRequestIds.length > 0 || runState?.status === "running" || runState?.status === "queued",
     activeRequestIds,
+    conversationActivity,
+    requestOutcomes,
     connected,
     aiHealth,
     checkAiHealth,
     currentConversationId,
+    getCurrentConversationId: () => currentConversationIdRef.current,
     conversations,
     historyLoading,
     historyLoadingId,

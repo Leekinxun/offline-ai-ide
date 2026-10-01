@@ -38,6 +38,51 @@ test("Plan and Review allow inspection commands but reject composed shell action
   }).allowed, true);
 });
 
+test("inspection shell policy blocks bypass flags, writes, external paths, and protected paths", () => {
+  const allowed = [
+    "rg -n plan src",
+    "rg -n 'user:name' src",
+    "rg -n -- foo src",
+    "grep -n plan src/agent/modeCapabilities.ts",
+    "sed -n 1,20p src/agent/modeCapabilities.ts",
+    "find src -maxdepth 2 -type f -name *.ts -print",
+    "git status --short",
+    "git diff -- src/agent/modeCapabilities.ts",
+    "git log --oneline -5",
+    "ls -la src/agent",
+    "head -n 5 src/agent/modeCapabilities.ts",
+    "wc -l src/agent/modeCapabilities.ts",
+  ];
+  for (const command of allowed) {
+    assert.equal(evaluateInspectionCommand(command).allowed, true, command);
+  }
+
+  const blocked = [
+    "rg --pre cat secret src",
+    "rg --hidden password .",
+    "grep password /etc/passwd",
+    "cat .env",
+    "cat ../outside.txt",
+    "cat users.json",
+    "sed -n -i 1,2p src/agent/modeCapabilities.ts",
+    "sed -n 'w output.txt' src/agent/modeCapabilities.ts",
+    "sed -n 'e touch output.txt' src/agent/modeCapabilities.ts",
+    "find . -exec cat {} +",
+    "find . -delete",
+    "git diff --output=/tmp/diff.txt -- src",
+    "git diff --ext-diff -- src",
+    "git diff --textconv -- src",
+    "git --no-pager diff -- src",
+    "git diff -- /etc/passwd",
+    "git show HEAD:../../etc/passwd",
+    "git show HEAD:.env",
+    "git diff --no-index src /tmp/other",
+  ];
+  for (const command of blocked) {
+    assert.equal(evaluateInspectionCommand(command).allowed, false, command);
+  }
+});
+
 test("Code is constrained to approved files and verification commands", () => {
   assert.deepEqual(evaluateModeCapability({
     mode: "code",

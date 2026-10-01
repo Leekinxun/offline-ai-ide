@@ -4,11 +4,13 @@ import type { ToolApprovalDecision, ToolApprovalRequest } from "../types";
 import { useI18n } from "../i18n";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 import "./ToolApprovalStack.css";
+import { canApproveToolInConversation } from "../utils/toolApprovalPolicy";
 
 interface ToolApprovalStackProps {
   requests: ToolApprovalRequest[];
   onRespond: (approvalId: string, decision: ToolApprovalDecision) => void;
   onApproveConversation: (conversationId: string) => void;
+  onRequestRevision?: (request: ToolApprovalRequest, instruction: string) => boolean;
   className?: string;
 }
 
@@ -16,12 +18,14 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
   requests,
   onRespond,
   onApproveConversation,
+  onRequestRevision,
   className,
 }, ref) => {
   const { t } = useI18n();
   if (requests.length === 0) return null;
 
-  const firstRequest = requests[0];
+  const bulkRequest = requests.find((request) => request.conversationId && canApproveToolInConversation(request));
+  const hasIndividualRequests = requests.some((request) => !canApproveToolInConversation(request));
   const pendingLabel = t("chat.approval.pendingCount", { count: requests.length });
 
   return (
@@ -32,20 +36,19 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
       className={`tool-approval-stack${className ? ` ${className}` : ""}`}
       aria-label={pendingLabel}
     >
-      {firstRequest.conversationId && firstRequest.name !== "submit_plan" && (
-        <div className="tool-approval-bulk">
+      <div className="tool-approval-bulk">
           <span>{pendingLabel}</span>
-          <button
+          {bulkRequest?.conversationId && <button
             type="button"
-            onClick={() => onApproveConversation(firstRequest.conversationId!)}
+            onClick={() => onApproveConversation(bulkRequest.conversationId!)}
           >
             <ShieldCheck size={14} />
             {t("chat.approval.allowConversation")}
-          </button>
-        </div>
-      )}
+          </button>}
+      </div>
+      {(bulkRequest || hasIndividualRequests) && <p className="tool-approval-individual-note">{t(bulkRequest ? "chat.approval.bulkScope" : "chat.approval.individualRequired")}</p>}
       {requests.map((request) => (
-        <ToolApprovalCard key={request.approvalId} request={request} onRespond={onRespond} />
+        <ToolApprovalCard key={request.approvalId} request={request} onRespond={onRespond} onRequestRevision={onRequestRevision} />
       ))}
     </section>
   );

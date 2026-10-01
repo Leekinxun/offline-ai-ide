@@ -19,13 +19,14 @@ import type { UserSession } from "../auth/sessionManager.js";
 import { TraceStore } from "../chat/traceStore.js";
 import { config } from "../config.js";
 import { assertCompletionGateToken, beginCompletionAttempt, clearCompletionGateCacheForTests, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
-import { AgentRunRecorder } from "../chat/runHistory.js";
+import { AgentRunRecorder, readRunRecord } from "../chat/runHistory.js";
 import { ExtensionPolicyStore } from "../extensions/policy/store.js";
 import { reloadExternalPlugins } from "../plugins/registry.js";
 import { extensionsPolicyRouter } from "../routes/extensionsPolicy.js";
 import { setActiveTeamId, setTeamManagerForTests } from "../team/sessionBridge.js";
 import { TeamManager } from "../team/teamManager.js";
 import { handleChatWs } from "../ws/chat.js";
+import { getActiveRunContext } from "../chat/runCoordinator.js";
 
 function sessionFor(workspaceDir: string, username = "owner", isAdmin = false): UserSession {
   const taskManager = new TaskManager(workspaceDir); const messageBus = new MessageBus(workspaceDir);
@@ -148,16 +149,32 @@ test("signed registry MCP hook calls the configured server tool once and honors 
 test("one websocket run reruns quality after a queued mutating turn and cannot report success when the second attempt fails", async (t) => {
   const outer = fs.mkdtempSync(path.join(os.tmpdir(), "g006-runtime-queued-")); const workspace = path.join(outer, "workspace"); const adminPath = path.join(outer, "admin.json"); fs.mkdirSync(workspace);
   const oldAdmin = process.env.CREWFORGE_ADMIN_POLICY; process.env.CREWFORGE_ADMIN_POLICY = adminPath; clearAgentHooksForTests(); clearCompletionGateCacheForTests(); new ExtensionPolicyStore(workspace, adminPath).putAdminPolicy({ permissions: { allow: ["*"], deny: [] }, sandbox: { readPaths: ["."], writePaths: ["."], networkOrigins: [], secretEnv: [] } }, 1);
-  let releaseFirst!: () => void; const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; }); let qualityCalls = 0;
-  const unregister = registerAgentHooks({ name: "queued-quality", failureMode: "closed", handlers: { repositoryQuality: async () => { qualityCalls += 1; if (qualityCalls === 1) { await firstRelease; return; } throw new Error("queued mutation failed quality"); } } });
+  let releaseFirst!: () => void; const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; }); let qualityCalls = 0; let firstRunId = "";
+  const callsByRun = new Map<string, number>();
+  const unregister = registerAgentHooks({ name: "queued-quality", failureMode: "closed", handlers: { repositoryQuality: async (context) => {
+    qualityCalls += 1;
+    const runId = context.runId || "missing-run";
+    firstRunId ||= runId;
+    const attempt = (callsByRun.get(runId) || 0) + 1;
+    callsByRun.set(runId, attempt);
+    if (runId !== firstRunId) {
+      if (attempt === 1) throw new Error("follow-up run requires one repair");
+      return;
+    }
+    if (attempt === 1) { await firstRelease; return; }
+    throw new Error("queued mutation failed quality");
+  } } });
   const originalFetch = globalThis.fetch; let modelCalls = 0;
+  const modelBodies: string[] = []; const unexpectedModelCalls: number[] = [];
   globalThis.fetch = async (_input, init) => {
     const body = String(init?.body || "");
     if (body.includes("Generate a concise title") || body.includes("title_runtime")) return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Queued mutation" } }] });
     modelCalls += 1;
+    modelBodies.push(body);
     if (modelCalls === 2) return Response.json({ choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "queued-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "queued.txt", content: "mutated by queued turn\n" }) } }] } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
-    if (modelCalls <= 3) return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: modelCalls === 1 ? "first complete" : "second complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
-    throw new Error(`Unexpected model call ${modelCalls}`);
+    const responses: Record<number, string> = { 1: "first complete", 3: "second complete", 4: "first bounded repair still cannot satisfy quality", 5: "second bounded repair still cannot satisfy quality", 6: "follow-up completion", 7: "follow-up repaired" };
+    if (!responses[modelCalls]) unexpectedModelCalls.push(modelCalls);
+    return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: responses[modelCalls] || "unexpected extra repair attempt" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   };
   t.after(() => { globalThis.fetch = originalFetch; unregister(); clearCompletionGateCacheForTests(); clearAgentHooksForTests(); oldAdmin === undefined ? delete process.env.CREWFORGE_ADMIN_POLICY : process.env.CREWFORGE_ADMIN_POLICY = oldAdmin; fs.rmSync(outer, { recursive: true, force: true }); });
 
@@ -171,8 +188,57 @@ test("one websocket run reruns quality after a queued mutating turn and cannot r
   await waitFor(() => ws.frames.some((frame) => frame.type === "run_state" && frame.status === "failed"), 5_000, () => ws.frames);
 
   const failed = ws.frames.find((frame) => frame.type === "run_state" && frame.status === "failed"); const summary = ws.frames.find((frame) => frame.type === "summary" && frame.runId === running.runId);
-  assert.equal(qualityCalls, 2); assert.equal(modelCalls, 3); assert.equal(failed.runId, running.runId, "queued turn must remain inside the same websocket run"); assert.equal(failed.qualityGate?.status, "blocked"); assert.notEqual(failed.completionEvidence?.outcome, "completed"); assert.ok(failed.completionEvidence?.ledger?.blockers?.includes("quality")); assert.notEqual(summary?.completionEvidence?.outcome, "completed"); assert.ok(summary?.completionEvidence?.ledger?.blockers?.includes("quality")); assert.equal(summary?.qualityGate?.status, "blocked");
+  assert.equal(qualityCalls, 4); assert.equal(modelCalls, 5); assert.equal(failed.runId, running.runId, "queued turn must remain inside the same websocket run"); assert.equal(failed.qualityGate?.status, "blocked"); assert.notEqual(failed.completionEvidence?.outcome, "completed"); assert.ok(failed.completionEvidence?.ledger?.blockers?.includes("quality")); assert.notEqual(summary?.completionEvidence?.outcome, "completed"); assert.ok(summary?.completionEvidence?.ledger?.blockers?.includes("quality")); assert.equal(summary?.qualityGate?.status, "blocked");
+  const feedbackCount = (body: string) => JSON.parse(body).messages.filter((message: { role: string; content: unknown }) => message.role === "user" && typeof message.content === "string" && message.content.startsWith("Repository quality gate failed:")).length;
+  assert.equal(feedbackCount(modelBodies[3]), 1, "first repair receives the failed gate evidence");
+  assert.equal(feedbackCount(modelBodies[4]), 2, "repair feedback is bounded to two model attempts");
+  const firstAttempts = fs.readFileSync(path.join(workspace, ".codex/audit/completion-gates.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.runId === running.runId);
+  assert.deepEqual(firstAttempts.map((event) => event.status), ["passed", "blocked", "blocked", "blocked"]);
+  assert.equal(new Set(firstAttempts.map((event) => event.attemptToken)).size, 4, "each revised completion gets a fresh gate attempt");
   assert.equal(fs.readFileSync(path.join(workspace, "queued.txt"), "utf8"), "mutated by queued turn\n"); assert.ok(ws.frames.some((frame) => frame.type === "tool_result" && frame.requestId === "queued-turn" && frame.name === "write_file" && frame.isError === false)); assert.ok(ws.frames.some((frame) => frame.type === "done" && frame.requestId === "first-turn")); assert.equal(ws.frames.some((frame) => frame.type === "done" && frame.requestId === "queued-turn"), false);
+  await waitFor(() => !getActiveRunContext(workspace, conversationId), 5_000);
+  ws.emit("message", Buffer.from(JSON.stringify({ type: "message", requestId: "later-turn", conversationId, message: "check the next task", mode: "code", modelName: config.modelName })));
+  await waitFor(() => ws.frames.some((frame) => frame.type === "run_state" && frame.status === "completed" && frame.runId !== running.runId), 5_000, () => ws.frames);
+  const later = ws.frames.find((frame) => frame.type === "run_state" && frame.status === "completed" && frame.runId !== running.runId);
+  assert.equal(modelCalls, 7);
+  assert.equal(callsByRun.get(later.runId), 2, "the next run has an independent quality-repair budget");
+  assert.equal(feedbackCount(modelBodies[6]), 1);
+  assert.equal(later.completionEvidence?.outcome, "completed");
+  assert.equal(later.completionEvidence?.ledger?.blockers?.includes("quality"), false);
+  assert.deepEqual(unexpectedModelCalls, []);
+});
+
+test("a repair provider failure preserves the already-blocked quality evidence and the original provider error", async (t) => {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), "g006-runtime-repair-provider-"));
+  const workspace = path.join(outer, "workspace"); fs.mkdirSync(workspace);
+  const oldAdmin = process.env.CREWFORGE_ADMIN_POLICY; const originalFetch = globalThis.fetch;
+  process.env.CREWFORGE_ADMIN_POLICY = path.join(outer, "admin.json");
+  clearAgentHooksForTests(); clearCompletionGateCacheForTests();
+  new ExtensionPolicyStore(workspace, process.env.CREWFORGE_ADMIN_POLICY).putAdminPolicy({ permissions: { allow: ["*"], deny: [] }, sandbox: { readPaths: ["."], writePaths: ["."], networkOrigins: [], secretEnv: [] } }, 1);
+  let qualityCalls = 0; let providerCalls = 0;
+  const unregister = registerAgentHooks({ name: "blocked-before-provider-failure", failureMode: "closed", handlers: { repositoryQuality: () => { qualityCalls++; throw new Error("quality remains blocked"); } } });
+  globalThis.fetch = async (url, init) => {
+    const body = String(init?.body || "");
+    if (String(url).endsWith("/models")) return Response.json({ data: [{ id: config.modelName }] });
+    if (body.includes("Generate a concise title") || body.includes("title_runtime")) return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Repair failure" } }] });
+    providerCalls++;
+    if (providerCalls === 1) return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "completion attempted" } }] });
+    return Response.json({ error: { message: "simulated repair authentication failure" } }, { status: 401 });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; unregister(); clearCompletionGateCacheForTests(); clearAgentHooksForTests(); oldAdmin === undefined ? delete process.env.CREWFORGE_ADMIN_POLICY : process.env.CREWFORGE_ADMIN_POLICY = oldAdmin; fs.rmSync(outer, { recursive: true, force: true }); });
+  const ws = new FakeSocket(); handleChatWs(ws as unknown as WebSocket, sessionFor(workspace), { validateSession: () => true });
+  ws.emit("message", Buffer.from(JSON.stringify({ type: "message", requestId: "repair-provider-error", message: "finish the task", mode: "code", modelName: config.modelName })));
+  await waitFor(() => ws.frames.some((frame) => frame.type === "run_state" && frame.status === "failed"), 5_000, () => ws.frames);
+  const failed = ws.frames.find((frame) => frame.type === "run_state" && frame.status === "failed");
+  assert.equal(providerCalls, 2);
+  assert.equal(qualityCalls, 1);
+  assert.equal(failed.qualityGate?.status, "blocked");
+  assert.ok(failed.completionEvidence?.ledger?.blockers?.includes("quality"));
+  assert.notEqual(failed.completionEvidence?.outcome, "completed");
+  assert.ok(ws.frames.some((frame) => frame.type === "error" && /authentication|401/i.test(String(frame.content))), "the provider failure itself must remain visible");
+  const persisted = readRunRecord(workspace, failed.runId);
+  assert.equal(persisted.qualityGate?.status, "blocked");
+  assert.ok(persisted.events.some((event) => event.label === "Agent run crashed" && /authentication|401/i.test(event.detail || "")), "provider failure must remain in durable run evidence");
 });
 
 test("policy routes reject viewer/member PUT and explain only server-resolved signed layers despite spoofed client layers", async (t) => {

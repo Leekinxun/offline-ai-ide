@@ -2,17 +2,20 @@ import React, { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, CircleX, LoaderCircle, Play, RefreshCw, Square, TestTube2, X } from "lucide-react";
 import { useRunCenter, type RunFailure, type RunRecord } from "../hooks/useRunCenter";
 import { useI18n } from "../i18n";
+import { ProcessSessionsPanel } from "./ProcessSessionsPanel";
 import "./RunCenterPanel.css";
 
 interface RunCenterPanelProps {
   visible: boolean;
   token: string;
+  workspaceDir: string;
   onOpenLocation: (failure: RunFailure) => void;
   onClose: () => void;
   onRunningChange?: (label: string | null) => void;
+  readOnly?: boolean;
 }
 
-export const RunCenterPanel: React.FC<RunCenterPanelProps> = ({ visible, token, onOpenLocation, onClose, onRunningChange }) => {
+export const RunCenterPanel: React.FC<RunCenterPanelProps> = ({ visible, token, workspaceDir, onOpenLocation, onClose, onRunningChange, readOnly = false }) => {
   const { t } = useI18n();
   const center = useRunCenter(token, visible);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -29,6 +32,7 @@ export const RunCenterPanel: React.FC<RunCenterPanelProps> = ({ visible, token, 
   return <aside className="run-center-panel panel-shell workspace-drawer" aria-label={t("runCenter.aria")} tabIndex={-1} data-workspace-drawer="run-center">
     <div className="workbench-panel-header"><div className="workbench-panel-title"><TestTube2 size={15} /><strong>{t("runCenter.title")}</strong></div><div className="workbench-panel-actions"><button type="button" className="sidebar-action-btn" onClick={() => void center.refresh()} title={t("runCenter.refresh")} aria-label={t("runCenter.refresh")}><RefreshCw size={14} /></button><button type="button" className="sidebar-action-btn" onClick={onClose} title={t("runCenter.close")} aria-label={t("runCenter.close")}><X size={14} /></button></div></div>
     <div className="run-center-body">
+      <ProcessSessionsPanel key={workspaceDir} token={token} workspaceDir={workspaceDir} readOnly={readOnly} />
       {center.error && <div className="workbench-panel-error" role="alert">{center.error}</div>}
       <div className="run-task-list">
         {center.tasks.map((task) => <div className="run-task-row" key={task.id}><span><strong>{task.label}</strong><small>{task.kind} · {task.source}</small></span>{center.runningTaskId === task.id ? <button type="button" className="dialog-btn danger" onClick={() => { const active = center.runs.find((run) => run.taskId === task.id && run.status === "running"); if (active) void center.stop(active.id); }}><Square size={12} />{t("runCenter.stop")}</button> : <button type="button" className="dialog-btn" onClick={() => void runTask(task.id)} disabled={center.runningTaskId !== null}><Play size={12} />{t("runCenter.run")}</button>}</div>)}

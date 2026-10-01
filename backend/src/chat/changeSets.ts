@@ -597,7 +597,10 @@ export function captureChangeSet(workspaceDir: string, worktreeId: string, evide
     const status = gitOutputStrict(worktree.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
     const committedPatch = git(worktree.path, ["diff", "--binary", `${worktree.baseSha}...HEAD`]);
     const dirtyPatch = git(worktree.path, ["diff", "--binary", "HEAD"]);
-    const untracked = status.split("\0").filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
+    // The recorder creates these checkpoints itself. Other protected files
+    // stay in the capture so preflight can flag prohibited child patches.
+    const untracked = status.split("\0").filter((line) => line.startsWith("?? ")).map((line) => line.slice(3))
+      .filter((relative) => !relative.startsWith(".checkpoints/"));
     const nullPath = process.platform === "win32" ? "NUL" : "/dev/null";
     const untrackedPatch = untracked.map((file) => gitDiffNoIndex(worktree.path, ["diff", "--no-index", "--binary", "--", nullPath, file])).join("\n");
     const patch = Buffer.from(`${committedPatch}\n${dirtyPatch}\n${untrackedPatch}`, "utf8");

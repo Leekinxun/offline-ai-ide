@@ -1,18 +1,24 @@
 import { WebSocket } from "ws";
 import type { AgentMode, WsServerMessage } from "../agent/types.js";
-import { sessionManager, type UserSession } from "../auth/sessionManager.js";
-import { ToolApprovalSession, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
+import { isSameOrDescendantPath, sessionManager, type UserSession } from "../auth/sessionManager.js";
+import { ToolApprovalSession, createToolApprovalGrants, type ToolApprovalGrants, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
 import type { ChatAttachmentRef } from "./attachments.js";
 import type { ExecutionPlan } from "./executionPlans.js";
 import type { AgentRunRecorder } from "./runHistory.js";
 import { redactSecrets } from "../agent/secretRedaction.js";
-import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam } from "../team/sessionBridge.js";
+import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "../team/sessionBridge.js";
 import { subscribeTeamAccessChanges } from "../team/teamManager.js";
+import { stopAgentProcesses } from "../agent/processTools.js";
+import fs from "node:fs";
+import path from "node:path";
+import { LiveTranscript } from "./liveTranscript.js";
+import { countAgentQuestions, subscribeAgentQuestionChanges } from "./agentQuestions.js";
 
 export interface PendingUserMessage {
   requestId: string;
   message: string;
   attachments?: ChatAttachmentRef[];
+  contextReferences?: import("./contextReferences.js").ResolvedContextReferences;
   context?: { path: string; content: string; language: string; selection?: string };
   conversationId: string;
   mode: AgentMode;
@@ -60,6 +66,8 @@ export interface ChatRunSnapshot {
   updatedAt: number;
   sequence: number;
   pendingApprovals: PendingRunApproval[];
+  pendingQuestionCount: number;
+  waitingForInput: boolean;
 }
 
 export interface ChatRunEvent {
@@ -93,11 +101,33 @@ export interface RunCommandResult {
   code: "accepted" | "not_found" | "forbidden" | "conflict" | "invalid";
   message?: string;
   requestId?: string;
+  resolvedCount?: number;
+  pendingApprovals?: ToolApprovalRequestEvent[];
 }
 
 type EventListener = (event: ChatRunEvent) => void;
 const runs = new Map<string, ActiveChatRun>();
 const listeners = new Map<string, Set<EventListener>>();
+// Authorization survives continuation runs, but is never shared across login
+// sessions, workspaces, or conversations. Keep the in-memory cache bounded.
+const approvalGrants = new Map<string, { token: string; grants: ToolApprovalGrants }>();
+
+function conversationApprovalGrants(token: string, workspace: string, conversation: string): ToolApprovalGrants {
+  const grantKey = `${token}\0${canonicalWorkspace(workspace)}\0${conversation}`;
+  const entry = approvalGrants.get(grantKey) || { token, grants: createToolApprovalGrants() };
+  approvalGrants.delete(grantKey);
+  approvalGrants.set(grantKey, entry);
+  if (approvalGrants.size > 512) approvalGrants.delete(approvalGrants.keys().next().value!);
+  return entry.grants;
+}
+
+subscribeAgentQuestionChanges((change) => {
+  const run = runs.get(key(change.workspaceDir, change.conversationId));
+  if (!run || run.runId !== change.runId || run.ownerUsername !== change.owner) return;
+  run.emit({ type: "question_state", requestId: change.requestId,
+    pendingQuestionCount: change.pendingQuestionCount,
+    waitingForInput: change.pendingQuestionCount > 0 || run.approvals.pendingCount(change.conversationId) > 0 });
+});
 
 subscribeTeamAccessChanges((change) => {
   if (change.role !== "viewer" && change.role !== null) return;
@@ -153,7 +183,22 @@ export function listPendingApprovals(workspaceDir: string): PendingRunApproval[]
   return listActiveRuns(workspaceDir).flatMap((run) => run.pendingApprovals);
 }
 
+function canonicalWorkspace(workspaceDir: string): string {
+  try { return fs.realpathSync.native(workspaceDir); } catch { return path.resolve(workspaceDir); }
+}
+
+export function assertPrimaryWriteAvailable(workspaceDir: string, conversationId: string, mode: AgentMode): void {
+  if (mode !== "code") return;
+  const workspace = canonicalWorkspace(workspaceDir);
+  const conflict = [...runs.values()].find((run) => (run.conversationId !== conversationId || run.workspaceDir !== workspaceDir)
+    && run.currentRecorder.snapshot().mode === "code"
+    && (isSameOrDescendantPath(canonicalWorkspace(run.workspaceDir), workspace)
+      || isSameOrDescendantPath(workspace, canonicalWorkspace(run.workspaceDir))));
+  if (conflict) throw new Error("Another Code task is writing this workspace. Wait for it to finish, or open an isolated window/worktree before starting another Code task. Ask, Plan and Review can run in parallel.");
+}
+
 export class ActiveChatRun {
+  readonly liveTranscript = new LiveTranscript();
   readonly controlState = createRunControlState();
   readonly steeringQueue: PendingUserMessage[] = [];
   readonly approvals: ToolApprovalSession;
@@ -183,13 +228,21 @@ export class ActiveChatRun {
     this.ownerUsername = input.session.username;
     this.ownerSessionToken = input.ownerSessionToken || input.session.token;
     this.ownerSession = input.session;
-    this.ownerSessionRegistered = Boolean(sessionManager.getSession(this.ownerSessionToken, { touch: false }));
+    const registeredOwner = sessionManager.getSession(this.ownerSessionToken, { touch: false });
+    const registeredExecution = sessionManager.getSession(input.session.token, { touch: false });
+    if (registeredOwner && registeredOwner.username !== input.session.username) throw new Error("Run owner does not match the authenticated session");
+    if (registeredExecution && this.ownerSessionToken !== input.session.token) throw new Error("Run owner token does not match the authenticated session");
+    if (!registeredOwner && input.session.createdAt !== undefined) throw new Error("Run owner session expired");
+    this.ownerSessionRegistered = Boolean(registeredOwner);
+    const approvalScopeToken = sessionManager.getApprovalScopeToken(input.session);
     this.teamId = resolveActiveTeam(input.session)?.id || null;
     this.recorder = input.recorder;
     this.queueSteering = input.queueSteering;
     this.approvals = new ToolApprovalSession((request) => {
       this.emit({ type: "tool_approval_request", ...request });
-    });
+    }, undefined, approvalScopeToken
+      ? conversationApprovalGrants(approvalScopeToken, this.workspaceDir, this.conversationId)
+      : createToolApprovalGrants());
     // The agent only uses readyState and send. The transport survives browser
     // disconnects so a run can finish and be observed by another device.
     this.transport = {
@@ -204,6 +257,7 @@ export class ActiveChatRun {
   setRecorder(recorder: AgentRunRecorder): boolean {
     if (recorder.conversationId !== this.conversationId) throw new Error("Run conversation changed");
     if (this.controlState.stopped || this.closed) return false;
+    assertPrimaryWriteAvailable(this.workspaceDir, this.conversationId, recorder.snapshot().mode);
     this.recorder = recorder;
     this.controlState.reset();
     this.acceptingSteering = true;
@@ -228,7 +282,7 @@ export class ActiveChatRun {
     if (this.teamId) {
       try {
         const team = getTeamManager(this.ownerSession).getTeamDetails(this.teamId, this.ownerUsername);
-        if (team.workspaceDir === this.workspaceDir && team.role !== "viewer") return;
+        if (teamWorkspaceContains(team.workspaceDir, this.workspaceDir) && team.role !== "viewer") return;
       } catch { /* The owner is no longer a team member. */ }
       this.forceStop("Team permission changed; stopping current AI run...");
     }
@@ -245,6 +299,7 @@ export class ActiveChatRun {
 
   snapshot(): ChatRunSnapshot {
     const record = this.recorder.snapshot();
+    const pendingQuestionCount = countAgentQuestions(this.workspaceDir, this.ownerUsername, this.conversationId, this.runId);
     return {
       workspaceDir: this.workspaceDir,
       conversationId: this.conversationId,
@@ -256,6 +311,8 @@ export class ActiveChatRun {
       startedAt: record.startedAt,
       updatedAt: record.updatedAt,
       sequence: this.sequence,
+      pendingQuestionCount,
+      waitingForInput: pendingQuestionCount > 0 || this.approvals.pendingCount(this.conversationId) > 0,
       pendingApprovals: this.approvals.listPending(this.conversationId).map((approval) => ({
         approvalId: approval.approvalId,
         runId: this.runId,
@@ -271,12 +328,13 @@ export class ActiveChatRun {
 
   emit(payload: WsServerMessage): void {
     if (this.closed) return;
+    this.liveTranscript.accept(payload);
     const event: ChatRunEvent = {
       workspaceDir: this.workspaceDir,
       conversationId: this.conversationId,
       runId: this.runId,
       sequence: ++this.sequence,
-      payload,
+      payload: { ...payload, conversationId: this.conversationId, runId: this.runId, eventSequence: this.sequence },
     };
     for (const listener of listeners.get(this.workspaceDir) || []) {
       try { listener(event); } catch { /* One client must not break the run. */ }
@@ -291,7 +349,7 @@ export class ActiveChatRun {
     if (this.teamId) {
       try {
         const team = getTeamManager(session).getTeamDetails(this.teamId, session.username);
-        if (team.workspaceDir !== this.workspaceDir || team.role === "viewer") return { ok: false, code: "forbidden" };
+        if (!teamWorkspaceContains(team.workspaceDir, this.workspaceDir) || team.role === "viewer") return { ok: false, code: "forbidden" };
       } catch { return { ok: false, code: "forbidden" }; }
     }
     if (command.type === "stop") {
@@ -310,8 +368,10 @@ export class ActiveChatRun {
     }
     if (command.type === "tool_approval_all") {
       if (command.source === "mobile") return { ok: false, code: "forbidden", message: "Approve all is unavailable on mobile" };
-      this.approvals.allowConversation(this.conversationId);
-      return { ok: true, code: "accepted" };
+      const resolvedCount = this.approvals.allowConversation(this.conversationId);
+      const pendingApprovals = this.approvals.listPending(this.conversationId);
+      this.emit({ type: "tool_approval_all_result", conversationId: this.conversationId, runId: this.runId, resolvedCount, pendingApprovals });
+      return { ok: true, code: "accepted", resolvedCount, pendingApprovals };
     }
     const pending = this.approvals.getPending(command.approvalId);
     if (!pending) return { ok: false, code: "conflict", message: "Tool approval request is no longer active" };
@@ -327,6 +387,8 @@ export class ActiveChatRun {
     this.closed = true;
     this.acceptingSteering = false;
     this.approvals.cancelAll();
+    this.controlState.stop();
+    void stopAgentProcesses({ workspaceDir: this.workspaceDir, sessionOwner: this.ownerUsername, sessionToken: this.ownerSessionToken, runId: this.runId }).catch(() => { /* The run abort signal also cancels its Agent-owned children. */ });
     runs.delete(key(this.workspaceDir, this.conversationId));
   }
 }
@@ -334,6 +396,7 @@ export class ActiveChatRun {
 export function createActiveRun(input: ConstructorParameters<typeof ActiveChatRun>[0]): ActiveChatRun {
   const runKey = key(input.session.workspaceDir, input.recorder.conversationId);
   if (runs.has(runKey)) throw new Error("An AI run is already active in this conversation");
+  assertPrimaryWriteAvailable(input.session.workspaceDir, input.recorder.conversationId, input.recorder.snapshot().mode);
   const run = new ActiveChatRun(input);
   runs.set(runKey, run);
   return run;
@@ -347,6 +410,9 @@ export async function dispatchRunCommand(session: UserSession, command: RunComma
 
 /** Called when a desktop session is explicitly revoked (logout, password reset, expiry). */
 export function stopRunsForSession(token: string): number {
+  for (const [grantKey, entry] of approvalGrants) {
+    if (entry.token === token) approvalGrants.delete(grantKey);
+  }
   let stopped = 0;
   for (const run of runs.values()) {
     if (run.ownerSessionToken === token && run.forceStop("Session ended; stopping current AI run...")) stopped += 1;

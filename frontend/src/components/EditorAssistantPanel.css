@@ -155,6 +155,7 @@
 
 /* 详情抽屉 */
 .editor-assistant-details {
+  min-width: 0;
   min-height: 0;
   max-height: min(48vh, 420px);
   flex: 0 1 auto;
@@ -163,6 +164,7 @@
 }
 
 .editor-assistant-context {
+  min-width: 0;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-light);
   background: var(--surface-workbench);
@@ -257,10 +259,12 @@
 
 /* 消息流区域 */
 .editor-assistant-messages {
+  min-width: 0;
   min-height: 0;
   flex: 1;
   padding: 14px 12px 16px;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -308,7 +312,7 @@
 
 .editor-assistant-quick-prompts {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
   width: 100%;
   max-width: 340px;
@@ -316,6 +320,8 @@
 
 .editor-assistant-quick-prompt-btn {
   display: flex;
+  min-width: 0;
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
@@ -345,6 +351,7 @@
 /* 消息气泡 */
 .editor-assistant-message {
   display: flex;
+  min-width: 0;
   width: min(92%, 100%);
   max-width: 640px;
   flex-direction: column;
@@ -360,6 +367,7 @@
 
 .editor-assistant-message > p {
   width: fit-content;
+  min-width: 0;
   max-width: 100%;
   margin: 0;
   padding: 9px 12px;
@@ -370,6 +378,7 @@
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .editor-assistant-message > small {
@@ -382,6 +391,7 @@
 
 .editor-assistant-message:not(.user) .editor-assistant-message-content {
   width: fit-content;
+  min-width: 0;
   max-width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--line-strong);
@@ -390,6 +400,7 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   color: var(--text-primary);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .editor-assistant-message-content .chat-markdown {
@@ -418,6 +429,58 @@
   color: #c9d1d9;
   font: 11px var(--font-mono);
   white-space: pre;
+}
+
+.editor-assistant-thinking,
+.editor-assistant-tools,
+.editor-assistant-tool {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.editor-assistant-thinking,
+.editor-assistant-tool {
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface-workbench);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.editor-assistant-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor-assistant-thinking > summary,
+.editor-assistant-tool > summary {
+  padding: 7px 9px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.editor-assistant-thinking-content {
+  padding: 0 9px 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.editor-assistant-tool > summary > svg { margin-right: 4px; vertical-align: middle; }
+.editor-assistant-tool > summary > small { margin-left: 6px; color: var(--text-muted); white-space: nowrap; }
+
+.editor-assistant-tool pre {
+  max-width: 100%;
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 9px;
+  overflow: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  font: 10px/1.5 var(--font-mono);
 }
 
 /* 运行卡片 */
@@ -574,12 +637,25 @@
 
 /* 审批浮层 */
 .editor-assistant-approvals {
-  max-height: min(46%, 380px);
-  flex: 0 1 auto;
+  max-height: min(38%, 340px);
+  flex: 0 0 auto;
   overflow-y: auto;
   border-top-color: color-mix(in srgb, var(--warning) 32%, var(--line-strong));
   background: color-mix(in srgb, var(--warning) 4%, var(--surface-workbench));
 }
+
+.editor-assistant-stop-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  background: var(--surface-panel-strong);
+  color: var(--danger);
+  cursor: pointer;
+}
+.editor-assistant-stop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .editor-assistant-approvals + .editor-assistant-composer {
   margin-top: 10px;
@@ -590,6 +666,7 @@
    ========================================================================== */
 
 .editor-assistant-composer {
+  min-width: 0;
   flex: 0 0 auto;
   margin: 0 10px 10px;
   overflow: hidden;
@@ -624,6 +701,7 @@
   color: var(--text-primary);
   font: 12px/1.55 var(--font-sans);
   box-sizing: border-box;
+  overflow-wrap: anywhere;
 }
 
 .editor-assistant-composer textarea::placeholder {
@@ -645,7 +723,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 160px;
+  min-width: 0;
+  max-width: min(100%, 160px);
   padding: 2px 6px 2px 7px;
   border-radius: 4px;
   border: 1px solid var(--line-strong);
@@ -655,12 +734,14 @@
 }
 
 .editor-assistant-draft-chip span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .editor-assistant-draft-chip button {
+  flex-shrink: 0;
   display: grid;
   width: 14px;
   height: 14px;
@@ -688,9 +769,11 @@
   color: var(--warning);
   background: color-mix(in srgb, var(--warning) 6%, transparent);
   border: none !important;
+  overflow-wrap: anywhere;
 }
 
 .editor-assistant-recheck-btn {
+  flex-shrink: 0;
   display: grid;
   width: 16px;
   height: 16px;
@@ -704,6 +787,8 @@
 /* 底部一体化扁平单行操作栏（完全消除内部多道分割线，紧凑精炼） */
 .editor-assistant-composer-controls {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -719,14 +804,18 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 100px;
+  max-width: 100%;
 }
 
 .editor-assistant-composer-right {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 160px;
+  justify-content: flex-end;
 }
 
 /* 左侧加号按钮：极简统一 26px 高度 */
@@ -797,8 +886,7 @@
 }
 
 .editor-assistant-composer .workbench-select-value {
-  display: inline-flex !important;
-  align-items: center !important;
+  display: block !important;
   line-height: 1 !important;
 }
 
@@ -809,8 +897,9 @@
 
 /* 模型选择器：无外框沉浸式文字下拉 */
 .editor-assistant-composer-model {
-  min-width: 80px;
+  min-width: 0;
   max-width: 180px;
+  flex: 1 1 80px;
 }
 
 .editor-assistant-composer-model .model-selector-trigger {
@@ -835,6 +924,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   max-width: 120px;
   height: 26px;
   padding: 0 5px;
@@ -846,7 +936,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 1 120px;
+}
+
+.editor-assistant-inline-context > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .editor-assistant-inline-context:hover {
@@ -886,4 +983,3 @@
   color: rgba(255, 255, 255, 0.25);
   transform: none;
 }
-

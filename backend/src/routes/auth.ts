@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import path from "node:path";
 import { isSamePath, sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
@@ -12,6 +12,34 @@ import { getDebugSession, stopDebugSession } from "../debug/service.js";
 import { stopDiagnosticsSession } from "../diagnostics/service.js";
 
 export const authRouter = Router();
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function normalizeHost(value: string | undefined): string {
+  if (!value) return "";
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    return end === -1 ? trimmed : trimmed.slice(0, end + 1);
+  }
+  return trimmed.split(":")[0];
+}
+
+function isLoopbackHost(value: string | undefined): boolean {
+  return LOOPBACK_HOSTS.has(normalizeHost(value));
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  if (!value) return false;
+  const address = value.toLowerCase();
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function isDesktopLocalRequest(req: Request): boolean {
+  return process.env.CREWFORGE_DESKTOP === "1" &&
+    isLoopbackHost(req.headers.host) &&
+    isLoopbackAddress(req.socket.remoteAddress);
+}
 
 // POST /api/auth/register
 authRouter.post("/register", async (req, res) => {
@@ -75,12 +103,13 @@ authRouter.post("/logout", (req, res) => {
 
 // GET /api/auth/me
 authRouter.get("/me", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const authHeader = req.headers["authorization"];
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   let session = sessionManager.getSession(token);
 
-  // 桌面模式免密直接使用：若无 token 或 token 已失效，自动就地创建/复用桌面本地会话
-  if (!session && process.env.CREWFORGE_DESKTOP === "1") {
+  // Desktop shells run on loopback and may bootstrap the local admin session.
+  if (!session && authHeader === undefined && isDesktopLocalRequest(req)) {
     const desktopSession = sessionManager.getOrCreateDesktopLocalSession();
     if (desktopSession) {
       return res.json({
@@ -111,6 +140,21 @@ authRouter.get("/me", (req, res) => {
 
 // --- Workspace routes (protected) ---
 
+// POST /api/auth/session/window — a fresh API token for this browser document.
+authRouter.post("/session/window", authMiddleware, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const session = (req as any).userSession;
+  if (req.body?.path !== undefined && (typeof req.body.path !== "string" || !req.body.path.trim())) {
+    return res.status(400).json({ error: "Invalid workspace path" });
+  }
+  if (session.isolated) return res.status(403).json({ error: "Isolated Vibe windows cannot open an unlocked session" });
+  try {
+    return res.json({ ...sessionManager.createWindowSession(session.token, req.body?.path), desktop: process.env.CREWFORGE_DESKTOP === "1" });
+  } catch {
+    return res.status(403).json({ error: "Path not allowed" });
+  }
+});
+
 // POST /api/auth/workspace/change
 authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   const session = (req as any).userSession;
@@ -128,7 +172,7 @@ authRouter.post("/workspace/change", authMiddleware, async (req, res) => {
   if (!result) {
     return res.status(403).json({ error: "Path not allowed" });
   }
-  if (result.workspaceDir !== previousWorkspace) {
+  if (result.workspaceDir !== previousWorkspace && !sessionManager.hasOtherSessionAtWorkspace(previousWorkspace, session.token)) {
     try { stopDiagnosticsSession(previousWorkspace); } catch { /* no active watcher */ }
     if (getDebugSession(previousWorkspace)) {
       try { await stopDebugSession(previousWorkspace); } catch { /* already stopped */ }
@@ -157,7 +201,7 @@ authRouter.post("/workspace/pick", authMiddleware, async (req, res) => {
     if (!result) {
       return res.status(400).json({ error: "Selected folder is not an accessible directory" });
     }
-    if (result.workspaceDir !== previousWorkspace) {
+    if (result.workspaceDir !== previousWorkspace && !sessionManager.hasOtherSessionAtWorkspace(previousWorkspace, session.token)) {
       try { stopDiagnosticsSession(previousWorkspace); } catch { /* no active watcher */ }
       if (getDebugSession(previousWorkspace)) {
         try { await stopDebugSession(previousWorkspace); } catch { /* already stopped */ }

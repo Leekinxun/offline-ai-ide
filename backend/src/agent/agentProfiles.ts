@@ -60,16 +60,16 @@ export type AgentProfileOverrides = Partial<Record<AgentProfileId, Partial<{
 
 const ALL_TOOLS = ["*"];
 const DEFAULTS: Record<AgentProfileId, AgentProfile> = {
-  ask: profile("ask", 8, 8, 5 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "TodoWrite", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
-  review: profile("review", 20, 30, 15 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "report_review_finding"]),
+  ask: profile("ask", 8, 8, 5 * 60_000, false, ["ask_user", "compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "TodoWrite", "mcp_*", "search_lazy_mcp_tools", "activate_lazy_mcp_tools"]),
+  review: profile("review", 20, 30, 15 * 60_000, false, ["ask_user", "compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "bash", "TodoWrite", "report_review_finding"]),
   // These are server-owned identities used only for immutable change-set review runs.
   change_set_reviewer: profile("change_set_reviewer", 12, 20, 10 * 60_000, false, ["read_file", "bash", "report_review_finding"]),
   change_set_verifier: profile("change_set_verifier", 10, 16, 10 * 60_000, false, ["read_file", "bash", "report_review_finding"]),
-  plan: profile("plan", 16, 20, 10 * 60_000, false, ["compress", "memory_read", "skill_load", "read_file", "bash", "TodoWrite", "submit_plan"]),
+  plan: profile("plan", 16, 20, 10 * 60_000, false, ["ask_user", "compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "bash", "TodoWrite", "submit_plan"]),
   code: profile("code", 30, 80, 30 * 60_000, true, ALL_TOOLS),
-  explore: profile("explore", 20, 40, 15 * 60_000, false, ["bash", "read_file"]),
-  subagent: profile("subagent", 30, 60, 25 * 60_000, true, ["bash", "read_file", "write_file", "edit_file"]),
-  teammate: profile("teammate", 50, 100, 60 * 60_000, true, ["bash", "read_file", "write_file", "edit_file", "send_message", "idle", "claim_task"]),
+  explore: profile("explore", 20, 40, 15 * 60_000, false, ["read_file", "find_files", "search_files", "list_directory"]),
+  subagent: profile("subagent", 30, 60, 25 * 60_000, true, ALL_TOOLS),
+  teammate: profile("teammate", 50, 100, 60 * 60_000, true, ["bash", "read_file", "write_file", "edit_file", "rename_file", "send_message", "idle", "claim_task"]),
 };
 
 function profile(

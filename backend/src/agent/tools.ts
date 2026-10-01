@@ -1,4 +1,3 @@
-import fs from "fs";
 import path from "path";
 import { safePath } from "../utils/safePath.js";
 import {
@@ -13,20 +12,32 @@ import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
 import { runSubagent } from "./subagent.js";
-import { recordFileMutation } from "../files/mutationRegistry.js";
+import { buildFileVersion, listFileMutations, recordFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
-import { runWorkspaceCommand } from "./shell.js";
+import { runInspectionCommand, runWorkspaceCommand, runReadOnlyShellCommand } from "./shell.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
+import { networkGrantForTool } from "./networkAccess.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
-import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
+import { requestAgentQuestion } from "../chat/agentQuestions.js";
+import { readAuthorizedAgentFile } from "./externalFileAccess.js";
+import { renameWorkspaceFile } from "./renameFile.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
+import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
+import { SUBAGENT_ROLES } from "./subagentRoles.js";
+import { executeProcessTool, pendingAgentProcesses, type AgentProcessResult } from "./processTools.js";
+import {
+  assertFileVersion, atomicWriteFile, normalizeEditablePath, readEditableFile,
+  rememberFileRead, rememberFileWrite, replaceUniqueText,
+} from "./fileEditSafety.js";
 
 // ---- Tool handler type ----
 
 export interface ToolExecutionResult {
   output: string;
   fileUpdate?: ToolFileUpdate;
+  process?: AgentProcessResult;
 }
 
 export type ToolHandler = (
@@ -42,6 +53,9 @@ export type ToolHandler = (
 // Tool calls may be retried by providers. Keep command responses stable within the
 // process so a retry cannot create a second task/message while a lease is active.
 const COMMAND_RESULTS = new Map<string, string>();
+function collaborationActor(ctx: ToolContext): string {
+  return ctx.subagentDepth ? ctx.actorName || "subagent" : "lead";
+}
 function idempotentCommand(ctx: ToolContext, key: unknown, run: () => string): string {
   const id = typeof key === "string" ? key.trim() : "";
   if (!id) return run();
@@ -158,18 +172,67 @@ function sanitizeReviewFinding(args: Record<string, unknown>, workspaceDir: stri
   };
 }
 
-async function runReadFile(
+export async function runReadFile(
   filePath: string,
   limit: number | undefined,
-  cwd: string
+  cwd: string,
+  options: { offset?: unknown; start_line?: unknown; character_offset?: unknown } = {},
+  context?: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "externalReadRoots" | "getExternalReadRoots">
 ): Promise<string> {
   try {
-    const content = readAuthorizedWorkspaceFile(cwd, filePath).content;
-    const lines = content.split("\n");
-    if (limit && limit < lines.length) {
-      return [...lines.slice(0, limit), `... (${lines.length - limit} more lines)`].join("\n");
+    const integer = (value: unknown, name: string, minimum: number): number => {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+        throw new Error(`${name} must be an integer >= ${minimum}`);
+      }
+      return value;
+    };
+    if ([options.offset, options.start_line, options.character_offset].filter((value) => value !== undefined).length > 1) {
+      throw new Error("Use only one of offset, start_line, or character_offset");
     }
-    return content.slice(0, 50000);
+    const lineLimit = limit === undefined ? undefined : integer(limit, "limit", 1);
+    const file = readAuthorizedAgentFile(cwd, filePath, context?.getExternalReadRoots?.() ?? context?.externalReadRoots ?? []);
+    const content = file.content;
+    const lineStarts = [0];
+    for (let index = 0; index < content.length; index += 1) if (content[index] === "\n") lineStarts.push(index + 1);
+    let firstLine = options.start_line !== undefined
+      ? integer(options.start_line, "start_line", 1) - 1
+      : options.offset !== undefined ? integer(options.offset, "offset", 0) : 0;
+    if (firstLine >= lineStarts.length) throw new Error("Requested line is past the end of the file");
+    const start = options.character_offset !== undefined
+      ? integer(options.character_offset, "character_offset", 0)
+      : lineStarts[firstLine];
+    if (start > content.length) throw new Error("character_offset is past the end of the file");
+    if (options.character_offset !== undefined) {
+      while (firstLine + 1 < lineStarts.length && lineStarts[firstLine + 1] <= start) firstLine += 1;
+    }
+    const requestedEnd = lineLimit === undefined ? content.length : lineStarts[firstLine + lineLimit] ?? content.length;
+    let end = Math.min(requestedEnd, start + 50_000);
+    if (end < requestedEnd) {
+      // Prefer whole lines, but permit explicit character continuation for a
+      // line longer than the page budget. Never silently lose the remainder.
+      const boundary = content.lastIndexOf("\n", end - 1) + 1;
+      if (boundary > start) end = boundary;
+      else if (/[\uD800-\uDBFF]/.test(content[end - 1]) && /[\uDC00-\uDFFF]/.test(content[end])) end -= 1;
+    }
+    const nextLine = end < content.length ? lineStarts.indexOf(end) : -1;
+    const truncated = end < content.length;
+    if (!file.external) rememberFileRead(cwd, file.path, content, start, end, context);
+    return JSON.stringify({
+      path: file.path,
+      ...(file.external ? { read_only: true, source: "external" } : {}),
+      version: buildFileVersion(content),
+      start_line: firstLine + 1,
+      offset: firstLine,
+      character_offset: start,
+      total_lines: lineStarts.length,
+      total_characters: content.length,
+      complete: start === 0 && !truncated,
+      truncated,
+      next_offset: nextLine >= 0 ? nextLine : null,
+      next_start_line: nextLine >= 0 ? nextLine + 1 : null,
+      next_character_offset: truncated ? end : null,
+      content: content.slice(start, end),
+    });
   } catch (e: any) {
     return `Error: ${e.message}`;
   }
@@ -179,19 +242,23 @@ async function runWriteFile(
   filePath: string,
   content: string,
   cwd: string,
-  context: Pick<ToolContext, "actorName" | "runId" | "toolCallId">
+  context: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "toolCallId">,
+  expectedVersion?: unknown
 ): Promise<string | ToolExecutionResult> {
   try {
+    filePath = normalizeEditablePath(filePath);
+    if ((context.runId || context.requestId) && pendingAgentProcesses({ ...context, workspaceDir: cwd }, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before modifying workspace files";
+    if (typeof content !== "string") return "Error: content must be a string";
     const policy = evaluateWorkspaceWrite(filePath);
     if (!policy.allowed) return `Error: Write blocked by workspace policy: ${policy.reason}`;
-    const full = safePath(filePath, cwd);
-    const preimageContent = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
+    const preimageContent = readEditableFile(cwd, filePath);
+    assertFileVersion(cwd, filePath, preimageContent, expectedVersion, true, context);
     if (preimageContent === content) {
       return `No changes to ${filePath}`;
     }
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, "utf-8");
-    const stat = fs.statSync(full);
+    // A damaged/unreadable journal must fail before mutating the working file.
+    listFileMutations(cwd);
+    const stat = atomicWriteFile(cwd, filePath, content, preimageContent);
     recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
@@ -199,12 +266,14 @@ async function runWriteFile(
       actor: context.actorName,
       mtimeMs: stat.mtimeMs,
       runId: context.runId,
+      requestId: context.requestId,
       toolCallId: context.toolCallId,
       preimageContent,
       postimageContent: content,
     });
+    rememberFileWrite(cwd, filePath, content, context, true);
     return {
-      output: `Wrote ${content.length} bytes to ${filePath}`,
+      output: `Wrote ${Buffer.byteLength(content, "utf8")} bytes to ${filePath}\nversion: ${buildFileVersion(content)}`,
       fileUpdate: {
         path: filePath,
         content,
@@ -220,23 +289,24 @@ async function runEditFile(
   oldText: string,
   newText: string,
   cwd: string,
-  context: Pick<ToolContext, "actorName" | "runId" | "toolCallId">
+  context: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "toolCallId">,
+  expectedVersion?: unknown
 ): Promise<string | ToolExecutionResult> {
   try {
+    filePath = normalizeEditablePath(filePath);
+    if ((context.runId || context.requestId) && pendingAgentProcesses({ ...context, workspaceDir: cwd }, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before modifying workspace files";
     const policy = evaluateWorkspaceWrite(filePath);
     if (!policy.allowed) return `Error: Edit blocked by workspace policy: ${policy.reason}`;
-    const full = safePath(filePath, cwd);
-    const content = fs.readFileSync(full, "utf-8");
-    const matchOffset = content.indexOf(oldText);
-    if (matchOffset < 0) {
-      return `Error: Text not found in ${filePath}`;
-    }
-    const updatedContent = content.replace(oldText, newText);
+    const content = readEditableFile(cwd, filePath);
+    if (content === undefined) return `Error: File not found: ${filePath}`;
+    assertFileVersion(cwd, filePath, content, expectedVersion, false, context);
+    const replacement = replaceUniqueText(content, oldText, newText);
+    const updatedContent = replacement.content;
     if (updatedContent === content) {
       return `No changes to ${filePath}`;
     }
-    fs.writeFileSync(full, updatedContent, "utf-8");
-    const stat = fs.statSync(full);
+    listFileMutations(cwd);
+    const stat = atomicWriteFile(cwd, filePath, updatedContent, content);
     recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
@@ -244,19 +314,21 @@ async function runEditFile(
       actor: context.actorName,
       mtimeMs: stat.mtimeMs,
       runId: context.runId,
+      requestId: context.requestId,
       toolCallId: context.toolCallId,
       preimageContent: content,
       postimageContent: updatedContent,
     });
+    rememberFileWrite(cwd, filePath, updatedContent, context, false);
     return {
-      output: `Edited ${filePath}`,
+      output: `Edited ${filePath}\nversion: ${buildFileVersion(updatedContent)}`,
       fileUpdate: {
         path: filePath,
         content: updatedContent,
         selection: createSelectionRange(
           updatedContent,
-          matchOffset,
-          matchOffset + newText.length
+          replacement.offset,
+          replacement.offset + replacement.replacementLength
         ),
       },
     };
@@ -268,6 +340,21 @@ async function runEditFile(
 // ---- Dispatch table ----
 
 export const TOOL_DISPATCH: Record<string, ToolHandler> = {
+  process_start: (args, ctx) => executeProcessTool("process_start", args, ctx),
+  process_poll: (args, ctx) => executeProcessTool("process_poll", args, ctx),
+  process_input: (args, ctx) => executeProcessTool("process_input", args, ctx),
+  process_stop: (args, ctx) => executeProcessTool("process_stop", args, ctx),
+  ask_user: async (args, ctx) => {
+    if (ctx.lineage && ctx.lineage.parentRunId !== ctx.runId) return "Error: Ask the primary agent to collect the user's answer.";
+    try {
+      return await requestAgentQuestion({
+        workspaceDir: ctx.workspaceDir, owner: ctx.actorName || "",
+        runId: ctx.runId || "", requestId: ctx.requestId || "",
+        toolCallId: ctx.toolCallId || "", conversationId: ctx.conversationId || "",
+        questions: args.questions, signal: ctx.signal,
+      });
+    } catch (error) { return `Error: ${error instanceof Error ? error.message : "Question failed"}`; }
+  },
   compress: async () =>
     "Context compaction requested. The agent will summarize the conversation before continuing.",
 
@@ -326,25 +413,46 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     });
   },
 
-  bash: async (args, ctx) =>
-    runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
+  bash: async (args, ctx) => {
+    const command = typeof args.command === "string" ? args.command : "";
+    if (ctx.readOnlyShellCommand !== undefined && (command !== ctx.readOnlyShellCommand || args.allow_network === true)) return "Error: Read-only command changed after authorization";
+    if (args.allow_network !== true && planReadOnlyShell(command)) {
+      return runReadOnlyShellCommand(command, ctx.workspaceDir, ctx.signal, { readPaths: ctx.filesystemSandbox?.readPaths || [], writePaths: [] });
+    }
+    if (ctx.readOnlyShellCommand !== undefined) return "Error: Read-only authorization cannot run a writable shell";
+    let networkExecutionGrant;
+    try { networkExecutionGrant = networkGrantForTool(ctx, args); }
+    catch (error) { return `Error: ${error instanceof Error ? error.message : "Network opt-in denied"}`; }
+    if (ctx.mode === "code" && (ctx.runId || ctx.requestId) && pendingAgentProcesses(ctx, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before executing another workspace command";
+    return ctx.mode === "review" || ctx.mode === "plan"
+      ? runInspectionCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
+          readPaths: ctx.filesystemSandbox?.readPaths || [], writePaths: [],
+        })
+      : runWorkspaceCommand(args.command as string, ctx.workspaceDir, ctx.signal, {
       compatibilityShellAuthorized: ctx.compatibilityShellAuthorized === true,
+      networkExecutionGrant,
       filesystem: {
         workspaceDir: ctx.workspaceDir,
         readPaths: ctx.filesystemSandbox?.readPaths || [],
         writePaths: ctx.filesystemSandbox?.writePaths || [],
       },
-    }),
+    });
+  },
 
   read_file: async (args, ctx) =>
-    runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir),
+    runReadFile(args.path as string, args.limit as number | undefined, ctx.workspaceDir, args, ctx),
+
+  find_files: async (args, ctx) => executeRepositoryInspectionTool("find_files", args, ctx.workspaceDir, ctx.signal),
+  search_files: async (args, ctx) => executeRepositoryInspectionTool("search_files", args, ctx.workspaceDir, ctx.signal),
+  list_directory: async (args, ctx) => executeRepositoryInspectionTool("list_directory", args, ctx.workspaceDir, ctx.signal),
 
   write_file: async (args, ctx) =>
     runWriteFile(
       args.path as string,
       args.content as string,
       ctx.workspaceDir,
-      ctx
+      ctx,
+      args.expected_version
     ),
 
   edit_file: async (args, ctx) =>
@@ -353,8 +461,17 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       args.old_text as string,
       args.new_text as string,
       ctx.workspaceDir,
-      ctx
+      ctx,
+      args.expected_version
     ),
+
+  rename_file: async (args, ctx) => {
+    const result = renameWorkspaceFile({ workspaceDir: ctx.workspaceDir, source_path: args.source_path, target_path: args.target_path, expected_version: args.expected_version }, ctx);
+    return {
+      output: JSON.stringify({ source_path: result.sourcePath, path: result.path, version: result.version, renamed: result.changed }),
+      ...(result.changed ? { fileUpdate: { path: result.path, previousPath: result.sourcePath, previousVersion: result.version, content: result.content } } : {}),
+    };
+  },
 
   TodoWrite: async (args, ctx) =>
     ctx.todoManager.update(args.items as unknown[]),
@@ -368,9 +485,10 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 
   task_update: async (args, ctx) => {
     const taskId = args.task_id as number;
+    const coordinationRoot = ctx.taskManager.workspaceRoot;
     const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
-    const attemptToken = args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
-    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    const attemptToken = args.status === "completed" ? beginCompletionAttempt({ workspaceDir: coordinationRoot, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: coordinationRoot, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
     return ctx.taskManager.update(
       taskId,
       args.status as string | undefined,
@@ -384,15 +502,16 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     ctx.taskManager.listAll(),
 
   claim_task: async (args, ctx) =>
-    ctx.taskManager.claim(args.task_id as number, "lead"),
+    ctx.taskManager.claim(args.task_id as number, collaborationActor(ctx)),
 
   /** Structured, lease-aware task adapter. Legacy task_* tools remain supported. */
   task_command: async (args, ctx) => {
     const action = args.action;
     const taskId = Number(args.task_id);
+    const coordinationRoot = ctx.taskManager.workspaceRoot;
     const runId = ctx.runId || `task-${taskId}`; const scopeId = `task:${taskId}`;
-    const attemptToken = action === "update" && args.status === "completed" ? beginCompletionAttempt({ workspaceDir: ctx.workspaceDir, runId, scopeId }) : undefined;
-    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: ctx.workspaceDir, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
+    const attemptToken = action === "update" && args.status === "completed" ? beginCompletionAttempt({ workspaceDir: coordinationRoot, runId, scopeId }) : undefined;
+    const gate = attemptToken ? await runRepositoryCompletionGate({ workspaceDir: coordinationRoot, runId, scopeId, attemptToken, agentId: ctx.actorName || "agent" }) : undefined;
     return idempotentCommand(ctx, args.idempotency_key, () => {
       if (action === "create") return ctx.taskManager.create(String(args.subject || ""), String(args.description || ""));
       if (action === "get") return JSON.stringify(ctx.taskManager.getTask(taskId));
@@ -436,7 +555,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     if (parentTaskId) ctx.taskManager.getTask(parentTaskId);
     return runSubagent(
       args.prompt as string,
-      (args.agent_type as string) || "Explore",
+      args.agent_type === undefined ? "explore" : String(args.agent_type),
       ctx.workspaceDir,
       ctx.vllmApiUrl,
       ctx.modelName,
@@ -446,7 +565,8 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
       ctx.lineage && {
         ...ctx.lineage,
         ...(parentTaskId ? { parentTaskId } : {}),
-      }
+      },
+      { tools: ctx.delegatedTools || getAllTools({ mode: ctx.mode }), context: ctx }
     );
   },
 
@@ -472,17 +592,17 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     ctx.teammateManager.listAll(),
 
   send_message: async (args, ctx) =>
-    ctx.messageBus.send("lead", args.to as string, args.content as string, (args.msg_type as string) || "message"),
+    ctx.messageBus.send(collaborationActor(ctx), args.to as string, args.content as string, (args.msg_type as string) || "message"),
 
   read_inbox: async (_args, ctx) =>
-    JSON.stringify(ctx.messageBus.readInbox("lead"), null, 2),
+    JSON.stringify(ctx.messageBus.readInbox(collaborationActor(ctx)), null, 2),
 
   broadcast: async (args, ctx) =>
-    ctx.messageBus.broadcast("lead", args.content as string, ctx.teammateManager.memberNames()),
+    ctx.messageBus.broadcast(collaborationActor(ctx), args.content as string, ctx.teammateManager.memberNames()),
 
   shutdown_request: async (args, ctx) => {
     const teammate = args.teammate as string;
-    ctx.messageBus.send("lead", teammate, "Please shut down.", "shutdown_request");
+    ctx.messageBus.send(collaborationActor(ctx), teammate, "Please shut down.", "shutdown_request");
     return `Shutdown request sent to '${teammate}'`;
   },
 };
@@ -490,6 +610,32 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
 // ---- Tool definitions (OpenAI function-calling format) ----
 
 export const CORE_TOOLS: OpenAIToolDef[] = [
+  { type: "function", function: { name: "process_start", description: "Start an approved long-running workspace command. Network is denied by default. allow_network requires two administrator grants and separate one-time approval for unrestricted egress. Returns immediately with an id; poll until a real final exit status. Other workspace mutation tools are blocked while it runs. Code mode only.", parameters: { type: "object", properties: { command: { type: "string", description: "Command subject to ordinary bash policy and approved-plan scope" }, allow_network: { type: "boolean", default: false, description: "Explicitly request unrestricted network access for this command; main Code Agent only, never approved by Plan or session reuse" }, timeout_ms: { type: "integer", minimum: 100, maximum: 86400000, description: "Wall timeout, defaults to 10 minutes" } }, required: ["command"] } } },
+  { type: "function", function: { name: "process_poll", description: "Read output after cursor and actual process status for a session owned by this run. Running is not success. Poll until exited, failed, cancelled or timed_out before completing.", parameters: { type: "object", properties: { session_id: { type: "string" }, cursor: { type: "integer", minimum: 0 } }, required: ["session_id"] } } },
+  { type: "function", function: { name: "process_input", description: "Send explicit input to this run's process. Requires a separate one-time approval and command-policy check; an approved plan does not authorize interactive input.", parameters: { type: "object", properties: { session_id: { type: "string" }, text: { type: "string", description: "Input bytes (at most 16 KiB)" }, eof: { type: "boolean", description: "Close standard input after writing" } }, required: ["session_id"] } } },
+  { type: "function", function: { name: "process_stop", description: "Idempotently request cancellation of this run's process. Poll until termination; a stop request is not yet a final exit status.", parameters: { type: "object", properties: { session_id: { type: "string" } }, required: ["session_id"] } } },
+  {
+    type: "function",
+    function: {
+      name: "ask_user",
+      description: "Ask the user one to three consequential clarification questions and wait for their answer. Use only when missing information materially changes the result. This does not grant tool permissions. Child agents should ask their primary agent instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          questions: {
+            type: "array", minItems: 1, maxItems: 3,
+            items: { type: "object", properties: {
+              prompt: { type: "string" },
+              options: { type: "array", items: { type: "string" }, maxItems: 6 },
+              multiple: { type: "boolean" },
+            }, required: ["prompt"] },
+          },
+        },
+        required: ["questions"],
+      },
+    },
+  },
+  ...REPOSITORY_INSPECTION_TOOLS,
   {
     type: "function",
     function: {
@@ -653,10 +799,10 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "bash",
-      description: "Run a shell command in the workspace directory.",
+      description: "Run a shell command in the workspace directory with network denied by default. allow_network requires administrator grants and an explicit one-time approval.",
       parameters: {
         type: "object",
-        properties: { command: { type: "string", description: "Shell command to execute" } },
+        properties: { command: { type: "string", description: "Shell command to execute" }, allow_network: { type: "boolean", default: false, description: "Explicit unrestricted network request; primary Code Agent only, separate one-time approval required" } },
         required: ["command"],
       },
     },
@@ -665,12 +811,15 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "read_file",
-      description: "Read the contents of a file in the workspace.",
+      description: "Read a versioned file page. Workspace files can later be edited; external ordinary files inside server-authorized roots are read-only and marked read_only. Returns JSON content, version and continuation offsets; never write metadata into files. Pages are bounded to 50,000 characters and file content policy still applies.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative path from workspace root" },
-          limit: { type: "integer", description: "Max lines to read" },
+          path: { type: "string", description: "Workspace-relative path, or an explicit absolute path to an authorized external read-only file; parent traversal is not accepted" },
+          limit: { type: "integer", minimum: 1, description: "Maximum lines to read; character budget may shorten the page" },
+          offset: { type: "integer", minimum: 0, description: "Zero-based line offset. Use only one of offset, start_line, or character_offset" },
+          start_line: { type: "integer", minimum: 1, description: "One-based starting line (alternative to offset)" },
+          character_offset: { type: "integer", minimum: 0, description: "Exact UTF-16 character offset returned in next_character_offset, including continuation within a long line" },
         },
         required: ["path"],
       },
@@ -679,13 +828,30 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
   {
     type: "function",
     function: {
+      name: "rename_file",
+      description: "Rename or move a regular file inside the workspace without overwriting a target. Read the complete source first or supply expected_version. Both paths must be workspace-relative; directories, links, external paths and existing targets are refused. The rename is recorded for review and undo.",
+      parameters: {
+        type: "object",
+        properties: {
+          source_path: { type: "string", description: "Existing workspace-relative file path" },
+          target_path: { type: "string", description: "New workspace-relative path; parent directory must exist and target must not exist" },
+          expected_version: { type: "string", description: "Source version from read_file, optional after a complete read in this run" },
+        },
+        required: ["source_path", "target_path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "write_file",
-      description: "Write content to a file (creates parent directories).",
+      description: "Atomically write a complete file (creates parent directories). Existing files require a complete read by this agent in this run or an explicit expected_version. Fails if the file changed since reading; reconcile changes before retrying.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string", description: "Relative path from workspace root" },
           content: { type: "string", description: "Full file content" },
+          expected_version: { type: "string", description: "Version returned by read_file or the last successful edit/write; 'missing' requires a new file. Optional when this agent has read the complete current file in this run" },
         },
         required: ["path", "content"],
       },
@@ -695,13 +861,14 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "edit_file",
-      description: "Replace the first occurrence of old_text with new_text in a file.",
+      description: "Atomically replace exactly one occurrence of old_text with literal new_text. Read the file first or supply expected_version. Rejects empty or ambiguous matches and stale reads. Only uniform LF/CRLF differences are normalized; include enough context to locate one match.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string", description: "Relative path" },
           old_text: { type: "string", description: "Exact text to find" },
           new_text: { type: "string", description: "Replacement text" },
+          expected_version: { type: "string", description: "Version returned by read_file or the last successful edit/write. Optional when this agent has read the current file in this run" },
         },
         required: ["path", "old_text", "new_text"],
       },
@@ -831,12 +998,12 @@ export const TEAM_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "task",
-      description: "Spawn a subagent for isolated exploration or work. Returns a summary when done.",
+      description: "Delegate an isolated task and wait for its summary. Choose general for implementation with available tools, explore for read-only repository reconnaissance, review for correctness and regression review, or planner for investigation and an implementation plan. Legacy Explore and general-purpose names remain accepted.",
       parameters: {
         type: "object",
         properties: {
           prompt: { type: "string" },
-          agent_type: { type: "string", enum: ["Explore", "general-purpose"] },
+          agent_type: { type: "string", enum: [...SUBAGENT_ROLES, "Explore", "general-purpose"], default: "explore" },
           parent_task_id: { type: "integer", description: "Optional durable parent task binding." },
         },
         required: ["prompt"],
@@ -951,7 +1118,7 @@ export const MCP_CONTROL_TOOLS: OpenAIToolDef[] = [
   },
 ];
 
-const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "TodoWrite"]);
+const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "TodoWrite", "ask_user"]);
 
 export function getAllTools(options?: {
   readOnly?: boolean;
@@ -959,16 +1126,22 @@ export function getAllTools(options?: {
   constrainedCode?: boolean;
 }): OpenAIToolDef[] {
   const allTools = [...CORE_TOOLS, ...TASK_TOOLS, ...TEAM_TOOLS];
-  if (options?.mode === "code" && options.constrainedCode) {
+  if (options?.mode === "code" && options.constrainedCode && !options.readOnly) {
     const codeContractTools = new Set([
+      "ask_user",
       "compress",
       "memory_read",
       "skill_load",
       "read_file",
+      "find_files",
+      "search_files",
+      "list_directory",
       "TodoWrite",
       "bash",
+      "process_start", "process_poll", "process_input", "process_stop",
       "write_file",
       "edit_file",
+      "rename_file",
       "submit_completion_evidence",
       "request_plan_amendment",
     ]);

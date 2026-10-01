@@ -1,20 +1,18 @@
-import fs from "fs";
-import path from "path";
 import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js";
-import { safePath } from "../utils/safePath.js";
-import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
-import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import {
   createPermissionAuthorizer,
   narrowPermissionAuthorizer,
   type PermissionAuthorizer,
 } from "./permissionService.js";
-import { runWorkspaceCommand } from "./shell.js";
+import { runInspectionCommand, runReadOnlyShellCommand } from "./shell.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
+import { classifyToolApproval } from "./toolApproval.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./providerRouting.js";
 import { AgentRunRecorder, createRunId } from "../chat/runHistory.js";
 import {
+  agentProfileAllowsTool,
   estimateUsageCostUsd,
   resolveAgentProfile,
 } from "./agentProfiles.js";
@@ -25,106 +23,23 @@ import { estimateMessageTokens } from "./context.js";
 import { createManagedWorktree, updateManagedWorktreeMetadata } from "../chat/worktrees.js";
 import { captureChangeSet } from "../chat/changeSets.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
-import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps, recordKnownFileMutation } from "../files/mutationRegistry.js";
+import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps } from "../files/mutationRegistry.js";
 
-const SUB_TOOLS_EXPLORE: OpenAIToolDef[] = [
-  {
-    type: "function",
-    function: {
-      name: "bash",
-      description: "Run command.",
-      parameters: {
-        type: "object",
-        properties: { command: { type: "string" } },
-        required: ["command"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read file.",
-      parameters: {
-        type: "object",
-        properties: { path: { type: "string" } },
-        required: ["path"],
-      },
-    },
-  },
-];
+import { getAllTools, runReadFile, TOOL_DISPATCH, type ToolHandler } from "./tools.js";
+import { TodoManager } from "./todoManager.js";
+import { TaskManager } from "./taskManager.js";
+import { MessageBus } from "./messageBus.js";
+import { TeammateManager } from "./teammateManager.js";
+import { executeRepositoryInspectionTool } from "./repositoryInspection.js";
+import { evaluateInspectionCommand } from "./modeCapabilities.js";
+import {
+  buildSubagentSystemPrompt, MAX_SUBAGENT_DEPTH, resolveSubagentRole,
+  subagentAllowsTool, subagentMode, subagentProfileId,
+} from "./subagentRoles.js";
 
-const SUB_TOOLS_WRITE: OpenAIToolDef[] = [
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description: "Write file.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          content: { type: "string" },
-        },
-        required: ["path", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "edit_file",
-      description: "Edit file.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          old_text: { type: "string" },
-          new_text: { type: "string" },
-        },
-        required: ["path", "old_text", "new_text"],
-      },
-    },
-  },
-];
-
-function subRead(filePath: string, cwd: string): string {
-  try {
-    return readAuthorizedWorkspaceFile(cwd, filePath).content.slice(0, 50000);
-  } catch (e: any) {
-    return `Error: ${e.message}`;
-  }
-}
-
-function subWrite(filePath: string, content: string, cwd: string, runId?: string, toolCallId?: string): string {
-  const decision = evaluateWorkspaceWrite(filePath);
-  if (!decision.allowed) return `Error: ${decision.reason || "Write blocked by workspace policy"}`;
-  try {
-    const full = safePath(filePath, cwd);
-    const previous = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : "";
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, "utf-8");
-    recordKnownFileMutation({ workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: "subagent", mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: previous, runId, toolCallId });
-    return `Wrote ${content.length} bytes to ${filePath}`;
-  } catch (e: any) {
-    return `Error: ${e.message}`;
-  }
-}
-
-function subEdit(filePath: string, oldText: string, newText: string, cwd: string, runId?: string, toolCallId?: string): string {
-  const decision = evaluateWorkspaceWrite(filePath);
-  if (!decision.allowed) return `Error: ${decision.reason || "Edit blocked by workspace policy"}`;
-  try {
-    const full = safePath(filePath, cwd);
-    const c = fs.readFileSync(full, "utf-8");
-    if (!c.includes(oldText)) return `Error: Text not found in ${filePath}`;
-    const content = c.replace(oldText, newText);
-    fs.writeFileSync(full, content, "utf-8");
-    recordKnownFileMutation({ workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: "subagent", mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: c, runId, toolCallId });
-    return `Edited ${filePath}`;
-  } catch (e: any) {
-    return `Error: ${e.message}`;
-  }
+export interface SubagentToolRuntime {
+  tools: readonly OpenAIToolDef[];
+  context: Parameters<ToolHandler>[1];
 }
 
 async function dispatchSubTool(
@@ -134,31 +49,38 @@ async function dispatchSubTool(
   agentName: string,
   authorize: PermissionAuthorizer,
   toolCallId: string,
-  onAuthorized?: () => Promise<void>,
-  signal?: AbortSignal,
-  runId?: string
+  onAuthorized: () => Promise<void>,
+  signal: AbortSignal | undefined,
+  context: Parameters<ToolHandler>[1] | undefined,
+  filesystemSandbox: ToolContext["filesystemSandbox"]
 ): Promise<string> {
-  const permission = await authorize({
-    requestId: agentName,
-    toolCallId,
-    name,
-    input: args,
-    agentName,
-  });
+  const readOnlyShellCommand = name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command) ? args.command as string : undefined;
+  const permission = await authorize({ requestId: agentName, toolCallId, name, input: args, agentName });
   if (!permission.allowed) return `Error: Tool denied: ${permission.reason || "permission denied"}`;
-  await onAuthorized?.();
-  switch (name) {
-    case "bash":
-      return runWorkspaceCommand(args.command as string, cwd, signal, { compatibilityShellAuthorized: true });
-    case "read_file":
-      return subRead(args.path as string, cwd);
-    case "write_file":
-      return subWrite(args.path as string, args.content as string, cwd, runId, toolCallId);
-    case "edit_file":
-      return subEdit(args.path as string, args.old_text as string, args.new_text as string, cwd, runId, toolCallId);
-    default:
-      return `Unknown tool: ${name}`;
+  signal?.throwIfAborted();
+  await onAuthorized();
+  signal?.throwIfAborted();
+  if (context) {
+    const childContext = {
+      ...context, toolCallId, compatibilityShellAuthorized: name === "bash", readOnlyShellCommand,
+      lineage: context.lineage && { ...context.lineage, parentToolCallId: toolCallId },
+    };
+    const handler = TOOL_DISPATCH[name];
+    const result = handler
+      ? await handler(args, childContext)
+      : await context.executeDelegatedTool?.(name, args, signal);
+    return typeof result === "string" ? result : result?.output || `Error: Unknown tool: ${name}`;
   }
+  if (name === "bash") {
+    const execute = readOnlyShellCommand ? runReadOnlyShellCommand : runInspectionCommand;
+    return execute(args.command as string, cwd, signal, {
+      readPaths: filesystemSandbox?.readPaths || [], writePaths: [],
+    });
+  }
+  if (name === "read_file") {
+    return runReadFile(args.path as string, args.limit as number | undefined, cwd, args);
+  }
+  return executeRepositoryInspectionTool(name, args, cwd, signal);
 }
 
 export async function runSubagent(
@@ -170,9 +92,17 @@ export async function runSubagent(
   vllmApiKey?: string,
   authorizeTool?: PermissionAuthorizer,
   signal?: AbortSignal,
-  lineage?: ToolContext["lineage"]
+  lineage?: ToolContext["lineage"],
+  runtime?: SubagentToolRuntime
 ): Promise<string> {
-  const profileId = agentType === "Explore" ? "explore" : "subagent";
+  let role;
+  try { role = resolveSubagentRole(agentType); }
+  catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
+  if (typeof prompt !== "string" || !prompt.trim()) return "Error: Subagent prompt must be non-empty";
+  const depth = (runtime?.context.subagentDepth || 0) + 1;
+  if (depth > MAX_SUBAGENT_DEPTH) return `Error: Subagent depth limit exceeded (${MAX_SUBAGENT_DEPTH})`;
+  signal?.throwIfAborted();
+  const profileId = subagentProfileId(role);
   const effectiveModel = resolveAgentProfile(profileId, config.agentProfiles, {
     modelName,
   }).modelName || modelName;
@@ -188,23 +118,27 @@ export async function runSubagent(
   const modelEndpoint = effectiveModel === modelName
     ? { apiUrl: vllmApiUrl, apiKey: vllmApiKey }
     : resolveModelEndpoint(effectiveModel);
-  const tools =
-    agentType === "Explore"
-      ? SUB_TOOLS_EXPLORE
-      : [...SUB_TOOLS_EXPLORE, ...SUB_TOOLS_WRITE];
-
-  const messages: OpenAIMessage[] = [{ role: "user", content: prompt }];
-  const authorize = authorizeTool
+  const tools = (runtime?.tools || getAllTools({ mode: "code" })).filter((tool) =>
+    subagentAllowsTool(role, tool.function.name) && agentProfileAllowsTool(profile, tool.function.name)
+  );
+  const toolNames = new Set(tools.map((tool) => tool.function.name));
+  const messages: OpenAIMessage[] = [
+    { role: "system", content: buildSubagentSystemPrompt(role) },
+    { role: "user", content: prompt },
+  ];
+  const inheritedAuthorize = authorizeTool
     ? narrowPermissionAuthorizer(authorizeTool, profile)
-    : createPermissionAuthorizer({
-        mode: "code",
-        readOnly: false,
-        signal,
-        profile,
-      });
+    : createPermissionAuthorizer({ mode: subagentMode(role), readOnly: role !== "general", signal, profile });
+  const authorize: PermissionAuthorizer = async (request) => {
+    if (!toolNames.has(request.name)) return { allowed: false, reason: `${role} subagent does not expose ${request.name}` };
+    if (role !== "general" && request.name === "bash") {
+      const inspection = evaluateInspectionCommand(request.input.command);
+      if (!inspection.allowed) return { allowed: false, reason: inspection.reason };
+    }
+    return inheritedAuthorize(request);
+  };
   const agentName = `subagent:${agentType}`;
-  // Bash is intentionally treated as write-capable: command intent cannot be proven
-  // read-only before execution, so every subagent receives an isolated checkout.
+  // Every child retains a separate checkout and the existing ChangeSet lifecycle.
   let worktree;
   const childRunId = createRunId();
   const traceStore = new TraceStore(workspaceDir);
@@ -240,7 +174,7 @@ export async function runSubagent(
         workspaceDir,
         childRunId,
         lineage.parentConversationId,
-        "code",
+        subagentMode(role),
         undefined,
         {
           parentRunId: lineage.parentRunId,
@@ -251,6 +185,44 @@ export async function runSubagent(
         }
       )
     : undefined;
+  const inheritedSandbox = runtime?.context.filesystemSandbox || { readPaths: ["."], writePaths: ["."] };
+  const filesystemSandbox = {
+    ...inheritedSandbox,
+    ...(role !== "general" ? { writePaths: [] } : {}),
+  };
+  let generalContext: Parameters<ToolHandler>[1] | undefined;
+  if (role === "general") {
+    const taskManager = runtime?.context.taskManager || new TaskManager(childWorkspaceDir);
+    const messageBus = runtime?.context.messageBus || new MessageBus(childWorkspaceDir);
+    generalContext = {
+      ...runtime?.context,
+      workspaceDir: childWorkspaceDir,
+      vllmApiUrl: modelEndpoint.apiUrl,
+      vllmApiKey: modelEndpoint.apiKey || "",
+      modelName: effectiveModel,
+      actorName: `${agentName}:${childRunId}`,
+      requestId: childRunId,
+      runId: childRunId,
+      mode: "code",
+      agentProfileId: profileId,
+      authorizeTool: authorize,
+      signal,
+      filesystemSandbox,
+      subagentDepth: depth,
+      delegatedTools: tools,
+      todoManager: new TodoManager(),
+      taskManager,
+      messageBus,
+      teammateManager: runtime?.context.teammateManager || new TeammateManager(childWorkspaceDir, messageBus, taskManager),
+      lineage: {
+        parentRunId: childRunId,
+        parentConversationId: lineage?.parentConversationId || "",
+        parentRequestId: childRunId,
+        parentTaskId: lineage?.parentTaskId,
+        parentToolCallId: "",
+      },
+    };
+  }
   await recorder?.start();
   if (recorder && profile.stepSnapshots) {
     try {
@@ -332,15 +304,32 @@ export async function runSubagent(
   };
   let completedNaturally = false;
 
+  let toolCallCount = 0;
+  let totalCostUsd = 0;
   const startedAt = Date.now();
   for (let i = 0; i < profile.budget.maxSteps; i++) {
+    try {
+      signal?.throwIfAborted();
+      if (role === "general" && runtime?.context.getDelegatedTools) {
+        const refreshed = await runtime.context.getDelegatedTools();
+        tools.splice(0, tools.length, ...refreshed.filter((tool) => agentProfileAllowsTool(profile, tool.function.name)));
+        toolNames.clear();
+        for (const tool of tools) toolNames.add(tool.function.name);
+      }
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        await finish("stopped", "");
+        throw error;
+      }
+      return finish("failed", `Error: Subagent tool discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (Date.now() - startedAt >= profile.budget.maxDurationMs) {
       return finish("failed", `(subagent: duration budget exceeded after ${profile.budget.maxDurationMs}ms)`);
     }
     const currentMetrics = recorder?.snapshot().metrics;
     if (
       profile.budget.maxCostUsd > 0 &&
-      (currentMetrics?.estimatedCostUsd || 0) >= profile.budget.maxCostUsd
+      totalCostUsd >= profile.budget.maxCostUsd
     ) {
       return finish("failed", `(subagent: cost budget exceeded at $${profile.budget.maxCostUsd})`);
     }
@@ -440,6 +429,7 @@ export async function runSubagent(
       ? usage.total_tokens
       : promptTokens + completionTokens;
     const estimatedCostUsd = estimateUsageCostUsd(profile, promptTokens, completionTokens);
+    totalCostUsd += estimatedCostUsd;
     await recorder?.event(
       {
         kind: "model_response",
@@ -453,6 +443,13 @@ export async function runSubagent(
         estimatedCostUsd: (currentMetrics?.estimatedCostUsd || 0) + estimatedCostUsd,
       }
     );
+
+    if (Date.now() - startedAt >= profile.budget.maxDurationMs) {
+      return finish("failed", `Error: Subagent duration budget exceeded (${profile.budget.maxDurationMs}ms)`);
+    }
+    if (profile.budget.maxCostUsd > 0 && totalCostUsd > profile.budget.maxCostUsd) {
+      return finish("failed", `Error: Subagent cost budget exceeded ($${profile.budget.maxCostUsd})`);
+    }
 
     const msg = choice.message;
     let turnAction: ReturnType<typeof requireModelTurnAction>;
@@ -531,15 +528,17 @@ export async function runSubagent(
         }
       };
       try {
-        if ((toolMetrics?.toolCalls || 0) >= profile.budget.maxToolCalls) {
+        if (toolCallCount++ >= profile.budget.maxToolCalls) {
           throw new Error(`Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`);
         }
-        await recorder?.toolState({
-          toolCallId: tc.id,
-          requestId: lineage?.parentRequestId || agentName,
-          name: tc.function.name,
-          status: "awaiting_permission",
-        });
+        if (classifyToolApproval(tc.function.name, args).kind === "approval") {
+          await recorder?.toolState({
+            toolCallId: tc.id,
+            requestId: lineage?.parentRequestId || agentName,
+            name: tc.function.name,
+            status: "awaiting_permission",
+          });
+        }
         output = await dispatchSubTool(
           tc.function.name,
           args,
@@ -548,7 +547,8 @@ export async function runSubagent(
           authorize,
           tc.id,
           async () => {
-            if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
+            if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)
+              && !(tc.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command))) {
               try {
                 const checkpoint = createCheckpoint(childWorkspaceDir, {
                   label: `Before ${agentName} · ${tc.function.name}`,
@@ -586,9 +586,13 @@ export async function runSubagent(
               status: "running",
               ...(snapshotId ? { snapshotId } : {}),
             });
+            if (Date.now() - startedAt >= profile.budget.maxDurationMs) {
+              throw new Error(`Subagent duration budget exceeded (${profile.budget.maxDurationMs}ms)`);
+            }
           },
           signal,
-          childRunId
+          generalContext,
+          filesystemSandbox
         );
       } catch (error) {
         if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
@@ -638,6 +642,9 @@ export async function runSubagent(
         tool_call_id: tc.id,
         content: output.slice(0, 50000),
       });
+      if (toolCallCount > profile.budget.maxToolCalls || Date.now() - startedAt >= profile.budget.maxDurationMs) {
+        return finish("failed", output.startsWith("Error:") ? output : "Error: Subagent execution budget exceeded");
+      }
     }
   }
 

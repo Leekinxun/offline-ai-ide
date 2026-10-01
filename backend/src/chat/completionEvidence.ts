@@ -8,6 +8,7 @@ import {
 } from "../files/mutationRegistry.js";
 import { listChangeSets, type ChangeSet } from "./changeSets.js";
 import { collectChangeEvidenceGaps } from "./changeEvidence.js";
+import { isRuntimeValidationReport } from "../agent/validationFeedback.js";
 
 export const COMPLETION_EVIDENCE_SCHEMA_VERSION = 1;
 
@@ -164,6 +165,7 @@ function submittedCriterionEvidence(tools: readonly PersistedToolCallStep[]): Re
 
 /** Derives deterministic, display-safe completion evidence without reading state or executing commands. */
 export function deriveCompletionEvidence(input: CompletionEvidenceInput): CompletionEvidence {
+  const runtimeValidation = [...input.messages].reverse().find((message) => isRuntimeValidationReport(message.runtimeValidation))?.runtimeValidation;
   const tools = allTools(input.messages);
   const bash = tools.flatMap((tool) => {
     const evidence = bashEvidence(tool);
@@ -171,20 +173,21 @@ export function deriveCompletionEvidence(input: CompletionEvidenceInput): Comple
   });
   const changedFiles = Array.from(new Set([
     ...(input.changedFiles || []).map((value) => redactSecrets(value)),
+    ...(runtimeValidation?.changedFiles || []).map((value) => redactSecrets(value)),
     ...tools.flatMap((tool) => tool.fileUpdate?.path ? [redactSecrets(tool.fileUpdate.path)] : []),
   ])).sort();
-  const commands = cleanList(input.plan?.verificationCommands);
+  const commands = cleanList(input.plan?.verificationCommands?.length ? input.plan.verificationCommands : runtimeValidation?.verification.map((check) => check.command));
   const criteria = cleanList(input.plan?.acceptanceCriteria);
   const verification = commands.map((command) => {
+    const runtimeCheck = runtimeValidation?.verification.find((check) => check.command === redactSecrets(command));
+    if (runtimeCheck) return { ...runtimeCheck, command: redactSecrets(command) };
     const evidence = bash.filter((entry) => entry.command === command).at(-1);
     return evidence
       ? { command: redactSecrets(command), status: evidence.status, toolCallId: evidence.toolCallId, ...(evidence.exitCode !== undefined ? { exitCode: evidence.exitCode } : {}), outputDigest: evidence.outputDigest }
       : { command: redactSecrets(command), status: "pending" as const };
   });
   const requiredCommands = new Set(commands);
-  const successfulEvidence = new Set(bash
-    .filter((entry) => entry.status === "passed" && requiredCommands.has(entry.command))
-    .map((entry) => entry.toolCallId));
+  const successfulEvidence = new Set(verification.filter((entry) => entry.status === "passed" && "toolCallId" in entry).map((entry) => entry.toolCallId));
   const criterionEvidence = input.criterionEvidence || submittedCriterionEvidence(tools);
   const criterionLedger = criteria.map((criterion, index) => {
     const requested = criterionEvidence?.[String(index)] || criterionEvidence?.[criterion] || [];
@@ -195,8 +198,9 @@ export function deriveCompletionEvidence(input: CompletionEvidenceInput): Comple
     return { criterion: redactSecrets(criterion), state: evidenceRefs.length ? "passed" as const : requestedFailed ? "failed" as const : "pending" as const, evidenceRefs };
   });
   const blockers = (["childRun", "approval", "amendment", "conflict", "check", "changeEvidence", "quality"] as const).filter((name) => input.blockers?.[name]);
+  if (runtimeValidation?.status === "unverified" && !blockers.includes("check")) blockers.push("check");
   if ((verification.some((entry) => entry.status === "pending" || entry.status === "cancelled") || criterionLedger.some((entry) => entry.state === "pending")) && !blockers.includes("check")) blockers.push("check");
-  const requiredFailed = verification.some((entry) => entry.status === "failed" || entry.status === "timed_out");
+  const requiredFailed = runtimeValidation?.status === "failed" || verification.some((entry) => entry.status === "failed" || entry.status === "timed_out");
   const incomplete = verification.some((entry) => entry.status !== "passed") || criterionLedger.some((entry) => entry.state !== "passed");
   const outcome: CompletionOutcome = input.stopped ? "stopped"
     : blockers.length ? "needs_attention"

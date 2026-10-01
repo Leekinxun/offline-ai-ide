@@ -60,6 +60,8 @@ export interface FileSelectionRange {
 
 export interface ToolFileUpdate {
   path: string;
+  previousPath?: string;
+  previousVersion?: string;
   content: string;
   selection?: FileSelectionRange;
 }
@@ -123,7 +125,10 @@ export interface AgentRunEventInput {
 
 // --- WebSocket message types (server -> client) ---
 
-export type WsServerMessage =
+export type WsServerMessage = (
+  | { type: "question_state"; requestId: string; pendingQuestionCount: number; waitingForInput: boolean }
+  | { type: "conversation_snapshot"; conversationId: string; messages: import("../chat/history.js").PersistedChatMessage[]; activeRequestIds: string[]; pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[]; pendingQuestionCount?: number; waitingForInput?: boolean; run: import("../chat/runHistory.js").AgentRunRecord | null }
+  | { type: "background_run_state"; conversationId: string; runId: string; status: AgentRunStatus | "stopping"; waiting: boolean; updatedAt: number; requestId?: string; outcome?: "completed" | "cancelled" | "failed" }
   | { type: "request_accepted"; requestId: string; conversationId: string; replayed?: true }
   | { type: "conversation"; conversationId: string; created: boolean }
   | { type: "conversation_updated"; conversationId: string; title: string }
@@ -245,6 +250,13 @@ export type WsServerMessage =
       canAllowSession: boolean;
     }
   | {
+      type: "tool_approval_all_result";
+      conversationId: string;
+      runId: string;
+      resolvedCount: number;
+      pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[];
+    }
+  | {
       type: "tool_result";
       requestId: string;
       toolCallId: string;
@@ -255,7 +267,8 @@ export type WsServerMessage =
     }
   | { type: "token"; requestId: string; content: string }
   | { type: "done"; requestId: string; interrupted?: boolean }
-  | { type: "error"; requestId?: string; content: string };
+  | { type: "error"; requestId?: string; content: string }
+) & { conversationId?: string; runId?: string; eventSequence?: number };
 
 // --- Tool context ---
 
@@ -268,12 +281,28 @@ export interface ToolContext {
   /** Correlates a primary tool mutation with its request and tool execution. */
   requestId?: string;
   toolCallId?: string;
-  /** Set only by the approved primary bash dispatch. */
+  /** Set only after the bash/process tool permission path approves execution. */
   compatibilityShellAuthorized?: boolean;
+  /** Immutable text of a server-classified read-only bash call. */
+  readOnlyShellCommand?: string;
+  /** Opaque, single-command egress permission issued only by the approval path. */
+  networkExecutionGrant?: import("./networkAccess.js").NetworkExecutionGrant;
+  sessionToken?: string;
+  sessionOwner?: string;
+  stepCheckpointId?: string;
   /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
+  /** Trusted server-provided read-only roots; never accepted from tool input. */
+  externalReadRoots?: readonly string[];
+  getExternalReadRoots?: () => readonly string[];
   signal?: AbortSignal;
   authorizeTool?: import("./permissionService.js").PermissionAuthorizer;
+  /** Tool schemas and external adapters available to a delegated child. */
+  delegatedTools?: readonly OpenAIToolDef[];
+  getDelegatedTools?: () => Promise<readonly OpenAIToolDef[]>;
+  executeDelegatedTool?: (name: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<string>;
+  /** Synchronous child delegation is bounded across the entire ancestry. */
+  subagentDepth?: number;
   lineage?: {
     parentRunId: string;
     parentTaskId?: number;

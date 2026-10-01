@@ -41,6 +41,38 @@ test("run center discovers allowlisted package scripts and records failures", as
   await assert.rejects(() => executeRunTask(workspace, "npm:missing"), /Unknown or unavailable task/);
 });
 
+test("run center discovers unittest for plain Python source trees", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-python-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "solution.py"), "def add(a, b): return a + b\n");
+  const tasks = discoverRunTasks(workspace);
+  assert.ok(tasks.some((task) => task.id === "python:unittest" && task.command.includes("python") && task.args.join(" ") === "-B -m unittest discover"));
+});
+
+test("run center executes non-package Python tests without a project manifest", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-unittest-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, "tests"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "app.py"), "def value():\n    return 1\n");
+  fs.writeFileSync(path.join(workspace, "tests", "test_app.py"), "import unittest\nfrom app import value\nclass ValueTest(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(value(), 1)\n");
+
+  assert.deepEqual(discoverRunTasks(workspace).map((task) => [task.id, task.command, task.args]), [
+    ["python:unittest", process.platform === "win32" ? "python" : "python3", ["-B", "-m", "unittest", "discover", "-s", "tests"]],
+  ]);
+  const result = await executeRunTask(workspace, "python:unittest");
+  assert.equal(result.status, "passed");
+  assert.match(`${result.stdout}\n${result.stderr}`, /Ran 1 test/);
+});
+
+test("run center prefers pytest when Python project config is present", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-pytest-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "pytest.ini"), "[pytest]\n");
+  fs.writeFileSync(path.join(workspace, "test_app.py"), "def test_ok():\n    assert True\n");
+
+  assert.deepEqual(discoverRunTasks(workspace).filter((task) => task.kind === "test").map((task) => task.id), ["python:pytest", "python:unittest"]);
+});
+
 test("running tasks can be cancelled and retain partial output", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-cancel-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));

@@ -1,16 +1,20 @@
 import React from "react";
 import { RunDetailsPanel, DetailTab } from "./RunDetailsPanel";
 import { EditorAssistantPanel } from "./EditorAssistantPanel";
+import { PreviewPanel } from "./PreviewPanel";
 import { useI18n } from "../i18n";
-import type { OpenFile } from "../types";
+import type { OpenFile, ContextReference, SelectionInfo, FileNode } from "../types";
+import type { RunReviewComment } from "./RunChangesReview";
 import { useChat } from "../hooks/useChat";
 
 export interface WorkbenchRightDockProps {
   workspaceView: "chat" | "files";
   editorAssistantVisible: boolean;
   runDetailsVisible: boolean;
+  webPreviewVisible?: boolean;
   setEditorAssistantVisible: (visible: boolean) => void;
   setRunDetailsVisible: (visible: boolean) => void;
+  setWebPreviewVisible?: (visible: boolean) => void;
   runDetailsTab: DetailTab;
   setRunDetailsTab: (tab: DetailTab) => void;
 
@@ -35,6 +39,18 @@ export interface WorkbenchRightDockProps {
   onSend: (message: string) => boolean;
   onSteer: (message: string) => boolean;
   onNewConversation: () => void;
+  contextReferences?: ContextReference[];
+  onContextReferencesChange?: (refs: ContextReference[]) => void;
+  onUndoLastTurn?: () => Promise<void>;
+  onReviewComment?: (comment: RunReviewComment) => void;
+  onChangesApplied?: () => void;
+  onNavigateToLocation?: (
+    path: string,
+    selection: { startLine: number; startColumn: number; endLine: number; endColumn: number }
+  ) => void;
+  theme?: "light" | "dark";
+  selectionInfo?: SelectionInfo | null;
+  fileTree?: FileNode[];
 }
 
 /**
@@ -45,8 +61,10 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
   workspaceView,
   editorAssistantVisible,
   runDetailsVisible,
+  webPreviewVisible = false,
   setEditorAssistantVisible,
   setRunDetailsVisible,
+  setWebPreviewVisible,
   runDetailsTab,
   setRunDetailsTab,
 
@@ -71,17 +89,56 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
   onSend,
   onSteer,
   onNewConversation,
+  contextReferences = [],
+  onContextReferencesChange,
+  onUndoLastTurn,
+  onReviewComment,
+  onChangesApplied,
+  onNavigateToLocation,
+  theme = "light",
+  selectionInfo,
+  fileTree = [],
 }) => {
   const { t } = useI18n();
 
   return (
     <>
-      {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+      {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
         <aside
           className="workbench-right-dock"
-          aria-label={runDetailsVisible ? t("workbench.runDetails") : t("workbench.editorAssistant")}
+          aria-label={
+            webPreviewVisible
+              ? t("preview.title")
+              : runDetailsVisible
+                ? t("workbench.runDetails")
+                : t("workbench.editorAssistant")
+          }
         >
-          {runDetailsVisible ? (
+          {webPreviewVisible ? (
+            <PreviewPanel
+              token={token}
+              workspaceDir={workspaceDir}
+              readOnly={readOnlyWorkspace}
+              key={workspaceDir}
+              onClose={() => {
+                setWebPreviewVisible?.(false);
+                setEditorAssistantVisible(true);
+              }}
+              onFeedback={(text) => {
+                setChatDraftText([chatDraftText, text].filter(Boolean).join("\n\n"));
+                setWebPreviewVisible?.(false);
+                setEditorAssistantVisible(true);
+              }}
+              onOpenSource={(path, line, column) =>
+                void onNavigateToLocation?.(path, {
+                  startLine: line,
+                  startColumn: column,
+                  endLine: line,
+                  endColumn: column + 1,
+                })
+              }
+            />
+          ) : runDetailsVisible ? (
             <RunDetailsPanel
               token={token}
               workspaceDir={workspaceDir}
@@ -95,6 +152,10 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
               onTabChange={setRunDetailsTab}
               onOpenFile={openFile}
               onOpenDiff={onOpenGitDiff}
+              theme={theme}
+              readOnly={readOnlyWorkspace}
+              onComment={onReviewComment}
+              onChanged={onChangesApplied}
               onClose={() => {
                 setRunDetailsVisible(false);
                 if (workspaceView === "files" && window.innerWidth > 1180) {
@@ -105,6 +166,12 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
           ) : (
             <EditorAssistantPanel
               token={token}
+              workspaceDir={workspaceDir}
+              referenceFiles={fileTree}
+              contextReferences={contextReferences}
+              onContextReferencesChange={onContextReferencesChange || (() => {})}
+              onUndoLastTurn={onUndoLastTurn}
+              selectionInfo={selectionInfo}
               visible={true}
               activeFilePath={activeFilePath}
               activeFileDirty={Boolean(activeFile?.modified)}
@@ -157,6 +224,10 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
           onTabChange={setRunDetailsTab}
           onOpenFile={openFile}
           onOpenDiff={onOpenGitDiff}
+          theme={theme}
+          readOnly={readOnlyWorkspace}
+          onComment={onReviewComment}
+          onChanged={onChangesApplied}
           onClose={() => setRunDetailsVisible(false)}
         />
       )}

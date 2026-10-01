@@ -5,11 +5,11 @@ import {
   ChevronDown,
   Copy,
   FileCode2,
-  Layers,
   ArrowRightToLine,
   XCircle,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import { getTabPathLabels, isSameTabPath, uniqueTabFiles } from "./tabBarModel";
 import "./TabBar.css";
 
 interface TabBarProps {
@@ -49,54 +49,17 @@ export const TabBar: React.FC<TabBarProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
-  // 规范化文件路径（剔除 Windows 斜杠及前导点杠差异）
-  const normalizePath = useCallback((p: string) => {
-    return p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
-  }, []);
+  // 渲染保护：对传入的 openFiles 做路径身份去重兜底，杜绝重复 key 导致 React 僵尸 DOM。
+  // 身份只规范化分隔符和前导相对符号，保留大小写以匹配 App 的文件路径判断。
+  const uniqueOpenFiles = useMemo(() => uniqueTabFiles(openFiles), [openFiles]);
 
-  // 渲染保护：对传入的 openFiles 做规范化去重兜底，杜绝重复 key 导致 React 僵尸 DOM
-  const uniqueOpenFiles = useMemo(() => {
-    const seen = new Set<string>();
-    const result: OpenFile[] = [];
-    for (const file of openFiles) {
-      const key = normalizePath(file.path).toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        result.push(file);
-      }
-    }
-    return result;
-  }, [openFiles, normalizePath]);
-
-  // 计算同名文件的路径歧义消除标签（如 utils/index.ts vs hooks/index.ts）
-  const pathLabels = useMemo(() => {
-    const labels = new Map<string, string>();
-    for (const file of uniqueOpenFiles) {
-      const peers = uniqueOpenFiles.filter((candidate) => candidate.name === file.name);
-      if (peers.length < 2) continue;
-      const parentParts = file.path.split("/").slice(0, -1);
-      for (let depth = 1; depth <= parentParts.length; depth += 1) {
-        const suffix = parentParts.slice(-depth).join("/");
-        const unique = peers.every((candidate) => {
-          if (candidate.path === file.path) return true;
-          const candidateParent = candidate.path.split("/").slice(0, -1);
-          return candidateParent.slice(-depth).join("/") !== suffix;
-        });
-        if (unique) {
-          labels.set(file.path, suffix);
-          break;
-        }
-      }
-    }
-    return labels;
-  }, [uniqueOpenFiles]);
+  // 计算同名文件的路径歧义消除标签（如 utils/index.ts vs hooks/index.ts）。
+  const pathLabels = useMemo(() => getTabPathLabels(uniqueOpenFiles), [uniqueOpenFiles]);
 
   // 当活动文件变更时，平滑滚动至当前标签，确保标签居中在视野内
   useEffect(() => {
     if (!activeFilePath) return;
-    const activeIndex = uniqueOpenFiles.findIndex(
-      (f) => normalizePath(f.path).toLowerCase() === normalizePath(activeFilePath).toLowerCase()
-    );
+    const activeIndex = uniqueOpenFiles.findIndex((file) => isSameTabPath(file.path, activeFilePath));
     if (activeIndex >= 0 && tabRefs.current[activeIndex]) {
       tabRefs.current[activeIndex]?.scrollIntoView({
         behavior: "smooth",
@@ -104,7 +67,7 @@ export const TabBar: React.FC<TabBarProps> = ({
         inline: "nearest",
       });
     }
-  }, [activeFilePath, uniqueOpenFiles, normalizePath]);
+  }, [activeFilePath, uniqueOpenFiles]);
 
   // 鼠标滚轮横向平滑滚动支持（将纵向 deltaY 转为横向 scrollLeft）
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -195,7 +158,7 @@ export const TabBar: React.FC<TabBarProps> = ({
   if (uniqueOpenFiles.length === 0) return null;
 
   const contextTargetIndex = contextMenu
-    ? uniqueOpenFiles.findIndex((f) => normalizePath(f.path).toLowerCase() === normalizePath(contextMenu.path).toLowerCase())
+    ? uniqueOpenFiles.findIndex((file) => isSameTabPath(file.path, contextMenu.path))
     : -1;
   const canCloseRight = contextTargetIndex >= 0 && contextTargetIndex < uniqueOpenFiles.length - 1;
   const canCloseOthers = uniqueOpenFiles.length > 1;
@@ -210,7 +173,7 @@ export const TabBar: React.FC<TabBarProps> = ({
         onWheel={handleWheel}
       >
         {uniqueOpenFiles.map((file, index) => {
-          const isActive = normalizePath(file.path).toLowerCase() === normalizePath(activeFilePath || "").toLowerCase();
+          const isActive = isSameTabPath(file.path, activeFilePath);
           return (
             <div
               key={file.path}
@@ -317,7 +280,7 @@ export const TabBar: React.FC<TabBarProps> = ({
             </div>
             <div className="tabbar-dropdown-list">
               {uniqueOpenFiles.map((file) => {
-                const isActive = normalizePath(file.path).toLowerCase() === normalizePath(activeFilePath || "").toLowerCase();
+                const isActive = isSameTabPath(file.path, activeFilePath);
                 return (
                   <div
                     key={file.path}

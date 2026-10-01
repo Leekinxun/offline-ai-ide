@@ -1,0 +1,15 @@
+.context-reference-picker { position: relative; min-width: 0; max-width: 100%; padding: 4px 0; font-size: 11px; }
+.context-reference-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); overflow-wrap: anywhere; }
+.context-reference-toolbar button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.context-reference-chips { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.context-reference-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.context-reference-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-reference-chip > svg, .context-reference-menu > button > svg { flex: 0 0 auto; }
+.context-reference-chip button { display: inline-flex; flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.context-reference-menu { position: absolute; bottom: 100%; left: 0; right: 0; min-width: 0; max-width: 100%; max-height: 270px; overflow-y: auto; overflow-x: hidden; z-index: 40; padding: 4px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-primary, #1e1e1e); box-shadow: 0 8px 24px #0003; }
+.context-reference-menu > button { display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
+.context-reference-menu > button > span { min-width: 0; }
+.context-reference-menu > button[aria-selected="true"], .context-reference-menu > button:hover { background: var(--bg-hover, #ffffff12); }
+.context-reference-menu > button:disabled { opacity: .55; cursor: default; }
+.context-reference-menu small { display: block; margin-top: 2px; font-size: 10px; color: var(--text-muted); }
+.context-reference-empty { padding: 12px; color: var(--text-muted); }

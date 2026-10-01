@@ -14,7 +14,7 @@ import {
 import type { AgentExecutionGraphSnapshot } from "../agent/executionGraph.js";
 import { CollaborationStore } from "../collaboration/collaborationStore.js";
 import { buildCollaborationSnapshot } from "../collaboration/snapshot.js";
-import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
+import { canWriteActiveWorkspace, teamWorkspaceContains } from "../team/sessionBridge.js";
 
 type TeamWsMessage =
   | { type: "team_snapshot"; team: TeamDetails | null }
@@ -311,7 +311,7 @@ export function handleTeamWs(ws: WebSocket, session: UserSession): void {
         // Authorize before changing the socket set or the active-session selection.
         const requestedTeamId = data.teamId.trim();
         const team = getTeamManager(session).getTeamDetails(requestedTeamId, session.username);
-        if (team.workspaceDir !== session.workspaceDir) throw new Error("403 Team workspace does not match the authorized session workspace");
+        if (!teamWorkspaceContains(team.workspaceDir, session.workspaceDir)) throw new Error("403 Team workspace does not match the authorized session workspace");
         if (requestedTeamId === currentTeamId) {
           sendTeam(ws, { type: "team_snapshot", team });
           sendTeam(ws, { type: "collaboration_snapshot", collaboration: buildCollaborationSnapshot(session, team) });

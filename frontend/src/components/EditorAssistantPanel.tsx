@@ -11,14 +11,12 @@ import {
   Circle,
   Code2,
   FileCode2,
-  Paperclip,
   Pause,
   Play,
   Plus,
   RotateCcw,
-  Send,
-  Brain,
   Sparkles,
+  Square,
   TerminalSquare,
   TestTube2,
   X,
@@ -32,27 +30,43 @@ import {
   ConversationRunSummary,
   ToolApprovalDecision,
   ToolApprovalRequest,
+  ContextReference,
+  FileNode,
+  SelectionInfo,
 } from "../types";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { approvalTaskAction } from "../utils/toolApprovalPolicy";
+import { AgentQuestionStack } from "./AgentQuestionStack";
+import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
+import { UndoTurnButton } from "./UndoTurnButton";
 import { ContextInspector } from "./ContextInspector";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
-import { ChatAttachmentPicker, MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
+import { MessageAttachments, type ChatAttachmentDraftController } from "./ChatAttachmentPicker";
 import { ModelSelector } from "./ModelSelector";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
+import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
+import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
+import { activeAssistantMessage, assistantToolStatus, isAssistantMessageVisible } from "../utils/assistantActivity";
 
 interface EditorAssistantPanelProps {
   token: string;
+  workspaceDir: string;
+  referenceFiles: FileNode[];
+  contextReferences: ContextReference[];
+  onContextReferencesChange: (references: ContextReference[]) => void;
+  selectionInfo?: SelectionInfo | null;
   visible: boolean;
   activeFilePath: string | null;
   activeFileDirty: boolean;
   messages: ChatMessage[];
   connected: boolean;
   isStreaming: boolean;
+  activeRequestIds?: string[];
   agentMode: AgentMode;
   runtimeOptions: ChatRuntimeOptions;
   selectedModelName: string;
@@ -71,9 +85,10 @@ interface EditorAssistantPanelProps {
   pendingApprovals: ToolApprovalRequest[];
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
-  onSend: (message: string) => boolean;
-  onSteer: (message: string) => boolean;
+  onSend: (message: string, references?: ContextReference[]) => boolean;
+  onSteer: (message: string, references?: ContextReference[]) => boolean;
   onStop: () => void;
+  onUndoLastTurn?: () => Promise<void>;
   onResume: (conversationId: string, runId?: string) => Promise<void> | void;
   onNewConversation: () => void;
   onToolApproval: (approvalId: string, decision: ToolApprovalDecision) => void;
@@ -104,12 +119,18 @@ function EventIcon({ event }: { event: AgentRunEvent }) {
 
 export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   token,
+  workspaceDir,
+  referenceFiles,
+  contextReferences,
+  onContextReferencesChange,
+  selectionInfo,
   visible,
   activeFilePath,
   activeFileDirty,
   messages,
   connected,
   isStreaming,
+  activeRequestIds,
   agentMode,
   runtimeOptions,
   selectedModelName,
@@ -131,6 +152,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   onSend,
   onSteer,
   onStop,
+  onUndoLastTurn,
   onResume,
   onNewConversation,
   onToolApproval,
@@ -142,6 +164,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const input = draftText;
   const setInput = onDraftTextChange;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const approvalStackRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -152,14 +175,12 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const [detailsCollapsed, setDetailsCollapsed] = useState(() =>
     localStorage.getItem("editorAssistantDetailsCollapsed") !== "0"
   );
-  const [thinkingLevel, setThinkingLevel] = useState<"auto" | "off" | "low" | "medium" | "high">(() =>
-    (localStorage.getItem("editorAssistantThinkingLevel") as "auto" | "off" | "low" | "medium" | "high") || "auto"
-  );
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
-    () => messages.filter((message) => getRenderableMessageContent(message.content) || message.attachments?.length),
+    () => messages.filter(isAssistantMessageVisible),
     [messages]
   );
+  const activeMessage = isStreaming ? activeAssistantMessage(messages, activeRequestIds, runState) : undefined;
   const runEvents = useMemo(
     () => runState?.events.filter((event) => !isQuietCompletionEvent(event)).slice(-6) || [],
     [runState]
@@ -233,12 +254,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     let sent = false;
     if (isStreaming) {
       if (!message || attachmentDeliveryChecking) return;
-      sent = onSteer(message);
+      sent = onSteer(message, contextReferences);
     } else {
       if ((!message && attachmentDraft.readyRefs.length === 0) || attachmentDraft.blocked || attachmentWarning) return;
-      sent = onSend(message);
+      sent = onSend(message, contextReferences);
     }
     if (!sent) return;
+    onContextReferencesChange([]);
     setInput("");
   };
 
@@ -269,11 +291,18 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     ? (runState.endedAt || (isStreaming ? now : runState.updatedAt)) - runState.startedAt
     : 0;
   const taskRunStatus = isStreaming ? "running" : runState?.status || "queued";
-  const taskRunTone: TaskStateTone = taskRunStatus === "running" || taskRunStatus === "queued" ? "running" : taskRunStatus === "completed" ? "success" : taskRunStatus === "failed" ? "danger" : "warning";
+  const taskRunTone: TaskStateTone = pendingApprovals.length ? "warning" : taskRunStatus === "running" || taskRunStatus === "queued" ? "running" : taskRunStatus === "completed" ? "success" : taskRunStatus === "failed" ? "danger" : "warning";
   const taskEvidenceCount = (completionEvidence?.ledger.verification.length || 0) + (completionEvidence?.ledger.criteria.length || 0) + (currentRunSummary?.changedFiles.length || 0);
-  const taskAction = isStreaming ? t("workbench.pauseRun") : runState?.status === "failed" || runState?.status === "stopped" ? t("workbench.resumeRun") : t("chat.focusComposer");
+  const taskActionKind = approvalTaskAction(pendingApprovals.length > 0, isStreaming, runState?.status === "failed" || runState?.status === "stopped");
+  const taskAction = taskActionKind === "approval" ? t("chat.approval.view") : taskActionKind === "stop" ? t("workbench.pauseRun") : taskActionKind === "resume" ? t("workbench.resumeRun") : t("chat.focusComposer");
   const handleTaskAction = () => {
-    if (isStreaming || runState?.status === "failed" || runState?.status === "stopped") { handleRunControl(); return; }
+    if (taskActionKind === "approval") {
+      const stack = approvalStackRef.current;
+      stack?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      window.requestAnimationFrame(() => (stack?.querySelector<HTMLElement>('button:not(:disabled)') || stack)?.focus());
+      return;
+    }
+    if (taskActionKind === "stop" || taskActionKind === "resume") { handleRunControl(); return; }
     textareaRef.current?.focus();
   };
   const handleToggleDetails = () => {
@@ -321,7 +350,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         </div>
       </header>
       {showAssistantSummary && <div id="editor-assistant-details" className="editor-assistant-details" hidden={detailsCollapsed}>
-      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+      <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${fileName || t("workbench.noActiveFile")}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${taskRunStatus}`)} runningTone={taskRunTone} evidence={taskEvidenceCount ? t("taskState.evidenceCount", { count: taskEvidenceCount }) : t("taskState.noEvidence")} evidenceTone={taskEvidenceCount ? "success" : "neutral"} action={taskAction} actionTone={taskRunStatus === "failed" ? "danger" : isStreaming ? "warning" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
 
       <section className="editor-assistant-context">
         <span>{t("workbench.autoAttachedContext")}</span>
@@ -388,7 +417,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         <div className="editor-assistant-compact-summary">
           <div className="editor-assistant-compact-copy">
             <strong>{fileName || t("workbench.noActiveFile")}</strong>
-            <small aria-live="polite">{t(`chat.taskStatus.${taskRunStatus}`)}</small>
+            <small aria-live="polite">{pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${taskRunStatus}`)}</small>
           </div>
           <button type="button" onClick={handleTaskAction} disabled={!connected} title={!connected ? t("chat.offline") : taskAction}>
             {taskAction}
@@ -480,13 +509,24 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         {visibleMessages.map((message, index) => (
             <article className={`editor-assistant-message ${message.role}`} key={`${message.timestamp}-${index}`} aria-label={message.role === "user" ? t("chat.you") : t("chat.ai")}>
               {message.role === "assistant" ? (
-                <div className="editor-assistant-message-content">
-                  {renderChatTextPart(getRenderableMessageContent(message.content), message)}
-                </div>
+                <>
+                  {message.thinking && <AssistantReasoning content={message.thinking} active={message === activeMessage} variant="editor" />}
+                  {Boolean(message.toolCalls?.length) && <div className="editor-assistant-tools">
+                    {message.toolCalls!.map((step) => {
+                      const status = assistantToolStatus(step, message === activeMessage, pendingApprovals);
+                      return <details className="editor-assistant-tool" data-assistant-tool-call-id={step.toolCallId} data-status={status} key={step.toolCallId}>
+                        <summary><FileCode2 size={13} aria-hidden="true" /><span>{step.name}{typeof step.input.path === "string" ? ` · ${step.input.path}` : ""}</span><small>{t(`assistantActivity.toolStatus.${status}`)}</small></summary>
+                        <pre>{JSON.stringify(step.input, null, 2).slice(0, 3000)}{step.result !== undefined ? `\n\n${step.result.slice(0, 5000)}` : ""}</pre>
+                      </details>;
+                    })}
+                  </div>}
+                  {getRenderableMessageContent(message.content) && <div className="editor-assistant-message-content">{renderChatTextPart(getRenderableMessageContent(message.content), message)}</div>}
+                </>
               ) : getRenderableMessageContent(message.content) ? (
-                <p>{getRenderableMessageContent(message.content)}</p>
+                <p>{inlineInstructionLabel(message.content) || getRenderableMessageContent(message.content)}</p>
               ) : null}
-              <MessageAttachments attachments={message.attachments} token={token} />
+                  <ContextReferenceBadges references={message.contextReferences} />
+                  <MessageAttachments attachments={message.attachments} token={token} />
               {message.role === "user" && activeFilePath && (
                 <small>{t("workbench.messageContext", {
                   path: activeFilePath,
@@ -497,7 +537,9 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             </article>
           ))}
 
-        {isStreaming && (!runState || runState.status === "running" || runState.status === "queued") && (
+        <AssistantActivity messages={messages} isStreaming={isStreaming} connected={connected} runState={runState} activeRequestIds={activeRequestIds} pendingApprovals={pendingApprovals} />
+
+        {isStreaming && (runState?.status === "running" || runState?.status === "queued") && (
           <section className={`editor-agent-run-card status-${runState?.status || "idle"}`}>
             <div className="editor-agent-run-head">
               <span className={`editor-agent-run-pulse${isStreaming ? " active" : ""}`} />
@@ -567,13 +609,21 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       </div>
 
       <ToolApprovalStack
+        ref={approvalStackRef}
         requests={pendingApprovals}
         onRespond={onToolApproval}
         onApproveConversation={onApproveConversationTools}
+        onRequestRevision={(request, instruction) => {
+          const sent = onSteer(`${t("planCard.revisionPrompt")}\n${instruction}`);
+          if (sent) onToolApproval(request.approvalId, "deny");
+          return sent;
+        }}
         className="editor-assistant-approvals"
       />
 
       <div className="editor-assistant-composer">
+        <AgentQuestionStack token={token} conversationId={runState?.conversationId} />
+        <UndoTurnButton onUndo={onUndoLastTurn} disabled={isStreaming || contextReadOnly} />
         <textarea
           ref={textareaRef}
           value={input}
@@ -587,6 +637,8 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           placeholder={t(`workbench.assistantPlaceholder.${agentMode}`)}
           aria-label={t("workbench.askAboutCurrentFile")}
         />
+
+        <ContextReferencePicker token={token} workspaceDir={workspaceDir} files={referenceFiles} references={contextReferences} onChange={onContextReferencesChange} value={input} onValueChange={setInput} textareaRef={textareaRef} activeFilePath={activeFilePath} selectionInfo={selectionInfo} />
 
         <input
           ref={fileInputRef}
@@ -684,34 +736,15 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                 label={t("workbench.model")}
               />
             </div>
-            <div className="editor-assistant-composer-thinking">
-              <span className="sr-only">{t("workbench.thinkingLevel")}</span>
-              <WorkbenchSelect
-                label={t("workbench.thinkingLevel")}
-                value={thinkingLevel}
-                onChange={(val) => {
-                  const level = val as "auto" | "off" | "low" | "medium" | "high";
-                  setThinkingLevel(level);
-                  localStorage.setItem("editorAssistantThinkingLevel", level);
-                }}
-                disabled={isStreaming}
-                title={t("workbench.thinkingLevel")}
-                icon={<Brain size={12} className="editor-assistant-thinking-icon" aria-hidden="true" />}
-                options={[
-                  { value: "auto", label: t("workbench.thinkingLevel.auto") },
-                  { value: "high", label: t("workbench.thinkingLevel.high") },
-                  { value: "medium", label: t("workbench.thinkingLevel.medium") },
-                  { value: "low", label: t("workbench.thinkingLevel.low") },
-                  { value: "off", label: t("workbench.thinkingLevel.off") },
-                ]}
-              />
-            </div>
             {fileName && (
               <span className="editor-assistant-inline-context" title={activeFilePath || ""}>
                 <FileCode2 size={11} aria-hidden="true" />
                 <span>{fileName}</span>
               </span>
             )}
+            {isStreaming && <button type="button" className="editor-assistant-stop-btn" onClick={onStop} disabled={!connected} title={t("chat.stop")} aria-label={t("chat.stop")}>
+              <Square size={12} aria-hidden="true" />
+            </button>}
             <button
               type="button"
               className="editor-assistant-send-btn"

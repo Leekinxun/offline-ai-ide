@@ -1,5 +1,19 @@
 /* ==================== Editor Toolbar Component Styles ==================== */
 
+.editor-review-bulk-bar {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  order: 1; flex-shrink: 0; min-width: 0; min-height: 32px; padding: 4px 12px;
+  border-bottom: 1px solid var(--border-light); background: var(--surface-panel); font-size: 11px;
+}
+.editor-review-bulk-bar > span { min-width: 0; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-review-keep-all {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  min-height: 25px; padding: 3px 9px; border: 1px solid var(--accent); border-radius: 5px;
+  background: var(--accent-light); color: var(--accent); font: inherit; cursor: pointer;
+}
+.editor-review-keep-all:disabled { opacity: .5; cursor: default; }
+.editor-review-keep-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .editor-toolbar {
   display: flex;
   align-items: center;

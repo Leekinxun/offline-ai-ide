@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
 test("workspace write policy allows source files and protects metadata and secrets", () => {
@@ -87,4 +90,38 @@ test("application-layer network policy preserves ordinary local tools without cl
 
   // TypeScript policy cannot prove that an arbitrary pre-existing script is
   // network-free. This denylist is application-layer defense, not OS egress isolation.
+});
+
+test("authorized shell permits the screenshot glob probe, null sink, and numeric descriptor copies", () => {
+  for (const command of [
+    "ls interview/*/题目.md 2>/dev/null; echo found",
+    "echo> /dev/null", 'printf text 2>"/dev/null"', "printf text 2>>/dev/null",
+    "printf text 2>&1", "printf text 1>&2", "cat 3<&0", "printf text 9>&-",
+    "printf 'not > a redirection' | tee /dev/null",
+    "printf '%s' 'tee /outside is just an argument'",
+  ]) assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, true, command);
+  assert.equal(evaluateShellCommand("ls interview/*/题目.md 2>/dev/null").allowed, false, "Compatibility-shell permission is still required");
+});
+
+test("literal output paths are workspace-bound, protect metadata and reject descriptor/file confusion", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-shell-paths-"));
+  const workspaceDir = path.join(root, "workspace"); fs.mkdirSync(workspaceDir);
+  const outside = path.join(root, "outside.txt"); fs.writeFileSync(outside, "outside");
+  fs.symlinkSync(outside, path.join(workspaceDir, "linked.txt"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const options = { compatibilityShellAuthorized: true, workspaceDir };
+  for (const command of [
+    "printf text > result.txt", "echo>result.txt", "printf text >> nested/result.txt",
+    `printf text > "${workspaceDir}/result with spaces.txt"`,
+    `printf text | tee -a "${workspaceDir}/result.txt"`,
+    "printf text 2>logs/error.txt 1>&2", "cat < input.txt > output.txt",
+  ]) assert.equal(evaluateShellCommand(command, options).allowed, true, command);
+  for (const command of [
+    `printf text > "${outside}"`, "printf text > ../outside.txt", "printf text > nested/../../outside.txt",
+    "printf text > .env", "printf text > .git/config", "printf text > .history/run.json",
+    "printf text > linked.txt", `printf text | tee -a "${outside}"`,
+    "printf text 2>&outside.txt", "printf text > $OUTPUT", "printf text > /dev/null/child",
+    "cat <<EOF", "printf text &>output.txt", "printf text >", "printf text > 'unterminated",
+  ]) assert.equal(evaluateShellCommand(command, options).allowed, false, command);
+  assert.equal(evaluateShellCommand(`printf text > "${workspaceDir}/result.txt"`, { compatibilityShellAuthorized: true }).allowed, false, "Absolute targets require the caller's workspace");
 });

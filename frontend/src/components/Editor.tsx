@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "../editor/monacoSetup";
 import MonacoEditor, { OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
@@ -15,6 +15,8 @@ import { DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { useI18n } from "../i18n";
 import { runEditorMountHandlers } from "../plugins/runtime";
 import type { DocumentDiagnostic } from "../hooks/useFileSystem";
+import { InlineAssistant, type InlineAssistantBindings } from "./InlineAssistant";
+import { EditorChangeReview, type EditorChangeReviewBindings } from "./EditorChangeReview";
 
 interface NavigationTarget extends FileSelectionRange {
   path: string;
@@ -26,13 +28,14 @@ interface HighlightTarget extends FileSelectionRange {
   requestId: number;
 }
 
-interface EditorProps {
+interface EditorProps extends InlineAssistantBindings, EditorChangeReviewBindings {
   content: string;
   language: string;
   path: string;
   theme: "light" | "dark";
   fontFamily: string;
   readOnly?: boolean;
+  dirty?: boolean;
   openFiles: Pick<OpenFile, "path" | "content" | "language">[];
   refreshNonce?: number;
   viewState?: monaco.editor.ICodeEditorViewState | null;
@@ -234,6 +237,17 @@ export const Editor: React.FC<EditorProps> = ({
   theme,
   fontFamily,
   readOnly = false,
+  dirty = false,
+  onInlineSubmit,
+  onInlineCancel,
+  inlineResponse,
+  inlineDisabled,
+  inlineModelKey,
+  changeReviewFile,
+  changeReviewRunning,
+  changeReviewBusy,
+  onChangeReviewAction,
+  onOpenChangeReview,
   openFiles,
   refreshNonce,
   viewState,
@@ -258,6 +272,7 @@ export const Editor: React.FC<EditorProps> = ({
   onHighlightComplete,
   collaboration,
 }) => {
+  const [inlineEditor, setInlineEditor] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
   const onSaveRef = useRef(onSave);
   const onFormatRef = useRef(onFormat);
   const onSelectionChangeRef = useRef(onSelectionChange);
@@ -516,6 +531,7 @@ export const Editor: React.FC<EditorProps> = ({
   const handleMount: OnMount = useCallback(
     (editor) => {
       editorRef.current = editor;
+      setInlineEditor(editor);
       onEditorReady?.(editor);
       pluginCleanupRef.current?.();
 
@@ -712,8 +728,8 @@ export const Editor: React.FC<EditorProps> = ({
     const currentScrollTop = editor.getScrollTop();
     const currentScrollLeft = editor.getScrollLeft();
     suppressChangeRef.current = true;
-
-    model.pushEditOperations(
+    editor.pushUndoStop();
+    try { model.pushEditOperations(
       [],
       [
         {
@@ -722,14 +738,14 @@ export const Editor: React.FC<EditorProps> = ({
         },
       ],
       () => null
-    );
+    ); } finally { editor.pushUndoStop(); suppressChangeRef.current = false; }
 
     if (currentSelection) {
       editor.setSelection(currentSelection);
     }
     editor.setScrollTop(currentScrollTop);
     editor.setScrollLeft(currentScrollLeft);
-  }, [content, path, refreshNonce, editorRef]);
+  }, [content, path, refreshNonce, editorRef, inlineEditor]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -801,10 +817,13 @@ export const Editor: React.FC<EditorProps> = ({
 
     const generation = ++validationGenerationRef.current;
     const timer = window.setTimeout(() => {
+      const modelVersion = model.getVersionId();
+      if (model.getValue() !== content) return;
       void onValidateDocument(path, content)
         .then((diagnostics) => {
-          if (generation !== validationGenerationRef.current || editor.getModel() !== model) return;
+          if (generation !== validationGenerationRef.current || editor.getModel() !== model || model.getVersionId() !== modelVersion || model.getValue() !== content) return;
           monaco.editor.setModelMarkers(model, owner, diagnostics.map((diagnostic) => ({
+            modelVersionId: modelVersion,
             startLineNumber: Math.max(1, diagnostic.line),
             startColumn: Math.max(1, diagnostic.column),
             endLineNumber: Math.max(1, diagnostic.line),
@@ -865,7 +884,7 @@ export const Editor: React.FC<EditorProps> = ({
         height="100%"
         language={language}
         path={path}
-        value={content}
+        defaultValue={content}
         onMount={handleMount}
         theme={getEditorThemeName(theme)}
         options={{
@@ -903,6 +922,29 @@ export const Editor: React.FC<EditorProps> = ({
             useShadows: false,
           },
         }}
+      />
+      <EditorChangeReview
+        editor={inlineEditor}
+        path={path}
+        dirty={dirty}
+        readOnly={readOnly}
+        changeReviewFile={changeReviewFile}
+        changeReviewRunning={changeReviewRunning}
+        changeReviewBusy={changeReviewBusy}
+        onChangeReviewAction={onChangeReviewAction}
+        onOpenChangeReview={onOpenChangeReview}
+      />
+      <InlineAssistant
+        editor={inlineEditor}
+        path={path}
+        language={language}
+        dirty={dirty}
+        readOnly={readOnly}
+        onInlineSubmit={onInlineSubmit}
+        onInlineCancel={onInlineCancel}
+        inlineResponse={inlineResponse}
+        inlineDisabled={inlineDisabled}
+        inlineModelKey={inlineModelKey}
       />
     </div>
   );

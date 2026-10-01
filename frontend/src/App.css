@@ -1300,6 +1300,22 @@ select:focus-visible,
     width: 100%;
   }
 
+  .terminal-panel[aria-modal="true"] {
+    position: fixed;
+    top: var(--titlebar-height);
+    right: 0;
+    bottom: var(--statusbar-height);
+    z-index: 55;
+    width: min(560px, 94vw) !important;
+    height: auto !important;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 1px solid var(--border-light);
+    box-shadow: var(--shadow-lg);
+    animation: workspace-drawer-enter 160ms ease-out;
+  }
+
   .terminal-body {
     min-height: 0;
   }
@@ -1931,7 +1947,12 @@ select:focus-visible,
 
 /* ==================== Markdown Styles ==================== */
 .chat-markdown {
+  min-width: 0;
+  max-width: 100%;
   line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .chat-markdown p {
@@ -1964,6 +1985,8 @@ select:focus-visible,
 
 .chat-markdown ul,
 .chat-markdown ol {
+  min-width: 0;
+  max-width: 100%;
   margin: 8px 0;
   padding-left: 24px;
 }
@@ -1980,13 +2003,27 @@ select:focus-visible,
   font-size: 12px;
 }
 
+.chat-markdown :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-markdown pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 8px 0;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-markdown pre code {
   background: none;
   padding: 0;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-markdown blockquote {
@@ -2006,6 +2043,9 @@ select:focus-visible,
 }
 
 .chat-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   width: 100%;
   margin: 8px 0;
@@ -2027,6 +2067,48 @@ select:focus-visible,
   border: none;
   border-top: 1px solid var(--border);
   margin: 12px 0;
+}
+
+.chat-markdown img,
+.chat-markdown video {
+  max-width: 100%;
+  height: auto;
+}
+
+.assistant-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-workbench);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.assistant-activity > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.assistant-activity-copy {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.assistant-activity-copy strong,
+.assistant-activity-copy span {
+  display: block;
+}
+
+.assistant-activity-copy strong {
+  color: var(--text-primary);
 }
 
 /* ==================== 2026 CrownForge redesign ==================== */
@@ -2746,9 +2828,11 @@ html {
     grid-template-columns: 56px var(--files-sidebar-width, 250px) var(--files-sidebar-handle-width, 6px) minmax(0, 1fr);
   }
 
+  .workbench-view-files > .workbench-right-dock,
   .workbench-view-files > .editor-assistant-panel,
   .workbench-view-files > .run-details-panel {
     position: absolute;
+    grid-area: auto;
     top: 0;
     right: 0;
     bottom: 0;
@@ -2757,12 +2841,14 @@ html {
     box-shadow: var(--shadow-lg);
   }
 
+  .workbench-view-files > .workbench-right-dock,
   .workbench-view-files > .editor-assistant-panel {
     width: min(var(--files-assistant-width, 400px), calc(100vw - 56px));
   }
 
   .workbench-view-files > .assistant-resize-handle {
     position: absolute;
+    grid-area: auto;
     top: 0;
     right: min(var(--files-assistant-width, 400px), calc(100vw - 56px));
     bottom: 0;
@@ -2953,6 +3039,21 @@ html {
   display: none !important;
 }
 
+.workbench-view-chat > .editor-area.terminal-drawer-host {
+  display: contents !important;
+}
+
+.workbench-view-chat > .editor-area.terminal-drawer-host > .terminal-panel {
+  grid-column: 4;
+  grid-row: 1;
+  height: auto !important;
+  min-height: 0;
+}
+
+.workbench-view-chat > .editor-area.terminal-drawer-host > :not(.terminal-panel) {
+  display: none !important;
+}
+
 .editor-main {
   min-width: 0;
   min-height: 0;
@@ -3027,3 +3128,15 @@ html {
     width: 260px;
   }
 }
+
+.plan-approval-content { max-height: 45vh; overflow: auto; padding: 8px; }
+.plan-approval-content section { margin-bottom: 12px; }
+.plan-approval-content ol { padding-left: 20px; margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-revision-input { display: grid; gap: 8px; padding: 8px; }
+.plan-revision-input textarea { width: 100%; min-height: 70px; box-sizing: border-box; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; }
+.plan-revision-input button { min-height: 36px; cursor: pointer; }
+
+.undo-turn-control { padding: 6px 10px; flex: 0 0 auto; }
+.undo-turn-control p { margin: 6px 0; color: var(--error-color, #c43d48); font-size: 12px; }
+
+.tool-approval-network { border-left: 3px solid var(--warning-color, #ad6500); padding: 8px; }

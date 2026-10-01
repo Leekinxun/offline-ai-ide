@@ -497,6 +497,8 @@ LLM 运行时配置同样支持两种方式：
 
 管理员可在 **Settings → Agent 配置档案** 中分别覆盖 `ask`、`code`、`review`、`plan`、`explore`、`subagent` 和 `teammate` 的模型/Provider、轮次/工具/时间/Token/成本预算、工具允许/拒绝规则、计价及 step snapshot。子 Agent 的权限只能在父权限基础上继续收窄。
 
+`task` 现在支持 `general`、`explore`、`review`、`planner` 四种子 Agent，分别配置职责提示词，并在运行时限制工具权限。工具范围、旧名称兼容与配置方式见 [Subagents](docs/subagents.md)。
+
 **Settings → 外部 MCP** 继续兼容旧版 HTTP 地址，同时支持高级 JSON：远程服务可配置请求头和从环境变量读取的 OAuth bearer token，本地服务可通过持久 `stdio` 命令启动。Code 运行会保存运行前基线及危险工具前快照；聊天 API 还提供会话 fork、按运行回滚和受控 Git worktree。
 
 已认证用户可通过 `GET /api/migrations` 检查持久化格式清单与迁移失败。管理员可调用 `POST /api/migrations/run` 执行已注册的工作区迁移，并通过 `POST /api/migrations/app-settings/run` 显式迁移兼容旧版的 app settings。`POST /api/migrations/rollback` 必须传入可回滚格式的规范 ID，例如 `{"formatId":"tasks"}`；缺失、空白或未知 ID 会被拒绝，有效请求会在哈希保护下恢复该格式迁移前的精确字节。迁移产生的单文件备份不能替代[运维手册](docs/operations/operator-runbook.md)要求的停写完整备份。

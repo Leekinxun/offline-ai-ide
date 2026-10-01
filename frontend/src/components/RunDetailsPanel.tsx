@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { AlertCircle, Check, ChevronRight, Download, ExternalLink, FileCode2, GitPullRequest, Network, TerminalSquare, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, Download, ExternalLink, GitPullRequest, Network, TerminalSquare, Trash2, X } from "lucide-react";
 import { AgentRunState, CausalTraceEvent, ConversationRunSummary } from "../types";
 import { useI18n } from "../i18n";
 import { useTrace } from "../hooks/useTrace";
@@ -11,6 +11,7 @@ import { DeliveryOperationCard } from "./DeliveryOperationCard";
 import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { SafeExternalLink } from "./SafeExternalLink";
+import { RunChangesReview, type RunReviewComment } from "./RunChangesReview";
 import "./RunDetailsPanel.css";
 
 interface RunDetailsPanelProps {
@@ -25,7 +26,12 @@ interface RunDetailsPanelProps {
   activeTab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
   onOpenFile: (path: string) => void;
-  onOpenDiff: (path: string) => void;
+  onOpenDiff: (path: string, runId?: string) => void;
+  theme?: "light" | "dark";
+  readOnly?: boolean;
+  requestId?: string;
+  onComment?: (comment: RunReviewComment) => void;
+  onChanged?: () => void;
   onClose: () => void;
 }
 
@@ -48,6 +54,11 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
   onTabChange,
   onOpenFile,
   onOpenDiff,
+  theme,
+  readOnly,
+  requestId,
+  onComment,
+  onChanged,
   onClose,
 }) => {
   const { t } = useI18n();
@@ -113,41 +124,10 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
 
       {activeTab === "changes" && (
         <div id="run-details-changes" role="tabpanel" aria-labelledby="run-details-tab-changes" className="run-details-body">
-          <div className="run-details-section-bar">
-            <span className="run-details-section-title">
-              <FileCode2 size={13} />
-              {t("workbench.changedFiles")}
-            </span>
-            <span className="run-details-count-chip">{changedFiles.length}</span>
-          </div>
-          {changedFiles.length === 0 ? (
-            <div className="run-details-empty">{t("chat.noChanges")}</div>
-          ) : (
-            <div className="run-details-file-list">
-              {changedFiles.map((path) => (
-                <button type="button" key={path} className="run-details-file-item" onClick={() => onOpenDiff(path)}>
-                  <FileCode2 size={14} className="file-icon" />
-                  <span className="file-info">
-                    <strong>{path.split("/").pop()}</strong>
-                    <small>{path}</small>
-                  </span>
-                  <span className="file-badge state-m">M</span>
-                  <ChevronRight size={13} className="file-chevron" />
-                </button>
-              ))}
-            </div>
-          )}
-          {changedFiles.length > 0 && (
-            <div className="run-details-action-group">
-              <button
-                type="button"
-                className="run-details-open-file"
-                onClick={() => changedFiles[0] && onOpenFile(changedFiles[0])}
-              >
-                {t("workbench.openFirstChange")}
-              </button>
-            </div>
-          )}
+          <RunChangesReview token={token} workspaceDir={workspaceDir} runId={runState?.runId} requestId={requestId}
+            theme={theme} readOnly={readOnly} running={runState?.status === "running" || runState?.status === "queued"}
+            refreshKey={`${runState?.status}:${runState?.events?.length || 0}`}
+            onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} onComment={onComment} onChanged={onChanged} />
         </div>
       )}
 
@@ -310,4 +290,3 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
     </aside>
   );
 };
-

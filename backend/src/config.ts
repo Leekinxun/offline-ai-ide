@@ -526,7 +526,9 @@ export const config = {
   port: process.env.CREWFORGE_DESKTOP === "1" && process.env.PORT === "0"
     ? 0
     : parsePositiveInteger(process.env.PORT, 3000),
-  host: process.env.CREWFORGE_DESKTOP === "1" ? "127.0.0.1" : "0.0.0.0",
+  // Fixtures carry public test credentials and must never inherit Web's LAN listener.
+  host: process.env.CREWFORGE_DESKTOP === "1" || process.env.CREWFORGE_FIXTURE_LOOPBACK === "1"
+    ? "127.0.0.1" : "0.0.0.0",
   defaultWorkspaceDir: resolveWorkspaceDir(),
   vllmApiUrl:
     persistedLlmSettings.vllmApiUrl ||

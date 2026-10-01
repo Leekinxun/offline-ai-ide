@@ -18,6 +18,7 @@ test("primary write_file and edit_file preserve exact preimages with run and too
     toolCallId: "write-call",
   };
 
+  await TOOL_DISPATCH.read_file({ path: "existing.txt" }, context as never);
   await TOOL_DISPATCH.write_file({ path: "existing.txt", content: "after" }, context as never);
   await TOOL_DISPATCH.write_file({ path: "created.txt", content: "created" }, {
     ...context,
@@ -35,7 +36,8 @@ test("primary write_file and edit_file preserve exact preimages with run and too
     operation: modified[0].operation,
     preimageContent: modified[0].preimageContent,
     actor: modified[0].actor,
-  }, { path: "existing.txt", operation: "modify", preimageContent: "before", actor: "primary-user" });
+    requestId: modified[0].requestId,
+  }, { path: "existing.txt", operation: "modify", preimageContent: "before", actor: "primary-user", requestId: "request-primary" });
   const created = listFileMutations(workspaceDir, { toolCallId: "create-call" });
   assert.equal(created[0]?.operation, "create");
   assert.equal(created[0]?.preimageContent, undefined);

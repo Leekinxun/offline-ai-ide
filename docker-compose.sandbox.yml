@@ -1,0 +1,8 @@
+# Explicit Linux Docker compatibility mode. See deploy/security/README.md.
+services:
+  ai-ide:
+    environment:
+      CROWNFORGE_SANDBOX_PROC_MODE: none
+    security_opt:
+      - "seccomp=${CROWNFORGE_SECCOMP_PROFILE:?Set the absolute host seccomp profile path}"
+      - apparmor=crownforge-bwrap

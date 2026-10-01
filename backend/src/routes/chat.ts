@@ -8,6 +8,8 @@ import {
   isValidChatRequestId,
   listConversationSummaries,
   readConversationMessages,
+  pruneConversationHistory,
+  type ConversationSummary,
 } from "../chat/history.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import {
@@ -15,7 +17,7 @@ import {
   readChatAttachment,
   storeChatAttachments,
 } from "../chat/attachments.js";
-import { sessionManager } from "../auth/sessionManager.js";
+import { sessionManager, isSamePath } from "../auth/sessionManager.js";
 import {
   hasActiveRunForConversation,
   listChildRuns,
@@ -23,7 +25,8 @@ import {
   readRunRecord,
 } from "../chat/runHistory.js";
 import { findCheckpointForRun, restoreCheckpoint } from "../chat/checkpoints.js";
-import { listFileMutations, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, MutationReviewConflictError, rollbackFileMutations, safeMutationRelativePath } from "../files/mutationRegistry.js";
+import { assertRunChangesOwner, keepAllRunChanges, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 import {
   createManagedWorktree,
@@ -55,10 +58,68 @@ import { toSarifReviewFindings } from "../artifacts/reviewArtifact.js";
 import "../indexing/repositoryIndex.js";
 
 export const chatRouter = Router();
+chatRouter.use((req, res, next) => {
+  const requestedWorkspace = req.header("X-Workspace-Dir");
+  if (requestedWorkspace) {
+    try {
+      const value = requestedWorkspace.includes("%") ? decodeURIComponent(requestedWorkspace) : requestedWorkspace;
+      if (!isSamePath(value, getSessionWorkspace(req))) return res.status(409).json({ error: "Workspace changed; refresh before continuing" });
+    } catch { return res.status(400).json({ error: "Invalid workspace scope" }); }
+  }
+  next();
+});
 const attachmentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 4, fields: 0, parts: 4 },
 });
+
+type ModelHealthStatus = "ready" | "auth_error" | "model_error" | "unreachable" | "timeout";
+type ModelHealthPayload = {
+  status: ModelHealthStatus;
+  modelName: string;
+  apiUrl: string;
+  error?: string;
+};
+
+export async function probeModelHealth(
+  modelName: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {}
+): Promise<ModelHealthPayload> {
+  const endpoint = resolveModelEndpoint(modelName);
+  const probeUrl = endpoint.apiUrl.replace(/\/+$/, "") + "/models";
+  const fetchImpl = options.fetchImpl || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3500);
+  const headers: Record<string, string> = {};
+  if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`;
+  try {
+    const response = await fetchImpl(probeUrl, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      return { status: "ready", modelName, apiUrl: endpoint.apiUrl };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { status: "auth_error", error: "Authentication failed", modelName, apiUrl: endpoint.apiUrl };
+    }
+    return { status: "model_error", error: `HTTP ${response.status}`, modelName, apiUrl: endpoint.apiUrl };
+  } catch (err: any) {
+    const timedOut = err?.name === "AbortError";
+    return {
+      status: timedOut ? "timeout" : "unreachable",
+      error: timedOut ? "Connection timeout" : err?.message || "Connection refused",
+      modelName,
+      apiUrl: endpoint.apiUrl,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function getSessionWorkspace(req: unknown): string {
   return ((req as any).userSession as UserSession).workspaceDir;
@@ -157,34 +218,7 @@ chatRouter.get("/model-health", async (req, res) => {
   const modelName = typeof req.query.model === "string" && req.query.model.trim()
     ? req.query.model.trim()
     : config.modelName;
-  const endpoint = resolveModelEndpoint(modelName);
-  try {
-    const probeUrl = endpoint.apiUrl.replace(/\/+$/, "") + "/models";
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const headers: Record<string, string> = {};
-    if (endpoint.apiKey) headers["Authorization"] = `Bearer ${endpoint.apiKey}`;
-    const response = await fetch(probeUrl, {
-      method: "GET",
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (response.ok) {
-      return res.json({ status: "ready", modelName, apiUrl: endpoint.apiUrl });
-    }
-    if (response.status === 401 || response.status === 403) {
-      return res.json({ status: "auth_error", error: "Authentication failed", modelName, apiUrl: endpoint.apiUrl });
-    }
-    return res.json({ status: "model_error", error: `HTTP ${response.status}`, modelName, apiUrl: endpoint.apiUrl });
-  } catch (err: any) {
-    return res.json({
-      status: "unreachable",
-      error: err.name === "AbortError" ? "Connection timeout" : err.message || "Connection refused",
-      modelName,
-      apiUrl: endpoint.apiUrl,
-    });
-  }
+  res.json(await probeModelHealth(modelName));
 });
 
 chatRouter.get("/request-status/:requestId", (req, res) => {
@@ -564,23 +598,107 @@ chatRouter.get("/runs/:runId", (req, res) => {
   }
 });
 
+chatRouter.get("/runs/:runId/changes", (req, res) => {
+  if (req.query.path !== undefined && typeof req.query.path !== "string") return res.status(400).json({ error: "path must be a string" });
+  if (req.query.requestId !== undefined && req.query.requestId !== "" && !isValidChatRequestId(req.query.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
+  try {
+    res.json(readRunChanges(getSessionWorkspace(req), req.params.runId, req.query.path as string | undefined, req.query.requestId as string | undefined));
+  } catch (error) {
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    const message = error instanceof Error ? error.message : "Failed to load run changes";
+    res.status(message === "Run not found" || message === "Run file change not found" ? 404 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Run evidence is unavailable" : message });
+  }
+});
+
+chatRouter.post("/runs/:runId/changes/keep-all", (req, res) => {
+  if (!writable(req, res)) return;
+  const body = req.body || {};
+  if (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)) return res.status(400).json({ error: "expectedRevision is required" });
+  if (body.requestId !== undefined && body.requestId !== "" && !isValidChatRequestId(body.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
+  if (body.path !== undefined || body.ids !== undefined || body.hunkIds !== undefined) return res.status(400).json({ error: "Batch review accepts a run/request summary, not a file or hunk selection" });
+  try {
+    res.json(keepAllRunChanges(getSessionWorkspace(req), req.params.runId, body.expectedRevision, body.requestId || undefined));
+  } catch (error) {
+    if (error instanceof RunChangesKeepError) return res.status(409).json({ error: error.message, currentRevision: error.changes.revision, ...(error.reason === "unavailable" ? { unavailableReason: error.changes.unavailableReason || "pending_change_evidence_unavailable", paths: error.paths } : {}) });
+    if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    const message = error instanceof Error ? error.message : "Failed to keep run changes";
+    return res.status(message === "Run not found" ? 404 : (error as NodeJS.ErrnoException)?.code ? 409 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Change evidence is unavailable" : message });
+  }
+});
+
+chatRouter.post("/runs/:runId/changes/keep", (req, res) => {
+  if (!writable(req, res)) return;
+  const body = req.body || {};
+  if (typeof body.path !== "string" || !safeMutationRelativePath(body.path) || typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)) return res.status(400).json({ error: "path and expectedRevision are required" });
+  if (body.requestId !== undefined && body.requestId !== "" && !isValidChatRequestId(body.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
+  for (const key of ["ids", "hunkIds"] as const) if (body[key] !== undefined && (!Array.isArray(body[key]) || !body[key].length || body[key].length > 2000 || !body[key].every((id: unknown) => typeof id === "string" && id.length > 0 && id.length <= 200))) return res.status(400).json({ error: "Invalid review selection" });
+  try {
+    const workspace = getSessionWorkspace(req);
+    const requestId = body.requestId || undefined;
+    const changes = readRunChanges(workspace, req.params.runId, body.path, requestId);
+    const file = changes.files[0];
+    if (file.revision !== body.expectedRevision) return res.status(409).json({ error: "Run changes changed; reload the review before keeping", currentRevision: file.revision });
+    if (file.unavailableReason) return res.status(409).json({ error: "Change evidence is unavailable", unavailableReason: file.unavailableReason });
+    const kept = keepFileMutations(workspace, { runId: req.params.runId, requestId, path: file.path, ids: body.ids, hunkIds: body.hunkIds });
+    res.json({ kept, ...readRunChanges(workspace, req.params.runId, file.path, requestId) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to keep changes";
+    res.status(message === "Run not found" || message === "Run file change not found" ? 404 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Change evidence is unavailable" : message });
+  }
+});
+
 chatRouter.post("/runs/:runId/revert", (req, res) => {
   const session = (req as any).userSession as UserSession;
+  let preparedFork: ConversationSummary | undefined;
   if (!canWriteActiveWorkspace(session)) {
     return res.status(403).json({ error: "Workspace is read-only" });
   }
   try {
+    assertRunChangesOwner(session.workspaceDir, req.params.runId);
     const run = readRunRecord(session.workspaceDir, req.params.runId);
     if (run.status === "running" || run.status === "queued") {
       return res.status(409).json({ error: "Stop the agent run before reverting its workspace" });
     }
-    const mutations = listFileMutations(session.workspaceDir, { runId: req.params.runId });
+    const body = req.body || {};
+    if (body.requestId !== undefined && body.requestId !== "" && !isValidChatRequestId(body.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
+    const requestId = body.requestId === "" ? undefined : body.requestId as string | undefined;
+    if (body.forkBeforeRequest !== undefined && typeof body.forkBeforeRequest !== "boolean") return res.status(400).json({ error: "Invalid turn undo option" });
+    if (body.forkBeforeRequest) {
+      if (body.expectedWorkspace !== session.workspaceDir) return res.status(409).json({ error: "Workspace changed before turn undo" });
+      const latestUser = readConversationMessages(session.workspaceDir, run.conversationId).filter((message) => message.role === "user").at(-1);
+      if (!requestId || latestUser?.requestId !== requestId) return res.status(409).json({ error: "Only the latest user turn can be undone with its conversation context" });
+    }
+    const selectedPath = body.path === undefined ? undefined : typeof body.path === "string" ? safeMutationRelativePath(body.path) : null;
+    const identifiers = (value: unknown): string[] | undefined | null => value === undefined ? undefined : Array.isArray(value) && value.length > 0 && value.length <= 2000 && value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200) ? [...new Set(value as string[])] : null;
+    const ids = identifiers(body.ids); const hunkIds = identifiers(body.hunkIds);
+    if (selectedPath === null || ids === null || hunkIds === null || (body.expectedRevision !== undefined && (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)))) return res.status(400).json({ error: "Invalid run rollback selection" });
+    const scoped = requestId !== undefined || selectedPath !== undefined || ids !== undefined || hunkIds !== undefined;
+    if (scoped && !body.expectedRevision) return res.status(400).json({ error: "expectedRevision is required for a scoped rollback" });
+    const mutations = listFileMutations(session.workspaceDir, { runId: req.params.runId, requestId });
+    const selected = mutations.filter((mutation) => (!selectedPath || mutation.path === selectedPath) && (!ids || ids.includes(mutation.id)));
+    if ((scoped && !selected.length) || ids?.some((id) => !selected.some((mutation) => mutation.id === id)) || hunkIds?.some((id) => !selected.some((mutation) => mutation.hunks?.some((hunk) => hunk.id === id)))) return res.status(400).json({ error: "Rollback selection does not belong to this run, request and file" });
+    if (body.expectedRevision) {
+      const changes = readRunChanges(session.workspaceDir, req.params.runId, selectedPath, requestId);
+      const revision = selectedPath ? changes.files[0].revision : changes.revision;
+      if (revision !== body.expectedRevision) return res.status(409).json({ error: "Run changes changed; reload the review before reverting", currentRevision: revision });
+    }
+    const evidenceGaps = listMutationEvidenceGaps(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}) });
+    if (evidenceGaps.length && !ids && !hunkIds) return res.status(409).json({ error: "Rollback evidence is incomplete; no files were changed", unavailableReason: "mutation_evidence_incomplete", paths: evidenceGaps.map((gap) => gap.path) });
     if (mutations.length) {
-      const rollback = rollbackFileMutations(session.workspaceDir, { runId: req.params.runId });
-      if (rollback.conflicts.length || rollback.unavailable.length) {
-        return res.status(409).json({ error: "Rollback conflicts detected; no files were changed", rollback });
+      // Hunk requests target only records that own the selected hunks.
+      const selectedIds = hunkIds ? selected.filter((mutation) => mutation.hunks?.some((hunk) => hunkIds.includes(hunk.id))).map((mutation) => mutation.id) : ids;
+      if (body.forkBeforeRequest) {
+        if (selectedPath || ids || hunkIds) return res.status(400).json({ error: "Conversation undo requires the complete user turn" });
+        preparedFork = forkConversation(session.workspaceDir, run.conversationId, { beforeRequestId: requestId, deferPrune: true });
       }
-      return res.json({ restored: false, rollback, mode: "incremental" });
+      const rollback = rollbackFileMutations(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}), ...(selectedIds ? { ids: selectedIds } : {}), ...(hunkIds ? { hunkIds } : {}) });
+      if (rollback.conflicts.length || rollback.unavailable.length) {
+        if (preparedFork) { deleteConversation(session.workspaceDir, preparedFork.id); preparedFork = undefined; }
+        return res.status(409).json({ error: rollback.applied.length ? "Rollback could not finish; inspect the applied and unavailable entries" : "Rollback conflicts detected; no files were changed", rollback });
+      }
+      if (preparedFork) pruneConversationHistory(session.workspaceDir, [run.conversationId, preparedFork.id]);
+      return res.json({ restored: false, rollback, mode: "incremental", ...(preparedFork ? { conversation: preparedFork } : {}) });
     }
     if (req.body?.legacyFullRestore !== true) {
       return res.status(409).json({
@@ -592,6 +710,9 @@ chatRouter.post("/runs/:runId/revert", (req, res) => {
     if (!checkpoint) return res.status(404).json({ error: "Run checkpoint not found" });
     res.json({ restored: true, checkpoint: restoreCheckpoint(session.workspaceDir, checkpoint.id), mode: "legacy-full-restore" });
   } catch (error) {
+    if (preparedFork) {
+      try { deleteConversation(session.workspaceDir, preparedFork.id); } catch { /* Keep a recoverable fork if cleanup is unavailable. */ }
+    }
     const message = error instanceof Error ? error.message : "Failed to revert run";
     res.status(message === "Run not found" || message === "Checkpoint not found" ? 404 : 400).json({ error: message });
   }

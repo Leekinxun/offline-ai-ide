@@ -28,6 +28,11 @@ function canonicalWorkspace(workspaceDir: string): string {
   catch { return path.resolve(workspaceDir); }
 }
 
+export function teamWorkspaceContains(teamWorkspaceDir: string, workspaceDir: string): boolean {
+  const relative = path.relative(canonicalWorkspace(teamWorkspaceDir), canonicalWorkspace(workspaceDir));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 export interface TeamMemberRecord {
   username: string;
   role: TeamRole;
@@ -540,11 +545,24 @@ export class TeamManager {
     return this.syncUserWorkspaceTeam(username, workspaceDir);
   }
 
+  getTeamCoveringWorkspace(username: string, workspaceDir: string): TeamDetails | null {
+    const matching = this.readIndex().teams.filter((team) => teamWorkspaceContains(team.workspaceDir, workspaceDir))
+      .sort((a, b) => canonicalWorkspace(b.workspaceDir).length - canonicalWorkspace(a.workspaceDir).length);
+    const closestLength = matching[0] && canonicalWorkspace(matching[0].workspaceDir).length;
+    const authorized = matching.find((team) => canonicalWorkspace(team.workspaceDir).length === closestLength
+      && team.members.some((member) => member.username === username));
+    return authorized ? this.toDetails(authorized, username) : null;
+  }
+
   /** Read-only ownership check. A removed member must not regain write access
    * by treating a team directory as an ordinary personal workspace. */
   hasTeamAtWorkspace(workspaceDir: string): boolean {
     const target = canonicalWorkspace(workspaceDir);
     return this.readIndex().teams.some((team) => canonicalWorkspace(team.workspaceDir) === target);
+  }
+
+  hasTeamCoveringWorkspace(workspaceDir: string): boolean {
+    return this.readIndex().teams.some((team) => teamWorkspaceContains(team.workspaceDir, workspaceDir));
   }
 
   upsertPresence(

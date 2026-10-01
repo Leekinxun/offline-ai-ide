@@ -8,6 +8,247 @@ export interface UploadFilePayload {
   file: File;
 }
 
+export interface UploadEntriesError extends Error {
+  code?: string;
+  conflicts?: string[];
+  completedUploaded: number;
+  completedOverwritten: number;
+  remainingFiles: UploadFilePayload[];
+  batchMayHaveUploaded: boolean;
+}
+
+export interface UploadProgress {
+  uploadedBytes: number;
+  totalBytes: number;
+  completedFiles: number;
+  totalFiles: number;
+  phase: "uploading" | "processing" | "complete";
+}
+
+export interface UploadEntriesOptions {
+  targetPath?: string;
+  overwrite?: boolean;
+  overwriteFirstBatchOnly?: boolean;
+  expectedWorkspaceDir?: string;
+  onProgress?: (progress: UploadProgress) => void;
+}
+
+const UPLOAD_BATCH_BYTES = 8 * 1024 * 1024;
+const UPLOAD_BATCH_FILES = 50;
+
+interface UploadBatch {
+  start: number;
+  files: UploadFilePayload[];
+}
+
+function makeUploadBatches(files: UploadFilePayload[]): UploadBatch[] {
+  const batches: UploadBatch[] = [];
+  let start = 0;
+  let size = 0;
+
+  for (let index = 0; index < files.length; index++) {
+    const fileSize = files[index].file.size;
+    if (index > start && (index - start >= UPLOAD_BATCH_FILES || size + fileSize > UPLOAD_BATCH_BYTES)) {
+      batches.push({ start, files: files.slice(start, index) });
+      start = index;
+      size = 0;
+    }
+    // A single file above 8 MiB must be sent alone; the server still enforces
+    // its configured per-file limit (250 MiB by default).
+    size += fileSize;
+  }
+  if (start < files.length) batches.push({ start, files: files.slice(start) });
+  return batches;
+}
+
+function parseUploadError(payload: unknown): Error & { code?: string; conflicts?: string[] } {
+  const data = payload && typeof payload === "object"
+    ? payload as Record<string, unknown> : {};
+  const message = typeof data.detail === "string" && data.detail.trim() ? data.detail
+    : typeof data.error === "string" && data.error.trim() ? data.error
+    : "Failed to upload";
+  const error = new Error(message) as Error & {
+    code?: string;
+    conflicts?: string[];
+  };
+  if (typeof data.code === "string") error.code = data.code;
+  if (Array.isArray(data.conflicts)) {
+    error.conflicts = data.conflicts.filter(
+      (item: unknown): item is string => typeof item === "string"
+    );
+  }
+  return error;
+}
+
+async function uploadFormData(
+  url: string,
+  headers: Record<string, string>,
+  body: FormData,
+  expectedUploaded: number,
+  onUploadProgress: (loaded: number, total: number | undefined) => void,
+  onUploadComplete: () => void
+): Promise<{ data: { uploaded: number; overwritten: number } }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      onUploadProgress(event.loaded, event.lengthComputable ? event.total : undefined);
+    };
+    xhr.upload.onload = () => {
+      onUploadComplete();
+    };
+    xhr.onload = () => {
+      let payload: unknown;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+      } catch {
+        payload = undefined;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject({ error: parseUploadError(payload), status: xhr.status });
+        return;
+      }
+      const data = payload && typeof payload === "object"
+        ? payload as Record<string, unknown> : {};
+      if (
+        typeof data.uploaded !== "number"
+        || typeof data.overwritten !== "number"
+        || data.uploaded !== expectedUploaded
+      ) {
+        reject(new Error("Upload result could not be confirmed"));
+        return;
+      }
+      resolve({
+        data: {
+          uploaded: data.uploaded,
+          overwritten: data.overwritten,
+        },
+      });
+    };
+    xhr.onerror = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.ontimeout = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.onabort = () => {
+      reject(new TypeError("Failed to fetch"));
+    };
+    xhr.send(body);
+  });
+}
+
+export async function uploadEntriesInBatches(
+  files: UploadFilePayload[],
+  options: UploadEntriesOptions | undefined,
+  headers: Record<string, string>
+): Promise<{ uploaded: number; overwritten: number }> {
+  let uploaded = 0;
+  let overwritten = 0;
+  let uploadedBytes = 0;
+  const totalBytes = files.reduce((total, entry) => total + entry.file.size, 0);
+
+  const reportProgress = (progress: UploadProgress) => {
+    options?.onProgress?.({
+      ...progress,
+      uploadedBytes: Math.min(progress.uploadedBytes, totalBytes),
+    });
+  };
+
+  if (files.length === 0) {
+    reportProgress({
+      uploadedBytes: 0,
+      totalBytes,
+      completedFiles: 0,
+      totalFiles: 0,
+      phase: "complete",
+    });
+  }
+
+  const batches = makeUploadBatches(files);
+  for (const [batchIndex, batch] of batches.entries()) {
+    const batchBytes = batch.files.reduce((total, entry) => total + entry.file.size, 0);
+    const confirmedBytesBeforeBatch = uploadedBytes;
+    const formData = new FormData();
+    formData.append("targetPath", options?.targetPath || "");
+    formData.append("expectedWorkspaceDir", options?.expectedWorkspaceDir ?? "");
+    formData.append("overwrite", String(Boolean(options?.overwrite && (!options.overwriteFirstBatchOnly || batchIndex === 0))));
+    for (const entry of batch.files) {
+      formData.append("files", entry.file, entry.file.name);
+      formData.append("paths", entry.path);
+    }
+
+    let batchMayHaveUploaded = true;
+    try {
+      reportProgress({
+        uploadedBytes,
+        totalBytes,
+        completedFiles: uploaded,
+        totalFiles: files.length,
+        phase: "uploading",
+      });
+      const { data } = await uploadFormData(`${API}/upload`,
+        headers,
+        formData,
+        batch.files.length,
+        (loaded, requestTotal) => {
+          const batchUploadedBytes = requestTotal && requestTotal > 0
+            ? Math.round(batchBytes * Math.min(loaded / requestTotal, 1))
+            : Math.min(loaded, batchBytes);
+          reportProgress({
+            uploadedBytes: confirmedBytesBeforeBatch + batchUploadedBytes,
+            totalBytes,
+            completedFiles: uploaded,
+            totalFiles: files.length,
+            phase: "uploading",
+          });
+        },
+        () => {
+          reportProgress({
+            uploadedBytes: confirmedBytesBeforeBatch + batchBytes,
+            totalBytes,
+            completedFiles: uploaded,
+            totalFiles: files.length,
+            phase: "processing",
+          });
+        }
+      ).catch((cause) => {
+        if (cause && typeof cause === "object" && "status" in cause && "error" in cause) {
+          const status = (cause as { status: number }).status;
+          // Conflict and request-validation responses happen before files are written.
+          batchMayHaveUploaded = status >= 500 || status === 408 || status === 429;
+          throw (cause as { error: Error }).error;
+        }
+        throw cause;
+      });
+      uploaded += data.uploaded;
+      overwritten += data.overwritten;
+      uploadedBytes = confirmedBytesBeforeBatch + batchBytes;
+      if (batchIndex === batches.length - 1) {
+        reportProgress({
+          uploadedBytes: totalBytes,
+          totalBytes,
+          completedFiles: uploaded,
+          totalFiles: files.length,
+          phase: "complete",
+        });
+      }
+    } catch (cause) {
+      const error = (cause instanceof Error ? cause : new Error(String(cause))) as UploadEntriesError;
+      error.completedUploaded = uploaded;
+      error.completedOverwritten = overwritten;
+      error.remainingFiles = files.slice(batch.start);
+      error.batchMayHaveUploaded = batchMayHaveUploaded;
+      throw error;
+    }
+  }
+
+  return { uploaded, overwritten };
+}
+
 export interface WorkspaceSearchResult {
   path: string;
   line: number;
@@ -164,7 +405,11 @@ export function useFileSystem(token: string) {
       const res = await fetch(`${API}/read?path=${encodeURIComponent(path)}`, {
         headers: authHeaders(),
       });
-      if (!res.ok) throw new Error("Failed to read file");
+      if (!res.ok) {
+        const error = new Error("Failed to read file") as Error & { status: number };
+        error.status = res.status;
+        throw error;
+      }
       const data = await res.json();
       return {
         content: data.content,
@@ -417,44 +662,9 @@ export function useFileSystem(token: string) {
   const uploadEntries = useCallback(
     async (
       files: UploadFilePayload[],
-      options?: { targetPath?: string; overwrite?: boolean }
+      options?: UploadEntriesOptions
     ): Promise<{ uploaded: number; overwritten: number }> => {
-      const formData = new FormData();
-      formData.append("targetPath", options?.targetPath || "");
-      formData.append("overwrite", String(Boolean(options?.overwrite)));
-      for (const file of files) {
-        formData.append("files", file.file, file.file.name);
-        formData.append("paths", file.path);
-      }
-
-      const res = await fetch(`${API}/upload`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const error = new Error(data.detail || "Failed to upload") as Error & {
-          code?: string;
-          conflicts?: string[];
-        };
-        if (typeof data.code === "string") {
-          error.code = data.code;
-        }
-        if (Array.isArray(data.conflicts)) {
-          error.conflicts = data.conflicts.filter(
-            (item: unknown): item is string => typeof item === "string"
-          );
-        }
-        throw error;
-      }
-
-      const data = await res.json();
-      return {
-        uploaded: data.uploaded,
-        overwritten: data.overwritten,
-      };
+      return uploadEntriesInBatches(files, options, authHeaders());
     },
     [authHeaders]
   );

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImage, FileText, FileType2, Paperclip, RotateCcw, X } from "lucide-react";
 import type { ChatAttachmentRef } from "../types";
 import { useI18n } from "../i18n";

@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f8f9fb" />
+  <title>CrewForge · 手机远程控制</title>
+  <style>
+    :root {
+      --bg: oklch(99% 0.002 240);
+      --surface: oklch(100% 0 0);
+      --fg: oklch(18% 0.012 250);
+      --muted: oklch(54% 0.012 250);
+      --border: oklch(92% 0.005 250);
+      --accent: oklch(58% 0.18 255);
+      --quiet: oklch(96.5% 0.004 250);
+      --hover: oklch(95% 0.006 250);
+      --strong-border: oklch(84% 0.008 250);
+      --success: oklch(61% 0.15 145);
+      --warn: oklch(70% 0.14 75);
+      --danger: oklch(58% 0.2 28);
+      --code-bg: oklch(22% 0.012 250);
+      --code-fg: oklch(94% 0.008 250);
+      --shadow-float: 0 18px 55px oklch(18% 0.012 250 / 0.14);
+      --shadow-input: 0 10px 32px oklch(18% 0.012 250 / 0.09);
+      --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+      --font-mono: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: oklch(16% 0.008 250);
+        --surface: oklch(19% 0.009 250);
+        --fg: oklch(94% 0.006 250);
+        --muted: oklch(68% 0.01 250);
+        --border: oklch(100% 0 0 / 0.09);
+        --quiet: oklch(22% 0.009 250);
+        --hover: oklch(25% 0.01 250);
+        --strong-border: oklch(100% 0 0 / 0.17);
+        --accent: oklch(70% 0.14 255);
+        --code-bg: oklch(12% 0.008 250);
+        --code-fg: oklch(92% 0.006 250);
+        --shadow-float: 0 18px 55px oklch(0% 0 0 / 0.38);
+        --shadow-input: 0 10px 32px oklch(0% 0 0 / 0.26);
+      }
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body {
+      font-family: var(--font-body);
+      color: var(--fg);
+      background: oklch(94% 0.01 250);
+      font-size: 14px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      display: grid;
+      place-items: center;
+      min-height: 100dvh;
+    }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* 桌面预览时的手机外框；真机上占满全屏 */
+    .phone {
+      width: min(400px, 100vw);
+      height: min(840px, 100dvh);
+      background: var(--bg);
+      border-radius: 28px;
+      box-shadow: var(--shadow-float), 0 0 0 1px oklch(18% 0.012 250 / 0.08);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 1fr;
+      position: relative;
+    }
+    @media (max-width: 440px), (max-height: 880px) {
+      body { display: block; background: var(--bg); }
+      .phone { width: 100vw; height: 100dvh; border-radius: 0; box-shadow: none; }
+    }
+
+    /* ---------- 连接引导层（扫码后第一屏） ---------- */
+    .gate {
+      position: absolute; inset: 0; z-index: 60;
+      background: var(--bg);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 40px 32px; text-align: center; gap: 0;
+      transition: opacity .3s ease;
+    }
+    .gate.gone { opacity: 0; pointer-events: none; }
+    .gate-mark { width: 56px; height: 56px; border-radius: 16px; background: var(--fg); color: var(--surface); display: grid; place-items: center; margin-bottom: 22px; }
+    .gate-mark svg { width: 34px; height: 34px; stroke-width: 1.9; }
+    .gate h1 { font-family: var(--font-display); font-size: 22px; letter-spacing: -.02em; margin: 0 0 8px; }
+    .gate p { color: var(--muted); font-size: 13px; margin: 0 0 26px; max-width: 30ch; }
+    .gate-spinner { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--fg); animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .gate-status { margin-top: 14px; font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+
+    /* ---------- 主框架 ---------- */
+    .shell { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; height: 100%; }
+    .topbar {
+      padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px 12px;
+      display: flex; align-items: center; gap: 10px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklch, var(--surface) 86%, transparent);
+      backdrop-filter: blur(18px);
+      z-index: 10;
+    }
+    .topbar-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--fg); color: var(--surface); display: grid; place-items: center; flex: 0 0 auto; }
+    .topbar-mark svg { width: 19px; height: 19px; stroke-width: 1.9; }
+    .topbar-title { min-width: 0; flex: 1; }
+    .topbar-title strong { display: block; font-family: var(--font-display); font-size: 14px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conn { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .conn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in oklch, var(--success) 15%, transparent); }
+    .conn.off .conn-dot { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 15%, transparent); }
+    .icon-btn { width: 38px; height: 38px; border: 0; border-radius: 10px; display: grid; place-items: center; background: transparent; color: var(--muted); flex: 0 0 auto; }
+    .icon-btn:active { background: var(--hover); color: var(--fg); }
+
+    .pages { min-height: 0; overflow: hidden; position: relative; }
+    .page { position: absolute; inset: 0; overflow-y: auto; padding: 14px 14px 24px; display: none; overscroll-behavior: contain; }
+    .page.active { display: block; }
+
+    .section-label { padding: 10px 4px 8px; font-size: 11px; font-weight: 550; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+
+    /* ---------- 任务动态 ---------- */
+    .run-card { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+    .run-head { display: flex; align-items: center; gap: 9px; min-height: 50px; padding: 0 13px; background: var(--quiet); }
+    .run-pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--success); position: relative; flex: 0 0 auto; }
+    .run-pulse::after { content: ''; position: absolute; inset: -4px; border: 1px solid color-mix(in oklch, var(--success) 50%, transparent); border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
+    @keyframes pulse { 0% { transform: scale(.7); opacity: 1; } 100% { transform: scale(1.7); opacity: 0; } }
+    .run-pulse.paused { background: var(--warn); }
+    .run-pulse.paused::after { display: none; }
+    .run-title-wrap { min-width: 0; flex: 1; }
+    .run-title { font-size: 12px; font-weight: 600; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-sub { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-elapsed { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+    .run-stop { height: 32px; padding: 0 11px; border: 1px solid var(--strong-border); border-radius: 8px; background: var(--surface); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+    .run-stop svg { width: 12px; }
+    .progress { height: 3px; background: var(--border); }
+    .progress span { display: block; height: 100%; width: 40%; background: var(--accent); transition: width .5s ease; }
+    .steps { padding: 5px 0; }
+    .step { border-top: 1px solid var(--border); }
+    .step:first-child { border-top: 0; }
+    .step-button { width: 100%; min-height: 44px; border: 0; background: transparent; padding: 0 13px; display: grid; grid-template-columns: 16px 20px minmax(0,1fr) auto; align-items: center; gap: 7px; text-align: left; }
+    .step-icon { color: var(--muted); display: grid; place-items: center; }
+    .step-icon svg, .chev { width: 14px; height: 14px; }
+    .step-name { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+    .step-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .step-status { color: var(--muted); font-size: 11px; }
+    .step.done .step-status { color: var(--success); }
+    .step.running .step-status { color: var(--warn); }
+    .step-detail { display: none; background: var(--code-bg); color: var(--code-fg); padding: 12px 15px; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-x: auto; }
+    .step.open .step-detail { display: block; }
+    .step.open .chev { transform: rotate(90deg); }
+
+    .task-row { width: 100%; border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 12px 13px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 10px; text-align: left; margin-bottom: 9px; }
+    .task-row:active { background: var(--quiet); }
+    .task-title { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-time { color: var(--muted); font-size: 11px; }
+    .task-meta { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+    .task-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 2px 7px; border-radius: 20px; }
+    .task-badge.ok { background: color-mix(in oklch, var(--success) 13%, transparent); color: var(--success); }
+
+    /* ---------- 审批 ---------- */
+    .approve-card { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; margin-bottom: 12px; transition: opacity .25s, transform .25s; }
+    .approve-card.resolved { opacity: 0; transform: translateX(24px); pointer-events: none; }
+    .approve-head { display: flex; align-items: center; gap: 9px; padding: 12px 13px; }
+    .approve-icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: 0 0 auto; background: color-mix(in oklch, var(--warn) 14%, transparent); color: var(--warn); }
+    .approve-icon.danger { background: color-mix(in oklch, var(--danger) 12%, transparent); color: var(--danger); }
+    .approve-title { min-width: 0; flex: 1; }
+    .approve-title strong { display: block; font-size: 13px; }
+    .approve-title span { font-size: 11px; color: var(--muted); }
+    .approve-cmd { margin: 0 13px 12px; background: var(--code-bg); color: var(--code-fg); border-radius: 10px; padding: 11px 13px; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+    .approve-impact { margin: 0 13px 12px; font-size: 11px; color: var(--muted); display: flex; gap: 6px; align-items: flex-start; }
+    .approve-impact svg { width: 13px; flex: 0 0 auto; margin-top: 2px; }
+    .approve-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 13px 13px; }
+    .btn { min-height: 42px; border-radius: 10px; font-size: 13px; font-weight: 550; border: 1px solid var(--strong-border); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn svg { width: 15px; }
+    .btn:active { transform: scale(.97); }
+    .btn.primary { background: var(--fg); color: var(--surface); border-color: var(--fg); }
+    .btn.danger { color: var(--danger); }
+    .btn.ghost { border-color: transparent; background: var(--quiet); color: var(--muted); min-height: 36px; font-size: 12px; }
+    .approve-always { grid-column: 1 / -1; }
+
+    .empty-pane { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 24px; text-align: center; color: var(--muted); }
+    .empty-pane svg { width: 40px; height: 40px; margin-bottom: 14px; opacity: .5; }
+    .empty-pane strong { color: var(--fg); font-size: 14px; display: block; margin-bottom: 4px; }
+    .empty-pane span { font-size: 12px; }
+
+    /* ---------- 对话 ---------- */
+    .page-chat { display: none; grid-template-rows: 1fr auto; padding: 0; }
+    .page-chat.active { display: grid; }
+    .chat-scroll { overflow-y: auto; padding: 16px 14px 12px; overscroll-behavior: contain; }
+    .msg { margin-bottom: 18px; }
+    .msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .avatar { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--quiet); font-size: 10px; font-weight: 600; }
+    .avatar.ai { background: var(--fg); color: var(--surface); }
+    .sender { font-weight: 600; font-size: 12px; }
+    .msg-time { color: var(--muted); font-size: 10px; }
+    .msg-body { font-size: 13px; }
+    .msg.user .msg-body { margin-left: 32px; padding: 10px 13px; border-radius: 12px; background: var(--quiet); }
+    .msg:not(.user) .msg-body { padding-left: 32px; }
+    .composer { border-top: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 92%, transparent); backdrop-filter: blur(18px); padding: 9px 10px calc(env(safe-area-inset-bottom, 0px) + 9px); display: flex; align-items: flex-end; gap: 8px; }
+    .composer textarea { flex: 1; min-height: 40px; max-height: 110px; resize: none; border: 1px solid var(--strong-border); border-radius: 12px; outline: 0; background: var(--surface); padding: 9px 12px; font-size: 13px; line-height: 1.45; }
+    .composer textarea:focus { border-color: color-mix(in oklch, var(--accent) 65%, var(--strong-border)); }
+    .send-btn { width: 40px; height: 40px; border: 0; border-radius: 11px; background: var(--accent); color: var(--surface); display: grid; place-items: center; flex: 0 0 auto; }
+    .send-btn:active { transform: scale(.93); }
+    .send-btn svg { width: 16px; }
+
+    /* ---------- 文件 ---------- */
+    .file-row { width: 100%; min-height: 46px; border: 0; border-radius: 10px; background: transparent; display: grid; grid-template-columns: 20px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 0 10px; text-align: left; color: var(--fg); }
+    .file-row:active { background: var(--quiet); }
+    .file-row svg { width: 15px; color: var(--muted); }
+    .file-name { font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-count { font-family: var(--font-mono); font-size: 11px; color: var(--success); }
+    .file-count .del { color: var(--danger); }
+
+    /* 底部弹出层（文件 diff 预览 / 设备管理） */
+    .sheet-mask { position: absolute; inset: 0; background: color-mix(in oklch, var(--fg) 22%, transparent); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
+    .sheet-mask.open { opacity: 1; pointer-events: auto; }
+    .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 78%; background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-float); transform: translateY(100%); transition: transform .24s ease; z-index: 41; display: grid; grid-template-rows: auto 1fr; }
+    .sheet.open { transform: translateY(0); }
+    .sheet-grip { width: 38px; height: 4px; border-radius: 4px; background: var(--strong-border); margin: 9px auto 4px; }
+    .sheet-head { display: flex; align-items: center; gap: 9px; padding: 4px 14px 12px; border-bottom: 1px solid var(--border); }
+    .sheet-head strong { font-family: var(--font-mono); font-size: 12px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sheet-body { overflow-y: auto; padding: 0 0 calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    .diff { background: var(--code-bg); color: var(--code-fg); padding: 13px 15px; font-family: var(--font-mono); font-size: 11px; line-height: 1.7; overflow-x: auto; white-space: pre; }
+    .diff .add { color: oklch(78% .13 145); }
+    .diff .remove { color: oklch(76% .13 28); }
+
+    .device-row { display: flex; align-items: center; gap: 11px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
+    .device-icon { width: 36px; height: 36px; border-radius: 10px; background: var(--quiet); color: var(--muted); display: grid; place-items: center; flex: 0 0 auto; }
+    .device-info { min-width: 0; flex: 1; }
+    .device-info strong { display: block; font-size: 13px; }
+    .device-info span { font-size: 11px; color: var(--muted); }
+    .device-revoke { border: 0; background: transparent; color: var(--danger); font-size: 12px; padding: 8px; }
+
+    /* ---------- 底部 Tab 导航 ---------- */
+    .tabbar {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--border);
+      background: color-mix(in oklch, var(--surface) 90%, transparent);
+      backdrop-filter: blur(20px);
+      padding: 4px 6px calc(env(safe-area-inset-bottom, 0px) + 6px);
+    }
+    .tab { border: 0; background: transparent; border-radius: 10px; min-height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--muted); font-size: 10px; letter-spacing: .02em; position: relative; }
+    .tab svg { width: 20px; height: 20px; }
+    .tab.active { color: var(--accent); }
+    .tab .badge { position: absolute; top: 5px; left: calc(50% + 6px); min-width: 16px; height: 16px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 10px; font-weight: 600; display: grid; place-items: center; padding: 0 4px; }
+    .tab .badge[hidden] { display: none; }
+
+    .toast { position: absolute; left: 50%; bottom: 96px; transform: translate(-50%, 20px); background: var(--fg); color: var(--surface); padding: 9px 14px; border-radius: 9px; font-size: 12px; opacity: 0; pointer-events: none; transition: .2s ease; z-index: 70; white-space: nowrap; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-mark" viewBox="0 0 24 24"><path d="M7 7.5 12 4l5 3.5v6L12 17l-5-3.5z"/><path d="m12 9 5 3.5M12 9 7 12.5M12 9v8"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.2 7.7-8 9-4.8-1.3-8-4.5-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a4 4 0 0 1-4 4H8l-4 3V7a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4z"/></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 4 4-4 4M12 17h7"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  </svg>
+
+  <div class="phone" id="phone">
+
+    <!-- 扫码后连接引导层 -->
+    <div class="gate" id="gate">
+      <div class="gate-mark"><svg><use href="#i-mark"/></svg></div>
+      <h1>连接 CrewForge</h1>
+      <p>正在验证扫码票据并建立安全通道，票据一次性且 2 分钟内有效。</p>
+      <div class="gate-spinner"></div>
+      <div class="gate-status" id="gateStatus">正在验证票据…</div>
+    </div>
+
+    <div class="shell">
+      <header class="topbar">
+        <div class="topbar-mark"><svg><use href="#i-mark"/></svg></div>
+        <div class="topbar-title">
+          <strong>CrewForge / ai-ide</strong>
+          <span class="conn" id="connState"><span class="conn-dot"></span><span id="connText">已连接 · 实时同步中</span></span>
+        </div>
+        <button class="icon-btn" id="deviceBtn" aria-label="设备管理"><svg><use href="#i-phone"/></svg></button>
+      </header>
+
+      <div class="pages">
+
+        <!-- 动态 -->
+        <section class="page active" id="page-runs">
+          <div class="section-label">正在运行</div>
+          <div class="run-card">
+            <div class="run-head">
+              <span class="run-pulse" id="runPulse"></span>
+              <div class="run-title-wrap">
+                <div class="run-title" id="runTitle">优化 AI 对话工作流</div>
+                <div class="run-sub" id="runSub">正在实现 · 编辑界面样式</div>
+              </div>
+              <span class="run-elapsed" id="elapsed">00:18</span>
+              <button class="run-stop" id="stopRun"><svg><use href="#i-stop"/></svg><span>停止</span></button>
+            </div>
+            <div class="progress"><span id="progressBar"></span></div>
+            <div class="steps" id="steps">
+              <div class="step done"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-search"/></svg></span><span><span class="step-name">read_file</span> <span class="step-summary">读取 ChatPanel 与相关样式</span></span><span class="step-status">完成</span></button><div class="step-detail">frontend/src/components/ChatPanel.tsx
+frontend/src/components/ToolCallStep.tsx
+frontend/src/App.css</div></div>
+              <div class="step done"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-file"/></svg></span><span><span class="step-name">edit_file</span> <span class="step-summary">重排任务头、消息流与输入区</span></span><span class="step-status">完成</span></button><div class="step-detail">修改 ChatPanel.tsx
++ 新增运行状态栏
++ 合并上下文入口
++ 将停止操作固定在状态区</div></div>
+              <div class="step running"><button class="step-button"><svg class="chev"><use href="#i-chevron"/></svg><span class="step-icon"><svg><use href="#i-terminal"/></svg></span><span><span class="step-name">bash</span> <span class="step-summary">npm run test</span></span><span class="step-status">进行中</span></button><div class="step-detail">正在运行 ChatPanel 交互测试…</div></div>
+            </div>
+          </div>
+
+          <div class="section-label">最近任务</div>
+          <button class="task-row"><span class="task-title">修复终端重连逻辑</span><span class="task-time">09:42</span><span class="task-meta"><span class="task-badge ok"><svg style="width:10px;height:10px"><use href="#i-check"/></svg>已完成</span> · 3 个文件</span></button>
+          <button class="task-row"><span class="task-title">检查登录页响应式布局</span><span class="task-time">08:16</span><span class="task-meta">待继续 · 有 1 条建议</span></button>
+          <button class="task-row"><span class="task-title">重构插件权限面板</span><span class="task-time">昨天</span><span class="task-meta"><span class="task-badge ok"><svg style="width:10px;height:10px"><use href="#i-check"/></svg>已完成</span> · 6 个文件</span></button>
+        </section>
+
+        <!-- 审批 -->
+        <section class="page" id="page-approvals">
+          <div class="section-label">待处理 · <span id="pendingCount">2</span></div>
+          <div id="approvalList">
+            <div class="approve-card" data-id="a1">
+              <div class="approve-head">
+                <div class="approve-icon danger"><svg><use href="#i-warn"/></svg></div>
+                <div class="approve-title"><strong>运行 shell 命令</strong><span>来自任务「优化 AI 对话工作流」· 刚刚</span></div>
+              </div>
+              <div class="approve-cmd">rm -rf build/ && npm run build</div>
+              <div class="approve-impact"><svg><use href="#i-warn"/></svg><span>将删除 build/ 目录下全部文件并重新构建，删除不可恢复。</span></div>
+              <div class="approve-actions">
+                <button class="btn primary" data-act="allow"><svg><use href="#i-check"/></svg>允许一次</button>
+                <button class="btn danger" data-act="deny"><svg><use href="#i-close"/></svg>拒绝</button>
+                <button class="btn ghost approve-always" data-act="always">本次任务内始终允许 bash 命令</button>
+              </div>
+            </div>
+            <div class="approve-card" data-id="a2">
+              <div class="approve-head">
+                <div class="approve-icon"><svg><use href="#i-file"/></svg></div>
+                <div class="approve-title"><strong>写入文件</strong><span>来自任务「优化 AI 对话工作流」· 2 分钟前</span></div>
+              </div>
+              <div class="approve-cmd">frontend/src/App.css
++86 行 · −42 行</div>
+              <div class="approve-impact"><svg><use href="#i-warn"/></svg><span>修改可通过检查点回滚，风险较低。</span></div>
+              <div class="approve-actions">
+                <button class="btn primary" data-act="allow"><svg><use href="#i-check"/></svg>允许一次</button>
+                <button class="btn danger" data-act="deny"><svg><use href="#i-close"/></svg>拒绝</button>
+              </div>
+            </div>
+          </div>
+          <div class="empty-pane" id="approvalEmpty" hidden>
+            <svg><use href="#i-shield"/></svg>
+            <strong>没有待审批的操作</strong>
+            <span>Agent 需要确认时会实时推送到这里</span>
+          </div>
+        </section>
+
+        <!-- 对话 -->
+        <section class="page page-chat" id="page-chat">
+          <div class="chat-scroll" id="chatScroll">
+            <div class="msg user"><div class="msg-head"><div class="avatar">你</div><span class="sender">你</span><span class="msg-time">10:03</span></div><div class="msg-body">优化 ChatPanel 的信息层级，工具调用不要打断阅读。</div></div>
+            <div class="msg"><div class="msg-head"><div class="avatar ai">CF</div><span class="sender">CrewForge</span><span class="msg-time">10:03</span></div><div class="msg-body">收到。我会把工具步骤收进可展开的运行记录，生成过程不会挤动当前阅读位置。你可以随时在「动态」里查看进度。</div></div>
+          </div>
+          <div class="composer">
+            <textarea id="chatInput" rows="1" placeholder="追加指令，或询问进度…"></textarea>
+            <button class="send-btn" id="chatSend" aria-label="发送"><svg><use href="#i-arrow"/></svg></button>
+          </div>
+        </section>
+
+        <!-- 文件 -->
+        <section class="page" id="page-files">
+          <div class="section-label">本次变更 · 3 个文件</div>
+          <div class="run-card" style="padding:6px 4px">
+            <button class="file-row" data-file="ChatPanel.tsx"><svg><use href="#i-file"/></svg><span class="file-name">frontend/src/components/ChatPanel.tsx</span><span class="file-count">+24 <span class="del">−11</span></span></button>
+            <button class="file-row" data-file="ToolCallStep.tsx"><svg><use href="#i-file"/></svg><span class="file-name">frontend/src/components/ToolCallStep.tsx</span><span class="file-count">+18 <span class="del">−7</span></span></button>
+            <button class="file-row" data-file="App.css"><svg><use href="#i-file"/></svg><span class="file-name">frontend/src/App.css</span><span class="file-count">+86 <span class="del">−42</span></span></button>
+          </div>
+          <div class="section-label">说明</div>
+          <p style="margin:0 6px;color:var(--muted);font-size:12px">文件为只读预览。需要修改时，在「对话」里描述改动即可，Agent 会代你执行。</p>
+        </section>
+      </div>
+
+      <!-- 底部导航 -->
+      <nav class="tabbar">
+        <button class="tab active" data-page="page-runs"><svg><use href="#i-pulse"/></svg>动态</button>
+        <button class="tab" data-page="page-approvals"><svg><use href="#i-shield"/></svg>审批<span class="badge" id="approveBadge">2</span></button>
+        <button class="tab" data-page="page-chat"><svg><use href="#i-chat"/></svg>对话</button>
+        <button class="tab" data-page="page-files"><svg><use href="#i-files"/></svg>文件</button>
+      </nav>
+    </div>
+
+    <!-- 底部弹出层：diff 预览 / 设备管理 -->
+    <div class="sheet-mask" id="sheetMask"></div>
+    <div class="sheet" id="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head"><strong id="sheetTitle">文件预览</strong><button class="icon-btn" id="sheetClose" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div>
+      <div class="sheet-body" id="sheetBody"></div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+  </div>
+
+  <script>
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const toast = $('#toast');
+    let toastTimer;
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    /* ---- 扫码引导：模拟 验证票据 → 建立通道 → 完成 ---- */
+    const gateSteps = ['正在验证票据…', '正在建立加密通道…', '正在同步工作区状态…'];
+    let gateIndex = 0;
+    const gateTimer = setInterval(() => {
+      gateIndex++;
+      if (gateIndex < gateSteps.length) {
+        $('#gateStatus').textContent = gateSteps[gateIndex];
+      } else {
+        clearInterval(gateTimer);
+        $('#gate').classList.add('gone');
+        showToast('已连接到 CrewForge / ai-ide');
+      }
+    }, 900);
+
+    /* ---- Tab 切换 ---- */
+    $$('.tab').forEach(tab => tab.addEventListener('click', () => {
+      $$('.tab').forEach(t => t.classList.toggle('active', t === tab));
+      $$('.page').forEach(p => p.classList.toggle('active', p.id === tab.dataset.page));
+    }));
+
+    /* ---- 任务运行：计时 / 停止-继续 / 步骤展开 ---- */
+    let running = true;
+    let seconds = 18;
+    setInterval(() => {
+      if (!running) return;
+      seconds++;
+      $('#elapsed').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    }, 1000);
+    $('#stopRun').addEventListener('click', () => {
+      running = !running;
+      $('#runPulse').classList.toggle('paused', !running);
+      $('#runSub').textContent = running ? '正在实现 · 编辑界面样式' : '已暂停 · 等待你的指令';
+      $('#stopRun span').textContent = running ? '停止' : '继续';
+      $('#connText').textContent = running ? '已连接 · 实时同步中' : '已连接 · 任务已暂停';
+      showToast(running ? '已通知 Agent 继续' : '已暂停，Agent 将停在当前步骤');
+    });
+    $('#steps').addEventListener('click', e => {
+      const btn = e.target.closest('.step-button');
+      if (btn) btn.parentElement.classList.toggle('open');
+    });
+
+    /* ---- 审批 ---- */
+    function refreshApprovals() {
+      const left = $$('.approve-card:not(.resolved)').length;
+      $('#pendingCount').textContent = left;
+      $('#approveBadge').hidden = left === 0;
+      $('#approveBadge').textContent = left;
+      $('#approvalEmpty').hidden = left > 0;
+    }
+    $('#approvalList').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const card = btn.closest('.approve-card');
+      const act = btn.dataset.act;
+      card.classList.add('resolved');
+      setTimeout(() => { card.style.display = 'none'; refreshApprovals(); }, 260);
+      refreshApprovals();
+      showToast(act === 'allow' ? '已允许，Agent 将继续执行' : act === 'deny' ? '已拒绝，Agent 会改用其他方案' : '本次任务内将自动允许同类操作');
+    });
+
+    /* ---- 对话 ---- */
+    const chatInput = $('#chatInput');
+    function sendChat() {
+      const text = chatInput.value.trim();
+      if (!text) return;
+      const scroll = $('#chatScroll');
+      const mine = document.createElement('div');
+      mine.className = 'msg user';
+      mine.innerHTML = '<div class="msg-head"><div class="avatar">你</div><span class="sender">你</span><span class="msg-time">刚刚</span></div><div class="msg-body"></div>';
+      $('.msg-body', mine).textContent = text;
+      scroll.appendChild(mine);
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      scroll.scrollTop = scroll.scrollHeight;
+      setTimeout(() => {
+        const reply = document.createElement('div');
+        reply.className = 'msg';
+        reply.innerHTML = '<div class="msg-head"><div class="avatar ai">CF</div><span class="sender">CrewForge</span><span class="msg-time">刚刚</span></div><div class="msg-body">已收到，会并入当前任务的执行计划。进度变化会同步到「动态」。</div>';
+        scroll.appendChild(reply);
+        scroll.scrollTop = scroll.scrollHeight;
+      }, 700);
+    }
+    $('#chatSend').addEventListener('click', sendChat);
+    chatInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
+    });
+    chatInput.addEventListener('input', () => { chatInput.style.height = 'auto'; chatInput.style.height = Math.min(chatInput.scrollHeight, 110) + 'px'; });
+
+    /* ---- 底部弹出层 ---- */
+    const diffs = {
+      'ChatPanel.tsx': '- {isStreaming && <Spinner />}\n+ <RunStatus state={runState} onStop={onStop} />\n+ <Composer mode={isStreaming ? \'steer\' : \'send\'} />',
+      'ToolCallStep.tsx': '- <pre>{step.raw}</pre>\n+ <details open={expanded}>\n+   <summary>{step.name} · {status}</summary>\n+   <pre>{JSON.stringify(step.input, null, 2)}</pre>\n+ </details>',
+      'App.css': '- .tool-step { margin: 24px 0; }\n+ .tool-step { margin: 8px 0; border-radius: 10px; }\n+ .tool-step summary { min-height: 40px; }'
+    };
+    function openSheet(title, bodyHTML) {
+      $('#sheetTitle').textContent = title;
+      $('#sheetBody').innerHTML = bodyHTML;
+      $('#sheet').classList.add('open');
+      $('#sheetMask').classList.add('open');
+    }
+    function closeSheet() {
+      $('#sheet').classList.remove('open');
+      $('#sheetMask').classList.remove('open');
+    }
+    const escapeHTML = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    $$('.file-row[data-file]').forEach(row => row.addEventListener('click', () => {
+      const name = row.dataset.file;
+      const diff = (diffs[name] || '// 暂无差异').split('\n').map(line => {
+        const safe = escapeHTML(line);
+        return line.startsWith('+') ? `<span class="add">${safe}</span>` : line.startsWith('-') ? `<span class="remove">${safe}</span>` : safe;
+      }).join('\n');
+      openSheet(name, `<div class="diff">${diff}</div>`);
+    }));
+    $('#deviceBtn').addEventListener('click', () => openSheet('已连接设备', `
+      <div class="device-row"><div class="device-icon"><svg><use href="#i-monitor"/></svg></div><div class="device-info"><strong>MacBook Pro（网页端）</strong><span>本次会话的发起端 · 在线</span></div></div>
+      <div class="device-row"><div class="device-icon"><svg><use href="#i-phone"/></svg></div><div class="device-info"><strong>iPhone · 微信浏览器</strong><span>本设备 · 刚刚扫码接入</span></div><button class="device-revoke" disabled style="color:var(--muted)">当前设备</button></div>
+      <div class="device-row"><div class="device-icon"><svg><use href="#i-phone"/></svg></div><div class="device-info"><strong>Pixel 7 · Chrome</strong><span>3 天前接入 · 离线</span></div><button class="device-revoke" id="revokeBtn">下线</button></div>
+      <p style="margin:14px;color:var(--muted);font-size:11px;line-height:1.6">移动端会话有效期 24 小时，权限为只读 + 审批 + 对话，不能修改账号设置。在网页端退出登录可选择同时吊销全部移动会话。</p>
+    `));
+    $('#sheetBody').addEventListener('click', e => {
+      if (e.target.id === 'revokeBtn') {
+        e.target.closest('.device-row').remove();
+        showToast('已吊销该设备的移动会话');
+      }
+    });
+    $('#sheetClose').addEventListener('click', closeSheet);
+    $('#sheetMask').addEventListener('click', closeSheet);
+
+    refreshApprovals();
+  </script>
+</body>
+</html>

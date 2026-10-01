@@ -20,6 +20,7 @@ import {
   ZoomIn,
   FolderOpen,
   LogOut,
+  Globe,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { UtilityPanelType } from "../hooks/useWorkspacePanels";
@@ -30,6 +31,7 @@ export interface ActivityRailProps {
   workspaceView: "chat" | "files";
   sidebarVisible: boolean;
   gitVisible: boolean;
+  webPreviewVisible?: boolean;
   agentsVisible: boolean;
   teamVisible: boolean;
   checkpointsVisible: boolean;
@@ -43,6 +45,7 @@ export interface ActivityRailProps {
 
   onFocusChat: () => void;
   onToggleExplorer: () => void;
+  onToggleWebPreview?: () => void;
   onOpenWorkspaceSearch: () => void;
   onToggleUtilityPanel: (panel: UtilityPanelType) => void;
   onToggleTeamPanel: () => void;
@@ -72,6 +75,7 @@ export const ActivityRail: React.FC<ActivityRailProps> = ({
   workspaceView,
   sidebarVisible,
   gitVisible,
+  webPreviewVisible = false,
   agentsVisible,
   teamVisible,
   checkpointsVisible,
@@ -85,6 +89,7 @@ export const ActivityRail: React.FC<ActivityRailProps> = ({
 
   onFocusChat,
   onToggleExplorer,
+  onToggleWebPreview,
   onOpenWorkspaceSearch,
   onToggleUtilityPanel,
   onToggleTeamPanel,
@@ -169,6 +174,17 @@ export const ActivityRail: React.FC<ActivityRailProps> = ({
         {changedFilesCount > 0 && (
           <span className="activity-rail-badge">{changedFilesCount}</span>
         )}
+      </button>
+
+      <button
+        type="button"
+        className={`activity-rail-btn${webPreviewVisible && workspaceView === "files" ? " active" : ""}`}
+        onClick={onToggleWebPreview}
+        title={t("preview.title")}
+        aria-label={t("preview.title")}
+        aria-pressed={webPreviewVisible && workspaceView === "files"}
+      >
+        <Globe size={18} />
       </button>
 
       <button

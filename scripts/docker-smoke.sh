@@ -11,8 +11,8 @@ WORKSPACE_DIR="$MOUNT_ROOT/workspace"
 PLUGINS_DIR="$MOUNT_ROOT/plugins"
 
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$PLUGINS_DIR"
-cp "$ROOT_DIR/users.json" "$CONFIG_DIR/users.json"
-cp "$ROOT_DIR/app-settings.json" "$CONFIG_DIR/app-settings.json"
+printf '%s\n' '{"allowedRoots":["/workspace"],"users":[{"username":"smoke","password":"local-smoke-only","defaultWorkspace":"/workspace","isAdmin":true}],"pendingRegistrations":[]}' > "$CONFIG_DIR/users.json"
+printf '%s\n' '{"schemaVersion":1,"llm":{"modelName":"smoke","vllmApiUrl":"http://127.0.0.1:9/v1","vllmApiKey":""},"mcp":{"baseUrls":[],"lazyUrls":[],"disabledUrls":[],"servers":[]},"delivery":{"providers":[]}}' > "$CONFIG_DIR/app-settings.json"
 cp -R "$ROOT_DIR/plugins/." "$PLUGINS_DIR/"
 chmod 0755 "$CONFIG_DIR" "$WORKSPACE_DIR" "$PLUGINS_DIR"
 chmod 0644 "$CONFIG_DIR/users.json" "$CONFIG_DIR/app-settings.json"
@@ -24,13 +24,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+security_args=(--security-opt no-new-privileges:true)
+if [ -n "${CROWNFORGE_SMOKE_SECCOMP_PROFILE:-}" ]; then
+  test "$CROWNFORGE_SMOKE_SECCOMP_PROFILE" != unconfined
+  test -f "$CROWNFORGE_SMOKE_SECCOMP_PROFILE"
+  security_args+=(--security-opt "seccomp=$CROWNFORGE_SMOKE_SECCOMP_PROFILE")
+fi
+if [ -n "${CROWNFORGE_SMOKE_APPARMOR_PROFILE:-}" ]; then
+  test "$CROWNFORGE_SMOKE_APPARMOR_PROFILE" != unconfined
+  security_args+=(--security-opt "apparmor=$CROWNFORGE_SMOKE_APPARMOR_PROFILE")
+fi
+
 docker build --pull=false -t "$IMAGE_NAME" "$ROOT_DIR"
 docker run -d --name "$CONTAINER_NAME" \
   --user 0:0 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --tmpfs /run:rw,nosuid,size=16m,mode=0755 \
-  --security-opt no-new-privileges:true \
+  "${security_args[@]}" \
   --cap-drop ALL \
   --cap-add CHOWN \
   --cap-add SETGID \
@@ -46,7 +57,7 @@ docker run -d --name "$CONTAINER_NAME" \
   --mount "type=bind,src=$WORKSPACE_DIR,dst=/workspace" \
   --mount "type=bind,src=$PLUGINS_DIR,dst=/app/plugins" \
   --mount "type=bind,src=$CONFIG_DIR,dst=/app/config" \
-  -p "$PORT:3000" "$IMAGE_NAME" >/dev/null
+  -p "127.0.0.1:$PORT:3000" "$IMAGE_NAME" >/dev/null
 
 for attempt in $(seq 1 30); do
   if curl --fail --silent "http://127.0.0.1:${PORT}/api/health" | grep -q '"status":"ok"'; then
@@ -67,6 +78,7 @@ docker exec "$CONTAINER_NAME" sh -ceu '
   test "$(awk '\''$1 == "Gid:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 10001
   test "$(awk '\''$1 == "CapEff:" { print $2 }'\'' "/proc/$node_pid/status")" = 0000000000000000
   test "$(awk '\''$1 == "NoNewPrivs:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 1
+  test "$(awk '\''$1 == "Seccomp:" { print $2 }'\'' "/proc/$node_pid/status")" -eq 2
 '
 docker exec --user 10001:10001 "$CONTAINER_NAME" sh -ceu '
   test "$(id -u)" -ne 0
@@ -90,15 +102,12 @@ docker exec --user 10001:10001 "$CONTAINER_NAME" sh -ceu '
   # The parent server retains ordinary container networking, while an agent
   # subprocess receives a separate network namespace with no loopback access.
   curl --fail --silent http://127.0.0.1:3000/api/health | grep -q '"'"'"status":"ok"'"'"'
-  /usr/bin/bwrap --die-with-parent --unshare-net -- /bin/sh -ceu '"'"'
-    test "$(id -u)" -eq 10001
-    printf "%s\n" "bubblewrap local command ok"
+  node --input-type=module -e '"'"'
+    import { runSandboxSelfTest } from "./dist/run/sandboxDiagnostics.js";
+    const result = await runSandboxSelfTest();
+    console.log(JSON.stringify(result));
+    if (!result.passed || !result.checks?.condaPythonVisible || !result.checks?.condaRuffVisible) process.exitCode = 1;
   '"'"'
-  if /usr/bin/bwrap --die-with-parent --unshare-net -- \
-    /opt/conda/bin/python -c '"'"'import socket; socket.create_connection(("127.0.0.1", 3000), timeout=1)'"'"'; then
-    echo "bubblewrap network namespace unexpectedly reached parent loopback" >&2
-    exit 1
-  fi
 '
 
 readonly_rootfs="$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$CONTAINER_NAME")"

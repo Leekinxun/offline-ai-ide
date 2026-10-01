@@ -44,6 +44,34 @@ test("checkpoint restores captured source files and removes later workspace file
   assert.equal(fs.readFileSync(path.join(workspace, "src", "new.ts"), "utf-8"), "temporary\n");
 });
 
+test("checkpoints ignore Python and Ruff cache artifacts", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-checkpoint-cache-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "source.py"), "value = 1\n");
+  fs.mkdirSync(path.join(workspace, "__pycache__"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "__pycache__", "source.cpython-312.pyc"), "cache");
+  fs.mkdirSync(path.join(workspace, ".ruff_cache"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".ruff_cache", "cache.bin"), "cache");
+  const checkpoint = createCheckpoint(workspace);
+  assert.equal(checkpoint.fileCount, 1);
+});
+
+test("checkpoints ignore generated Python and Ruff caches at any depth", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-cache-checkpoint-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, "pkg", "__pycache__"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, "pkg", ".ruff_cache"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "pkg", "app.py"), "value = 1\n");
+  fs.writeFileSync(path.join(workspace, "pkg", "__pycache__", "app.cpython-312.pyc"), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(workspace, "pkg", ".ruff_cache", "CACHEDIR.TAG"), "cache");
+
+  const checkpoint = createCheckpoint(workspace);
+  assert.equal(checkpoint.fileCount, 1);
+  fs.writeFileSync(path.join(workspace, "pkg", "app.py"), "value = 2\n");
+  restoreCheckpoint(workspace, checkpoint.id);
+  assert.equal(fs.readFileSync(path.join(workspace, "pkg", "app.py"), "utf8"), "value = 1\n");
+});
+
 test("indexes run and step checkpoint metadata for targeted rollback", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-run-checkpoint-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));

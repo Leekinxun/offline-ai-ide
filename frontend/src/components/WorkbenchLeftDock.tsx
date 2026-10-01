@@ -56,7 +56,7 @@ export interface WorkbenchLeftDockProps {
   onShowToast: (msg: string) => void;
 
   // Git & Delivery
-  gitDiffRequest: { path: string; id: number } | null;
+  gitDiffRequest: { path: string; id: number; runId?: string } | null;
   onGitReview: (files?: string[]) => void;
   onOpenFollowUpRun: (runId: string) => Promise<void>;
   onCloseGit: () => void;
@@ -209,6 +209,7 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
           conversationId={chat.currentConversationId}
           runId={chat.runState?.runId || null}
           requestedDiffPath={gitDiffRequest?.path}
+          requestedDiffRunId={gitDiffRequest?.runId}
           requestedDiffId={gitDiffRequest?.id}
           onOpenFile={openFile}
           onAskReview={onGitReview}
@@ -401,6 +402,7 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
           key={`run:${workspaceDir}`}
           visible={true}
           token={token}
+          workspaceDir={workspaceDir}
           onRunningChange={onRunningChange}
           onOpenLocation={(failure) =>
             void onNavigateToLocation(failure.path, {

@@ -1,6 +1,8 @@
 import path from "path";
 import type { UserSession } from "../auth/sessionManager.js";
-import { TeamManager, TeamDetails, TeamRole } from "./teamManager.js";
+import { TeamManager, TeamDetails, TeamRole, teamWorkspaceContains } from "./teamManager.js";
+
+export { teamWorkspaceContains };
 
 const ACTIVE_TEAM_BY_TOKEN = new Map<string, string>();
 let teamManagerInstance: TeamManager | null = null;
@@ -43,15 +45,19 @@ export function getActiveTeamId(session: UserSession): string | null {
 
 export function resolveActiveTeam(session: UserSession): TeamDetails | null {
   const manager = getManager();
+  const inferred = manager.getTeamCoveringWorkspace(session.username, session.workspaceDir);
   const explicitId = getActiveTeamId(session);
   if (explicitId) {
     try {
-      return manager.getTeamDetails(explicitId, session.username);
+      const team = manager.getTeamDetails(explicitId, session.username);
+      if (inferred && teamWorkspaceContains(team.workspaceDir, session.workspaceDir)
+        && teamWorkspaceContains(team.workspaceDir, inferred.workspaceDir)
+        && teamWorkspaceContains(inferred.workspaceDir, team.workspaceDir)) return team;
     } catch {
-      ACTIVE_TEAM_BY_TOKEN.delete(session.token);
+      // Membership and the closest authorized team root are checked afresh.
     }
+    ACTIVE_TEAM_BY_TOKEN.delete(session.token);
   }
-  const inferred = manager.getTeamByWorkspace(session.username, session.workspaceDir);
   if (inferred) {
     ACTIVE_TEAM_BY_TOKEN.set(session.token, inferred.id);
     return inferred;
@@ -66,7 +72,7 @@ export function getActiveTeamRole(session: UserSession): TeamRole | null {
 export function canWriteActiveWorkspace(session: UserSession): boolean {
   const team = resolveActiveTeam(session);
   if (team) return team.role !== "viewer";
-  return !getManager().hasTeamAtWorkspace(session.workspaceDir);
+  return !getManager().hasTeamCoveringWorkspace(session.workspaceDir);
 }
 
 export function canManageActiveTeam(session: UserSession): boolean {

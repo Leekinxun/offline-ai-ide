@@ -5,6 +5,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { safePath as safePathUtil } from "../utils/safePath.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
+import { searchContextSymbols } from "../chat/contextSymbols.js";
 import { findTypeScriptReferences, getTypeScriptLanguageServiceMetrics } from "../utils/typescriptLanguageService.js";
 import { findPythonDefinition, findPythonReferences } from "../utils/pythonLanguageService.js";
 import { createDirectoryZipStream } from "../utils/zipStream.js";
@@ -33,6 +34,8 @@ import {
 export const filesRouter = Router();
 
 const MAX_DIFF_SOURCE_BYTES = 2 * 1024 * 1024;
+const UPLOAD_WORKSPACE_CHANGED_DETAIL =
+  "Workspace changed during upload. Return to the original workspace and select the folder again.";
 
 interface DiffSource {
   content: string;
@@ -99,6 +102,40 @@ function createUploadMiddleware() {
 
 function getWorkspace(req: Request): string {
   return ((req as any).userSession as UserSession).workspaceDir;
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function getPinnedUploadWorkspace(req: Request): string {
+  const workspaceDir = (req as any).uploadWorkspaceDir;
+  if (typeof workspaceDir !== "string" || !workspaceDir) {
+    return getWorkspace(req);
+  }
+  return workspaceDir;
+}
+
+function validatePinnedUploadWorkspace(req: Request, res: any): boolean {
+  const workspaceDir = getPinnedUploadWorkspace(req);
+  if (!sameWorkspace(getWorkspace(req), workspaceDir)) {
+    res.status(409).json({
+      detail: UPLOAD_WORKSPACE_CHANGED_DETAIL,
+      code: "UPLOAD_WORKSPACE_CHANGED",
+    });
+    return false;
+  }
+
+  const expectedWorkspaceDir = getFormFieldValues(req.body?.expectedWorkspaceDir)[0];
+  if (expectedWorkspaceDir && !sameWorkspace(expectedWorkspaceDir, workspaceDir)) {
+    res.status(409).json({
+      detail: UPLOAD_WORKSPACE_CHANGED_DETAIL,
+      code: "UPLOAD_WORKSPACE_CHANGED",
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function requireWorkspaceWrite(req: Request, res: any): boolean {
@@ -593,6 +630,19 @@ filesRouter.get("/read", (req, res) => {
 });
 
 // GET /definition?symbol=xxx&currentPath=yyy
+filesRouter.get("/context-symbols", async (req, res) => {
+  const workspaceDir = getWorkspace(req);
+  if (req.query.expectedWorkspaceDir !== workspaceDir) return res.status(409).json({ detail: "Workspace changed; search symbols again" });
+  const query = typeof req.query.query === "string" ? req.query.query : "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  const closed = () => { if (!res.writableEnded) controller.abort(); };
+  res.on("close", closed);
+  try { return res.json({ workspaceDir, ...(await searchContextSymbols(workspaceDir, query, controller.signal)) }); }
+  catch (error) { if (!res.writableEnded) return res.status(controller.signal.aborted ? 408 : 500).json({ detail: controller.signal.aborted ? "Symbol search timed out; use a narrower name" : error instanceof Error ? error.message : "Symbol search failed" }); }
+  finally { clearTimeout(timeout); res.off("close", closed); }
+});
+
 filesRouter.get("/definition", async (req, res) => {
   const symbol = typeof req.query.symbol === "string" ? req.query.symbol.trim() : "";
   const currentPath =
@@ -855,6 +905,7 @@ filesRouter.post("/move", (req, res) => {
 // POST /upload multipart/form-data { targetPath, overwrite, files[], paths[] }
 filesRouter.post("/upload", (req, res, next) => {
   if (!requireWorkspaceWrite(req, res)) return;
+  (req as any).uploadWorkspaceDir = getWorkspace(req);
 
   createUploadMiddleware().array("files")(req, res, (error) => {
     if (error) {
@@ -866,6 +917,8 @@ filesRouter.post("/upload", (req, res, next) => {
           : "Upload failed";
       return res.status(400).json({ detail: message });
     }
+    if (!validatePinnedUploadWorkspace(req, res)) return;
+    if (!requireWorkspaceWrite(req, res)) return;
     next();
   });
 }, (req, res) => {
@@ -885,7 +938,7 @@ filesRouter.post("/upload", (req, res, next) => {
 
   try {
     const session = (req as any).userSession as UserSession;
-    const workspaceDir = getWorkspace(req);
+    const workspaceDir = getPinnedUploadWorkspace(req);
     const prepared = files.map((file, index) => {
       const relPath = joinUploadTarget(
         targetPath,

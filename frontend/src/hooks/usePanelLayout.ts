@@ -14,6 +14,7 @@ export interface PanelLayoutOptions {
   isLeftDockOpen: boolean;
   runDetailsVisible: boolean;
   editorAssistantVisible: boolean;
+  webPreviewVisible?: boolean;
   mainLayoutRef: React.RefObject<HTMLDivElement | null>;
 }
 
@@ -49,6 +50,7 @@ export function usePanelLayout(options: PanelLayoutOptions): PanelLayoutReturn {
     isLeftDockOpen,
     runDetailsVisible,
     editorAssistantVisible,
+    webPreviewVisible = false,
     mainLayoutRef,
   } = options;
 
@@ -75,7 +77,13 @@ export function usePanelLayout(options: PanelLayoutOptions): PanelLayoutReturn {
   const responsiveDefaultAssistantWidth = isLaptopOrCompact ? Math.min(assistantWidth, 340) : assistantWidth;
 
   const dockedRightWidth = viewportWidth > 1180
-    ? runDetailsVisible ? (isLaptopOrCompact ? 340 : 400) : editorAssistantVisible ? responsiveDefaultAssistantWidth : 0
+    ? webPreviewVisible
+      ? Math.max(400, responsiveDefaultAssistantWidth)
+      : runDetailsVisible
+        ? (isLaptopOrCompact ? 340 : 400)
+        : editorAssistantVisible
+          ? responsiveDefaultAssistantWidth
+          : 0
     : 0;
 
   // 黄金编辑区保底空间：大屏保留 520px，中屏保留 460px，紧凑模式保留至少 360px

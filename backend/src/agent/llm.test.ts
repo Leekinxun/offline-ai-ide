@@ -74,3 +74,25 @@ test("falls back to a regular JSON completion response", async () => {
   const result = await readChatCompletionResponse(response);
   assert.equal(result.choices[0].message.content, "ok");
 });
+
+test("JSON compatibility responses expose only provider-supplied reasoning as reasoning", async () => {
+  const reasoning: string[] = [];
+  await readChatCompletionResponse(Response.json({ choices: [{ message: { role: "assistant", content: "I will inspect a file", reasoning_content: "Actual provider reasoning" }, finish_reason: "stop" }] }), { onReasoningDelta: (value) => reasoning.push(value) });
+  assert.deepEqual(reasoning, ["Actual provider reasoning"]);
+  await readChatCompletionResponse(Response.json({ choices: [{ message: { role: "assistant", content: "Ordinary reply" }, finish_reason: "stop" }] }), { onReasoningDelta: (value) => reasoning.push(value) });
+  assert.deepEqual(reasoning, ["Actual provider reasoning"], "ordinary content must not be fabricated into reasoning");
+});
+
+test("reasoning deltas reach consumers before the SSE response finishes", async () => {
+  let writer!: ReadableStreamDefaultController<Uint8Array>;
+  const reasoning: string[] = []; let completed = false;
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { writer = controller; } });
+  const pending = readChatCompletionResponse(new Response(stream, { headers: { "content-type": "text/event-stream" } }), { onReasoningDelta: (value) => reasoning.push(value) }).then((value) => { completed = true; return value; });
+  writer.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"visible now"}}]}\n\n'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasoning, ["visible now"]);
+  assert.equal(completed, false);
+  writer.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"final"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+  writer.close();
+  assert.equal((await pending).choices[0].message.content, "final");
+});

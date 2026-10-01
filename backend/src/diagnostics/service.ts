@@ -20,6 +20,8 @@ export interface DiagnosticsResult {
   startedAt: number;
   durationMs: number;
   session: DiagnosticsSessionState;
+  /** Present only when the bounded workspace snapshot stayed stable during checks. */
+  workspaceVersion?: string;
 }
 
 export interface DiagnosticsSessionState {
@@ -133,7 +135,7 @@ export async function checkPythonDocument(
 
   const result = await run(
     executable,
-    ["check", "--output-format=json", "--stdin-filename", absolute, "-"],
+    ["check", "--no-cache", "--output-format=json", "--stdin-filename", absolute, "-"],
     root,
     content
   );
@@ -166,7 +168,7 @@ export async function formatPythonDocument(
     throw new DocumentFormatError("Ruff formatting supports Python files only", "UNSUPPORTED_FILE");
   }
 
-  const result = await run(executable, ["format", "--stdin-filename", absolute, "-"], root, content);
+  const result = await run(executable, ["format", "--no-cache", "--stdin-filename", absolute, "-"], root, content);
   if (result.missing) {
     throw new DocumentFormatError("Ruff formatter is not installed", "RUFF_MISSING");
   }
@@ -259,7 +261,7 @@ function hasPythonFiles(directory: string, depth = 0): boolean {
   if (depth > 4) return false;
   try {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if ([".git", ".checkpoints", "node_modules", "dist", "build", "target"].includes(entry.name)) continue;
+      if ([".git", ".checkpoints", "node_modules", "dist", "build", "target", ".pytest_cache", ".ruff_cache", "__pycache__"].includes(entry.name)) continue;
       if (entry.isFile() && entry.name.endsWith(".py")) return true;
       if (entry.isDirectory() && hasPythonFiles(path.join(directory, entry.name), depth + 1)) return true;
     }
@@ -281,6 +283,7 @@ export function getDiagnostics(workspaceDir: string): DiagnosticsResult {
 
 async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResult> {
   const startedAt = Date.now();
+  const beforeVersion = getDiagnosticsWorkspaceVersion(workspaceDir);
   const diagnostics: WorkspaceDiagnostic[] = [];
   const tools: string[] = [];
   const session = sessions.get(workspaceDir);
@@ -293,7 +296,7 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
     tools.push("typescript");
   }
   if (hasPythonFiles(workspaceDir)) {
-    const result = await run("ruff", ["check", "--output-format=json", "."], workspaceDir);
+    const result = await run("ruff", ["check", "--no-cache", "--output-format=json", "."], workspaceDir);
     if (!result.missing) {
       diagnostics.push(...parseRuff(workspaceDir, result.stdout));
       tools.push("ruff");
@@ -316,7 +319,8 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
       error: undefined,
     };
   }
-  const next = { diagnostics: diagnostics.slice(0, 2_000), tools, startedAt, durationMs: Date.now() - startedAt, session: { ...(session?.state || stoppedState()) } };
+  const afterVersion = getDiagnosticsWorkspaceVersion(workspaceDir);
+  const next = { diagnostics: diagnostics.slice(0, 2_000), tools, startedAt, durationMs: Date.now() - startedAt, session: { ...(session?.state || stoppedState()) }, ...(beforeVersion && beforeVersion === afterVersion ? { workspaceVersion: afterVersion } : {}) };
   resultCache.set(workspaceDir, next);
   return next;
 }
@@ -336,33 +340,43 @@ export function runDiagnostics(workspaceDir: string): Promise<DiagnosticsResult>
 }
 
 const WATCH_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".json", ".toml"]);
-const WATCH_IGNORED = new Set([".git", ".checkpoints", "node_modules", "dist", "build", "target", ".venv"]);
+const WATCH_IGNORED = new Set([".git", ".history", ".checkpoints", ".team", ".tasks", ".codex", ".omx", ".crewforge", ".transcripts", "node_modules", "dist", "build", "target", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"]);
 
 function workspaceSignature(workspaceDir: string): string {
   let count = 0;
+  let visited = 0;
+  let incomplete = false;
   let fingerprint = 2166136261;
   const visit = (directory: string, depth: number) => {
-    if (depth > 10 || count >= 5_000) return;
+    if (depth > 10 || count >= 5_000 || visited >= 10_000) { incomplete = true; return; }
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { incomplete = true; return; }
     for (const entry of entries) {
-      if (count >= 5_000 || WATCH_IGNORED.has(entry.name)) break;
+      if (count >= 5_000 || ++visited >= 10_000) { incomplete = true; break; }
+      if (WATCH_IGNORED.has(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) { visit(full, depth + 1); continue; }
-      if (!entry.isFile() || !WATCH_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      if (!entry.isFile()) continue;
+      const extension = path.extname(entry.name).toLowerCase();
+      if (!WATCH_EXTENSIONS.has(extension) || extension === ".pyc" || extension === ".pyo") continue;
       try {
         const stat = fs.statSync(full);
-        const value = `${path.relative(workspaceDir, full)}:${stat.mtimeMs}:${stat.size}`;
+        const value = `${path.relative(workspaceDir, full)}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
         for (let index = 0; index < value.length; index += 1) {
           fingerprint ^= value.charCodeAt(index);
           fingerprint = Math.imul(fingerprint, 16777619);
         }
         count += 1;
-      } catch { /* file changed while scanning */ }
+      } catch { incomplete = true; }
     }
   };
   visit(workspaceDir, 0);
-  return `${count}:${fingerprint >>> 0}`;
+  return `${incomplete ? "incomplete:" : ""}${count}:${fingerprint >>> 0}`;
+}
+
+export function getDiagnosticsWorkspaceVersion(workspaceDir: string): string | undefined {
+  const signature = workspaceSignature(workspaceDir);
+  return signature.startsWith("incomplete:") ? undefined : signature;
 }
 
 export async function startDiagnosticsSession(workspaceDir: string): Promise<DiagnosticsResult> {

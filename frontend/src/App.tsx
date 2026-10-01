@@ -23,6 +23,10 @@ import type { CommandPaletteMode } from "./components/CommandPalette";
 import { useModalDialogFocus } from "./components/useModalDialogFocus";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
+import { useEditorDiagnosticFeedback } from "./hooks/useEditorDiagnosticFeedback";
+import { useRunChanges } from "./hooks/useRunChanges";
+import type { RunReviewComment } from "./components/RunChangesReview";
+import type { ContextReference } from "./types";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
@@ -414,7 +418,9 @@ function AuthenticatedApp({
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
   const [workspaceSearchScope, setWorkspaceSearchScope] = useState("");
-  const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number } | null>(null);
+  const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number; runId?: string } | null>(null);
+  const [webPreviewVisible, setWebPreviewVisible] = useState(false);
+  const [confirmWorkspaceSwitch, setConfirmWorkspaceSwitch] = useState(false);
   const [breakpointsByPath, setBreakpointsByPath] = useState<Record<string, number[]>>({});
   const [debugStartRequest, setDebugStartRequest] = useState<{ id: number; path: string } | null>(null);
   const [debugActiveFrame, setDebugActiveFrame] = useState<DebugFrame | null>(null);
@@ -636,6 +642,7 @@ function AuthenticatedApp({
     isLeftDockOpen,
     runDetailsVisible,
     editorAssistantVisible,
+    webPreviewVisible,
     mainLayoutRef,
   });
 
@@ -676,6 +683,7 @@ function AuthenticatedApp({
     editorViewStatesRef.current = {};
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
+    setWebPreviewVisible(false);
     loadTree();
   }, [loadTree, workspaceDir]);
 
@@ -704,6 +712,8 @@ function AuthenticatedApp({
     chatAttachmentDraft,
     chatDraftText,
     setChatDraftText,
+    contextReferences,
+    setContextReferences,
     attachmentSubmissionError,
     attachmentSubmissionNotice,
     pendingAttachmentVerificationIds,
@@ -741,6 +751,85 @@ function AuthenticatedApp({
     setRunDetailsVisible,
     setEditorAssistantVisible,
   });
+
+  useEditorDiagnosticFeedback({ token, workspaceDir, file: activeFile, problems: editorProblems.problems, enabled: !readOnlyWorkspace });
+  const changeReviewRunning = chat.runState?.status === "running" || chat.runState?.status === "queued";
+  const editorChanges = useRunChanges({
+    token,
+    workspaceDir,
+    runId: workspaceView === "files" && activeFile && chat.runState?.mode === "code" ? chat.runState.runId : undefined,
+    running: changeReviewRunning,
+    refreshKey: `${chat.runState?.status}:${chat.runState?.events.length || 0}`,
+    onChanged: () => void handleWorkspaceRestored(),
+  });
+  useEffect(() => {
+    editorChanges.setSelectedPath(
+      activeFilePath && editorChanges.changes?.files.some((file) => file.path === activeFilePath)
+        ? activeFilePath
+        : null
+    );
+  }, [activeFilePath, editorChanges.changes?.revision, editorChanges.setSelectedPath]);
+
+  const handleReviewComment = useCallback(
+    (comment: RunReviewComment) => {
+      const reference = `${comment.path}:${comment.startLine}-${comment.endLine} (${comment.side || "modified"}, revision ${comment.revision})`;
+      setChatDraftText((current) => [current.trim(), `${reference}\n${comment.text}`].filter(Boolean).join("\n\n"));
+      setContextReferences((current) =>
+        current.some((item) => item.kind === "file" && item.path === comment.path)
+          ? current
+          : [...current, { kind: "file" as const, path: comment.path }].slice(-16)
+      );
+      if (workspaceView === "files") {
+        setRunDetailsVisible(false);
+        setEditorAssistantVisible(true);
+      } else {
+        setChatVisible(true);
+      }
+    },
+    [workspaceView, setChatDraftText, setContextReferences, setEditorAssistantVisible, setRunDetailsVisible, setChatVisible]
+  );
+
+  const handleUndoLastTurn = useCallback(async () => {
+    const users = chat.messages.filter((message) => message.role === "user" && message.requestId);
+    const last = users[users.length - 1];
+    const runId = chat.runState?.runId;
+    const conversationId = chat.currentConversationId;
+    if (chat.isStreaming || readOnlyWorkspace || !last?.requestId || !runId || !conversationId) {
+      throw new Error(t("undoTurn.unavailable"));
+    }
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "X-Workspace-Dir": encodeURIComponent(workspaceDir),
+    };
+    const response = await fetch(
+      `/api/chat/runs/${encodeURIComponent(runId)}/changes?requestId=${encodeURIComponent(last.requestId)}`,
+      { headers }
+    );
+    const evidence = await response.json();
+    if (!response.ok || !evidence.files?.length || evidence.unavailableReason) {
+      throw new Error(evidence.error || t("undoTurn.unavailable"));
+    }
+    const reverted = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/revert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        requestId: last.requestId,
+        expectedRevision: evidence.revision,
+        expectedWorkspace: workspaceDir,
+        forkBeforeRequest: true,
+      }),
+    });
+    const payload = await reverted.json();
+    await handleWorkspaceRestored();
+    if (!reverted.ok) throw new Error(payload.error || t("undoTurn.failed"));
+    if (!payload.conversation?.id) throw new Error(t("undoTurn.failed"));
+    if (chat.currentConversationId === conversationId) {
+      await chat.loadConversation(payload.conversation.id);
+      showToast(t("undoTurn.done"));
+    }
+    await chat.refreshConversations();
+  }, [chat, handleWorkspaceRestored, readOnlyWorkspace, showToast, t, token, workspaceDir]);
 
 
   const getConflictSourceMessage = useCallback(
@@ -1053,8 +1142,8 @@ function AuthenticatedApp({
   }, [activeFilePath, fs, openFiles, showToast, t]);
 
 
-  const handleOpenGitDiff = useCallback((path: string) => {
-    setGitDiffRequest((current) => ({ path, id: (current?.id || 0) + 1 }));
+  const handleOpenGitDiff = useCallback((path: string, runId?: string) => {
+    setGitDiffRequest((current) => ({ path, runId, id: (current?.id || 0) + 1 }));
     toggleUtilityPanel("git", true);
   }, [toggleUtilityPanel]);
 
@@ -1098,9 +1187,10 @@ function AuthenticatedApp({
     [loadTree, onChangeWorkspace, showToast, t]
   );
 
-  const handlePickDesktopWorkspace = useCallback(async () => {
+  const handlePickDesktopWorkspace = useCallback(async (confirmed = false) => {
     if (pickingWorkspaceRef.current) return;
-    if (openFiles.some((file) => file.modified) && !window.confirm(t("app.unsavedWorkspaceSwitch"))) {
+    if (!confirmed && openFiles.some((file) => file.modified)) {
+      setConfirmWorkspaceSwitch(true);
       return;
     }
     pickingWorkspaceRef.current = true;
@@ -1334,7 +1424,7 @@ function AuthenticatedApp({
       {/* Main Layout */}
       <div
         ref={mainLayoutRef}
-        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && editorAssistantVisible && !runDetailsVisible ? " with-editor-assistant" : ""}`}
+        className={`main-layout workbench-view-${workspaceView}${runDetailsVisible ? " with-run-details" : ""}${workspaceView === "files" && (editorAssistantVisible || webPreviewVisible) && !runDetailsVisible ? " with-editor-assistant" : ""}`}
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,
@@ -1354,6 +1444,7 @@ function AuthenticatedApp({
           workspaceView={workspaceView}
           sidebarVisible={sidebarVisible}
           gitVisible={gitVisible}
+          webPreviewVisible={webPreviewVisible}
           agentsVisible={agentsVisible}
           teamVisible={teamVisible}
           checkpointsVisible={checkpointsVisible}
@@ -1366,6 +1457,15 @@ function AuthenticatedApp({
           compactWorkspace={compactWorkspace}
           onFocusChat={focusChat}
           onToggleExplorer={toggleExplorerPanel}
+          onToggleWebPreview={() => {
+            const opening = workspaceView !== "files" || !webPreviewVisible;
+            setWebPreviewVisible(opening);
+            if (opening) {
+              setWorkspaceView("files");
+              setRunDetailsVisible(false);
+              setEditorAssistantVisible(false);
+            }
+          }}
           onOpenWorkspaceSearch={() => {
             setWorkspaceSearchScope("");
             setWorkspaceSearchVisible(true);
@@ -1567,6 +1667,10 @@ function AuthenticatedApp({
 
         <ChatPanel
           token={token}
+          workspaceDir={workspaceDir}
+          referenceFiles={fileTree}
+          contextReferences={contextReferences}
+          onContextReferencesChange={setContextReferences}
           isolatedWindow={isolatedWindow}
           messages={chat.messages}
           currentConversationId={chat.currentConversationId}
@@ -1616,6 +1720,10 @@ function AuthenticatedApp({
           historyError={chat.historyError}
           selectionInfo={selectionInfo}
           activeFileName={activeFile?.name || null}
+          theme={theme}
+          onReviewComment={handleReviewComment}
+          onChangesApplied={() => void handleWorkspaceRestored()}
+          onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
           onSend={handleChatSend}
           onSteer={handleChatSteer}
           onStop={chat.stopCurrentRun}
@@ -1685,7 +1793,7 @@ function AuthenticatedApp({
           onClose={() => setTerminalVisible(false)}
         />
       </div>
-        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible) && (
+        {workspaceView === "files" && (editorAssistantVisible || runDetailsVisible || webPreviewVisible) && (
           <div
             className={`resize-handle assistant-resize-handle${draggingPanel === "assistant" ? " dragging" : ""}`}
             role="separator"
@@ -1703,8 +1811,10 @@ function AuthenticatedApp({
           workspaceView={workspaceView}
           editorAssistantVisible={editorAssistantVisible}
           runDetailsVisible={runDetailsVisible}
+          webPreviewVisible={webPreviewVisible}
           setEditorAssistantVisible={setEditorAssistantVisible}
           setRunDetailsVisible={setRunDetailsVisible}
+          setWebPreviewVisible={setWebPreviewVisible}
           runDetailsTab={runDetailsTab}
           setRunDetailsTab={setRunDetailsTab}
           token={token}
@@ -1727,6 +1837,15 @@ function AuthenticatedApp({
           onSend={handleChatSend}
           onSteer={handleChatSteer}
           onNewConversation={clearChatConversation}
+          contextReferences={contextReferences}
+          onContextReferencesChange={setContextReferences}
+          onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
+          onReviewComment={handleReviewComment}
+          onChangesApplied={() => void handleWorkspaceRestored()}
+          onNavigateToLocation={handleNavigateToLocation}
+          theme={theme}
+          selectionInfo={selectionInfo}
+          fileTree={fileTree}
         />
       </div>
 
@@ -1805,7 +1924,14 @@ function AuthenticatedApp({
             : undefined
         }
         confirmIntent={
-          claimSaveConfirmation
+          confirmWorkspaceSwitch
+            ? {
+                id: "switch-workspace",
+                title: t("sidebar.openFolder"),
+                description: t("app.unsavedWorkspaceSwitch"),
+                tone: "danger",
+              }
+            : claimSaveConfirmation
             ? {
                 id: `claim-save:${claimSaveConfirmation.file.path}:${claimSaveConfirmation.username}`,
                 title: t("team.confirmAction"),
@@ -1817,14 +1943,25 @@ function AuthenticatedApp({
               }
             : null
         }
-        confirmBusy={claimSaveBusy}
-        confirmError={claimSaveError}
+        confirmBusy={confirmWorkspaceSwitch ? pickingWorkspace : claimSaveBusy}
+        confirmError={confirmWorkspaceSwitch ? null : claimSaveError}
         onCloseConfirm={() => {
-          setClaimSaveConfirmation(null);
-          setClaimSaveError(null);
-          showToast(t("team.claimConflictCancelled"));
+          if (confirmWorkspaceSwitch) {
+            setConfirmWorkspaceSwitch(false);
+          } else if (claimSaveConfirmation) {
+            setClaimSaveConfirmation(null);
+            setClaimSaveError(null);
+            showToast(t("team.claimConflictCancelled"));
+          }
         }}
-        onConfirmAction={() => forceSaveClaimedFile()}
+        onConfirmAction={() => {
+          if (confirmWorkspaceSwitch) {
+            setConfirmWorkspaceSwitch(false);
+            void handlePickDesktopWorkspace(true);
+          } else if (claimSaveConfirmation) {
+            void forceSaveClaimedFile();
+          }
+        }}
         commandPaletteVisible={commandPaletteVisible}
         commandPaletteMode={commandPaletteMode}
         fileTree={fileTree}

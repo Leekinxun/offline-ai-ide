@@ -51,6 +51,27 @@ function safeJson(filePath: string): any {
   try { return JSON.parse(fs.readFileSync(filePath, "utf-8")); } catch { return null; }
 }
 
+function hasPythonFiles(directory: string, depth = 0): boolean {
+  if (depth > 6) return false;
+  try {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if ([".git", ".history", ".checkpoints", ".team", ".codex", ".omx", ".crewforge", "node_modules", "dist", "build", "target", ".pytest_cache", ".ruff_cache", "__pycache__"].includes(entry.name) || entry.isSymbolicLink()) continue;
+      if (entry.isFile() && entry.name.endsWith(".py")) return true;
+      if (entry.isDirectory() && hasPythonFiles(path.join(directory, entry.name), depth + 1)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function hasDirectPythonTests(directory: string): boolean {
+  try {
+    if (fs.lstatSync(directory).isSymbolicLink()) return false;
+    return fs.readdirSync(directory, { withFileTypes: true }).some((entry) => entry.isFile() && /^test.*\.py$/.test(entry.name));
+  } catch { return false; }
+}
+
 export function discoverRunTasks(workspaceDir: string): RunTask[] {
   const tasks: RunTask[] = [];
   const packageJson = safeJson(path.join(workspaceDir, "package.json"));
@@ -68,10 +89,15 @@ export function discoverRunTasks(workspaceDir: string): RunTask[] {
     );
   }
   const pythonConfig = ["pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"].some((name) => fs.existsSync(path.join(workspaceDir, name)));
-  if (pythonConfig) {
+  const pythonFiles = pythonConfig || hasPythonFiles(workspaceDir);
+  if (pythonFiles) {
     const python = process.platform === "win32" ? "python" : "python3";
-    tasks.push({ id: "python:pytest", label: "pytest", kind: "test", source: "Python", command: python, args: ["-m", "pytest"] });
-    tasks.push({ id: "python:compile", label: "Python compile check", kind: "check", source: "Python", command: python, args: ["-m", "compileall", "-q", "."] });
+    if (pythonConfig) tasks.push({ id: "python:pytest", label: "pytest", kind: "test", source: "Python", command: python, args: ["-B", "-m", "pytest"] });
+    // A tests folder need not be an importable package. Explicit -s avoids a
+    // misleading zero-test discovery for the common lightweight layout.
+    const testRoot = !hasDirectPythonTests(workspaceDir) && hasDirectPythonTests(path.join(workspaceDir, "tests")) ? "tests" : undefined;
+    tasks.push({ id: "python:unittest", label: "unittest discover", kind: "test", source: "Python", command: python, args: ["-B", "-m", "unittest", "discover", ...(testRoot ? ["-s", testRoot] : [])] });
+    if (pythonConfig) tasks.push({ id: "python:compile", label: "Python compile check", kind: "check", source: "Python", command: python, args: ["-m", "compileall", "-q", "."] });
   }
   return tasks.slice(0, 100);
 }

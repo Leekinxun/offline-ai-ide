@@ -1,0 +1,59 @@
+.editor-change-review-added-line {
+  background: color-mix(in srgb, #2da44e 13%, transparent);
+}
+.editor-change-review-added-gutter { border-left: 3px solid #2da44e; margin-left: 3px; }
+.editor-change-review-zone-host {
+  box-sizing: border-box;
+  overflow: hidden;
+  /* Monaco places its full-size view-lines hit target after view zones.
+     Raise this interactive zone above that transparent sibling so real
+     pointer input reaches the review controls. */
+  z-index: 1;
+}
+.editor-change-review-zone { height: 100%; color: var(--text-primary); font: 11px/1.4 var(--font-sans); }
+.editor-change-review-toolbar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 30px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+}
+.editor-change-review-toolbar > span { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.editor-change-review-actions { display: flex; gap: 5px; flex-shrink: 1; min-width: 0; max-width: 100%; overflow-x: auto; }
+.editor-change-review-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 23px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--surface-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.editor-change-review-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.editor-change-review-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.editor-change-review-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-change-review-deleted {
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 3px solid #cf4049;
+  background: color-mix(in srgb, #cf4049 11%, var(--surface-panel-strong));
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 2;
+}
+.editor-change-review-more { display: block; height: 20px; padding: 1px 8px; color: var(--text-secondary); background: var(--surface-panel); }
+.editor-change-review-error { position: absolute; z-index: 25; bottom: 12px; left: 12px; max-width: calc(100% - 24px); padding: 8px 12px; border: 1px solid var(--border-light); border-radius: 5px; background: var(--surface-panel-strong); color: var(--status-danger-fg, var(--text-primary)); font: 12px/1.5 var(--font-sans); }

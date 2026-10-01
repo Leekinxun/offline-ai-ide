@@ -115,6 +115,40 @@ test("shared run decisions are first-wins and mobile cannot approve high-risk ac
   assert.equal(getActiveRun(workspaceDir, "conversation-1")?.status, "stopping");
 });
 
+test("bulk approval acknowledgements contain the authoritative remaining approvals for one run", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-bulk-approval-"));
+  const session = sessionFor(workspaceDir);
+  const recorder = new AgentRunRecorder(workspaceDir, "run-bulk", "conversation-bulk", "code");
+  const run = createActiveRun({ session, recorder, queueSteering: async () => ({ ok: true, code: "accepted" }) });
+  const events: Array<Extract<import("../agent/types.js").WsServerMessage, { type: "tool_approval_all_result" }>> = [];
+  const unsubscribe = subscribeRunEvents(workspaceDir, (event) => {
+    if (event.payload.type === "tool_approval_all_result") events.push(event.payload);
+  });
+  t.after(() => { run.finish(); unsubscribe(); fs.rmSync(workspaceDir, { recursive: true, force: true }); });
+  const base = { conversationId: "conversation-bulk", requestId: "request", toolCallId: "write", name: "write_file", input: { path: "src/a.ts" } as Record<string, unknown>, risk: "medium" as const, reason: "action", scope: "action", canAllowSession: true };
+  const write = run.approvals.request(base);
+  const pending = [
+    run.approvals.request({ ...base, toolCallId: "high", name: "bash", input: { command: "npm test" }, risk: "high" }),
+    run.approvals.request({ ...base, toolCallId: "plan", name: "submit_plan", canAllowSession: false }),
+    run.approvals.request({ ...base, toolCallId: "network", name: "bash", input: { command: "curl https://example.test", allow_network: true } }),
+  ];
+  const command = { source: "web" as const, type: "tool_approval_all" as const, conversationId: "conversation-bulk", runId: "run-bulk" };
+  assert.equal((await dispatchRunCommand({ ...session, username: "someone-else" }, command)).code, "forbidden");
+  assert.equal((await dispatchRunCommand(session, { ...command, runId: "older-run" })).code, "conflict");
+  assert.equal((await dispatchRunCommand(session, { ...command, source: "mobile" })).code, "forbidden");
+  assert.equal(events.length, 0); assert.equal(run.approvals.pendingCount(), 4);
+  const result = await dispatchRunCommand(session, command);
+  assert.equal(result.ok, true); assert.equal(result.resolvedCount, 1);
+  assert.equal(await write, "allow_once");
+  assert.deepEqual(result.pendingApprovals?.map((item) => item.toolCallId), ["high", "plan", "network"]);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].conversationId, "conversation-bulk"); assert.equal(events[0].runId, "run-bulk");
+  assert.equal(events[0].resolvedCount, 1); assert.ok(events[0].eventSequence);
+  assert.deepEqual(events[0].pendingApprovals, result.pendingApprovals);
+  assert.equal((await dispatchRunCommand(session, command)).resolvedCount, 0);
+  run.approvals.cancelAll(); await Promise.all(pending);
+});
+
 test("role downgrade blocks both shared commands and chat WebSocket mutations", async (t) => {
   const outer = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-run-role-"));
   const workspaceDir = path.join(outer, "workspace");

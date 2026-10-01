@@ -4,6 +4,7 @@ import { ContextState, ConversationSummary } from "../types";
 import { useI18n } from "../i18n";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import "./TaskSidebar.css";
+import type { ConversationActivity } from "../utils/chatScope";
 
 interface TaskSidebarProps {
   workspaceLabel: string;
@@ -14,6 +15,7 @@ interface TaskSidebarProps {
   loading: boolean;
   loadingId: string | null;
   isStreaming: boolean;
+  activity?: Record<string, ConversationActivity>;
   onNewTask: () => void;
   onLoadConversation: (conversationId: string) => Promise<void> | void;
   onDeleteConversation: (conversationId: string) => Promise<void> | void;
@@ -47,7 +49,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
   currentConversationId,
   loading,
   loadingId,
-  isStreaming,
+  activity = {},
   onNewTask,
   onLoadConversation,
   onDeleteConversation,
@@ -72,7 +74,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
     conversation: ConversationSummary,
     title: string
   ) => {
-    if (isStreaming || deletingId) return;
+    if (conversation.status === "running" || activity[conversation.id]?.running || deletingId) return;
     setDeleteError(null);
     setPendingDelete(conversation);
     setConfirmIntent({ id: `delete:${conversation.id}`, title: t("chat.deleteConversation"), description: t("chat.deleteConversationConfirm", { title }), confirmLabel: t("chat.deleteConversation"), tone: "danger" });
@@ -115,7 +117,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
       </header>
 
       <div className="task-sidebar-toolbar">
-        <button type="button" className="task-new-button" onClick={onNewTask} disabled={isStreaming}>
+        <button type="button" className="task-new-button" onClick={onNewTask}>
           <Plus size={15} />
           <span>{t("workbench.newTask")}</span>
           <kbd>⌘ N</kbd>
@@ -150,18 +152,18 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
                   type="button"
                   className="task-list-item-main"
                   onClick={() => void onLoadConversation(conversation.id)}
-                  disabled={isStreaming || busy}
+                  disabled={busy}
                   aria-current={conversation.id === currentConversationId ? "page" : undefined}
                 >
                   <span className="task-list-item-title">
-                    <strong>{title}</strong>
+                    <strong>{activity[conversation.id]?.unread && <><span aria-hidden="true">● </span><span className="sr-only">{t("background.unread")} </span></>}{title}</strong>
                     <time>{formatRelativeTime(conversation.updatedAt, locale)}</time>
                   </span>
                   <span className="task-list-item-preview">
                     {conversation.preview || t("chat.messageCount", { count: conversation.messageCount })}
                   </span>
                   <span className="task-list-item-meta">
-                    {t(`chat.taskStatus.${conversation.status || "completed"}`)}
+                    {activity[conversation.id]?.waiting ? t("background.waiting") : t(`chat.taskStatus.${conversation.status || "completed"}`)}
                     {conversation.summary?.changedFiles.length
                       ? ` · ${t("chat.summaryFiles", { count: conversation.summary.changedFiles.length })}`
                       : ` · ${t("chat.messageCount", { count: conversation.messageCount })}`}
@@ -171,7 +173,7 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
                   type="button"
                   className="task-list-item-delete"
                   onClick={() => handleDeleteConversation(conversation, title)}
-                  disabled={isStreaming || Boolean(deletingId)}
+                  disabled={conversation.status === "running" || activity[conversation.id]?.running || Boolean(deletingId)}
                   title={t("chat.deleteConversation")}
                   aria-label={t("chat.deleteConversationNamed", { title })}
                 >

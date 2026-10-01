@@ -14,6 +14,7 @@ import {
   SelectionInfo,
   ChatAttachmentRef,
   FileSelectionRange,
+  ContextReference,
   getLanguage,
 } from "../types";
 import {
@@ -184,6 +185,7 @@ export function useWorkbenchChat({
 
   const chatAttachmentDraft = useChatAttachmentDraft(token);
   const [chatDraftText, setChatDraftText] = useState("");
+  const [contextReferences, setContextReferences] = useState<ContextReference[]>([]);
   const [attachmentSubmissionError, setAttachmentSubmissionError] = useState<string | null>(null);
   const [attachmentSubmissionNotice, setAttachmentSubmissionNotice] = useState<string | null>(null);
   const [pendingAttachmentVerificationIds, setPendingAttachmentVerificationIds] = useState<Set<string>>(() => new Set());
@@ -276,6 +278,7 @@ export function useWorkbenchChat({
   const clearChatConversation = useCallback(() => {
     chatAttachmentDraft.clear();
     setChatDraftText("");
+    setContextReferences([]);
     setAttachmentSubmissionError(null);
     setAttachmentSubmissionNotice(null);
     setPendingAttachmentVerificationIds(new Set());
@@ -310,6 +313,7 @@ export function useWorkbenchChat({
   useEffect(() => {
     chatAttachmentDraft.clear();
     setChatDraftText("");
+    setContextReferences([]);
     setAttachmentSubmissionError(null);
     setAttachmentSubmissionNotice(null);
     setPendingAttachmentVerificationIds(new Set());
@@ -366,7 +370,7 @@ export function useWorkbenchChat({
   );
 
   const handleChatSend = useCallback(
-    (message: string) => {
+    (message: string, references: ContextReference[] = contextReferences) => {
       if (chatAttachmentDraft.blocked || attachmentWarning) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
@@ -387,7 +391,14 @@ export function useWorkbenchChat({
         && chatAttachmentDraft.readyRefs.every((attachment: ChatAttachmentRef, index: number) => attachment.id === matchingAttachmentRetries[0].attachmentIds[index])
         ? matchingAttachmentRetries[0].requestId
         : undefined;
-      const sent = chat.sendMessage(message, context, undefined, chatAttachmentDraft.readyRefs, retryRequestId);
+      const sent = chat.sendMessage(
+        message,
+        context,
+        undefined,
+        chatAttachmentDraft.readyRefs,
+        retryRequestId,
+        references
+      );
       if (sent) {
         if (matchingAttachmentRetries.length) {
           const consumedIds = new Set(matchingAttachmentRetries.map((item) => item.requestId));
@@ -400,11 +411,11 @@ export function useWorkbenchChat({
       }
       return sent;
     },
-    [chat, chatAttachmentDraft, attachmentWarning, matchingAttachmentRetries, openFiles, activeFilePath, selectionInfo]
+    [chat, chatAttachmentDraft, attachmentWarning, matchingAttachmentRetries, openFiles, activeFilePath, selectionInfo, contextReferences]
   );
 
   const handleChatSteer = useCallback(
-    (message: string) => {
+    (message: string, references: ContextReference[] = contextReferences) => {
       if (pendingAttachmentVerificationIds.size > 0) return false;
       const activeFile = openFiles.find((f) => f.path === activeFilePath);
       const context = activeFile
@@ -419,9 +430,9 @@ export function useWorkbenchChat({
               : undefined,
           }
         : undefined;
-      return chat.sendSteering(message, context);
+      return chat.sendSteering(message, context, undefined, references);
     },
-    [chat, pendingAttachmentVerificationIds.size, openFiles, activeFilePath, selectionInfo]
+    [chat, pendingAttachmentVerificationIds.size, openFiles, activeFilePath, selectionInfo, contextReferences]
   );
 
   const handleGitReview = useCallback(() => {
@@ -439,6 +450,8 @@ export function useWorkbenchChat({
     chatAttachmentDraft,
     chatDraftText,
     setChatDraftText,
+    contextReferences,
+    setContextReferences,
     attachmentSubmissionError,
     attachmentSubmissionNotice,
     pendingAttachmentVerificationIds,

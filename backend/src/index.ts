@@ -11,11 +11,18 @@ import { mobilePairingRouter } from "./routes/mobilePairing.js";
 import { mobileDataRouter } from "./routes/mobileData.js";
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
+import { agentQuestionsRouter } from "./routes/agentQuestions.js";
+import { editorDiagnosticsRouter } from "./routes/editorDiagnostics.js";
 import { pluginsRouter } from "./routes/plugins.js";
 import { teamRouter } from "./routes/team.js";
 import { checkpointsRouter } from "./routes/checkpoints.js";
 import { diagnosticsRouter } from "./routes/diagnostics.js";
 import { runRouter } from "./routes/run.js";
+import { runtimeRouter } from "./routes/runtime.js";
+import { processSessionsRouter } from "./routes/processSessions.js";
+import { previewContentRouter, previewsRouter, handlePreviewUpgrade } from "./routes/previews.js";
+import { shutdownProcessSessions, stopProcessSessionsForToken } from "./run/processSessions.js";
+import { shutdownPreviews, stopPreviewsForToken } from "./run/previewService.js";
 import { debugRouter } from "./routes/debug.js";
 import { gitDeliveryRouter } from "./routes/gitDelivery.js";
 import { deliveryRouter, deliveryWebhookRouter } from "./routes/delivery.js";
@@ -31,7 +38,7 @@ import { handleMobileWs } from "./ws/mobile.js";
 import { getMobileSessionFromUpgrade } from "./mobile/pairing.js";
 import { stopRunsForSession } from "./chat/runCoordinator.js";
 import { sessionManager, type UserSession } from "./auth/sessionManager.js";
-import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam } from "./team/sessionBridge.js";
+import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "./team/sessionBridge.js";
 import { reloadExternalPlugins } from "./plugins/registry.js";
 
 const app = express();
@@ -41,6 +48,7 @@ reloadExternalPlugins();
 // credentials are deliberately unavailable to external sites.
 // Signed webhook verification requires the exact bytes received from the provider.
 app.use("/api/delivery/webhooks", deliveryWebhookRouter);
+app.use("/preview", previewContentRouter);
 app.use(express.json({ limit: "10mb" }));
 
 // Auth routes (no middleware — login/logout must be public)
@@ -53,10 +61,15 @@ app.use("/api/plugins", pluginsRouter);
 app.use("/api/files", authMiddleware, filesRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/chat", authMiddleware, chatRouter);
+app.use("/api/questions", authMiddleware, agentQuestionsRouter);
+app.use("/api/editor-diagnostics", authMiddleware, editorDiagnosticsRouter);
+app.use("/api/runtime", authMiddleware, runtimeRouter);
 app.use("/api/team", authMiddleware, teamRouter);
 app.use("/api/checkpoints", authMiddleware, checkpointsRouter);
 app.use("/api/diagnostics", authMiddleware, diagnosticsRouter);
 app.use("/api/run", authMiddleware, runRouter);
+app.use("/api/process-sessions", authMiddleware, processSessionsRouter);
+app.use("/api/previews", authMiddleware, previewsRouter);
 app.use("/api/debug", authMiddleware, debugRouter);
 app.use("/api/git-delivery", authMiddleware, gitDeliveryRouter);
 app.use("/api/delivery", authMiddleware, deliveryRouter);
@@ -107,6 +120,8 @@ const connections = new Set<Socket>();
 const desktopSockets = new Map<string, Set<WebSocket>>();
 
 sessionManager.onSessionRevoked((token) => {
+  stopPreviewsForToken(token);
+  stopProcessSessionsForToken(token);
   stopRunsForSession(token);
   for (const ws of desktopSockets.get(token) || []) {
     try { ws.close(1008, "Session ended"); } catch { ws.terminate(); }
@@ -120,6 +135,7 @@ server.on("connection", (socket) => {
 });
 
 server.on("upgrade", (request, socket, head) => {
+  if (handlePreviewUpgrade(request, socket, head)) return;
   const url = request.url || "";
   if (!url.startsWith("/ws/")) {
     socket.destroy();
@@ -164,7 +180,7 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
     if (originalTeamId) {
       try {
         const team = getTeamManager(session).getTeamDetails(originalTeamId, session.username);
-        if (team.workspaceDir !== originalWorkspace) { ws.close(1008, "Team access changed"); return; }
+        if (!teamWorkspaceContains(team.workspaceDir, originalWorkspace)) { ws.close(1008, "Team access changed"); return; }
       } catch { ws.close(1008, "Team access changed"); return; }
     }
     if (url.startsWith("/ws/terminal") && !canWriteActiveWorkspace(session)) ws.close(1008, "Terminal permission changed");
@@ -202,6 +218,8 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 
 process.on("message", (message: unknown) => {
   if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "shutdown") return;
+  shutdownPreviews();
+  shutdownProcessSessions();
   wss.clients.forEach((client) => client.terminate());
   server.close(() => process.exit(0));
   connections.forEach((socket) => socket.destroy());

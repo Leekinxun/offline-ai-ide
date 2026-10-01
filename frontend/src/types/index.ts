@@ -38,6 +38,8 @@ export type ReferenceLocation = DefinitionLocation;
 
 export interface FileUpdate {
   path: string;
+  previousPath?: string;
+  previousVersion?: string;
   content: string;
   selection?: FileSelectionRange;
 }
@@ -80,9 +82,12 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   attachments?: ChatAttachmentRef[];
+  contextReferences?: ContextReference[];
   toolCalls?: ToolCallStep[];
   thinking?: string;
   parts?: ChatMessagePart[];
+  /** Transient event-backed activity; never a synthetic model reasoning message. */
+  activity?: { phase: "waiting" | "reasoning" | "responding" | "tool"; updatedAt: number; toolCallId?: string; waitingFor?: "acceptance" | "model" };
 }
 
 export interface ChatAttachmentRef {
@@ -495,6 +500,7 @@ export interface GitDiffPayload {
   isBinary: boolean;
   isTooLarge: boolean;
   updatedAt: number;
+  revision?: string;
 }
 
 export interface GitStatus {
@@ -734,6 +740,14 @@ export interface FileContext {
   selection?: string;
   dirty?: boolean;
   selectionRange?: { startLine: number; endLine: number };
+}
+
+export interface ContextReference {
+  kind: "file" | "folder" | "selection" | "problems" | "terminal" | "symbol";
+  path?: string;
+  symbol?: string;
+  range?: FileSelectionRange;
+  version?: string;
 }
 
 export interface SelectionInfo {
