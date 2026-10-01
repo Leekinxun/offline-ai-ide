@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import "./Sidebar.css";
+import "./ContextMenu.css";
 import { FileNode, TeamDetails } from "../types";
 import { FILE_TREE_DRAG_TYPE, FileTree } from "./FileTree";
 import {

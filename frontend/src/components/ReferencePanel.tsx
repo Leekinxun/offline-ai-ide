@@ -1,4 +1,5 @@
 import React from "react";
+import "./ReferencePanel.css";
 import { X } from "lucide-react";
 import type { ReferenceLocation } from "../types";
 import { useI18n } from "../i18n";

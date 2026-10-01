@@ -18,6 +18,7 @@ import { TitleBar } from "./components/TitleBar";
 import "./components/UserPopover.css";
 import "./components/ActivityRail.css";
 import "./components/Sidebar.css";
+import "./components/CreateEntryDialog.css";
 import { PRODUCT_NAME } from "./brand";
 import { CommandPalette, CommandPaletteMode } from "./components/CommandPalette";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
@@ -53,6 +54,7 @@ import { useWorkbenchShortcuts } from "./hooks/useWorkbenchShortcuts";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
 import { useEditorSync } from "./hooks/useEditorSync";
+import { useWorkspacePanels } from "./hooks/useWorkspacePanels";
 import { useWorkbenchChat } from "./hooks/useWorkbenchChat";
 import {
   normalizeWorkspaceRelativePath,
@@ -388,35 +390,87 @@ function AuthenticatedApp({
   }, []);
 
   const [workspaceView, setWorkspaceView] = useState<"chat" | "files">("files");
-  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth > 1100);
+  const mainLayoutRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const previewPaneRef = useRef<HTMLDivElement | null>(null);
+  const navigationRequestRef = useRef(0);
+  const highlightRequestRef = useRef(0);
+  const editorViewStatesRef = useRef<
+    Record<string, monaco.editor.ICodeEditorViewState | null>
+  >({});
+
+  const {
+    sidebarVisible,
+    setSidebarVisible,
+    chatVisible,
+    setChatVisible,
+    terminalVisible,
+    setTerminalVisible,
+    teamVisible,
+    setTeamVisible,
+    runDetailsVisible,
+    setRunDetailsVisible,
+    runDetailsTab,
+    setRunDetailsTab,
+    editorAssistantVisible,
+    setEditorAssistantVisible,
+    chatFocusNonce,
+    setChatFocusNonce,
+    gitVisible,
+    setGitVisible,
+    agentsVisible,
+    setAgentsVisible,
+    checkpointsVisible,
+    setCheckpointsVisible,
+    problemsVisible,
+    setProblemsVisible,
+    runCenterVisible,
+    setRunCenterVisible,
+    debugVisible,
+    setDebugVisible,
+    settingsVisible,
+    setSettingsVisible,
+    chatHistoryRequest,
+    newConversationRequest,
+    setNewConversationRequest,
+    isLeftDockOpen,
+    compactWorkspace,
+    isMobileViewport,
+    activeWorkspaceDrawer,
+    workspaceDrawerOpen,
+    closeUtilityPanels,
+    toggleFocusMode,
+    focusChat,
+    toggleChatPanel,
+    handleToggleAiAssistant,
+    toggleExplorerPanel,
+    toggleUtilityPanel,
+    toggleTeamPanel,
+    toggleTerminalPanel,
+    closeWorkspaceDrawers,
+    runPaletteCommand,
+  } = useWorkspacePanels({
+    viewportWidth,
+    workspaceView,
+    setWorkspaceView,
+    mainLayoutRef,
+    onFormatDocument: useCallback(() => {
+      void editorRef.current?.getAction("format-python-document")?.run();
+    }, []),
+  });
+
   const [folderOpenRequestId, setFolderOpenRequestId] = useState(0);
-  const [chatVisible, setChatVisible] = useState(() => window.innerWidth > 860);
-  const [runDetailsVisible, setRunDetailsVisible] = useState(false);
-  const [runDetailsTab, setRunDetailsTab] = useState<DetailTab>("changes");
-  const [editorAssistantVisible, setEditorAssistantVisible] = useState(() => window.innerWidth > 1180);
-  const [chatFocusNonce, setChatFocusNonce] = useState(0);
-  const [terminalVisible, setTerminalVisible] = useState(false);
-  const [teamVisible, setTeamVisible] = useState(false);
-  const [, setFocusMode] = useState(false);
   const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode>("commands");
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
-  const [chatHistoryRequest, setChatHistoryRequest] = useState(0);
-  const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [workspaceSearchVisible, setWorkspaceSearchVisible] = useState(false);
   const [workspaceSearchScope, setWorkspaceSearchScope] = useState("");
-  const [gitVisible, setGitVisible] = useState(false);
   const [gitDiffRequest, setGitDiffRequest] = useState<{ path: string; id: number } | null>(null);
-  const [agentsVisible, setAgentsVisible] = useState(false);
-  const [checkpointsVisible, setCheckpointsVisible] = useState(false);
-  const [problemsVisible, setProblemsVisible] = useState(false);
-  const [runCenterVisible, setRunCenterVisible] = useState(false);
-  const [debugVisible, setDebugVisible] = useState(false);
   const [breakpointsByPath, setBreakpointsByPath] = useState<Record<string, number[]>>({});
   const [debugStartRequest, setDebugStartRequest] = useState<{ id: number; path: string } | null>(null);
   const [debugActiveFrame, setDebugActiveFrame] = useState<DebugFrame | null>(null);
   const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
-  const [settingsVisible, setSettingsVisible] = useState(false);
   const [mobilePairingVisible, setMobilePairingVisible] = useState(false);
   const [diffViewerPath, setDiffViewerPath] = useState<string | null>(null);
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
@@ -429,29 +483,6 @@ function AuthenticatedApp({
   const [editorHighlightTarget, setEditorHighlightTarget] =
     useState<EditorHighlightTarget | null>(null);
   const [referenceResult, setReferenceResult] = useState<{ symbol: string; references: ReferenceLocation[] } | null>(null);
-
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const compareEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const previewPaneRef = useRef<HTMLDivElement | null>(null);
-  const navigationRequestRef = useRef(0);
-  const highlightRequestRef = useRef(0);
-  const editorViewStatesRef = useRef<
-    Record<string, monaco.editor.ICodeEditorViewState | null>
-  >({});
-  const drawerTriggerRef = useRef<HTMLElement | null>(null);
-  const mainLayoutRef = useRef<HTMLDivElement>(null);
-  const previousDrawerRef = useRef<string | null>(null);
-  const layoutBeforeFocusRef = useRef({
-    sidebar: true,
-    chat: true,
-    team: false,
-    git: false,
-    agents: false,
-    checkpoints: false,
-    problems: false,
-    runCenter: false,
-    debug: false,
-  });
   const fs = useFileSystem(token);
 
   useEffect(() => {
@@ -628,12 +659,6 @@ function AuthenticatedApp({
     setReferenceResult(null);
   }, [activeFilePath]);
 
-  const compactWorkspace = viewportWidth <= 1100;
-  const narrowWorkspace = viewportWidth <= 860;
-  // Media-query thresholds follow the viewport; panel budgets use the actual
-  // content width, which can be smaller with classic Windows scrollbars.
-  const isLeftDockOpen = Boolean(sidebarVisible || gitVisible || agentsVisible || teamVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible);
-
   const {
     sidebarWidth,
     setSidebarWidth,
@@ -669,380 +694,10 @@ function AuthenticatedApp({
     return () => window.removeEventListener("resize", handleViewportResize);
   }, []);
 
-  const captureDrawerTrigger = useCallback(() => {
-    if (document.activeElement instanceof HTMLElement) {
-      drawerTriggerRef.current = document.activeElement;
-    }
-  }, []);
-
-  const closeUtilityPanels = useCallback(() => {
-    setGitVisible(false);
-    setAgentsVisible(false);
-    setCheckpointsVisible(false);
-    setProblemsVisible(false);
-    setRunCenterVisible(false);
-    setDebugVisible(false);
-  }, []);
-
-  const toggleFocusMode = useCallback(() => {
-    setFocusMode((current) => {
-      if (current) {
-        setSidebarVisible(layoutBeforeFocusRef.current.sidebar);
-        setChatVisible(layoutBeforeFocusRef.current.chat);
-        setTeamVisible(layoutBeforeFocusRef.current.team);
-        setGitVisible(layoutBeforeFocusRef.current.git);
-        setAgentsVisible(layoutBeforeFocusRef.current.agents);
-        setCheckpointsVisible(layoutBeforeFocusRef.current.checkpoints);
-        setProblemsVisible(layoutBeforeFocusRef.current.problems);
-        setRunCenterVisible(layoutBeforeFocusRef.current.runCenter);
-        setDebugVisible(layoutBeforeFocusRef.current.debug);
-      } else {
-        layoutBeforeFocusRef.current = {
-          sidebar: sidebarVisible,
-          chat: chatVisible,
-          team: teamVisible,
-          git: gitVisible,
-          agents: agentsVisible,
-          checkpoints: checkpointsVisible,
-          problems: problemsVisible,
-          runCenter: runCenterVisible,
-          debug: debugVisible,
-        };
-        setSidebarVisible(false);
-        setChatVisible(false);
-        setTeamVisible(false);
-        setGitVisible(false);
-        setAgentsVisible(false);
-        setCheckpointsVisible(false);
-        setProblemsVisible(false);
-        setRunCenterVisible(false);
-        setDebugVisible(false);
-      }
-      return !current;
-    });
-  }, [
-    agentsVisible,
-    chatVisible,
-    checkpointsVisible,
-    gitVisible,
-    problemsVisible,
-    runCenterVisible,
-    debugVisible,
-    sidebarVisible,
-    teamVisible,
-  ]);
-
   const openCommandPalette = useCallback((mode: CommandPaletteMode) => {
     setCommandPaletteMode(mode);
     setCommandPaletteVisible(true);
   }, []);
-
-  const focusChat = useCallback(() => {
-    const switchingToChat = workspaceView !== "chat";
-    setWorkspaceView("chat");
-    setEditorAssistantVisible(false);
-    setRunDetailsVisible(false);
-    setChatVisible(true);
-    const utilityOpen =
-      gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible || teamVisible;
-    if (switchingToChat) {
-      closeUtilityPanels();
-      setTeamVisible(false);
-      setSidebarVisible(true);
-    } else if (utilityOpen) {
-      closeUtilityPanels();
-      setTeamVisible(false);
-      setSidebarVisible(true);
-    } else {
-      setSidebarVisible((prev) => !prev);
-    }
-    if (window.innerWidth <= 860) {
-      captureDrawerTrigger();
-      setSidebarVisible(false);
-      setTeamVisible(false);
-      setTerminalVisible(false);
-      closeUtilityPanels();
-    }
-    setChatFocusNonce((value) => value + 1);
-  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, teamVisible, workspaceView]);
-
-  const toggleChatPanel = useCallback(() => {
-    const nextOpen = !chatVisible;
-    if (nextOpen && window.innerWidth <= 860) {
-      captureDrawerTrigger();
-      setSidebarVisible(false);
-      setTeamVisible(false);
-      setTerminalVisible(false);
-      closeUtilityPanels();
-    }
-    setChatVisible(nextOpen);
-  }, [captureDrawerTrigger, chatVisible, closeUtilityPanels]);
-
-  const handleToggleAiAssistant = useCallback(() => {
-    if (workspaceView === "files") {
-      setRunDetailsVisible(false);
-      setEditorAssistantVisible((prev) => !prev);
-    } else {
-      toggleChatPanel();
-    }
-  }, [workspaceView, toggleChatPanel]);
-
-  const toggleExplorerPanel = useCallback(() => {
-    const switchingToFiles = workspaceView !== "files";
-    setWorkspaceView("files");
-    if (switchingToFiles && window.innerWidth > 1180) setEditorAssistantVisible(true);
-    const utilityOpen =
-      gitVisible || agentsVisible || checkpointsVisible || problemsVisible || runCenterVisible || debugVisible;
-    const nextOpen = switchingToFiles || utilityOpen ? true : !sidebarVisible;
-    if (nextOpen) setTeamVisible(false);
-    if (nextOpen && window.innerWidth <= 1100) {
-      captureDrawerTrigger();
-      setTerminalVisible(false);
-      if (window.innerWidth <= 860) setChatVisible(false);
-    }
-    closeUtilityPanels();
-    setSidebarVisible(nextOpen);
-  }, [agentsVisible, captureDrawerTrigger, checkpointsVisible, closeUtilityPanels, debugVisible, gitVisible, problemsVisible, runCenterVisible, sidebarVisible, workspaceView]);
-
-  const toggleUtilityPanel = useCallback(
-    (
-      panel: "git" | "agents" | "checkpoints" | "problems" | "run-center" | "debug",
-      forceOpen = false
-    ) => {
-      const isOpen =
-        panel === "git"
-          ? gitVisible
-          : panel === "agents"
-            ? agentsVisible
-            : panel === "checkpoints"
-              ? checkpointsVisible
-              : panel === "problems"
-                ? problemsVisible
-                : panel === "run-center"
-                  ? runCenterVisible
-                  : debugVisible;
-      const nextOpen = forceOpen || !isOpen;
-      if (nextOpen) {
-        setSidebarVisible(false);
-        setTeamVisible(false);
-        if (window.innerWidth <= 1100) {
-          captureDrawerTrigger();
-          setTerminalVisible(false);
-        }
-        if (window.innerWidth <= 860) {
-          setChatVisible(false);
-        }
-      }
-      setGitVisible(panel === "git" && nextOpen);
-      setAgentsVisible(panel === "agents" && nextOpen);
-      setCheckpointsVisible(panel === "checkpoints" && nextOpen);
-      setProblemsVisible(panel === "problems" && nextOpen);
-      setRunCenterVisible(panel === "run-center" && nextOpen);
-      setDebugVisible(panel === "debug" && nextOpen);
-    },
-    [agentsVisible, captureDrawerTrigger, checkpointsVisible, debugVisible, gitVisible, problemsVisible, runCenterVisible]
-  );
-
-  const toggleTeamPanel = useCallback((forceOpen = false) => {
-    const nextOpen = forceOpen || !teamVisible;
-    if (nextOpen) {
-      setSidebarVisible(false);
-      closeUtilityPanels();
-    }
-    if (nextOpen && window.innerWidth <= 1100) {
-      captureDrawerTrigger();
-      setTerminalVisible(false);
-      if (window.innerWidth <= 860) setChatVisible(false);
-    }
-    setTeamVisible(nextOpen);
-  }, [captureDrawerTrigger, closeUtilityPanels, teamVisible]);
-
-  const toggleTerminalPanel = useCallback((forceOpen = false) => {
-    const nextOpen = forceOpen || !terminalVisible;
-    if (nextOpen && window.innerWidth <= 1100) {
-      captureDrawerTrigger();
-      setSidebarVisible(false);
-      setTeamVisible(false);
-      closeUtilityPanels();
-      if (window.innerWidth <= 860) setChatVisible(false);
-    }
-    setTerminalVisible(nextOpen);
-  }, [captureDrawerTrigger, closeUtilityPanels, terminalVisible]);
-
-  const runPaletteCommand = useCallback(
-    (command: string) => {
-      switch (command) {
-        case "format-document":
-          void editorRef.current?.getAction("format-python-document")?.run();
-          break;
-        case "focus":
-          toggleFocusMode();
-          break;
-        case "explorer":
-          toggleExplorerPanel();
-          break;
-        case "terminal":
-          toggleTerminalPanel();
-          break;
-        case "chat":
-          toggleChatPanel();
-          break;
-        case "new-conversation":
-          setChatVisible(true);
-          setNewConversationRequest((value) => value + 1);
-          break;
-        case "history":
-          setChatVisible(true);
-          setChatHistoryRequest((value) => value + 1);
-          break;
-        case "settings":
-        case "mcp":
-        case "knowledge":
-          setSettingsVisible(true);
-          break;
-        case "git":
-          toggleUtilityPanel("git", true);
-          break;
-        case "agents":
-          toggleUtilityPanel("agents", true);
-          break;
-        case "checkpoints":
-          toggleUtilityPanel("checkpoints", true);
-          break;
-        case "problems":
-          toggleUtilityPanel("problems", true);
-          break;
-        case "run-center":
-          toggleUtilityPanel("run-center", true);
-          break;
-        case "debug":
-          toggleUtilityPanel("debug", true);
-          break;
-        case "team":
-          toggleTeamPanel(true);
-          break;
-        default:
-          break;
-      }
-    },
-    [toggleChatPanel, toggleExplorerPanel, toggleFocusMode, toggleTeamPanel, toggleTerminalPanel, toggleUtilityPanel]
-  );
-
-  const isMobileViewport = viewportWidth <= 640;
-  const isTabletOrMobile = viewportWidth <= 860;
-  const activeWorkspaceDrawer = isTabletOrMobile
-    ? teamVisible
-      ? "team"
-      : agentsVisible
-        ? "agents"
-        : gitVisible
-          ? "git"
-          : checkpointsVisible
-            ? "checkpoints"
-            : problemsVisible
-              ? "problems"
-              : runCenterVisible
-                ? "run-center"
-                : debugVisible
-                  ? "debug"
-                  : isMobileViewport && sidebarVisible
-                    ? "sidebar"
-                    : isMobileViewport && chatVisible
-                      ? "chat"
-                      : null
-    : null;
-  const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
-  const compactModalDrawerOpen = isTabletOrMobile && (agentsVisible || teamVisible || gitVisible);
-  const previousCompactWorkspaceRef = useRef(isMobileViewport);
-
-  useEffect(() => {
-    const becameMobile = isMobileViewport && !previousCompactWorkspaceRef.current;
-    previousCompactWorkspaceRef.current = isMobileViewport;
-    if (!becameMobile) return;
-    setSidebarVisible(activeWorkspaceDrawer === "sidebar");
-    setTeamVisible(activeWorkspaceDrawer === "team");
-    setAgentsVisible(activeWorkspaceDrawer === "agents");
-    setGitVisible(activeWorkspaceDrawer === "git");
-    setCheckpointsVisible(activeWorkspaceDrawer === "checkpoints");
-    setProblemsVisible(activeWorkspaceDrawer === "problems");
-    setRunCenterVisible(activeWorkspaceDrawer === "run-center");
-    setDebugVisible(activeWorkspaceDrawer === "debug");
-    if (narrowWorkspace) setChatVisible(activeWorkspaceDrawer === "chat");
-  }, [activeWorkspaceDrawer, isMobileViewport, narrowWorkspace]);
-
-  const closeWorkspaceDrawers = useCallback(() => {
-    if (isMobileViewport) {
-      setSidebarVisible(false);
-      setChatVisible(false);
-    }
-    setTeamVisible(false);
-    closeUtilityPanels();
-  }, [closeUtilityPanels, isMobileViewport]);
-
-  useEffect(() => {
-    const previousDrawer = previousDrawerRef.current;
-    previousDrawerRef.current = activeWorkspaceDrawer;
-
-    if (activeWorkspaceDrawer && activeWorkspaceDrawer !== previousDrawer) {
-      requestAnimationFrame(() => {
-        const drawer = document.querySelector<HTMLElement>(
-          `[data-workspace-drawer="${activeWorkspaceDrawer}"]`
-        );
-        drawer?.focus();
-      });
-      return;
-    }
-
-    if (!activeWorkspaceDrawer && previousDrawer) {
-      requestAnimationFrame(() => {
-        const storedTrigger = drawerTriggerRef.current && document.contains(drawerTriggerRef.current)
-          ? drawerTriggerRef.current
-          : null;
-        const matchingTriggers = Array.from(
-          document.querySelectorAll<HTMLElement>(`[data-drawer-trigger="${previousDrawer}"]`)
-        );
-        const trigger = storedTrigger && storedTrigger.offsetParent !== null
-          ? storedTrigger
-          : matchingTriggers.find((candidate) => candidate.offsetParent !== null)
-            || document.querySelector<HTMLElement>(".titlebar-mobile-command");
-        trigger?.focus();
-        drawerTriggerRef.current = null;
-      });
-    }
-  }, [activeWorkspaceDrawer]);
-
-  useEffect(() => {
-    const layout = mainLayoutRef.current;
-    if (!layout) return;
-    const clearBoundaries = () => {
-      layout.querySelectorAll<HTMLElement>('[data-compact-modal-inert="true"]').forEach((element) => {
-        element.removeAttribute("inert");
-        element.removeAttribute("aria-hidden");
-        element.removeAttribute("data-compact-modal-inert");
-      });
-    };
-    const applyBoundaries = () => {
-      clearBoundaries();
-      if (!compactModalDrawerOpen || !activeWorkspaceDrawer) return;
-      const activeDrawer = layout.querySelector<HTMLElement>(`[data-workspace-drawer="${activeWorkspaceDrawer}"]`);
-      if (!activeDrawer) return;
-      const isolate = (container: HTMLElement) => {
-        Array.from(container.children).forEach((child) => {
-          if (!(child instanceof HTMLElement) || child.classList.contains("mobile-drawer-scrim")) return;
-          if (child === activeDrawer) return;
-          if (child.contains(activeDrawer)) { isolate(child); return; }
-          child.setAttribute("inert", "");
-          child.setAttribute("aria-hidden", "true");
-          child.setAttribute("data-compact-modal-inert", "true");
-        });
-      };
-      isolate(layout);
-    };
-    applyBoundaries();
-    const observer = new MutationObserver(applyBoundaries);
-    observer.observe(layout, { childList: true, subtree: true });
-    return () => { observer.disconnect(); clearBoundaries(); };
-  }, [activeWorkspaceDrawer, compactModalDrawerOpen]);
 
 
 
