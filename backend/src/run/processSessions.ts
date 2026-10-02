@@ -189,7 +189,9 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
   let child: ChildProcess;
-  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", String(process.pid), prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
+  // On Windows libuv kills non-detached direct children with the parent's Job
+  // Object. The watchdog must outlive that parent to clean its whole subtree.
+  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", String(process.pid), prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
   catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
   const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);
