@@ -382,10 +382,12 @@ for (const file of [...walk(absolute("frontend/src/plugins"), ".ts"), ...walk(ab
   }
 }
 
-const css = read("frontend/src/App.css", "responsive-css");
 for (const baseline of fixture.responsiveBaselines) {
   requireTokens(read(baseline.component, baseline.id), baseline.componentTokens, baseline.id);
-  requireTokens(css, baseline.cssTokens, baseline.id);
+  const cssSources = (baseline.cssFiles?.length ? baseline.cssFiles : ["frontend/src/App.css"])
+    .map((file) => read(file, baseline.id))
+    .join("\n");
+  requireTokens(cssSources, baseline.cssTokens, baseline.id);
 }
 
 function jpegDimensions(buffer) {

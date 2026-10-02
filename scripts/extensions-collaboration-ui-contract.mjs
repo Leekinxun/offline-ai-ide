@@ -8,7 +8,7 @@ const sources = {
   app: read("frontend/src/App.tsx"), team: read("frontend/src/components/TeamPanel.tsx"), agents: read("frontend/src/components/AgentBoard.tsx"), editor: read("frontend/src/components/Editor.tsx"), contextStrip: read("frontend/src/components/ContextStrip.tsx"),
   plugins: read("frontend/src/components/PluginManagerPanel.tsx"), settings: read("frontend/src/components/SettingsModal.tsx"),
   runDetails: read("frontend/src/components/RunDetailsPanel.tsx"), editorAssistant: read("frontend/src/components/EditorAssistantPanel.tsx"),
-  changeDiff: read("frontend/src/components/ChangeDiffDialog.tsx"), teamHook: read("frontend/src/hooks/useTeam.ts"),
+  changeDiff: read("frontend/src/components/ChangeDiffDialog.tsx"), editorSync: read("frontend/src/hooks/useEditorSync.ts"), teamHook: read("frontend/src/hooks/useTeam.ts"),
   pluginHook: read("frontend/src/hooks/usePlugins.ts"), policyHook: read("frontend/src/hooks/useExtensionPolicy.ts"),
   governanceHook: read("frontend/src/hooks/useModelGovernance.ts"), governance: read("frontend/src/components/ModelGovernancePanel.tsx"),
   messages: read("frontend/src/i18n/messages.ts"), css: read("frontend/src/App.css"), backendIndex: read("backend/src/index.ts"), teamRoute: read("backend/src/routes/team.ts"), policyRoute: read("backend/src/routes/extensionsPolicy.ts"),
@@ -23,7 +23,7 @@ for (const route of ["comments", "review-requests", "merge-previews", "merge-dec
 requireText(sources.teamHook, "expectedVersion: collaboration.version", "collaboration mutations use CAS");
 requireText(sources.teamHook, "refreshAbortRef.current?.abort()", "team state is request-cancelled and scope safe");
 requireText(sources.teamHook, 'type: "buffer_register"', "unsaved buffers are published over the team socket");
-requireText(sources.app, "sha256Text(activeFile.content)", "unsaved-buffer presence uses actual content digests");
+requireText(sources.editorSync, "sha256Text(activeFile.content)", "unsaved-buffer presence uses actual content digests");
 requireText(sources.editor, "collaborationDecorationIdsRef", "editor renders durable collaboration anchors");
 requireText(sources.contextStrip, "collaboration.contextSummary", "context strip exposes collaboration state");
 requireText(sources.team, "collaboration-owner-badge", "human/agent ownership is visible");
@@ -74,7 +74,7 @@ requireText(sources.runDetails, 'event.decision === "blocked"', "blocked quality
 requireText(sources.editorAssistant, 'evidenceOutcome === "completed" ? "" : "warning"', "editor assistant never presents blocked completion evidence as success");
 requireText(sources.css, "@media (max-width: 780px)", "G006 UI has the required responsive breakpoint");
 requireText(sources.css, "min-height: 40px", "G006 interactive controls meet the touch target contract");
-for (const source of [sources.app, sources.team, sources.agents, sources.editor, sources.contextStrip, sources.plugins, sources.settings, sources.changeDiff, sources.teamHook, sources.pluginHook, sources.policyHook, sources.governanceHook]) {
+for (const source of [sources.app, sources.team, sources.agents, sources.editor, sources.contextStrip, sources.plugins, sources.settings, sources.changeDiff, sources.editorSync, sources.teamHook, sources.pluginHook, sources.policyHook, sources.governanceHook]) {
   forbidText(source, "window.confirm", "assigned collaboration surfaces use no native confirm");
   forbidText(source, ".catch(() => undefined)", "assigned collaboration surfaces use no silent catch");
 }

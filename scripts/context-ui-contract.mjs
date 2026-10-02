@@ -4,7 +4,7 @@ import process from "node:process";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const hook = fs.readFileSync(path.join(root, "frontend/src/hooks/useContextManifest.ts"), "utf8");
-const app = fs.readFileSync(path.join(root, "frontend/src/App.tsx"), "utf8");
+const editorSync = fs.readFileSync(path.join(root, "frontend/src/hooks/useEditorSync.ts"), "utf8");
 const inspector = fs.readFileSync(path.join(root, "frontend/src/components/ContextInspector.tsx"), "utf8");
 const chatRoutes = fs.readFileSync(path.join(root, "backend/src/routes/chat.ts"), "utf8");
 
@@ -37,10 +37,10 @@ assert(!updateBlock.includes("setDraftManifest"), "preference mutations must not
 assert(updateBlock.includes("await preview(lastPreviewContextRef.current)"), "successful and CAS preference responses must refresh the server preview");
 assert(updateBlock.includes("response.status === 409"), "preference CAS conflicts must be handled explicitly");
 
-const previewCall = app.indexOf("chat.contextManifest.preview({");
-const previewEffectEnd = app.indexOf("}, [activeFile", previewCall);
+const previewCall = editorSync.indexOf("chat.contextManifest.preview({");
+const previewEffectEnd = editorSync.indexOf("}, [activeFile", previewCall);
 assert(previewCall >= 0 && previewEffectEnd > previewCall, "editor preview effect must be discoverable");
-assert(!app.slice(previewCall, previewEffectEnd).includes("catch(() => undefined)"), "preview failures must not be silently swallowed by App");
+assert(!editorSync.slice(previewCall, previewEffectEnd).includes("catch(() => undefined)"), "preview failures must not be silently swallowed by editor sync");
 assert(inspector.includes('mode === "draft"'), "source controls must be absent from historical context views");
 
 process.stdout.write("CrewForge context UI contract passed.\n");

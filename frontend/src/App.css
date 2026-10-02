@@ -1616,7 +1616,17 @@ select:focus-visible,
   background: var(--surface-panel-strong);
 }
 
-.workbench-center-viewport > .editor-area {
+.workbench-center-background {
+  order: 1;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workbench-center-background > .editor-area {
   order: 1;
   flex: 1 1 0%;
   min-height: 0;
@@ -1627,7 +1637,7 @@ select:focus-visible,
   background: var(--bg-primary);
 }
 
-.workbench-center-viewport > .chat-panel {
+.workbench-center-background > .chat-panel {
   order: 1;
   flex: 1 1 0%;
   min-height: 0;
@@ -2515,7 +2525,7 @@ html {
 }
 
 .workbench-view-files > .workbench-center-viewport,
-.workbench-view-files > .editor-area {
+.workbench-view-files .workbench-center-background > .editor-area {
   grid-column: 4;
   grid-row: 1;
   min-width: 0;
@@ -2902,7 +2912,7 @@ html {
   }
 
   .workbench-view-files > .workbench-center-viewport,
-  .workbench-view-files > .editor-area {
+  .workbench-view-files .workbench-center-background > .editor-area {
     height: 100%;
   }
 

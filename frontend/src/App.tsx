@@ -26,6 +26,8 @@ import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useEditorDiagnosticFeedback } from "./hooks/useEditorDiagnosticFeedback";
 import { useRunChanges } from "./hooks/useRunChanges";
 import type { RunReviewComment } from "./components/RunChangesReview";
+import type { ReviewFile, ReviewHunk } from "./components/runReviewPolicy";
+import type { InlineAssistantRequest, InlineAssistantResponse } from "./editor/inlineAssistantPolicy";
 import type { ContextReference } from "./types";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
@@ -108,6 +110,8 @@ import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
 import { getEditorThemeName } from "./editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
+import { inlineRequestStatus } from "./utils/requestOutcome";
+import { canKeepEditorFileChanges } from "./editor/editorChangeReviewPolicy";
 const MobileApp = lazy(() =>
   import("./mobile/MobileApp").then((module) => ({ default: module.MobileApp }))
 );
@@ -392,6 +396,7 @@ function AuthenticatedApp({
     isMobileViewport,
     activeWorkspaceDrawer,
     workspaceDrawerOpen,
+    compactModalDrawerOpen,
     closeUtilityPanels,
     toggleFocusMode,
     focusChat,
@@ -770,6 +775,12 @@ function AuthenticatedApp({
     setEditorAssistantVisible,
   });
 
+  const selectedChatModelName = chat.selectedModelName
+    || chat.runtimeOptions.modeModels[chat.agentMode]
+    || chat.runtimeOptions.defaultModelName;
+  const [inlineRequest, setInlineRequest] = useState<InlineAssistantRequest | null>(null);
+  const [inlineCancelledId, setInlineCancelledId] = useState<string | null>(null);
+
   useEditorDiagnosticFeedback({ token, workspaceDir, file: activeFile, problems: editorProblems.problems, enabled: !readOnlyWorkspace });
   const changeReviewRunning = chat.runState?.status === "running" || chat.runState?.status === "queued";
   const editorChanges = useRunChanges({
@@ -787,6 +798,102 @@ function AuthenticatedApp({
         : null
     );
   }, [activeFilePath, editorChanges.changes?.revision, editorChanges.setSelectedPath]);
+  const editorChangeReviewFile = !editorChanges.stale && !editorChanges.detailLoading && editorChanges.file?.path === activeFilePath ? editorChanges.file : null;
+  const changeReviewScopeRef = useRef("");
+  changeReviewScopeRef.current = JSON.stringify([workspaceDir, chat.runState?.runId || null, activeFilePath, editorChangeReviewFile?.revision || null]);
+
+  useEffect(() => {
+    setInlineRequest(null);
+    setInlineCancelledId(null);
+  }, [workspaceDir, token]);
+
+  const handleInlineSubmit = useCallback((request: InlineAssistantRequest) => {
+    if (chat.isStreaming || readOnlyWorkspace) return false;
+    const sent = chat.sendMessage(request.prompt, {
+      path: request.path,
+      content: request.fullModelSnapshot,
+      language: request.language,
+      selection: request.selectedText,
+      dirty: request.dirty,
+      selectionRange: {
+        startLine: request.selection.startLine,
+        endLine: request.selection.endLine,
+      },
+    }, "ask", [], undefined, contextReferences, {
+      requestId: request.id,
+      preserveMode: true,
+      modelName: selectedChatModelName,
+    });
+    if (sent) {
+      setInlineRequest(request);
+      setInlineCancelledId(null);
+    }
+    return sent;
+  }, [chat, contextReferences, readOnlyWorkspace, selectedChatModelName]);
+
+  const handleInlineCancel = useCallback((requestId: string) => {
+    setInlineCancelledId(requestId);
+    chat.stopRequest(requestId);
+  }, [chat]);
+
+  const inlineResponse = useMemo<InlineAssistantResponse | undefined>(() => {
+    if (!inlineRequest) return undefined;
+    const responses = chat.messages.filter((message) => message.requestId === inlineRequest.id && message.role === "assistant");
+    const nonempty = responses.filter((message) => message.content.trim());
+    const text = nonempty[nonempty.length - 1]?.content || "";
+    const active = chat.activeRequestIds.includes(inlineRequest.id);
+    return {
+      requestId: inlineRequest.id,
+      text,
+      status: inlineRequestStatus(chat.requestOutcomes[inlineRequest.id], inlineCancelledId === inlineRequest.id),
+      ...(!active && !text ? { error: t("chat.noChanges") } : {}),
+    };
+  }, [chat.activeRequestIds, chat.messages, chat.requestOutcomes, inlineCancelledId, inlineRequest, t]);
+
+  const handleEditorChangeReviewAction = useCallback(async (file: ReviewFile, hunk: ReviewHunk | undefined, decision: "keep" | "revert") => {
+    const requestedScope = changeReviewScopeRef.current;
+    const applied = await editorChanges.decide(file, decision, hunk);
+    if (changeReviewScopeRef.current !== requestedScope) return;
+    if (!applied) {
+      setRunDetailsTab("changes");
+      setRunDetailsVisible(true);
+      showToast(t("review.actionFailed"));
+    }
+  }, [editorChanges, setRunDetailsTab, setRunDetailsVisible, showToast, t]);
+
+  const handleKeepFileChanges = useCallback(async () => {
+    if (!activeFile) return;
+    const file = editorChangeReviewFile;
+    const model = editorRef.current?.getModel();
+    const matchesModel = !model || (!model.isDisposed()
+      && normalizeWorkspaceRelativePath(model.uri.path, workspaceDir) === normalizeWorkspaceRelativePath(activeFile.path, workspaceDir));
+    if (!file || !matchesModel || !canKeepEditorFileChanges(file, {
+      path: activeFile.path,
+      content: model?.getValue() ?? activeFile.content,
+      dirty: activeFile.modified,
+      readOnly: readOnlyWorkspace || Boolean(editorRef.current?.getRawOptions().readOnly),
+    }, editorChanges.busy || changeReviewRunning)) {
+      showToast(t("editorReview.stale"));
+      return;
+    }
+    const requestedScope = changeReviewScopeRef.current;
+    const kept = await editorChanges.decide(file, "keep");
+    if (changeReviewScopeRef.current !== requestedScope) return;
+    if (!kept) {
+      setRunDetailsTab("changes");
+      setRunDetailsVisible(true);
+      showToast(t("review.actionFailed"));
+    }
+  }, [activeFile, changeReviewRunning, editorChangeReviewFile, editorChanges, readOnlyWorkspace, showToast, t, workspaceDir]);
+
+  const keepFileChangesAvailable = activeFile
+    ? canKeepEditorFileChanges(editorChangeReviewFile, {
+      path: activeFile.path,
+      content: activeFile.content,
+      dirty: activeFile.modified,
+      readOnly: readOnlyWorkspace,
+    }, editorChanges.busy || changeReviewRunning)
+    : false;
 
   const handleReviewComment = useCallback(
     (comment: RunReviewComment) => {
@@ -1597,7 +1704,13 @@ function AuthenticatedApp({
         />
 
         <div className="workbench-center-viewport">
-          <WorkbenchEditorArea
+          <div
+            className="workbench-center-background"
+            data-compact-modal-background
+            inert={compactWorkspace && compactModalDrawerOpen && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined}
+            aria-hidden={compactWorkspace && compactModalDrawerOpen && (agentsVisible || teamVisible || gitVisible || terminalVisible) ? true : undefined}
+          >
+            <WorkbenchEditorArea
             workspaceView={workspaceView}
             openFiles={openFiles}
             activeFilePath={activeFilePath}
@@ -1630,6 +1743,8 @@ function AuthenticatedApp({
               setRunDetailsTab("changes");
               setRunDetailsVisible(true);
             }}
+            keepFileChangesBusy={editorChanges.busy}
+            onKeepFileChanges={keepFileChangesAvailable ? handleKeepFileChanges : undefined}
             onRunCurrent={() => void runCurrentFile()}
             readOnlyWorkspace={readOnlyWorkspace}
             compareFilePath={compareFilePath}
@@ -1672,6 +1787,20 @@ function AuthenticatedApp({
             editorHighlightTarget={editorHighlightTarget}
             onNavigationComplete={handleNavigationComplete}
             onHighlightComplete={handleHighlightComplete}
+            onInlineSubmit={handleInlineSubmit}
+            onInlineCancel={handleInlineCancel}
+            inlineResponse={inlineResponse}
+            inlineDisabled={chat.isStreaming}
+            inlineModelKey={selectedChatModelName}
+            changeReviewFile={editorChangeReviewFile}
+            changeReviewRunning={changeReviewRunning}
+            changeReviewBusy={editorChanges.busy}
+            onChangeReviewAction={handleEditorChangeReviewAction}
+            onOpenChangeReview={() => {
+              setWebPreviewVisible(false);
+              setRunDetailsTab("changes");
+              setRunDetailsVisible(true);
+            }}
             previewPaneRef={previewPaneRef}
             activePreviewContent={activePreviewContent}
             fileTree={fileTree}
@@ -1682,110 +1811,111 @@ function AuthenticatedApp({
             onOpenFile={openFile}
             referenceResult={referenceResult}
             onCloseReference={() => setReferenceResult(null)}
-          />
+            />
 
-        <ChatPanel
-          token={token}
-          workspaceDir={workspaceDir}
-          referenceFiles={fileTree}
-          contextReferences={contextReferences}
-          onContextReferencesChange={setContextReferences}
-          isolatedWindow={isolatedWindow}
-          messages={chat.messages}
-          currentConversationId={chat.currentConversationId}
-          conversations={chat.conversations}
-          isStreaming={chat.isStreaming}
-          activeRequestIds={chat.activeRequestIds}
-          connected={chat.connected}
-          aiHealth={chat.aiHealth}
-          visible={chatVisible && workspaceView === "chat"}
-          focusRequest={chatFocusNonce}
-          agentMode={chat.agentMode}
-          runtimeOptions={chat.runtimeOptions}
-          selectedModelName={chat.selectedModelName}
-          draftText={chatDraftText}
-          onDraftTextChange={setChatDraftText}
-          attachmentDraft={chatAttachmentDraft}
-          attachmentWarning={attachmentWarning}
-          attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
-          onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
-          attachmentSubmissionError={attachmentSubmissionError}
-          attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-          taskTitle={workbenchTaskTitle || t("workbench.newTask")}
-          onAgentModeChange={chat.setAgentMode}
-          onModelNameChange={chat.setSelectedModelName}
-          currentRunSummary={chat.currentRunSummary}
-          contextState={chat.contextState}
-          contextManifest={chat.contextManifest}
-          contextReadOnly={readOnlyWorkspace}
-          mcpState={chat.mcpState}
-          knowledgeState={chat.knowledgeState}
-          historyRequest={chatHistoryRequest}
-          newConversationRequest={newConversationRequest}
-          onOpenSettings={() => setSettingsVisible(true)}
-          collaboration={team.collaboration}
-          activeFilePath={activeFilePath}
-          onOpenCollaboration={() => toggleTeamPanel(true)}
-          onOpenFile={openFile}
-          onOpenDiff={handleOpenGitDiff}
-          onOpenReviewFinding={(finding) => void handleNavigateToLocation(finding.path, {
-            startLine: finding.line,
-            startColumn: finding.column || 1,
-            endLine: finding.line,
-            endColumn: (finding.column || 1) + 1,
-          })}
-          historyLoading={chat.historyLoading}
-          historyLoadingId={chat.historyLoadingId}
-          historyError={chat.historyError}
-          selectionInfo={selectionInfo}
-          activeFileName={activeFile?.name || null}
-          theme={theme}
-          onReviewComment={handleReviewComment}
-          onChangesApplied={() => void handleWorkspaceRestored()}
-          onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
-          onSend={handleChatSend}
-          onSteer={handleChatSteer}
-          onStop={chat.stopCurrentRun}
-          onClear={clearChatConversation}
-          onRetry={chat.retryLast}
-          onLoadConversation={loadChatConversation}
-          onDeleteConversation={chat.deleteConversation}
-          onForkConversation={async (conversationId, upToTimestamp) => {
-            try {
-              const fork = await chat.forkConversation(conversationId, upToTimestamp);
-              showToast(t("chat.forkCreated"));
-              return fork;
-            } catch (error) {
-              showToast(error instanceof Error ? error.message : t("chat.forkFailed"));
-              throw error;
-            }
-          }}
-          onRefreshConversations={chat.refreshConversations}
-          runState={chat.runState}
-          runHistory={chat.runHistory}
-          runHistoryLoading={chat.runHistoryLoading}
-          runHistoryError={chat.runHistoryError}
-          onLoadRun={chat.loadRun}
-          onResumeRun={chat.resumeConversation}
-          onRevertRun={async (runId, options) => {
-            try {
-              const result = await chat.revertRun(runId, options) as { mode?: string };
-              await handleWorkspaceRestored();
-              showToast(result.mode === "legacy-full-restore" ? t("chat.runRevertedLegacy") : t("chat.runReverted"));
-              return result;
-            } catch (error) {
-              showToast(error instanceof Error ? error.message : t("chat.revertRunFailed"));
-              throw error;
-            }
-          }}
-          onApplyCode={handleApplyCode}
-          onNavigateToFileUpdate={handleNavigateToFileUpdate}
-          pendingApprovals={chat.pendingApprovals}
-          onToolApproval={chat.respondToToolApproval}
-          onApproveConversationTools={chat.approveConversationTools}
-          onPlanAmendmentDecision={chat.decidePlanAmendment}
-          style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
-        />
+            <ChatPanel
+              token={token}
+              workspaceDir={workspaceDir}
+              referenceFiles={fileTree}
+              contextReferences={contextReferences}
+              onContextReferencesChange={setContextReferences}
+              isolatedWindow={isolatedWindow}
+              messages={chat.messages}
+              currentConversationId={chat.currentConversationId}
+              conversations={chat.conversations}
+              isStreaming={chat.isStreaming}
+              activeRequestIds={chat.activeRequestIds}
+              connected={chat.connected}
+              aiHealth={chat.aiHealth}
+              visible={chatVisible && workspaceView === "chat"}
+              focusRequest={chatFocusNonce}
+              agentMode={chat.agentMode}
+              runtimeOptions={chat.runtimeOptions}
+              selectedModelName={chat.selectedModelName}
+              draftText={chatDraftText}
+              onDraftTextChange={setChatDraftText}
+              attachmentDraft={chatAttachmentDraft}
+              attachmentWarning={attachmentWarning}
+              attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+              onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+              attachmentSubmissionError={attachmentSubmissionError}
+              attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
+              taskTitle={workbenchTaskTitle || t("workbench.newTask")}
+              onAgentModeChange={chat.setAgentMode}
+              onModelNameChange={chat.setSelectedModelName}
+              currentRunSummary={chat.currentRunSummary}
+              contextState={chat.contextState}
+              contextManifest={chat.contextManifest}
+              contextReadOnly={readOnlyWorkspace}
+              mcpState={chat.mcpState}
+              knowledgeState={chat.knowledgeState}
+              historyRequest={chatHistoryRequest}
+              newConversationRequest={newConversationRequest}
+              onOpenSettings={() => setSettingsVisible(true)}
+              collaboration={team.collaboration}
+              activeFilePath={activeFilePath}
+              onOpenCollaboration={() => toggleTeamPanel(true)}
+              onOpenFile={openFile}
+              onOpenDiff={handleOpenGitDiff}
+              onOpenReviewFinding={(finding) => void handleNavigateToLocation(finding.path, {
+                startLine: finding.line,
+                startColumn: finding.column || 1,
+                endLine: finding.line,
+                endColumn: (finding.column || 1) + 1,
+              })}
+              historyLoading={chat.historyLoading}
+              historyLoadingId={chat.historyLoadingId}
+              historyError={chat.historyError}
+              selectionInfo={selectionInfo}
+              activeFileName={activeFile?.name || null}
+              theme={theme}
+              onReviewComment={handleReviewComment}
+              onChangesApplied={() => void handleWorkspaceRestored()}
+              onUndoLastTurn={chat.currentRunSummary?.changedFiles.length ? handleUndoLastTurn : undefined}
+              onSend={handleChatSend}
+              onSteer={handleChatSteer}
+              onStop={chat.stopCurrentRun}
+              onClear={clearChatConversation}
+              onRetry={chat.retryLast}
+              onLoadConversation={loadChatConversation}
+              onDeleteConversation={chat.deleteConversation}
+              onForkConversation={async (conversationId, upToTimestamp) => {
+                try {
+                  const fork = await chat.forkConversation(conversationId, upToTimestamp);
+                  showToast(t("chat.forkCreated"));
+                  return fork;
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("chat.forkFailed"));
+                  throw error;
+                }
+              }}
+              onRefreshConversations={chat.refreshConversations}
+              runState={chat.runState}
+              runHistory={chat.runHistory}
+              runHistoryLoading={chat.runHistoryLoading}
+              runHistoryError={chat.runHistoryError}
+              onLoadRun={chat.loadRun}
+              onResumeRun={chat.resumeConversation}
+              onRevertRun={async (runId, options) => {
+                try {
+                  const result = await chat.revertRun(runId, options) as { mode?: string };
+                  await handleWorkspaceRestored();
+                  showToast(result.mode === "legacy-full-restore" ? t("chat.runRevertedLegacy") : t("chat.runReverted"));
+                  return result;
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : t("chat.revertRunFailed"));
+                  throw error;
+                }
+              }}
+              onApplyCode={handleApplyCode}
+              onNavigateToFileUpdate={handleNavigateToFileUpdate}
+              pendingApprovals={chat.pendingApprovals}
+              onToolApproval={chat.respondToToolApproval}
+              onApproveConversationTools={chat.approveConversationTools}
+              onPlanAmendmentDecision={chat.decidePlanAmendment}
+              style={chatVisible && workspaceView === "files" ? { width: chatWidth } : undefined}
+            />
+          </div>
 
         {terminalVisible && (
           <div

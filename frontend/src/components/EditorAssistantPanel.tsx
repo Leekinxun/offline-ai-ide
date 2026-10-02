@@ -61,6 +61,7 @@ import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
 import { activeAssistantMessage, assistantToolStatus, isAssistantMessageVisible } from "../utils/assistantActivity";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface EditorAssistantPanelProps {
   token: string;
@@ -186,6 +187,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const approvalStackRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
+  const contextDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const historyContainerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
@@ -243,19 +245,15 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     localStorage.setItem("editorAssistantDetailsCollapsed", detailsCollapsed ? "1" : "0");
   }, [detailsCollapsed]);
 
-  useEffect(() => {
-    if (!contextInspectorOpen) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setContextInspectorOpen(false);
-      window.requestAnimationFrame(() => contextTriggerRef.current?.focus());
-    };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [contextInspectorOpen]);
+  const contextDrawerRef = useModalDialogFocus<HTMLElement>({
+    open: contextInspectorOpen,
+    onClose: () => setContextInspectorOpen(false),
+    initialFocusRef: contextDrawerCloseRef,
+  });
+  const historyDialogRef = useModalDialogFocus<HTMLDivElement>({
+    open: historyOpen,
+    onClose: () => setHistoryOpen(false),
+  });
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -382,7 +380,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               <History size={14} />
             </button>
             {historyOpen && (
-              <div className="editor-assistant-history-popover" role="dialog">
+              <div ref={historyDialogRef} className="editor-assistant-history-popover" role="dialog" aria-modal="false" aria-label="历史会话" tabIndex={-1}>
                 <div className="editor-assistant-history-head">
                   <span>历史会话 ({conversations.length})</span>
                 </div>
@@ -887,12 +885,14 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       {contextInspectorOpen && (
         <div className="chat-drawer-backdrop" onClick={() => setContextInspectorOpen(false)}>
           <aside
+            ref={contextDrawerRef}
             className="chat-drawer chat-drawer-context"
             role="dialog"
             aria-modal="true"
             aria-label={t("workbench.currentContext")}
             onClick={(e) => e.stopPropagation()}
             style={{ width: "100%", maxWidth: "100%" }}
+            tabIndex={-1}
           >
             <div className="chat-drawer-header">
               <div className="chat-drawer-title">
@@ -906,10 +906,11 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               </div>
               <button
                 type="button"
+                ref={contextDrawerCloseRef}
                 className="chat-drawer-close"
                 onClick={() => setContextInspectorOpen(false)}
-                title={t("chat.close")}
-                aria-label={t("chat.close")}
+                title={t("common.close")}
+                aria-label={t("common.close")}
               >
                 <X size={14} />
               </button>

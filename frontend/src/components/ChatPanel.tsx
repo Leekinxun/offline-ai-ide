@@ -77,6 +77,7 @@ import { CHAT_EMPTY_QUICK_PROMPTS, type WorkbenchQuickPromptId } from "./workben
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
 import { assistantToolStatus } from "../utils/assistantActivity";
+import { useModalDialogFocus } from "./useModalDialogFocus";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -308,6 +309,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const approvalStackRef = useRef<HTMLElement>(null);
+  const contextDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const historyDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const contextContainerRef = useRef<HTMLDivElement>(null);
   const contextInspectorTriggerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
@@ -369,23 +372,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   }, [focusRequest, visible]);
 
-  useEffect(() => {
-    if (!contextInspectorOpen) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setContextInspectorOpen(false);
-      window.requestAnimationFrame(() => {
-        contextInspectorTriggerRef.current
-          ?.querySelector<HTMLElement>("button[aria-expanded]")
-          ?.focus();
-      });
-    };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [contextInspectorOpen]);
+  const contextDrawerRef = useModalDialogFocus<HTMLElement>({
+    open: contextInspectorOpen,
+    onClose: () => setContextInspectorOpen(false),
+    initialFocusRef: contextDrawerCloseRef,
+  });
+  const historyDrawerRef = useModalDialogFocus<HTMLElement>({
+    open: historyOpen,
+    onClose: () => setHistoryOpen(false),
+    initialFocusRef: historyDrawerCloseRef,
+  });
 
   useEffect(() => {
     if (!contextPopoverOpen) return;
@@ -1082,7 +1078,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   {contextInspectorOpen && (
     <div className="chat-drawer-backdrop" onClick={() => setContextInspectorOpen(false)}>
-      <aside className="chat-drawer chat-drawer-context" role="dialog" aria-modal="true" aria-label={t("workbench.currentContext")} onClick={(e) => e.stopPropagation()}>
+      <aside ref={contextDrawerRef} className="chat-drawer chat-drawer-context" role="dialog" aria-modal="true" aria-label={t("workbench.currentContext")} onClick={(e) => e.stopPropagation()} tabIndex={-1}>
         <div className="chat-drawer-header">
           <div className="chat-drawer-title">
             <Layers size={15} />
@@ -1090,10 +1086,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
           <button
             type="button"
+            ref={contextDrawerCloseRef}
             className="chat-drawer-close"
             onClick={() => setContextInspectorOpen(false)}
-            title={t("chat.close")}
-            aria-label={t("chat.close")}
+            title={t("common.close")}
+            aria-label={t("common.close")}
           >
             <X size={14} />
           </button>
@@ -1129,7 +1126,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   {historyOpen && (
     <div className="chat-drawer-backdrop" onClick={() => setHistoryOpen(false)}>
-      <aside className="chat-drawer chat-drawer-history" role="dialog" aria-modal="true" aria-label={t("chat.tasks")} onClick={(e) => e.stopPropagation()}>
+      <aside ref={historyDrawerRef} className="chat-drawer chat-drawer-history" role="dialog" aria-modal="true" aria-label={t("chat.tasks")} onClick={(e) => e.stopPropagation()} tabIndex={-1}>
         <div className="chat-drawer-header">
           <div className="chat-drawer-title">
             <History size={15} />
@@ -1150,10 +1147,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </button>
             <button
               type="button"
+              ref={historyDrawerCloseRef}
               className="chat-drawer-close"
               onClick={() => setHistoryOpen(false)}
-              title={t("chat.close")}
-              aria-label={t("chat.close")}
+              title={t("common.close")}
+              aria-label={t("common.close")}
             >
               <X size={14} />
             </button>

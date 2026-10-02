@@ -21,6 +21,8 @@ import type {
 } from "../hooks/useWorkspaceFiles";
 import { useFileSystem } from "../hooks/useFileSystem";
 import { useTeam } from "../hooks/useTeam";
+import type { InlineAssistantBindings } from "./InlineAssistant";
+import type { EditorChangeReviewBindings } from "./EditorChangeReview";
 import type * as monaco from "monaco-editor";
 import "./WorkbenchEditorArea.css";
 
@@ -28,7 +30,7 @@ const Editor = lazy(() =>
   import("./Editor").then((module) => ({ default: module.Editor }))
 );
 
-export interface WorkbenchEditorAreaProps {
+export interface WorkbenchEditorAreaProps extends InlineAssistantBindings, EditorChangeReviewBindings {
   workspaceView: "chat" | "files";
 
   // TabBar
@@ -56,6 +58,8 @@ export interface WorkbenchEditorAreaProps {
   onToggleTerminal: (forceOpen?: boolean) => void;
   runDetailsVisible: boolean;
   onOpenChanges: () => void;
+  onKeepFileChanges?: () => void;
+  keepFileChangesBusy?: boolean;
   onRunCurrent: () => void;
   readOnlyWorkspace: boolean;
 
@@ -153,6 +157,8 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
   onToggleTerminal,
   runDetailsVisible,
   onOpenChanges,
+  onKeepFileChanges,
+  keepFileChangesBusy,
   onRunCurrent,
   readOnlyWorkspace,
 
@@ -198,6 +204,16 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
   editorHighlightTarget,
   onNavigationComplete,
   onHighlightComplete,
+  onInlineSubmit,
+  onInlineCancel,
+  inlineResponse,
+  inlineDisabled,
+  inlineModelKey,
+  changeReviewFile,
+  changeReviewRunning,
+  changeReviewBusy,
+  onChangeReviewAction,
+  onOpenChangeReview,
 
   previewPaneRef,
   activePreviewContent,
@@ -241,6 +257,8 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
           onToggleTerminal={onToggleTerminal}
           runDetailsVisible={runDetailsVisible}
           onOpenChanges={onOpenChanges}
+          onKeepFileChanges={onKeepFileChanges}
+          keepFileChangesBusy={keepFileChangesBusy}
           canRunCurrent={isDebuggablePath(activeFile.path)}
           onRunCurrent={() => void onRunCurrent()}
           readOnlyWorkspace={readOnlyWorkspace}
@@ -334,6 +352,17 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
                   <Editor
                     key={`editor:${activeFile.path}`}
                     content={activeFile.content}
+                    dirty={activeFile.modified}
+                    onInlineSubmit={onInlineSubmit}
+                    onInlineCancel={onInlineCancel}
+                    inlineResponse={inlineResponse}
+                    inlineDisabled={inlineDisabled}
+                    inlineModelKey={inlineModelKey}
+                    changeReviewFile={changeReviewFile}
+                    changeReviewRunning={changeReviewRunning}
+                    changeReviewBusy={changeReviewBusy}
+                    onChangeReviewAction={onChangeReviewAction}
+                    onOpenChangeReview={onOpenChangeReview}
                     language={activeFile.language}
                     path={activeFile.path}
                     collaboration={team.collaboration}
@@ -424,6 +453,17 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
                       <Editor
                         key={`editor:${activeFile.path}`}
                         content={activeFile.content}
+                        dirty={activeFile.modified}
+                        onInlineSubmit={onInlineSubmit}
+                        onInlineCancel={onInlineCancel}
+                        inlineResponse={inlineResponse}
+                        inlineDisabled={inlineDisabled}
+                        inlineModelKey={inlineModelKey}
+                        changeReviewFile={changeReviewFile}
+                        changeReviewRunning={changeReviewRunning}
+                        changeReviewBusy={changeReviewBusy}
+                        onChangeReviewAction={onChangeReviewAction}
+                        onOpenChangeReview={onOpenChangeReview}
                         language={activeFile.language}
                         path={activeFile.path}
                         collaboration={team.collaboration}
@@ -480,6 +520,17 @@ export const WorkbenchEditorArea: React.FC<WorkbenchEditorAreaProps> = ({
               <Editor
                 key={`editor:${activeFile.path}`}
                 content={activeFile.content}
+                dirty={activeFile.modified}
+                onInlineSubmit={onInlineSubmit}
+                onInlineCancel={onInlineCancel}
+                inlineResponse={inlineResponse}
+                inlineDisabled={inlineDisabled}
+                inlineModelKey={inlineModelKey}
+                changeReviewFile={changeReviewFile}
+                changeReviewRunning={changeReviewRunning}
+                changeReviewBusy={changeReviewBusy}
+                onChangeReviewAction={onChangeReviewAction}
+                onOpenChangeReview={onOpenChangeReview}
                 language={activeFile.language}
                 path={activeFile.path}
                 collaboration={team.collaboration}

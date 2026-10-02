@@ -177,6 +177,7 @@ export const ModelGovernancePanel: React.FC<Props> = ({
 
       <div className="governance-preflight">
         <strong>{t("governance.dispatchPreflight")}</strong>
+        <small>{t("governance.preflight")}</small>
         <input
           type="number"
           min="0"

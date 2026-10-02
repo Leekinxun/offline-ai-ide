@@ -1,11 +1,17 @@
-import React from "react";
-import { RunDetailsPanel, DetailTab } from "./RunDetailsPanel";
+import React, { lazy, Suspense } from "react";
+import type { DetailTab } from "./RunDetailsPanel";
 import { EditorAssistantPanel } from "./EditorAssistantPanel";
-import { PreviewPanel } from "./PreviewPanel";
 import { useI18n } from "../i18n";
 import type { OpenFile, ContextReference, SelectionInfo, FileNode } from "../types";
 import type { RunReviewComment } from "./RunChangesReview";
 import { useChat } from "../hooks/useChat";
+
+const RunDetailsPanel = lazy(() =>
+  import("./RunDetailsPanel").then((module) => ({ default: module.RunDetailsPanel }))
+);
+const PreviewPanel = lazy(() =>
+  import("./PreviewPanel").then((module) => ({ default: module.PreviewPanel }))
+);
 
 export interface WorkbenchRightDockProps {
   workspaceView: "chat" | "files";
@@ -114,124 +120,129 @@ export const WorkbenchRightDock: React.FC<WorkbenchRightDockProps> = ({
                 : t("workbench.editorAssistant")
           }
         >
-          {webPreviewVisible ? (
-            <PreviewPanel
-              token={token}
-              workspaceDir={workspaceDir}
-              readOnly={readOnlyWorkspace}
-              key={workspaceDir}
-              onClose={() => setWebPreviewVisible?.(false)}
-              onFeedback={(text) => {
-                setChatDraftText([chatDraftText, text].filter(Boolean).join("\n\n"));
-                setWebPreviewVisible?.(false);
-                if (workspaceView === "files") setEditorAssistantVisible(true);
-              }}
-              onOpenSource={(path, line, column) =>
-                void onNavigateToLocation?.(path, {
-                  startLine: line,
-                  startColumn: column,
-                  endLine: line,
-                  endColumn: column + 1,
-                })
-              }
-            />
-          ) : runDetailsVisible ? (
-            <RunDetailsPanel
-              token={token}
-              workspaceDir={workspaceDir}
-              visible={runDetailsVisible}
-              summary={chat.currentRunSummary}
-              runState={chat.runState}
-              errorCount={problemCounts.errors}
-              warningCount={problemCounts.warnings}
-              contextManifest={chat.contextManifest}
-              activeTab={runDetailsTab}
-              onTabChange={setRunDetailsTab}
-              onOpenFile={openFile}
-              onOpenDiff={onOpenGitDiff}
-              theme={theme}
-              readOnly={readOnlyWorkspace}
-              onComment={onReviewComment}
-              onChanged={onChangesApplied}
-              onClose={() => {
-                setRunDetailsVisible(false);
-                if (workspaceView === "files" && window.innerWidth > 1180) {
-                  setEditorAssistantVisible(true);
+          <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+            {webPreviewVisible ? (
+              <PreviewPanel
+                token={token}
+                workspaceDir={workspaceDir}
+                readOnly={readOnlyWorkspace}
+                key={workspaceDir}
+                onClose={() => setWebPreviewVisible?.(false)}
+                onFeedback={(text) => {
+                  setChatDraftText([chatDraftText, text].filter(Boolean).join("\n\n"));
+                  setWebPreviewVisible?.(false);
+                  if (workspaceView === "files") setEditorAssistantVisible(true);
+                }}
+                onOpenSource={(path, line, column) =>
+                  void onNavigateToLocation?.(path, {
+                    startLine: line,
+                    startColumn: column,
+                    endLine: line,
+                    endColumn: column + 1,
+                  })
                 }
-              }}
-            />
-          ) : (
-            <EditorAssistantPanel
-              token={token}
-              workspaceDir={workspaceDir}
-              referenceFiles={fileTree}
-              contextReferences={contextReferences}
-              onContextReferencesChange={onContextReferencesChange || (() => {})}
-              onUndoLastTurn={onUndoLastTurn}
-              selectionInfo={selectionInfo}
-              visible={true}
-              activeFilePath={activeFilePath}
-              activeFileDirty={Boolean(activeFile?.modified)}
-              messages={chat.messages}
-              connected={chat.connected}
-              isStreaming={chat.isStreaming}
-              agentMode={chat.agentMode}
-              runtimeOptions={chat.runtimeOptions}
-              selectedModelName={chat.selectedModelName}
-              draftText={chatDraftText}
-              onDraftTextChange={setChatDraftText}
-              attachmentDraft={chatAttachmentDraft}
-              attachmentWarning={attachmentWarning}
-              attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
-              onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
-              attachmentSubmissionError={attachmentSubmissionError}
-              attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
-              runState={chat.runState}
-              currentRunSummary={chat.currentRunSummary}
-              contextManifest={chat.contextManifest}
-              contextReadOnly={readOnlyWorkspace}
-              contextState={chat.contextState}
-              conversations={chat.conversations}
-              currentConversationId={chat.currentConversationId}
-              onLoadConversation={chat.loadConversation}
-              onDeleteConversation={chat.deleteConversation}
-              pendingApprovals={chat.pendingApprovals}
-              onAgentModeChange={chat.setAgentMode}
-              onModelNameChange={chat.setSelectedModelName}
-              onSend={onSend}
-              onSteer={onSteer}
-              onStop={chat.stopCurrentRun}
-              onResume={chat.resumeConversation}
-              onNewConversation={onNewConversation}
-              onToolApproval={chat.respondToToolApproval}
-              onApproveConversationTools={chat.approveConversationTools}
-              onPlanAmendmentDecision={chat.decidePlanAmendment}
-              onClose={() => setEditorAssistantVisible(false)}
-            />
-          )}
+              />
+            ) : runDetailsVisible ? (
+              <RunDetailsPanel
+                token={token}
+                workspaceDir={workspaceDir}
+                visible={runDetailsVisible}
+                summary={chat.currentRunSummary}
+                runState={chat.runState}
+                errorCount={problemCounts.errors}
+                warningCount={problemCounts.warnings}
+                contextManifest={chat.contextManifest}
+                activeTab={runDetailsTab}
+                onTabChange={setRunDetailsTab}
+                onOpenFile={openFile}
+                onOpenDiff={onOpenGitDiff}
+                theme={theme}
+                readOnly={readOnlyWorkspace}
+                onComment={onReviewComment}
+                onChanged={onChangesApplied}
+                onClose={() => {
+                  setRunDetailsVisible(false);
+                  if (workspaceView === "files" && window.innerWidth > 1180) {
+                    setEditorAssistantVisible(true);
+                  }
+                }}
+              />
+            ) : (
+              <EditorAssistantPanel
+                token={token}
+                workspaceDir={workspaceDir}
+                referenceFiles={fileTree}
+                contextReferences={contextReferences}
+                onContextReferencesChange={onContextReferencesChange || (() => {})}
+                onUndoLastTurn={onUndoLastTurn}
+                selectionInfo={selectionInfo}
+                visible={true}
+                activeFilePath={activeFilePath}
+                activeFileDirty={Boolean(activeFile?.modified)}
+                messages={chat.messages}
+                connected={chat.connected}
+                isStreaming={chat.isStreaming}
+                activeRequestIds={chat.activeRequestIds}
+                agentMode={chat.agentMode}
+                runtimeOptions={chat.runtimeOptions}
+                selectedModelName={chat.selectedModelName}
+                draftText={chatDraftText}
+                onDraftTextChange={setChatDraftText}
+                attachmentDraft={chatAttachmentDraft}
+                attachmentWarning={attachmentWarning}
+                attachmentDeliveryChecking={pendingAttachmentVerificationIds.size > 0}
+                onRecheckAttachmentDelivery={() => void chat.recheckAttachmentSends()}
+                attachmentSubmissionError={attachmentSubmissionError}
+                attachmentSubmissionNotice={editedRetryNotice || attachmentSubmissionNotice}
+                runState={chat.runState}
+                currentRunSummary={chat.currentRunSummary}
+                contextManifest={chat.contextManifest}
+                contextReadOnly={readOnlyWorkspace}
+                contextState={chat.contextState}
+                conversations={chat.conversations}
+                currentConversationId={chat.currentConversationId}
+                onLoadConversation={chat.loadConversation}
+                onDeleteConversation={chat.deleteConversation}
+                pendingApprovals={chat.pendingApprovals}
+                onAgentModeChange={chat.setAgentMode}
+                onModelNameChange={chat.setSelectedModelName}
+                onSend={onSend}
+                onSteer={onSteer}
+                onStop={chat.stopCurrentRun}
+                onResume={chat.resumeConversation}
+                onNewConversation={onNewConversation}
+                onToolApproval={chat.respondToToolApproval}
+                onApproveConversationTools={chat.approveConversationTools}
+                onPlanAmendmentDecision={chat.decidePlanAmendment}
+                onClose={() => setEditorAssistantVisible(false)}
+              />
+            )}
+          </Suspense>
         </aside>
       )}
 
       {workspaceView === "chat" && runDetailsVisible && (
-        <RunDetailsPanel
-          token={token}
-          workspaceDir={workspaceDir}
-          visible={runDetailsVisible}
-          summary={chat.currentRunSummary}
-          runState={chat.runState}
-          errorCount={problemCounts.errors}
-          warningCount={problemCounts.warnings}
-          contextManifest={chat.contextManifest}
-          activeTab={runDetailsTab}
-          onTabChange={setRunDetailsTab}
-          onOpenFile={openFile}
-          onOpenDiff={onOpenGitDiff}
-          theme={theme}
-          readOnly={readOnlyWorkspace}
-          onComment={onReviewComment}
-          onChanged={onChangesApplied}
-          onClose={() => setRunDetailsVisible(false)}
-        />
+        <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
+          <RunDetailsPanel
+            token={token}
+            workspaceDir={workspaceDir}
+            visible={runDetailsVisible}
+            summary={chat.currentRunSummary}
+            runState={chat.runState}
+            errorCount={problemCounts.errors}
+            warningCount={problemCounts.warnings}
+            contextManifest={chat.contextManifest}
+            activeTab={runDetailsTab}
+            onTabChange={setRunDetailsTab}
+            onOpenFile={openFile}
+            onOpenDiff={onOpenGitDiff}
+            theme={theme}
+            readOnly={readOnlyWorkspace}
+            onComment={onReviewComment}
+            onChanged={onChangesApplied}
+            onClose={() => setRunDetailsVisible(false)}
+          />
+        </Suspense>
       )}
     </>
   );

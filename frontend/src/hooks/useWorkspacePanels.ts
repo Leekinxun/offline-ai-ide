@@ -466,14 +466,18 @@ export function useWorkspacePanels({
                 ? "run-center"
                 : debugVisible
                   ? "debug"
-                  : isMobileViewport && sidebarVisible
-                    ? "sidebar"
-                    : isMobileViewport && chatVisible
-                      ? "chat"
-                      : null
+                  : isMobileViewport && terminalVisible
+                    ? "terminal"
+                    : isMobileViewport && sidebarVisible
+                      ? "sidebar"
+                      : isMobileViewport && chatVisible
+                        ? "chat"
+                        : null
     : null;
   const workspaceDrawerOpen = activeWorkspaceDrawer !== null;
-  const compactModalDrawerOpen = isTabletOrMobile && (agentsVisible || teamVisible || gitVisible);
+  const compactModalDrawerOpen = isTabletOrMobile && (
+    agentsVisible || teamVisible || gitVisible || (isMobileViewport && terminalVisible)
+  );
   const previousCompactWorkspaceRef = useRef(isMobileViewport);
 
   useEffect(() => {
@@ -488,6 +492,7 @@ export function useWorkspacePanels({
     setProblemsVisible(activeWorkspaceDrawer === "problems");
     setRunCenterVisible(activeWorkspaceDrawer === "run-center");
     setDebugVisible(activeWorkspaceDrawer === "debug");
+    setTerminalVisible(activeWorkspaceDrawer === "terminal");
     if (viewportWidth <= 860) setChatVisible(activeWorkspaceDrawer === "chat");
   }, [activeWorkspaceDrawer, isMobileViewport, viewportWidth]);
 
@@ -495,6 +500,7 @@ export function useWorkspacePanels({
     if (isMobileViewport) {
       setSidebarVisible(false);
       setChatVisible(false);
+      setTerminalVisible(false);
     }
     setTeamVisible(false);
     closeUtilityPanels();
@@ -505,17 +511,38 @@ export function useWorkspacePanels({
     previousDrawerRef.current = activeWorkspaceDrawer;
 
     if (activeWorkspaceDrawer && activeWorkspaceDrawer !== previousDrawer) {
-      requestAnimationFrame(() => {
-        const drawer = document.querySelector<HTMLElement>(
+      let focusFrame = 0;
+      let observer: MutationObserver | undefined;
+      const focusDrawer = () => {
+        const drawer = mainLayoutRef.current?.querySelector<HTMLElement>(
           `[data-workspace-drawer="${activeWorkspaceDrawer}"]`
         );
-        drawer?.focus();
+        if (!drawer || drawer.getClientRects().length === 0) return false;
+        if (!drawer.contains(document.activeElement)) drawer.focus();
+        if (document.activeElement === drawer || drawer.contains(document.activeElement)) {
+          observer?.disconnect();
+          return true;
+        }
+        return false;
+      };
+      focusFrame = requestAnimationFrame(() => {
+        if (focusDrawer() || !mainLayoutRef.current) return;
+        // A lazy panel can appear after the initial frame. Stop observing once
+        // it receives focus so later content updates do not steal input focus.
+        observer = new MutationObserver(() => {
+          cancelAnimationFrame(focusFrame);
+          focusFrame = requestAnimationFrame(focusDrawer);
+        });
+        observer.observe(mainLayoutRef.current, { childList: true, subtree: true });
       });
-      return;
+      return () => {
+        cancelAnimationFrame(focusFrame);
+        observer?.disconnect();
+      };
     }
 
     if (!activeWorkspaceDrawer && previousDrawer) {
-      requestAnimationFrame(() => {
+      const focusFrame = requestAnimationFrame(() => {
         const storedTrigger =
           drawerTriggerRef.current && document.contains(drawerTriggerRef.current)
             ? drawerTriggerRef.current
@@ -523,16 +550,22 @@ export function useWorkspacePanels({
         const matchingTriggers = Array.from(
           document.querySelectorAll<HTMLElement>(`[data-drawer-trigger="${previousDrawer}"]`)
         );
+        const commandTrigger = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-drawer-trigger="command"], .titlebar-mobile-command'
+          )
+        ).find((candidate) => candidate.getClientRects().length > 0);
         const trigger =
           storedTrigger && storedTrigger.offsetParent !== null
             ? storedTrigger
             : matchingTriggers.find((candidate) => candidate.offsetParent !== null) ||
-              document.querySelector<HTMLElement>(".titlebar-mobile-command");
+              commandTrigger;
         trigger?.focus();
         drawerTriggerRef.current = null;
       });
+      return () => cancelAnimationFrame(focusFrame);
     }
-  }, [activeWorkspaceDrawer]);
+  }, [activeWorkspaceDrawer, mainLayoutRef]);
 
   useEffect(() => {
     const layout = mainLayoutRef.current;

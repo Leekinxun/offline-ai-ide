@@ -130,7 +130,7 @@
       "id": "delivery-offline",
       "component": "frontend/src/components/ProviderDeliveryPanel.tsx",
       "componentTokens": ["delivery-offline-state", "delivery-stale-card"],
-      "cssFiles": ["frontend/src/App.css", "frontend/src/components/GitPanel.css"],
+      "cssFiles": ["frontend/src/App.css", "frontend/src/components/GitPanel.css", "frontend/src/components/OfflineBundlePanel.css"],
       "cssTokens": ["@media (max-width: 780px)", ".delivery-offline-state", ".delivery-form"]
     }
   ],

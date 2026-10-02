@@ -1,12 +1,6 @@
 import React, { lazy, Suspense } from "react";
 import { Sidebar } from "./Sidebar";
 import { TaskSidebar } from "./TaskSidebar";
-import { GitPanel } from "./GitPanel";
-import { AgentBoard } from "./AgentBoard";
-import { CheckpointPanel } from "./CheckpointPanel";
-import { ProblemsPanel } from "./ProblemsPanel";
-import { RunCenterPanel } from "./RunCenterPanel";
-import { DebugPanel } from "./DebugPanel";
 import type { TeamRole } from "../types";
 import type { FileNode } from "../types";
 import type { DebugFrame } from "../hooks/useDebugger";
@@ -20,8 +14,26 @@ import { useTeam } from "../hooks/useTeam";
 import { useChat } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 
+const GitPanel = lazy(() =>
+  import("./GitPanel").then((module) => ({ default: module.GitPanel }))
+);
+const AgentBoard = lazy(() =>
+  import("./AgentBoard").then((module) => ({ default: module.AgentBoard }))
+);
 const TeamPanel = lazy(() =>
   import("./TeamPanel").then((module) => ({ default: module.TeamPanel }))
+);
+const CheckpointPanel = lazy(() =>
+  import("./CheckpointPanel").then((module) => ({ default: module.CheckpointPanel }))
+);
+const ProblemsPanel = lazy(() =>
+  import("./ProblemsPanel").then((module) => ({ default: module.ProblemsPanel }))
+);
+const RunCenterPanel = lazy(() =>
+  import("./RunCenterPanel").then((module) => ({ default: module.RunCenterPanel }))
+);
+const DebugPanel = lazy(() =>
+  import("./DebugPanel").then((module) => ({ default: module.DebugPanel }))
 );
 
 export interface WorkbenchLeftDockProps {
@@ -197,6 +209,7 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
 
   return (
     <aside className="workbench-left-dock" aria-label={t("sidebar.explorer")}>
+      <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
       {gitVisible ? (
         <GitPanel
           key={`git:${workspaceDir}`}
@@ -479,6 +492,7 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
           activeTeam={team.activeTeam}
         />
       )}
+      </Suspense>
     </aside>
   );
 };

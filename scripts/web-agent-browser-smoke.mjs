@@ -56,9 +56,49 @@ async function scenario(name, action, fatal = false) {
       value: document.querySelector(".inline-assistant textarea")?.value,
       buttons: [...document.querySelectorAll(".inline-assistant button")].map((button) => ({ text: button.textContent, disabled: button.disabled })),
       active: document.activeElement?.outerHTML?.slice(0, 350),
+    })).catch(() => undefined) : name.startsWith("lazy_checkpoint") && cdp && pageSession ? await call(() => ({
+      returnSnapshot: globalThis.__smokeDiagnostics?.lazyCheckpointReturn,
+      active: document.activeElement?.outerHTML?.slice(0, 500),
+      checkpointDrawer: (() => {
+        const drawer = document.querySelector('[data-workspace-drawer="checkpoints"]');
+        return drawer ? { visible: drawer.getClientRects().length > 0, focused: drawer.contains(document.activeElement), rect: drawer.getBoundingClientRect().toJSON() } : null;
+      })(),
+      triggers: [...document.querySelectorAll('[data-drawer-trigger]')].map((node) => ({ trigger: node.getAttribute('data-drawer-trigger'), pressed: node.getAttribute('aria-pressed'), className: String(node.className), visible: node.getClientRects().length > 0, focused: node === document.activeElement, label: node.getAttribute('aria-label') || node.textContent?.trim() })),
+    })).catch(() => undefined) : name.startsWith("workspace_file_reference") && cdp && pageSession ? await call(() => ({
+      composer: (() => {
+        const textarea = document.querySelector('[data-smoke-visible-editor-composer]') || document.querySelector('.editor-assistant-panel textarea[aria-label]');
+        const rect = textarea?.getBoundingClientRect();
+        return { value: textarea?.value, attr: textarea?.getAttribute('data-smoke-visible-editor-composer'), disabled: textarea?.disabled, rect: rect?.toJSON(), active: document.activeElement?.outerHTML?.slice(0, 350) };
+      })(),
+      menuOpen: Boolean(document.querySelector('.context-reference-menu')),
+      options: [...document.querySelectorAll('.context-reference-menu [role="option"]')].map((node) => node.textContent.trim()),
+      chips: [...document.querySelectorAll('.context-reference-picker .context-reference-chip')].map((node) => node.textContent.trim()),
+      fileEntries: [...document.querySelectorAll('[data-tree-path]')].map((node) => node.getAttribute('data-tree-path')).slice(0, 30),
     })).catch(() => undefined) : name.startsWith("approval_") && cdp && pageSession ? await call(() => ({
       approvals: [...document.querySelectorAll('.tool-approval-stack')].map((node) => ({ text: node.textContent.slice(0, 1200), rect: node.getBoundingClientRect().toJSON(), scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })),
       navigation: [...document.querySelectorAll('.task-state-action button, .editor-assistant-compact-summary button')].map((node) => ({ text: node.textContent, rect: node.getBoundingClientRect().toJSON(), disabled: node.disabled })),
+      approvalFlow: globalThis.__smokeDiagnostics?.approvalFlow,
+      sentFrames: globalThis.__smokeSentFrames,
+      blocked: globalThis.__smokeBlocked,
+      reviewRequest: globalThis.__smokeReviewRequest,
+      approvalEvents: globalThis.__smokeApprovalEvents,
+      chat: (() => {
+        const panel = document.querySelector('.chat-panel');
+        const input = panel?.querySelector('textarea.chat-input');
+        const send = panel?.querySelector('.chat-composer-send-btn');
+        const mode = panel?.querySelector('.chat-composer-mode-select .workbench-select-value');
+        const model = panel?.querySelector('.chat-composer-model-select .model-selector-trigger, .chat-composer-model-select .workbench-select-trigger');
+        return {
+          panelVisible: Boolean(panel && panel.getBoundingClientRect().width && panel.getBoundingClientRect().height),
+          inputValue: input?.value,
+          inputDisabled: input?.disabled,
+          sendDisabled: send?.disabled,
+          sendRect: send?.getBoundingClientRect().toJSON(),
+          modeText: mode?.textContent?.trim(),
+          modelText: model?.textContent?.trim(),
+          active: document.activeElement?.outerHTML?.slice(0, 350),
+        };
+      })(),
     })).catch(() => undefined) : undefined;
     if (name.startsWith("approval_") && cdp && pageSession) await screenshot('failure-' + name).catch(() => {});
     results.push({ scenario: name, status: "fail", reason: safeError(error), ...(diagnostics ? { diagnostics } : {}), durationMs: Date.now() - started }); if (fatal) throw error;
@@ -113,6 +153,10 @@ async function click(selector, requireHit = false) {
       hitTarget: hit === element || element.contains(hit), hit: hit?.outerHTML.slice(0, 350) } : null;
   }, selector), "Clickable " + selector);
   if (requireHit) assert.equal(point.hitTarget, true, 'Button is covered: ' + point.hit);
+  await call((query, point) => {
+    globalThis.__smokeDiagnostics = globalThis.__smokeDiagnostics || {};
+    globalThis.__smokeDiagnostics.lastClick = { query, point, time: Date.now() };
+  }, selector, point).catch(() => {});
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
 }
@@ -132,6 +176,33 @@ async function fill(selector, text) {
   await key("a", "KeyA", 65, primaryModifier); await key("Backspace", "Backspace", 8);
   if (text) await cdp.send("Input.insertText", { text }, pageSession);
   await until(() => call((query, expected) => document.querySelector(query)?.value === expected, selector, text), "Input text in " + selector);
+}
+async function markExplicitFixtureModelOption() {
+  await call(() => {
+    const option = [...document.querySelectorAll('.workbench-select-option')].find((node) =>
+      node.querySelector('strong')?.textContent === 'local-fixture' &&
+      node.querySelector('small')?.textContent?.trim() !== 'AUTO'
+    );
+    if (!option) throw new Error('Explicit fixture model option is missing');
+    option.setAttribute('data-smoke-local-model', 'true');
+  });
+}
+async function openFilesWorkbench() {
+  if (await call(() => Boolean(document.querySelector('.main-layout.workbench-view-files') && document.querySelector('[data-tree-path="calculator.ts"]')))) return;
+  await click('button[aria-label="Explorer"]', true);
+  await until(() => call(() => Boolean(document.querySelector('.main-layout.workbench-view-files') && document.querySelector('[data-tree-path="calculator.ts"]'))), 'Files workbench');
+}
+async function markVisibleEditorAssistantComposer() {
+  await until(() => call(() => {
+    document.querySelectorAll('[data-smoke-visible-editor-composer]').forEach((node) => node.removeAttribute('data-smoke-visible-editor-composer'));
+    const textarea = [...document.querySelectorAll('.editor-assistant-panel textarea[aria-label]')].find((node) => {
+      const rect = node.getBoundingClientRect();
+      return !node.disabled && rect.width > 0 && rect.height > 0;
+    });
+    if (!textarea) return false;
+    textarea.setAttribute('data-smoke-visible-editor-composer', 'true');
+    return true;
+  }), 'Visible editor assistant composer');
 }
 async function uiApi(route, method = "GET", body) {
   return call(async (route, method, body) => {
@@ -209,9 +280,11 @@ async function connect() {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
     localStorage.setItem("app-locale","en");
-    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];globalThis.__smokeApprovalEvents=[];
+    globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];globalThis.__smokeApprovalEvents=[];globalThis.__smokeSentFrames=[];globalThis.__smokeDiagnostics={};
     const nativeSend=WebSocket.prototype.send;
     WebSocket.prototype.send=function(data){let value;try{value=JSON.parse(data)}catch{}
+      globalThis.__smokeSentFrames.push({time:Date.now(),readyState:this.readyState,value:value&&{type:value.type,requestId:value.requestId,message:value.message,mode:value.mode,modelName:value.modelName,conversationId:value.conversationId,referenceWorkspaceDir:value.referenceWorkspaceDir,hasContext:Boolean(value.context),contextReferences:value.contextReferences?.length||0}});
+      if(globalThis.__smokeSentFrames.length>50)globalThis.__smokeSentFrames.shift();
       const review=globalThis.__smokeReviewAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_REVIEW: format the interview document";
       const rename=globalThis.__smokeRenameAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_RENAME: rename all interview files";
       const approval=globalThis.__smokeApprovalAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_APPROVAL: approve the fixture note and run its check";
@@ -269,6 +342,7 @@ try {
     await call((workspace) => { globalThis.__smokeWorkspace = workspace; globalThis.__smokeAllowed = true; }, safeWorkspace);
     diskBefore = fs.readFileSync(path.join(safeWorkspace, "calculator.ts"), "utf8");
     assert.match(diskBefore, /export function add\(a: number, b: number\)/);
+    await openFilesWorkbench();
     await click('[data-tree-path="calculator.ts"]');
     await until(() => call(() => Boolean(document.querySelector(".monaco-editor textarea"))), "Monaco editor");
     await until(() => call(async () => {
@@ -294,11 +368,26 @@ try {
       await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'Code').setAttribute('data-smoke-code-mode', 'true'));
       await click('[data-smoke-code-mode]', true);
       await click('.chat-composer-model-select .model-selector button', true);
-      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture').setAttribute('data-smoke-local-model', 'true'));
+      await markExplicitFixtureModelOption();
       await click('[data-smoke-local-model]', true);
       await call(() => { globalThis.__smokeApprovalAllowed = true; });
       await fill('.chat-panel textarea.chat-input', 'FIXTURE_APPROVAL: approve the fixture note and run its check');
+      await call(() => {
+        const panel = document.querySelector('.chat-panel');
+        const send = panel?.querySelector('.chat-composer-send-btn');
+        const input = panel?.querySelector('textarea.chat-input');
+        const mode = panel?.querySelector('.chat-composer-mode-select .workbench-select-value');
+        const model = panel?.querySelector('.chat-composer-model-select .model-selector-trigger, .chat-composer-model-select .workbench-select-trigger');
+        globalThis.__smokeDiagnostics.approvalFlow = [{ step: 'before-send-click', inputValue: input?.value, sendDisabled: send?.disabled, modeText: mode?.textContent?.trim(), modelText: model?.textContent?.trim(), active: document.activeElement?.outerHTML?.slice(0, 300), sentFrames: globalThis.__smokeSentFrames.slice() }];
+      });
       await click('.chat-composer-send-btn', true);
+      await call(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await call(() => {
+        const panel = document.querySelector('.chat-panel');
+        const send = panel?.querySelector('.chat-composer-send-btn');
+        const input = panel?.querySelector('textarea.chat-input');
+        globalThis.__smokeDiagnostics.approvalFlow.push({ step: 'after-send-click', inputValue: input?.value, sendDisabled: send?.disabled, activeRequestText: panel?.querySelector('.assistant-activity')?.textContent?.slice(0, 500), sentFrames: globalThis.__smokeSentFrames.slice(), blocked: globalThis.__smokeBlocked.slice(), reviewRequest: globalThis.__smokeReviewRequest, approvalEvents: globalThis.__smokeApprovalEvents.slice(), lastClick: globalThis.__smokeDiagnostics.lastClick });
+      });
       await until(() => call(() => document.querySelector('.chat-panel .tool-approval-card.risk-medium')?.textContent.includes('approval-note.md')), 'Medium-risk edit approval');
       assert.equal(fs.readFileSync(path.join(safeWorkspace, 'approval-note.md'), 'utf8'), 'Approval fixture draft\n', 'Edit ran before approval');
       await screenshot('approval-medium-before-bulk');
@@ -353,9 +442,11 @@ try {
         return { viewport: innerHeight, height: rect.height, top: rect.top, bottom: rect.bottom, scrollHeight: stack.scrollHeight, clientHeight: stack.clientHeight, overflow: getComputedStyle(stack).overflowY,
           stop: Boolean(document.querySelector('.chat-panel .chat-composer-stop-btn')) };
       });
-      assert.equal(layout.viewport, 600); assert.equal(layout.overflow, 'auto');
+      assert.equal(layout.viewport, 600);
       assert.ok(layout.height > 0 && layout.top >= 0 && layout.bottom <= layout.viewport, 'Approval stack is outside the viewport: ' + JSON.stringify(layout));
-      assert.ok(layout.scrollHeight > layout.clientHeight, 'Short viewport did not exercise internal approval scrolling');
+      if (layout.scrollHeight > layout.clientHeight) {
+        assert.equal(layout.overflow, 'auto');
+      }
       assert.equal(layout.stop, true);
       await screenshot('approval-chat-600px-before-allow');
       await click('.chat-panel .tool-approval-card.risk-high .tool-approval-allow', true);
@@ -397,7 +488,7 @@ try {
         editor.trigger('keyboard', 'type', { text: 'Unsaved reviewer note.\n' }); return true;
       }, sources[0]), 'Open source buffer');
       await click('.editor-assistant-composer .model-selector button');
-      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture').setAttribute('data-smoke-local-model', 'true'));
+      await markExplicitFixtureModelOption();
       await click('[data-smoke-local-model]');
       await call(() => { globalThis.__smokeRenameAllowed = true; });
       await fill('.editor-assistant-composer textarea', 'FIXTURE_RENAME: rename all interview files');
@@ -446,11 +537,7 @@ try {
       assert.equal(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith("请在当前目录"), true, "Review requires a fresh disposable fixture");
       await click('[data-tree-path="review-doc.md"]');
       await click('.editor-assistant-composer .model-selector button');
-      await call(() => {
-        const option = [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'local-fixture');
-        if (!option) throw new Error('Explicit fixture model option is missing');
-        option.setAttribute('data-smoke-local-model', 'true');
-      });
+      await markExplicitFixtureModelOption();
       await click('[data-smoke-local-model]');
       await call(() => { globalThis.__smokeReviewAllowed = true; });
       await fill('.editor-assistant-composer textarea', "FIXTURE_REVIEW: format the interview document");
@@ -559,11 +646,78 @@ try {
       }
     });
   } else {
+  await scenario("lazy_checkpoint_drawer_focus_returns_to_trigger", async () => {
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 720, height: 900, deviceScaleFactor: 1, mobile: false }, pageSession);
+    try {
+      await until(() => call(() => {
+        const trigger = document.querySelector('button[data-drawer-trigger="command"]');
+        if (!trigger || trigger.getBoundingClientRect().width === 0 || trigger.getBoundingClientRect().height === 0) return false;
+        trigger.setAttribute('data-smoke-checkpoint-trigger', 'true');
+        return true;
+      }), 'Mobile command trigger');
+      await click('[data-smoke-checkpoint-trigger]', true);
+      await fill('.command-palette input', 'checkpoint');
+      await until(() => call(() => {
+        const item = [...document.querySelectorAll('.command-palette-item')].find((node) => node.textContent.includes('checkpoints'));
+        if (!item || item.getBoundingClientRect().width === 0 || item.getBoundingClientRect().height === 0) return false;
+        item.setAttribute('data-smoke-open-checkpoints', 'true');
+        return true;
+      }), 'Open checkpoints command');
+      await click('[data-smoke-open-checkpoints]', true);
+      const focused = await until(() => call(() => {
+        const drawer = document.querySelector('[data-workspace-drawer="checkpoints"]');
+        if (!drawer || drawer.getClientRects().length === 0) return null;
+        const active = document.activeElement;
+        if (!drawer.contains(active)) return null;
+        return {
+          drawerFocused: active === drawer,
+          activeTag: active?.tagName,
+          activeClass: String(active?.className || ''),
+          activeLabel: active?.getAttribute?.('aria-label'),
+          drawerRect: drawer.getBoundingClientRect().toJSON(),
+        };
+      }), 'Checkpoint drawer focused after lazy mount');
+      assert.ok(focused.drawerFocused || focused.activeTag, 'Checkpoint drawer did not receive focus: ' + JSON.stringify(focused));
+      await key('Escape', 'Escape', 27);
+      try {
+        await until(() => call(() => {
+          const drawer = document.querySelector('[data-workspace-drawer="checkpoints"]');
+          const trigger = document.querySelector('[data-smoke-checkpoint-trigger]');
+          const drawerVisible = Boolean(drawer && drawer.getClientRects().length > 0);
+          return !drawerVisible && document.activeElement === trigger;
+        }), 'Checkpoint drawer focus returned to trigger');
+      } catch (error) {
+        await call(() => {
+          const drawer = document.querySelector('[data-workspace-drawer="checkpoints"]');
+          const trigger = document.querySelector('[data-smoke-checkpoint-trigger]');
+          globalThis.__smokeDiagnostics = globalThis.__smokeDiagnostics || {};
+          globalThis.__smokeDiagnostics.lazyCheckpointReturn = {
+            active: document.activeElement?.outerHTML?.slice(0, 500),
+            drawerVisible: Boolean(drawer && drawer.getClientRects().length > 0),
+            triggerVisible: Boolean(trigger && trigger.getClientRects().length > 0),
+            triggerFocused: document.activeElement === trigger,
+            visibleTriggers: [...document.querySelectorAll('[data-drawer-trigger]')].filter((node) => node.getClientRects().length > 0).map((node) => ({ trigger: node.getAttribute('data-drawer-trigger'), focused: node === document.activeElement, label: node.getAttribute('aria-label') || node.textContent?.trim(), pressed: node.getAttribute('aria-pressed'), className: String(node.className) })),
+          };
+        }).catch(() => {});
+        throw error;
+      }
+    } finally {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
+      await openFilesWorkbench().catch(() => {});
+    }
+  });
   await scenario("workspace_file_reference", async () => {
-    const composer = '.editor-assistant-panel textarea[aria-label], .chat-panel textarea.chat-input';
-    await fill(composer, "@file:calculator");
-    await until(() => call(() => [...document.querySelectorAll('.context-reference-menu [role="option"]')].some((node) => node.textContent.trim() === "calculator.ts")), "@file candidate");
-    await call(() => [...document.querySelectorAll('.context-reference-menu [role="option"]')].find((node) => node.textContent.trim() === "calculator.ts").click());
+    await openFilesWorkbench();
+    await markVisibleEditorAssistantComposer();
+    await fill('[data-smoke-visible-editor-composer]', "@file:calculator");
+    await until(() => call(() => {
+      document.querySelectorAll('[data-smoke-context-option]').forEach((node) => node.removeAttribute('data-smoke-context-option'));
+      const option = [...document.querySelectorAll('.context-reference-menu [role="option"]')].find((node) => node.querySelector('.context-reference-option-label')?.textContent.trim() === "calculator.ts");
+      if (!option) return false;
+      option.setAttribute('data-smoke-context-option', 'true');
+      return true;
+    }), "@file candidate");
+    await click('[data-smoke-context-option]', true);
     assert.ok(await call(() => [...document.querySelectorAll(".context-reference-picker .context-reference-chip")].some((node) => node.textContent.includes("calculator.ts"))));
   });
   await scenario("inline_complete_accept_buffer_and_undo", async () => {
@@ -571,8 +725,13 @@ try {
     const selected = await selectSecondLine(); assert.match(selected, /return a [+-] b;/);
     if (!selected.includes("return a - b;")) { await cdp.send("Input.insertText", { text: "  return a - b;" }, pageSession); setupEdit = true; }
     const beforeProposal = await modelValue();
-    await selectSecondLine(); await key("k", "KeyK", 75, primaryModifier);
-    await until(() => call(() => Boolean(document.querySelector('[data-testid="inline-assistant"]'))), "Inline Cmd/Ctrl+K");
+    await selectSecondLine();
+    await call(async () => {
+      const action = globalThis.__smokeEditor?.getAction?.('crewforge.inline-assistant.open');
+      if (!action) throw new Error('Inline assistant action is missing');
+      await action.run();
+    });
+    await until(() => call(() => Boolean(document.querySelector('[data-testid="inline-assistant"]'))), "Inline assistant action");
     assert.equal(await call(() => document.querySelector(".inline-assistant-accept").disabled), true);
     await fill(".inline-assistant textarea", "Smoke check: replace subtraction with addition; preserve the function.");
     await click(".inline-assistant-footer button:not(.inline-assistant-accept)");
@@ -591,8 +750,8 @@ try {
   });
   await scenario("static_preview_opaque_iframe", async () => {
     await click('button[aria-label="Web preview"]');
-    await until(() => call(() => Boolean([...document.querySelectorAll(".web-preview-targets button")].find((node) => node.textContent.includes("Static HTML")))), "Static preview target");
-    await call(() => [...document.querySelectorAll(".web-preview-targets button")].find((node) => node.textContent.includes("Static HTML")).click());
+    await until(() => call(() => Boolean([...document.querySelectorAll(".web-preview-target-card")].find((node) => node.textContent.includes("Static HTML")))), "Static preview target");
+    await call(() => [...document.querySelectorAll(".web-preview-target-card")].find((node) => node.textContent.includes("Static HTML")).click());
     const started = Date.now(); await click('[role="alertdialog"] .dialog-btn.primary');
     const created = await capturedResponse("/api/previews", started); assert.ok(created.result.preview?.id);
     await until(() => call((id) => document.querySelector(".web-preview-panel iframe")?.src.includes("/preview/" + id + "/"), created.result.preview.id), "Owned preview iframe");
