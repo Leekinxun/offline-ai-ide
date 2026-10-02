@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { initializeUiPreferences } from "./desktop/preferences";
 
 async function bootstrap() {
   const root = ReactDOM.createRoot(document.getElementById("root")!);
@@ -17,7 +18,12 @@ async function bootstrap() {
     import("./App"),
     import("./i18n"),
   ]);
-  await initializePluginRuntime();
+  await Promise.all([
+    initializePluginRuntime(),
+    initializeUiPreferences().catch(() => {
+      console.warn("CrownForge could not load desktop preferences.");
+    }),
+  ]);
   root.render(
     <React.StrictMode>
       <I18nProvider>

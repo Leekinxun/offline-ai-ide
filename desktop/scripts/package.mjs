@@ -90,7 +90,7 @@ const config = {
   asar: true,
   npmRebuild: false,
   directories: { output: path.join(rootDir, "desktop-dist", target) },
-  files: ["main.cjs", "package.json"],
+  files: ["main.cjs", "preload.cjs", "preferences.cjs", "bridge-policy.cjs", "package.json"],
   extraResources: [
     { from: path.join(stageDir, "backend"), to: "backend", filter: ["dist/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
     { from: path.join(stageDir, "backend", "node_modules"), to: "backend/node_modules", filter: ["**/*"] },

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
+import { getDesktopBridge } from "../desktop/bridge";
+import { readUiPreference, saveUiPreference } from "../desktop/preferences";
 
 const STORAGE_KEY = "user-zoom-level";
 const DEFAULT_ZOOM = 1.0;
@@ -25,7 +27,7 @@ export const ZOOM_PRESET_OPTIONS = [
 export function useGlobalZoom(showToast?: (msg: string) => void) {
   const [zoomLevel, setZoomLevelState] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = readUiPreference(STORAGE_KEY);
       if (saved) {
         const val = parseFloat(saved);
         if (!isNaN(val) && val >= MIN_ZOOM && val <= MAX_ZOOM) {
@@ -40,7 +42,7 @@ export function useGlobalZoom(showToast?: (msg: string) => void) {
     const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(level * 100) / 100));
     setZoomLevelState(clamped);
     try {
-      localStorage.setItem(STORAGE_KEY, String(clamped));
+      saveUiPreference(STORAGE_KEY, String(clamped));
     } catch {}
     document.documentElement.style.zoom = String(clamped);
 
@@ -73,6 +75,12 @@ export function useGlobalZoom(showToast?: (msg: string) => void) {
   const setZoom = useCallback((level: number) => {
     applyZoom(level, true);
   }, [applyZoom]);
+
+  useEffect(() => getDesktopBridge()?.onZoomCommand((command) => {
+    if (command === "in") zoomIn();
+    else if (command === "out") zoomOut();
+    else if (command === "reset") resetZoom();
+  }), [zoomIn, zoomOut, resetZoom]);
 
   // 快捷键全局监听: Ctrl/Cmd + '=', Ctrl/Cmd + '-', Ctrl/Cmd + '0'
   useEffect(() => {

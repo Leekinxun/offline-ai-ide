@@ -13,7 +13,6 @@ import {
   FileUpdate,
   SelectionInfo,
   ChatAttachmentRef,
-  FileSelectionRange,
   ContextReference,
   getLanguage,
 } from "../types";

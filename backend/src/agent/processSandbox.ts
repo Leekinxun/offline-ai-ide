@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { redactSecrets } from "./secretRedaction.js";
+import { INTERNAL_NODE_RUNTIME, macosNodeRuntimeFrameworks, nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
 
 export interface ProcessResourceLimits {
   /** A wall-clock limit, enforced by this supervisor. */
@@ -31,6 +32,8 @@ export interface WorkspaceProcessOptions {
   networkMode?: "inherit" | "deny";
   /** Literal workspace-relative filesystem grants enforced by the OS helper. */
   filesystem?: WorkspaceFilesystemGrant;
+  /** Server-owned fixed Node runtime authority; identity cannot be supplied over HTTP or model JSON. */
+  internalNodeRuntime?: typeof INTERNAL_NODE_RUNTIME;
 }
 
 export interface WorkspaceFilesystemGrant {
@@ -69,7 +72,7 @@ export function resolveLinuxProcMode(value = process.env.CROWNFORGE_SANDBOX_PROC
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 50_000;
 const INHERITED_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TEMP", "TMP"] as const;
-const BLOCKED_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_[A-Z_]+|BASH_ENV|ENV|PYTHONPATH|RUBYOPT|PERL5OPT)$/;
+const BLOCKED_ENV = /^(?:ELECTRON_RUN_AS_NODE|NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_[A-Z_]+|BASH_ENV|ENV|PYTHONPATH|RUBYOPT|PERL5OPT)$/;
 const MACOS_SANDBOX_PROFILE = "(version 1)(deny network*)(allow default)";
 const LINUX_BWRAP_CANDIDATES = ["/usr/bin/bwrap", "/bin/bwrap"] as const;
 const PROTECTED_WORKSPACE_NAMES = [".git", ".codex", ".history", ".checkpoints", ".crewforge", ".ssh", ".npmrc", ".pypirc", ".netrc"] as const;
@@ -300,7 +303,7 @@ function networkWrappedCommand(
 
 function sbplLiteral(value: string): string { return JSON.stringify(value); }
 
-function macosSandboxProfile(policy: CompiledFilesystemPolicy, networkMode: WorkspaceProcessOptions["networkMode"], executable: string, scratchDir: string): string {
+function macosSandboxProfile(policy: CompiledFilesystemPolicy, networkMode: WorkspaceProcessOptions["networkMode"], executable: string, scratchDir: string, runtimeReadPaths: readonly string[]): string {
   const systemReads = SYSTEM_READ_PATHS.filter((item) => fs.existsSync(item));
   const lines = [
     "(version 1)",
@@ -314,6 +317,7 @@ function macosSandboxProfile(policy: CompiledFilesystemPolicy, networkMode: Work
     `(allow file-read* (literal ${sbplLiteral(policy.workspaceDir)}))`,
     `(allow file-read* (literal ${sbplLiteral(executable)}))`,
     ...systemReads.map((item) => `(allow file-read* (subpath ${sbplLiteral(item)}) (literal ${sbplLiteral(item)}))`),
+    ...runtimeReadPaths.map((item) => `(allow file-read* (subpath ${sbplLiteral(item)}) (literal ${sbplLiteral(item)}))`),
     `(allow file-read* (subpath ${sbplLiteral(scratchDir)}) (literal ${sbplLiteral(scratchDir)}))`,
     ...policy.readPaths.map((item) => `(allow file-read* (subpath ${sbplLiteral(item)}) (literal ${sbplLiteral(item)}))`),
     `(allow file-write* (subpath ${sbplLiteral(scratchDir)}) (literal ${sbplLiteral(scratchDir)}))`,
@@ -435,7 +439,8 @@ function sandboxWrappedCommand(
   networkMode: WorkspaceProcessOptions["networkMode"],
   filesystem: WorkspaceProcessOptions["filesystem"],
   scratchDir?: string,
-  procMode?: LinuxProcMode
+  procMode?: LinuxProcMode,
+  runtimeReadPaths: readonly string[] = []
 ): { executable: string; args: string[] } | string {
   if (!filesystem) return networkWrappedCommand(executable, args, networkMode, cwd, procMode);
   let policy: CompiledFilesystemPolicy;
@@ -451,7 +456,7 @@ function sandboxWrappedCommand(
   }
   if (capability.helper === "sandbox-exec") {
     if (!scratchDir) return "Filesystem isolation scratch directory is unavailable";
-    return { executable: capability.executable, args: ["-p", macosSandboxProfile(policy, networkMode, executable, scratchDir), executable, ...args] };
+    return { executable: capability.executable, args: ["-p", macosSandboxProfile(policy, networkMode, executable, scratchDir, runtimeReadPaths), executable, ...args] };
   }
   const bwrapArgs = buildLinuxFilesystemSandboxArgs(policy, networkMode, executable, args, canonicalCwd, capability.procMode);
   return typeof bwrapArgs === "string" ? bwrapArgs : { executable: capability.executable, args: bwrapArgs };
@@ -469,6 +474,8 @@ export interface PreparedWorkspaceProcess {
 export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): PreparedWorkspaceProcess {
   const executable = options.executable.trim();
   if (!executable || executable.includes("\0")) throw new Error("Invalid executable");
+  const internalNode = options.internalNodeRuntime === INTERNAL_NODE_RUNTIME && executable === process.execPath;
+  if (options.internalNodeRuntime && !internalNode) throw new Error("Internal Node runtime authority requires the fixed backend executable");
   const args = options.args ?? [];
   if (!args.every((arg) => typeof arg === "string" && !arg.includes("\0"))) throw new Error("Invalid process arguments");
   if (options.signal?.aborted) throw new Error("Stopped before process execution");
@@ -480,8 +487,11 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
 
   const limitError = validateLimits(options.limits);
   if (limitError) throw new Error(limitError);
-  const env = minimalEnvironment(options.env);
+  let env = minimalEnvironment(options.env);
   if (!env) throw new Error("Process environment contains a blocked or invalid variable");
+  if (internalNode) env = nodeRuntimeEnvironment(env);
+  const frameworks = internalNode ? macosNodeRuntimeFrameworks() : undefined;
+  const runtimeReadPaths = frameworks ? [fs.realpathSync.native(executable), frameworks] : [];
 
   const timeoutMs = options.limits?.wallTimeMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
@@ -501,7 +511,7 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
     env.HOME = "/tmp";
   }
   const cleanupSandboxTemp = () => { if (sandboxTempDir) fs.rmSync(sandboxTempDir, { recursive: true, force: true }); };
-  const networkWrapped = sandboxWrappedCommand(wrapped.executable, wrapped.args, options.cwd, options.networkMode ?? "inherit", options.filesystem, sandboxTempDir, procMode);
+  const networkWrapped = sandboxWrappedCommand(wrapped.executable, wrapped.args, options.cwd, options.networkMode ?? "inherit", options.filesystem, sandboxTempDir, procMode, runtimeReadPaths);
   if (typeof networkWrapped === "string") { cleanupSandboxTemp(); throw new Error(networkWrapped); }
 
   return { ...networkWrapped, env, timeoutMs, maxOutputBytes, cleanup: cleanupSandboxTemp };

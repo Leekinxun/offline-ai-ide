@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
 import { config } from "../config.js";
@@ -11,9 +12,10 @@ import { TeammateManager } from "../agent/teammateManager.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import { handleChatWs } from "../ws/chat.js";
 import { appendConversationMessage, readConversationMessages } from "./history.js";
-import { AgentRunRecorder } from "./runHistory.js";
+import { AgentRunRecorder, getRunsDir, listRunRecords, readRunRecord } from "./runHistory.js";
 import { createActiveRun, getActiveRunContext, listActiveRuns } from "./runCoordinator.js";
 import { answerAgentQuestion, listAgentQuestions, requestAgentQuestion } from "./agentQuestions.js";
+import { createApprovedExecutionPlan } from "./executionPlans.js";
 
 function sessionFor(workspaceDir: string): UserSession {
   const taskManager = new TaskManager(workspaceDir); const messageBus = new MessageBus(workspaceDir);
@@ -40,6 +42,125 @@ async function socketServer(session: UserSession) {
   };
   return { connect, close: async () => { for (const client of clients) client.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); } };
 }
+
+function persistOrphanedRuns(workspace: string, runs: Array<{
+  runId: string; conversationId: string; mode: "ask" | "code"; parentRunId?: string; executionPlanId?: string;
+}>): void {
+  const usersFile = path.join(workspace, ".history", "fixture-users.json");
+  fs.mkdirSync(path.dirname(usersFile), { recursive: true });
+  fs.writeFileSync(usersFile, JSON.stringify({ allowedRoots: [workspace], users: [] }));
+  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    const { AgentRunRecorder } = await import(process.argv[1]);
+    const workspace = process.argv[2];
+    for (const run of JSON.parse(process.argv[3])) {
+      const recorder = new AgentRunRecorder(workspace, run.runId, run.conversationId, run.mode,
+        undefined, run.parentRunId ? { parentRunId: run.parentRunId } : undefined,
+        run.executionPlanId, "restart-fixture");
+      await recorder.start();
+    }
+  `, new URL("./runHistory.ts", import.meta.url).href, workspace, JSON.stringify(runs)], {
+    encoding: "utf8", timeout: 10_000,
+    env: { ...process.env, WORKSPACE_DIR: workspace, USERS_CONFIG: usersFile,
+      APP_SETTINGS_CONFIG: path.join(workspace, ".history", "fixture-app-settings.json") },
+  });
+  assert.equal(child.status, 0, child.stderr || child.error?.message);
+}
+
+test("real WS resumes runs orphaned by a backend restart with preserved history and validation boundaries", async (t) => {
+  for (const scenario of [{ mode: "ask", byRunId: true }, { mode: "code", byRunId: false }] as const) {
+    await t.test(`${scenario.mode} via ${scenario.byRunId ? "run id" : "conversation"}`, async (t) => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-restart-resume-"));
+      const conversationId = "restart-task"; const oldRunId = "orphan-run";
+      await appendConversationMessage(workspace, conversationId, { role: "user", content: "Keep the completed work.", timestamp: Date.now() });
+      await appendConversationMessage(workspace, conversationId, { role: "user", content: "Correction: preserve the latest scope.", timestamp: Date.now() });
+      persistOrphanedRuns(workspace, [{ runId: oldRunId, conversationId, mode: scenario.mode }]);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(getRunsDir(workspace), `${oldRunId}.json`), "utf8")).status, "running");
+      if (!scenario.byRunId) assert.equal(readRunRecord(workspace, oldRunId).status, "interrupted");
+      const original = { models: config.models, profiles: config.agentProfiles, fallbacks: config.modelFallbacks, fetch: globalThis.fetch };
+      config.models = [{ modelName: "restart-fixture", apiUrl: "https://restart-fixture.invalid/v1", apiKey: "" }];
+      config.agentProfiles = {}; config.modelFallbacks = [];
+      const bodies: Array<{ messages: Array<{ content: string }> }> = [];
+      globalThis.fetch = async (input, init) => {
+        assert.ok(String(input).startsWith("https://restart-fixture.invalid/v1/"), "only the fixed provider fixture may be requested");
+        if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "restart-fixture", max_output_tokens: 1024 }] });
+        bodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Resumed from persisted history." } }] });
+      };
+      const server = await socketServer(sessionFor(workspace));
+      t.after(async () => {
+        for (const run of listActiveRuns(workspace)) getActiveRunContext(workspace, run.conversationId)?.forceStop();
+        await waitUntil(() => !listActiveRuns(workspace).length);
+        await server.close(); globalThis.fetch = original.fetch; config.models = original.models;
+        config.agentProfiles = original.profiles; config.modelFallbacks = original.fallbacks;
+        fs.rmSync(workspace, { recursive: true, force: true });
+      });
+      const client = await server.connect();
+      client.send({ type: "resume", requestId: "resume-request", conversationId, ...(scenario.byRunId ? { runId: oldRunId } : {}) });
+      await waitUntil(() => client.frames.some((frame) => frame.type === "done") || client.frames.some((frame) => frame.type === "error"));
+      assert.equal(client.frames.some((frame) => frame.type === "error"), false, JSON.stringify(client.frames.filter((frame) => frame.type === "error")));
+      const accepted = client.frames.find((frame) => frame.type === "request_accepted");
+      assert.ok(accepted); assert.notEqual(accepted.runId, oldRunId);
+      await waitUntil(() => !listActiveRuns(workspace).length);
+      const resumed = readRunRecord(workspace, accepted.runId);
+      assert.equal(resumed.resumedFromRunId, oldRunId); assert.equal(resumed.conversationId, conversationId);
+      assert.equal(resumed.mode, scenario.mode); assert.equal(readRunRecord(workspace, oldRunId).status, "interrupted");
+      assert.ok(bodies.length > 0);
+      assert.ok(bodies[0].messages.some((message) => message.content.includes("Correction: preserve the latest scope.")));
+      assert.equal(readConversationMessages(workspace, conversationId).filter((message) => message.content === "Keep the completed work.").length, 1);
+      if (scenario.mode === "code") {
+        assert.equal(resumed.completionEvidence?.outcome, "needs_attention");
+        assert.ok(resumed.completionEvidence.ledger.blockers.includes("check"));
+      } else assert.equal(resumed.status, "completed");
+    });
+  }
+});
+
+test("real WS restart resume rejects foreign conversations, workspaces, children and stale or missing bound plans", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-restart-resume-scope-"));
+  const otherWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-restart-resume-other-"));
+  const conversationId = "restart-task";
+  fs.writeFileSync(path.join(workspace, "scope.ts"), "export const value = 1;\n");
+  const plan = createApprovedExecutionPlan(workspace, { goal: "Update the value", files: ["scope.ts"], steps: ["Update the value"], risks: [],
+    verification_commands: ["npm test"], acceptance_criteria: ["The value is correct"] }, { conversationId, planRunId: "plan-run" });
+  const foreignPlan = createApprovedExecutionPlan(workspace, { goal: "Another task", files: ["scope.ts"], steps: ["Update the value"], risks: [],
+    verification_commands: ["npm test"], acceptance_criteria: ["The value is correct"] }, { conversationId: "another-task", planRunId: "other-plan-run" });
+  await appendConversationMessage(workspace, conversationId, { role: "user", content: "Preserve approved scope.", timestamp: Date.now() });
+  persistOrphanedRuns(workspace, [
+    { runId: "parent-run", conversationId, mode: "ask" },
+    { runId: "child-run", conversationId, mode: "ask", parentRunId: "parent-run" },
+    { runId: "planned-run", conversationId, mode: "code", executionPlanId: plan.id },
+    { runId: "missing-plan-run", conversationId, mode: "code", executionPlanId: "missing-plan" },
+    { runId: "foreign-plan-run", conversationId, mode: "code", executionPlanId: foreignPlan.id },
+  ]);
+  fs.writeFileSync(path.join(workspace, "scope.ts"), "export const value = 2;\n");
+  const initialRunIds = listRunRecords(workspace).map((run) => run.runId).sort();
+  const initialHistory = readConversationMessages(workspace, conversationId);
+  const originalFetch = globalThis.fetch; let providerCalls = 0;
+  globalThis.fetch = async () => { providerCalls++; throw new Error("Rejected resume must not call a provider"); };
+  const server = await socketServer(sessionFor(workspace));
+  const otherServer = await socketServer(sessionFor(otherWorkspace));
+  t.after(async () => {
+    await server.close(); await otherServer.close(); globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true }); fs.rmSync(otherWorkspace, { recursive: true, force: true });
+  });
+  const client = await server.connect(); const otherClient = await otherServer.connect();
+  const reject = async (target: typeof client, request: Record<string, unknown>, expected: RegExp) => {
+    const cursor = target.frames.length; target.send({ type: "resume", conversationId, ...request });
+    await waitUntil(() => target.frames.slice(cursor).some((frame) => frame.type === "error"));
+    assert.match(target.frames.slice(cursor).find((frame) => frame.type === "error").content, expected);
+    assert.equal(target.frames.slice(cursor).some((frame) => frame.type === "request_accepted"), false);
+  };
+  await reject(client, { runId: "parent-run", conversationId: "another-task" }, /does not belong to this conversation/);
+  await reject(otherClient, { runId: "parent-run" }, /not found|ENOENT/i);
+  await reject(client, { runId: "child-run" }, /Child agent runs cannot be resumed/);
+  await reject(client, { runId: "planned-run" }, /requires revision/);
+  await reject(client, { runId: "missing-plan-run" }, /Execution plan.*unavailable/i);
+  await reject(client, { runId: "foreign-plan-run" }, /Execution plan.*does not belong/i);
+  assert.equal(providerCalls, 0);
+  assert.deepEqual(listRunRecords(workspace).map((run) => run.runId).sort(), initialRunIds);
+  assert.deepEqual(readConversationMessages(workspace, conversationId), initialHistory);
+  assert.deepEqual(listActiveRuns(workspace), []);
+});
 
 test("real WS switching and reconnect recover live text and approvals without stopping background work", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-background-ws-"));

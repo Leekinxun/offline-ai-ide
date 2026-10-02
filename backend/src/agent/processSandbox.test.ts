@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import childProcess from "node:child_process";
+import { INTERNAL_NODE_RUNTIME } from "../utils/nodeRuntime.js";
 import {
   compileFilesystemPolicy,
   buildLinuxFilesystemSandboxArgs,
@@ -430,4 +431,35 @@ test("filesystem sandbox gives tools a private home without exposing the server 
   assert.equal(prepared.env.HOME, "/tmp");
   assert.ok(prepared.args.includes("--tmpfs"));
   assert.equal(prepared.args.includes("/server-home-must-not-be-inherited"), false);
+});
+
+test("only identity-bound internal Node launches receive readonly current Frameworks through resource wrappers", (t) => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-runtime-sandbox-")));
+  const workspace = path.join(root, "workspace"); const contents = path.join(root, "Fixture.app", "Contents");
+  const executable = path.join(contents, "MacOS", "Fixture"); const frameworks = path.join(contents, "Frameworks");
+  fs.mkdirSync(workspace); fs.mkdirSync(path.dirname(executable), { recursive: true }); fs.mkdirSync(frameworks); fs.writeFileSync(executable, "fixture");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!; const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+  const electron = Object.getOwnPropertyDescriptor(process.versions, "electron");
+  Object.defineProperty(process, "platform", { ...platform, value: "darwin" }); Object.defineProperty(process, "execPath", { ...execPath, value: executable });
+  Object.defineProperty(process.versions, "electron", { value: "44.4.4", configurable: true });
+  if (typeof process.getuid === "function") t.mock.method(process as NodeJS.Process & { getuid: () => number }, "getuid", () => 501);
+  const exists = fs.existsSync;
+  t.mock.method(fs, "existsSync", (candidate: fs.PathLike) => String(candidate) === "/usr/bin/sandbox-exec" || exists(candidate));
+  t.mock.method(childProcess, "spawnSync", (() => ({ pid: 1, output: [null, "", ""], status: 0, stdout: "", stderr: "", signal: null })) as unknown as typeof childProcess.spawnSync);
+  t.after(() => { Object.defineProperty(process, "platform", platform); Object.defineProperty(process, "execPath", execPath);
+    if (electron) Object.defineProperty(process.versions, "electron", electron); else delete process.versions.electron;
+    fs.rmSync(root, { recursive: true, force: true }); });
+  const options = { executable, args: ["-e", "fixture"], cwd: workspace, filesystem: { readPaths: ["."], writePaths: [] }, networkMode: "deny" as const };
+  assert.throws(() => prepareWorkspaceProcess({ ...options, env: { ELECTRON_RUN_AS_NODE: "1" } }), /blocked or invalid variable/);
+  assert.throws(() => prepareWorkspaceProcess({ ...options, internalNodeRuntime: { kind: "internal-node-runtime" } }), /Internal Node runtime authority/);
+  assert.throws(() => prepareWorkspaceProcess({ ...options, executable: "/bin/sh", internalNodeRuntime: INTERNAL_NODE_RUNTIME }), /Internal Node runtime authority/);
+  const ordinary = prepareWorkspaceProcess(options); t.after(ordinary.cleanup);
+  assert.equal(ordinary.env.ELECTRON_RUN_AS_NODE, undefined); assert.equal(ordinary.args[1].includes(frameworks), false);
+  const trusted = prepareWorkspaceProcess({ ...options, internalNodeRuntime: INTERNAL_NODE_RUNTIME, limits: { maxOpenFiles: 64 }, resourceLimitMode: "posix-shell" }); t.after(trusted.cleanup);
+  const profile = trusted.args[1];
+  assert.equal(trusted.args[2], "/bin/sh"); assert.equal(trusted.env.ELECTRON_RUN_AS_NODE, "1");
+  assert.ok(profile.includes(`(allow file-read* (subpath ${JSON.stringify(frameworks)}) (literal ${JSON.stringify(frameworks)}))`));
+  assert.equal(profile.split("\n").filter((line) => line.includes("allow file-write") && line.includes(frameworks)).length, 0);
+  assert.equal(profile.includes(`(subpath ${JSON.stringify(contents)})`), false);
+  assert.ok(profile.includes("(deny network*)")); assert.ok(profile.includes("(deny file-read* (subpath") && profile.includes(".codex"));
 });

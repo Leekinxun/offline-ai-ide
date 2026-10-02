@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { readUiPreference, saveUiPreference } from "../desktop/preferences";
 import { getRegisteredLocaleBundles } from "../plugins/runtime";
 import type { LocaleBundle, LocaleMessageDictionary } from "../plugins/types";
 import {
@@ -58,7 +59,7 @@ function mergeLocaleBundles(): LocaleBundle[] {
 
 function resolveInitialLocale(bundles: LocaleBundle[]): string {
   const available = new Set(bundles.map((bundle) => bundle.locale));
-  const stored = normalizeLocale(localStorage.getItem(LOCALE_STORAGE_KEY));
+  const stored = normalizeLocale(readUiPreference(LOCALE_STORAGE_KEY));
   if (stored && available.has(stored)) {
     return stored;
   }
@@ -116,6 +117,7 @@ export const I18nProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     [bundles]
   );
   const [locale, setLocaleState] = useState<string>(() => resolveInitialLocale(bundles));
+  useEffect(() => { document.documentElement.lang = locale; }, [locale]);
 
   const setLocale = useCallback(
     (nextLocale: string) => {
@@ -125,7 +127,7 @@ export const I18nProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
           ? normalized
           : DEFAULT_LOCALE;
       setLocaleState(resolved);
-      localStorage.setItem(LOCALE_STORAGE_KEY, resolved);
+      saveUiPreference(LOCALE_STORAGE_KEY, resolved);
     },
     [messagesByLocale]
   );

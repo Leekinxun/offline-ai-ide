@@ -8,15 +8,17 @@
       ".git",
       ".history",
       ".omx",
+      ".reasonix",
       ".tasks",
       ".team",
       ".tmp",
+      "desktop-dist",
       "app-settings.json",
       "users.json",
       "workspace"
     ],
     "excludedDirectoryNames": ["node_modules", "dist", "coverage", ".cache", ".vite"],
-    "excludedRelativePaths": ["backend/workspace"],
+    "excludedRelativePaths": ["backend/workspace", "desktop/.stage", "desktop/.stage-cross-win-x64", "desktop/.stage-cross-win7-x64"],
     "excludedFileNames": [".DS_Store"],
     "excludedSuffixes": [".bak", ".log", ".tmp"],
     "dependencyLinks": ["backend/node_modules", "frontend/node_modules"]

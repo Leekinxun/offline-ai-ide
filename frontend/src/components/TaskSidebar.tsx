@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Plus, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { ContextState, ConversationSummary } from "../types";
 import { useI18n } from "../i18n";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";

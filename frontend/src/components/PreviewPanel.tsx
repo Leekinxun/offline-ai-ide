@@ -15,6 +15,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import { getDesktopBridge } from "../desktop/bridge";
 import { ActionConfirmDialog } from "./ActionConfirmDialog";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import "./PreviewPanel.css";
@@ -356,7 +357,15 @@ export function PreviewPanel({
                   target="_blank"
                   rel="noreferrer noopener"
                   className="web-preview-action-btn link-btn"
-                  title="在外部浏览器打开"
+                  title={t("preview.openExternal")}
+                  onClick={(event) => {
+                    const desktop = getDesktopBridge();
+                    if (!desktop) return;
+                    event.preventDefault();
+                    void desktop.openExternal(url)
+                      .then((opened) => { if (!opened) setError(t("preview.externalFailed")); })
+                      .catch(() => setError(t("preview.externalFailed")));
+                  }}
                 >
                   <ExternalLink size={13} />
                 </a>

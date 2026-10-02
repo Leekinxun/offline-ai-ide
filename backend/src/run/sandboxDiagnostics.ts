@@ -1,8 +1,10 @@
 import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { INTERNAL_NODE_RUNTIME } from "../utils/nodeRuntime.js";
 import {
   linuxTrustedRuntimeReadPaths, probeFilesystemIsolation, probeNetworkIsolation,
   resolveLinuxProcMode, runWorkspaceProcess, sanitizeIsolationDiagnostic, type LinuxProcMode, type NetworkIsolationCapability,
@@ -96,7 +98,18 @@ export interface SandboxSelfTestResult {
   checks?: Record<string, boolean>;
   /** A same-named file was created only in private scratch; the host canary stayed hidden and unchanged. */
   scratchShadowWrite?: boolean;
+  runtimeDiagnostics?: string;
   error?: string;
+}
+
+/** Keep runtime stderr separate from one explicitly framed fixed-canary receipt. */
+export function parseSandboxSelfTestOutput(output: string, marker: string): { evidence: Record<string, unknown>; runtimeDiagnostics?: string } {
+  const lines = output.split(/\r?\n/); const receipts = lines.filter((line) => line.startsWith(marker));
+  if (receipts.length !== 1) throw new Error("Sandbox self-test receipt is missing or ambiguous");
+  const evidence: unknown = JSON.parse(receipts[0].slice(marker.length));
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) throw new Error("Sandbox self-test receipt is invalid");
+  const runtimeDiagnostics = sanitizeIsolationDiagnostic(lines.filter((line) => !line.startsWith(marker)).join("\n"));
+  return { evidence: evidence as Record<string, unknown>, ...(runtimeDiagnostics ? { runtimeDiagnostics } : {}) };
 }
 
 /** The protected boundary is the host file, not the same pathname in private tmpfs. */
@@ -130,6 +143,7 @@ export async function runSandboxSelfTest(): Promise<SandboxSelfTestResult> {
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Could not create isolated test listener");
+    const marker = `CREWFORGE_SANDBOX_CANARY:${crypto.randomBytes(12).toString("hex")}:`;
     const command = `
       const fs = require('fs'); const net = require('net'); const cp = require('child_process');
       const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
@@ -149,15 +163,15 @@ export async function runSandboxSelfTest(): Promise<SandboxSelfTestResult> {
         try { evidence.ruff = cp.execFileSync('/opt/conda/bin/ruff', ['--version'], { encoding: 'utf8' }).trim(); } catch { evidence.ruff = ''; }
       }
       const socket = net.connect({ host: '127.0.0.1', port: Number(process.argv[2]) });
-      let finished = false; const done = reachable => { if (finished) return; finished = true; socket.destroy(); process.stdout.write(JSON.stringify({ ...evidence, parentReachable: reachable })); };
+      let finished = false; const done = reachable => { if (finished) return; finished = true; socket.destroy(); const newline = String.fromCharCode(10); process.stdout.write(newline + ${JSON.stringify(marker)} + JSON.stringify({ ...evidence, parentReachable: reachable }) + newline); };
       socket.once('connect', () => done(true)); socket.once('error', () => done(false)); socket.setTimeout(1000, () => done(false));
     `;
     const conda = diagnostics.runtimeReadPaths.includes("/opt/conda");
     if (diagnostics.linux && resolveLinuxProcMode() !== diagnostics.linux.procMode) throw new Error("Sandbox proc mode changed during self-test; run the diagnostic again");
     const output = await runWorkspaceProcess({ executable: process.execPath, args: ["-e", command, outside, String(address.port), conda ? "conda" : "", diagnostics.linux?.procMode || ""], cwd: workspace,
-      filesystem: { workspaceDir: workspace, readPaths: ["."], writePaths: ["allowed"] }, networkMode: "deny", timeoutMs: 10_000, maxOutputBytes: 8_192 });
+      internalNodeRuntime: INTERNAL_NODE_RUNTIME, filesystem: { workspaceDir: workspace, readPaths: ["."], writePaths: ["allowed"] }, networkMode: "deny", timeoutMs: 10_000, maxOutputBytes: 8_192 });
     if (output.startsWith("Error:")) return { passed: false, diagnostics, error: sanitizeIsolationDiagnostic(output) };
-    const evidence = JSON.parse(output) as Record<string, unknown>;
+    const { evidence, runtimeDiagnostics } = parseSandboxSelfTestOutput(output, marker);
     const outsideBoundary = evaluateOutsideCanary(evidence, fs.readFileSync(outside, "utf8"));
     const checks = {
       allowedRead: evidence.allowedRead === "allowed-canary", allowedWrite: evidence.allowedWrite === true,
@@ -168,7 +182,8 @@ export async function runSandboxSelfTest(): Promise<SandboxSelfTestResult> {
       ...(diagnostics.linux?.procMode === "none" ? { payloadProcAbsent: evidence.payloadProcAbsent === true } : {}),
       ...(conda ? { condaPythonVisible: /^Python \d/.test(String(evidence.python)), condaRuffVisible: /^ruff \d/.test(String(evidence.ruff)) } : {}),
     };
-    return { passed: Object.values(checks).every(Boolean), diagnostics, checks, scratchShadowWrite: outsideBoundary.scratchShadowWrite };
+    return { passed: Object.values(checks).every(Boolean), diagnostics, checks, scratchShadowWrite: outsideBoundary.scratchShadowWrite,
+      ...(runtimeDiagnostics ? { runtimeDiagnostics } : {}) };
   } catch (error) { return { passed: false, diagnostics, error: sanitizeIsolationDiagnostic(error instanceof Error ? error.message : String(error)) }; }
   finally {
     await new Promise<void>((resolve) => { if (server.listening) server.close(() => resolve()); else resolve(); });

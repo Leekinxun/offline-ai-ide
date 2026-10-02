@@ -8,13 +8,14 @@ import { prepareWorkspaceProcess, type WorkspaceFilesystemGrant, type ProcessRes
 import { DEFAULT_COMPATIBILITY_SHELL_LIMITS } from "../agent/shell.js";
 import { safePath } from "../utils/safePath.js";
 import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "../agent/networkAccess.js";
+import { nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
 
 export type ProcessSessionStatus = "running" | "exited" | "failed" | "cancelled" | "timed_out" | "interrupted";
 export interface ProcessSessionSummary { id: string; taskId: string; label: string; status: ProcessSessionStatus; startedAt: number; endedAt?: number; timeoutMs?: number; deadlineAt?: number; exitCode: number | null; nextCursor: number; runId?: string; invocation?: { executable: string; args: string[] }; }
 export interface ProcessOutputEvent { seq: number; stream: "stdout" | "stderr"; text: string; }
 export interface ProcessSessionOwner { workspaceDir: string; owner: string; sessionToken?: string; runId?: string; }
 interface StoredSession extends ProcessSessionSummary { ownerHash: string; workspaceDir: string; events: ProcessOutputEvent[]; }
-interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; }
+interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; stdinError?: Error; }
 const active = new Map<string, LiveSession>();
 const MAX_LOG_CHARS = 128_000;
 const MAX_EVENTS = 1024;
@@ -23,18 +24,33 @@ const MAX_SESSIONS = 40;
 // if the backend disappears, including a hard crash before shutdown hooks run.
 const PROCESS_WATCHDOG = `
 const {spawn}=require("node:child_process");
-const [executable,...args]=process.argv.slice(1);
-const child=spawn(executable,args,{stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
-const kill=()=>{try{if(process.platform==="win32")child.kill("SIGKILL");else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
+const [nodeRuntime,executable,...args]=process.argv.slice(1);
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+if(nodeRuntime==="node")env.ELECTRON_RUN_AS_NODE="1";
+const child=spawn(executable,args,{env,stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
+const taskkill=(pid)=>{try{spawn("taskkill",["/pid",String(pid),"/T","/F"],{stdio:"ignore",windowsHide:true}).once("error",()=>{}).once("close",()=>process.exit(1))}catch{process.exit(1)}};
+const kill=()=>{try{if(process.platform==="win32"){if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
 process.on("disconnect",kill);
-process.on("SIGTERM",()=>{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()});
-process.on("SIGINT",()=>{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()});
+process.on("SIGTERM",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()}});
+process.on("SIGINT",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()}});
 process.stdin.pipe(child.stdin);child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
 child.stdin.on("error",()=>{});child.once("error",error=>{console.error(error.message)});
 child.once("close",code=>process.exit(code===null?1:code));
 `;
 const ownerHash = (owner: string) => crypto.createHash("sha256").update(owner).digest("hex");
 const summary = ({ ownerHash: _owner, workspaceDir: _workspace, events: _events, ...record }: StoredSession): ProcessSessionSummary => ({ ...record });
+export function windowsProcessTreeKillInvocation(pid: number): { executable: "taskkill"; args: string[] } {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid process tree pid");
+  return { executable: "taskkill", args: ["/pid", String(pid), "/T", "/F"] };
+}
+function killWindowsProcessTree(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    const invocation = windowsProcessTreeKillInvocation(pid);
+    const killer = spawn(invocation.executable, invocation.args, { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => { /* taskkill may be unavailable or the process may have exited. */ });
+  } catch { /* exited or invalid */ }
+}
 function storage(workspace: string, id?: string): string {
   if (id !== undefined && !/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid process session id");
   const relative = `.history/process-sessions${id ? `/${id}.json` : ""}`;
@@ -84,7 +100,7 @@ export function pollProcessSession(owner: ProcessSessionOwner, id: string, curso
 }
 function signalGroup(live: LiveSession, signal: NodeJS.Signals): void {
   if (!live.child.pid) return;
-  try { if (process.platform === "win32") live.child.kill(signal); else process.kill(-live.child.pid, signal); } catch { /* exited */ }
+  try { if (process.platform === "win32") killWindowsProcessTree(live.child.pid); else process.kill(-live.child.pid, signal); } catch { /* exited */ }
 }
 function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   if (live.requestedStatus) return;
@@ -98,13 +114,23 @@ export function stopProcessSession(owner: ProcessSessionOwner, id: string): Proc
   if (live) terminate(live, "cancelled");
   return summary(record);
 }
+function closedInputError(error: unknown): boolean {
+  return ["EPIPE", "ECONNRESET", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END", "ERR_STREAM_PREMATURE_CLOSE"].includes((error as NodeJS.ErrnoException | undefined)?.code || "");
+}
+function inputFailure(error: unknown): unknown {
+  return closedInputError(error) ? new Error("Process session is not accepting input", { cause: error }) : error;
+}
 export async function inputProcessSession(owner: ProcessSessionOwner, id: string, text = "", eof = false): Promise<ProcessSessionSummary> {
   const record = owned(owner, id);
   const live = active.get(id);
-  if (!live || record.status !== "running" || live.requestedStatus || !live.child.stdin?.writable) throw new Error("Process session is not accepting input");
+  if (live?.stdinError) throw inputFailure(live.stdinError);
+  const stdin = live?.child.stdin;
+  if (!live || record.status !== "running" || live.requestedStatus || !stdin?.writable || stdin.destroyed || stdin.writableEnded || live.child.exitCode !== null || live.child.signalCode !== null) throw new Error("Process session is not accepting input");
   if (typeof text !== "string" || Buffer.byteLength(text) > 16_384 || typeof eof !== "boolean") throw new Error("Invalid process input");
-  if (text) await new Promise<void>((resolve, reject) => live.child.stdin!.write(text, (error) => error ? reject(error) : resolve()));
-  if (eof) live.child.stdin.end();
+  try {
+    if (text) await new Promise<void>((resolve, reject) => stdin.write(text, (error) => error ? reject(error) : resolve()));
+    if (eof) await new Promise<void>((resolve, reject) => stdin.end((error?: Error | null) => error ? reject(error) : resolve()));
+  } catch (error) { throw inputFailure(error); }
   return summary(record);
 }
 interface StartOptions extends ProcessSessionOwner {
@@ -114,6 +140,8 @@ interface StartOptions extends ProcessSessionOwner {
   privateInvocation?: boolean;
   /** Trusted launch state, never accepted by HTTP or model tool arguments. */
   networkAuthorized?: boolean;
+  /** Internal fixed Node payload only; never supplied by project tasks or Agent tools. */
+  nodeRuntime?: boolean;
 }
 function startManagedSession(input: StartOptions): ProcessSessionSummary {
   const workspaceDir = fs.realpathSync(path.resolve(input.workspaceDir));
@@ -122,6 +150,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 24 * 60 * 60_000) throw new Error("Invalid process timeout");
   if ([...active.values()].filter((item) => item.record.ownerHash === ownerHash(input.owner)).length >= 8) throw new Error("Too many active process sessions");
   if (input.signal?.aborted) throw new Error("Process request was cancelled");
+  if (input.nodeRuntime && input.executable !== process.execPath) throw new Error("Internal Node sessions must use the backend executable");
   const prepared = prepareWorkspaceProcess({
     executable: input.executable, args: input.args, cwd: workspaceDir, signal: input.signal,
     limits: { ...(input.agent ? DEFAULT_COMPATIBILITY_SHELL_LIMITS : {}), ...input.limits, wallTimeMs: timeoutMs },
@@ -134,7 +163,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
   let child: ChildProcess;
-  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, prepared.executable, ...prepared.args], { cwd: workspaceDir, env: prepared.env, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
+  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", prepared.executable, ...prepared.args], { cwd: workspaceDir, env: nodeRuntimeEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
   catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
   const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);
@@ -148,6 +177,12 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
     if (!live.save) { live.save = setTimeout(() => { live.save = undefined; try { persist(record); } catch { terminate(live, "failed"); } }, 250); live.save.unref(); }
   };
   const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+  // A failed write also emits an error event. Keep a listener for the complete
+  // stream lifetime so an exit race cannot become an uncaught backend error.
+  child.stdin?.on("error", (error) => {
+    live.stdinError = error;
+    if (!closedInputError(error)) { append("stderr", error.message); terminate(live, "failed"); }
+  });
   child.stdout?.on("data", (chunk: Buffer) => append("stdout", decoders.stdout.write(chunk)));
   child.stderr?.on("data", (chunk: Buffer) => append("stderr", decoders.stderr.write(chunk)));
   child.once("error", (error) => append("stderr", error.message));
@@ -168,7 +203,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
 export function startProjectTaskSession(owner: ProcessSessionOwner, taskId: string, timeoutMs?: number): ProcessSessionSummary {
   const task = discoverRunTasks(owner.workspaceDir).find((item) => item.id === taskId);
   if (!task) throw new Error("Unknown or unavailable task");
-  return startManagedSession({ ...owner, taskId, label: task.label, executable: task.command, args: task.args, timeoutMs });
+  return startManagedSession({ ...owner, taskId, label: task.label, executable: task.command, args: task.args, timeoutMs, nodeRuntime: false });
 }
 /** Default network deny; a separately approved, exact-command grant is single-use. */
 export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: () => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
@@ -179,11 +214,11 @@ export function startAgentProcessSession(input: ProcessSessionOwner & { executab
     consumeNetworkExecutionGrant(input.networkExecutionGrant, input.workspaceDir, shellCommand, "process_start");
     networkAuthorized = true;
   }
-  return startManagedSession({ ...input, taskId: "agent:command", label: input.executable, agent: true, networkAuthorized });
+  return startManagedSession({ ...input, taskId: "agent:command", label: input.executable, agent: true, networkAuthorized, nodeRuntime: false });
 }
 /** Internal preview launch: no HTTP route accepts arbitrary executables or arguments. */
 export function startPreviewProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; targetId: string; onOutput: (event: ProcessOutputEvent) => void; onExit: () => void }): ProcessSessionSummary {
-  return startManagedSession({ ...input, taskId: input.targetId, label: "Web preview", timeoutMs: 60 * 60_000, privateInvocation: true });
+  return startManagedSession({ ...input, taskId: input.targetId, label: "Web preview", timeoutMs: 60 * 60_000, privateInvocation: true, nodeRuntime: true });
 }
 export function stopProcessSessionsForToken(token: string): void { for (const live of active.values()) if (live.token === token) terminate(live, "cancelled"); }
 export function shutdownProcessSessions(): void { for (const live of active.values()) { terminate(live, "interrupted"); live.record.status = "interrupted"; live.record.endedAt = Date.now(); try { persist(live.record); } catch { /* shutdown */ } } }

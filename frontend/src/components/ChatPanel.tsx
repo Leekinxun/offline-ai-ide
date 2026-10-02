@@ -33,16 +33,12 @@ import {
   TestTube2,
   TextSelect,
   Plus,
-  RefreshCw,
   Square,
   Sparkles,
-  Activity,
-  ArchiveRestore,
   GitFork,
   GitCompare,
   RotateCcw,
   Trash2,
-  FileCode2,
   X,
   Layers,
   History,
@@ -52,7 +48,6 @@ import "./ChatPanel.css";
 import "./ExecutionFactsCard.css";
 import { ExecutionFactsCard } from "./ExecutionFactsCard";
 import { BrandMark } from "./BrandMark";
-import { ContextStrip } from "./ContextStrip";
 import { ContextInspector } from "./ContextInspector";
 import { TaskHeader } from "./TaskHeader";
 import { ToolCallStep } from "./ToolCallStep";
@@ -72,7 +67,6 @@ import { ModelSelector } from "./ModelSelector";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import type { ContextManifestController } from "../hooks/useContextManifest";
 import type { ChatRuntimeOptions, AiHealthInfo } from "../hooks/useChat";
-import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { CHAT_EMPTY_QUICK_PROMPTS, type WorkbenchQuickPromptId } from "./workbenchQuickPrompts";
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
@@ -243,10 +237,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   knowledgeState,
   historyRequest,
   newConversationRequest,
-  onOpenSettings,
-  collaboration,
   activeFilePath,
-  onOpenCollaboration,
   onOpenFile,
   onOpenDiff,
   theme,
@@ -267,12 +258,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onLoadConversation,
   onDeleteConversation,
   onForkConversation,
-  onRefreshConversations,
   runState,
-  runHistory,
-  runHistoryLoading,
-  runHistoryError,
-  onLoadRun,
   onResumeRun,
   onRevertRun,
   onApplyCode,
@@ -295,7 +281,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   );
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [runTimelineOpen, setRunTimelineOpen] = useState(false);
   const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
@@ -312,7 +297,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const contextDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const historyDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const contextContainerRef = useRef<HTMLDivElement>(null);
-  const contextInspectorTriggerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const handledNewConversationRef = useRef(0);
   const previousMessageCountRef = useRef(messages.length);
@@ -502,16 +486,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [busyHistoryAction, isStreaming, t]
   );
 
-  const handleRevertRun = useCallback(
-    (runId: string) => {
-      if (busyHistoryAction || isStreaming) return;
-      setConfirmError(null);
-      setConfirmAction({ kind: "revert", runId });
-      setConfirmIntent({ id: `revert:${runId}`, title: t("chat.revertRun"), description: t("chat.revertRunConfirm"), confirmLabel: t("chat.revertRun"), tone: "danger" });
-    },
-    [busyHistoryAction, isStreaming, t]
-  );
-
   const executeConfirmedAction = useCallback(async () => {
     const action = confirmAction;
     if (!action) return;
@@ -602,10 +576,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [activeRequestIds, messages]
   );
   const activeTool = activeAssistantMessage?.toolCalls?.find((step) => step.result === undefined);
-  const timelineEvents = useMemo(
-    () => runState?.events.filter((event) => !isQuietCompletionEvent(event)).slice(-10) || [],
-    [runState]
-  );
   const runStatus = isStreaming ? "running" : runState?.status || "queued";
   const runTone: TaskStateTone = pendingApprovals.length ? "warning" : runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
   const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
@@ -640,8 +610,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         historyOpen={historyOpen}
         changesOpen={changesOpen}
         changedFilesCount={currentRunSummary?.changedFiles?.length || 0}
+        detailsCollapsed={detailsCollapsed}
         onToggleHistory={() => setHistoryOpen((open) => !open)}
         onToggleChanges={() => setChangesOpen((open) => !open)}
+        onToggleDetails={handleToggleDetails}
         onClear={onClear}
         onOpenIsolatedWindow={() => void handleOpenIsolatedWindow()}
         creatingIsolatedWindow={creatingIsolatedWindow}

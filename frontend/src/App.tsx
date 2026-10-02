@@ -3,8 +3,6 @@ import type * as monaco from "monaco-editor";
 import { ChatPanel } from "./components/ChatPanel";
 import { WorkbenchRightDock } from "./components/WorkbenchRightDock";
 import { WorkbenchModals } from "./components/WorkbenchModals";
-import type { DetailTab } from "./components/RunDetailsPanel";
-import { WorkbenchSelect } from "./components/WorkbenchSelect";
 import { StatusBar } from "./components/StatusBar";
 import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
@@ -20,7 +18,6 @@ import "./components/Sidebar.css";
 import "./components/CreateEntryDialog.css";
 import { PRODUCT_NAME } from "./brand";
 import type { CommandPaletteMode } from "./components/CommandPalette";
-import { useModalDialogFocus } from "./components/useModalDialogFocus";
 import type { DebugFrame } from "./hooks/useDebugger";
 import { useEditorProblems } from "./hooks/useEditorProblems";
 import { useEditorDiagnosticFeedback } from "./hooks/useEditorDiagnosticFeedback";
@@ -28,22 +25,18 @@ import { useRunChanges } from "./hooks/useRunChanges";
 import type { RunReviewComment } from "./components/RunChangesReview";
 import type { ReviewFile, ReviewHunk } from "./components/runReviewPolicy";
 import type { InlineAssistantRequest, InlineAssistantResponse } from "./editor/inlineAssistantPolicy";
-import type { ContextReference } from "./types";
 import { useFileSystem } from "./hooks/useFileSystem";
 import type { WorkspaceSearchResult } from "./hooks/useFileSystem";
 import { useAuth, type DesktopFolderPickResult } from "./hooks/useAuth";
 import { useTeam } from "./hooks/useTeam";
 import { usePlatformEnvironment } from "./hooks/usePlatformEnvironment";
 import { useGlobalZoom } from "./hooks/useGlobalZoom";
+import { readUiPreference, saveUiPreference } from "./desktop/preferences";
 import {
   usePanelLayout,
-  FILES_ACTIVITY_WIDTH,
   FILES_HANDLE_WIDTH,
-  FILES_EDITOR_MIN_WIDTH,
   FILES_SIDEBAR_MIN_WIDTH,
-  FILES_SIDEBAR_MAX_WIDTH,
   FILES_ASSISTANT_MIN_WIDTH,
-  FILES_ASSISTANT_MAX_WIDTH,
 } from "./hooks/usePanelLayout";
 import { useWorkbenchShortcuts } from "./hooks/useWorkbenchShortcuts";
 import { useEditorTabs } from "./hooks/useEditorTabs";
@@ -55,52 +48,17 @@ import {
   normalizeWorkspaceRelativePath,
   isSameWorkspacePath,
   isPathEqualOrDescendant,
-  remapMovedPath,
-  pruneNestedPaths,
-  collectVisiblePaths,
   isReadOnlyTeamRole,
   isDebuggablePath,
   buildClearedRemoteState,
 } from "./utils/workspacePaths";
 import {
   DefinitionLocation,
-  FileNode,
   FileSelectionRange,
-  FileUpdate,
   OpenFile,
   ReferenceLocation,
   SelectionInfo,
-  TeamRole,
-  getLanguage,
 } from "./types";
-import {
-  PanelLeft,
-  MessageSquare,
-  TerminalSquare,
-  LogOut,
-  Settings,
-  Moon,
-  Sun,
-  Command,
-  GitBranch,
-  Bot,
-  CircleAlert,
-  ChevronRight,
-  Columns2,
-  FileCode2,
-  Files,
-  ShieldCheck,
-  Bug,
-  Users,
-  X,
-  Link2,
-  Unlink2,
-  Play,
-  Search,
-  Maximize2,
-  Minimize2,
-  FolderOpen,
-} from "lucide-react";
 import { useI18n } from "./i18n";
 import {
   getMatchingFilePreviewRenderer,
@@ -108,8 +66,7 @@ import {
 } from "./plugins/runtime";
 import type { FilePreviewMode } from "./plugins/types";
 import "./App.css";
-import { getEditorThemeName } from "./editor/themeNames";
-import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "./editor/fontDefaults";
+import { DEFAULT_EDITOR_FONT_FAMILY } from "./editor/fontDefaults";
 import { inlineRequestStatus } from "./utils/requestOutcome";
 import { canKeepEditorFileChanges } from "./editor/editorChangeReviewPolicy";
 const MobileApp = lazy(() =>
@@ -155,11 +112,11 @@ function DesktopApp() {
   const auth = useAuth();
   const platform = usePlatformEnvironment(auth.user?.desktop);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const saved = localStorage.getItem("theme");
-    return (saved as "light" | "dark") || "light";
+    const saved = readUiPreference("theme");
+    return saved === "dark" ? "dark" : "light";
   });
   const [editorFont, setEditorFont] = useState(() => {
-    const saved = localStorage.getItem("editorFont");
+    const saved = readUiPreference("editorFont");
     return saved || EDITOR_FONT_OPTIONS[0].family;
   });
   const [publicView, setPublicView] = useState<"landing" | "login">(() =>
@@ -171,7 +128,7 @@ function DesktopApp() {
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-os", platform.os);
     document.documentElement.setAttribute("data-platform", platform.host);
-    localStorage.setItem("theme", theme);
+    saveUiPreference("theme", theme);
   }, [theme, platform.os, platform.host]);
 
   const toggleTheme = useCallback(() => {
@@ -180,7 +137,7 @@ function DesktopApp() {
 
   const changeEditorFont = useCallback((fontFamily: string) => {
     setEditorFont(fontFamily);
-    localStorage.setItem("editorFont", fontFamily);
+    saveUiPreference("editorFont", fontFamily);
   }, []);
 
   useEffect(() => {
@@ -608,7 +565,6 @@ function AuthenticatedApp({
 
   const {
     fileTree,
-    setFileTree,
     treeRefreshNonce,
     setTreeRefreshNonce,
     lastWorkspaceMtimeRef,
@@ -617,7 +573,6 @@ function AuthenticatedApp({
     handleCopyEntry,
     handleDeleteEntry,
     handleDeleteEntries,
-    updateMovedPathsInEditor,
     handleRenameEntry,
     handleMoveEntry,
     handleDownloadEntry,
@@ -640,14 +595,8 @@ function AuthenticatedApp({
   }, [activeFilePath]);
 
   const {
-    sidebarWidth,
-    setSidebarWidth,
-    assistantWidth,
-    setAssistantWidth,
     chatWidth,
-    setChatWidth,
     terminalHeight,
-    setTerminalHeight,
     draggingPanel,
     sidebarMaxWidth,
     assistantMaxWidth,
@@ -659,7 +608,6 @@ function AuthenticatedApp({
     handlePanelResizeKeyDown,
     handleTerminalResizeStart,
     handleTerminalResizeKeyDown,
-    adjustTerminalHeight,
   } = usePanelLayout({
     viewportWidth,
     isLeftDockOpen,
@@ -1557,6 +1505,7 @@ function AuthenticatedApp({
             ? " with-editor-assistant"
             : ""
         }`}
+        data-active-workspace-drawer={activeWorkspaceDrawer || undefined}
         style={{
           "--files-sidebar-width": `${fileDockWidth}px`,
           "--chat-sidebar-width": `${chatDockWidth}px`,

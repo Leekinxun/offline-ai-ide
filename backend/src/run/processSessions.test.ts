@@ -8,7 +8,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { probeFilesystemIsolation } from "../agent/processSandbox.js";
-import { startAgentProcessSession, startProjectTaskSession, listProcessSessions, pollProcessSession, inputProcessSession, stopProcessSession, type ProcessSessionOwner } from "./processSessions.js";
+import { startAgentProcessSession, startProjectTaskSession, startPreviewProcessSession, listProcessSessions, pollProcessSession, inputProcessSession, stopProcessSession, windowsProcessTreeKillInvocation, type ProcessSessionOwner } from "./processSessions.js";
 
 function fixture(t: test.TestContext, scripts: Record<string, string>): ProcessSessionOwner {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-process-"));
@@ -23,6 +23,12 @@ async function waitFor(owner: ProcessSessionOwner, id: string, predicate: (value
   }
   throw new Error("Process session did not reach the expected state");
 }
+
+test("Windows process tree cleanup invokes taskkill for the owned supervisor pid only", () => {
+  assert.deepEqual(windowsProcessTreeKillInvocation(4321), { executable: "taskkill", args: ["/pid", "4321", "/T", "/F"] });
+  for (const pid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) assert.throws(() => windowsProcessTreeKillInvocation(pid), /Invalid process tree pid/);
+});
+
 test("sessions stream incremental output, accept stdin, and preserve exact invocation and exit", async (t) => {
   const owner = fixture(t, { interactive: 'node -e "console.log(\'ready\');process.stdin.once(\'data\',data=>{console.log(\'received:\'+data);process.exit(0)})"' });
   const record = startProjectTaskSession(owner, "npm:interactive");
@@ -39,6 +45,60 @@ test("sessions stream incremental output, accept stdin, and preserve exact invoc
   assert.match(delta.events.map((event) => event.text).join(""), /received:hello/);
   assert.deepEqual(pollProcessSession(owner, record.id, delta.nextCursor).events, []);
   await assert.rejects(inputProcessSession(owner, record.id, "late"), /not accepting/);
+});
+
+test("writes racing a real supervisor exit reject closed stdin without an uncaught stream error", async (t) => {
+  const owner = fixture(t, {});
+  const script = "require('fs').writeFileSync('supervisor.pid',String(process.ppid));require('fs').writeFileSync('payload.pid',String(process.pid));console.log('ready');setTimeout(()=>process.exit(23),1500);";
+  const record = startPreviewProcessSession({ ...owner, executable: process.execPath, args: ["-e", script], targetId: "stdin-exit-race", onOutput: () => {}, onExit: () => {} });
+  await waitFor(owner, record.id, (state) => state.events.some((event) => event.text.includes("ready")));
+  const supervisorPid = Number(fs.readFileSync(path.join(owner.workspaceDir, "supervisor.pid"), "utf8"));
+  const payloadPid = Number(fs.readFileSync(path.join(owner.workspaceDir, "payload.pid"), "utf8"));
+  assert.ok(Number.isSafeInteger(supervisorPid) && supervisorPid > 0 && supervisorPid !== process.pid);
+  assert.ok(Number.isSafeInteger(payloadPid) && payloadPid > 0 && payloadPid !== process.pid);
+  t.after(() => { try { process.kill(payloadPid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } });
+  // The test payload is the supervisor's direct child; its open stdout retains
+  // the session until close while the supervisor's stdin disappears.
+  process.kill(supervisorPid, "SIGKILL");
+  const writes = await Promise.allSettled(Array.from({ length: 32 }, () => inputProcessSession(owner, record.id, "x".repeat(16_384))));
+  const rejected = writes.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  assert.ok(rejected.length > 0, "The closed pipe must reject at least one racing write");
+  for (const result of rejected) assert.match(result.reason.message, /Process session is not accepting input/);
+  await assert.rejects(inputProcessSession(owner, record.id, "late"), /Process session is not accepting input/);
+  const final = await waitFor(owner, record.id, (state) => state.session.status !== "running");
+  assert.equal(final.session.status, "failed"); assert.equal(final.session.exitCode, null);
+});
+
+test("ending process stdin rejects later input while retaining its actual successful exit", async (t) => {
+  const owner = fixture(t, {});
+  const record = startPreviewProcessSession({ ...owner, executable: process.execPath,
+    args: ["-e", "process.stdin.resume();process.stdin.on('end',()=>{console.log('eof received');setTimeout(()=>process.exit(0),100)});console.log('ready');"],
+    targetId: "stdin-eof", onOutput: () => {}, onExit: () => {} });
+  await waitFor(owner, record.id, (state) => state.events.some((event) => event.text.includes("ready")));
+  await inputProcessSession(owner, record.id, "", true);
+  await assert.rejects(inputProcessSession(owner, record.id, "after EOF"), /Process session is not accepting input/);
+  const final = await waitFor(owner, record.id, (state) => state.session.status !== "running");
+  assert.equal(final.session.status, "exited"); assert.equal(final.session.exitCode, 0);
+  assert.match(final.events.map((event) => event.text).join(""), /eof received/);
+});
+
+test("Electron supervisors keep Node mode internal and do not pass it to discovered project tasks", async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+  Object.defineProperty(process.versions, "electron", { value: "44.4.4", configurable: true });
+  t.after(() => { if (descriptor) Object.defineProperty(process.versions, "electron", descriptor); else delete process.versions.electron; });
+  const owner = fixture(t, { env: 'node -e "console.log(\'payload-mode:\'+String(process.env.ELECTRON_RUN_AS_NODE))"' });
+  const project = startProjectTaskSession({ ...owner, nodeRuntime: true } as ProcessSessionOwner, "npm:env");
+  const projectResult = await waitFor(owner, project.id, (state) => state.session.status !== "running");
+  assert.equal(projectResult.session.status, "exited");
+  assert.match(projectResult.events.map((event) => event.text).join(""), /payload-mode:undefined/);
+  const preview = startPreviewProcessSession({ ...owner, executable: process.execPath,
+    args: ["-e", "console.log('internal-mode:'+process.env.ELECTRON_RUN_AS_NODE)"], targetId: "internal-node",
+    onOutput: () => {}, onExit: () => {} });
+  const previewResult = await waitFor(owner, preview.id, (state) => state.session.status !== "running");
+  assert.equal(previewResult.session.status, "exited");
+  assert.match(previewResult.events.map((event) => event.text).join(""), /internal-mode:1/);
+  assert.throws(() => startPreviewProcessSession({ ...owner, executable: "arbitrary-electron", args: [], targetId: "forged-node",
+    onOutput: () => {}, onExit: () => {} }), /Internal Node sessions must use the backend executable/);
 });
 test("sessions enforce owner, workspace, run selection and bounded output", async (t) => {
   const owner = fixture(t, { flood: 'node -e "for(let i=0;i<60;i++)console.log(\'x\'.repeat(10000))"' });
@@ -91,13 +151,27 @@ test("Agent long sessions keep mandatory filesystem and network isolation", asyn
   t.after(() => new Promise<void>((resolve) => listener.close(() => resolve())));
   const address = listener.address(); assert.ok(address && typeof address !== "string");
   const input = { ...owner, runId: "agent-run", executable: process.execPath, args: ["-e", `require('http').get('http://127.0.0.1:${address.port}',()=>{console.log('ESCAPED');process.exit(1)}).on('error',()=>console.log('network-blocked'))`], timeoutMs: 2000 };
-  if (!probeFilesystemIsolation().available) { assert.throws(() => startAgentProcessSession(input), /isolation|sandbox/i); return; }
+  if (!probeFilesystemIsolation().available) {
+    const unsupported = process.platform === "win32" ? /POSIX hard resource limits are unavailable on win32|isolation|sandbox/i : /isolation|sandbox/i;
+    assert.throws(() => startAgentProcessSession(input), unsupported);
+    return;
+  }
   const session = startAgentProcessSession(input);
   assert.throws(() => pollProcessSession({ ...owner, runId: "other-run" }, session.id), /not found/);
   const finished = await waitFor({ ...owner, runId: "agent-run" }, session.id, (value) => value.session.status !== "running");
   assert.equal(hits, 0);
   assert.match(finished.events.map((event) => event.text).join(""), /network-blocked/);
   assert.equal(finished.session.status, "exited");
+});
+
+test("Agent sessions fail closed on Windows where mandatory process isolation is unavailable", (t) => {
+  const owner = fixture(t, {});
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  t.after(() => Object.defineProperty(process, "platform", descriptor));
+  assert.equal(probeFilesystemIsolation().available, false);
+  assert.equal(probeFilesystemIsolation().reasonCode, "unsupported_platform");
+  assert.throws(() => startAgentProcessSession({ ...owner, executable: process.execPath, args: ["-e", "console.log('must-not-run')"] }), /POSIX hard resource limits are unavailable on win32|isolation|sandbox/i);
 });
 
 test("the IPC watchdog stops ordinary descendants when the backend crashes", async (t) => {

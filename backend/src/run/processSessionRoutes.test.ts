@@ -9,6 +9,7 @@ import { processSessionsRouter } from "../routes/processSessions.js";
 import { previewsRouter } from "../routes/previews.js";
 import { TeamManager } from "../team/teamManager.js";
 import { setTeamManagerForTests } from "../team/sessionBridge.js";
+import { inputProcessSession, pollProcessSession, startPreviewProcessSession, stopProcessSession } from "./processSessions.js";
 
 test("process and preview control APIs require authentication and reject viewer starts", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-session-routes-"));
@@ -35,4 +36,27 @@ test("process and preview control APIs require authentication and reject viewer 
   }
   assert.equal((await fetch(base + "/process", { method: "POST", headers: { "Content-Type": "application/json", "x-user": "owner" }, body: JSON.stringify({ taskId: "npm:check", command: "arbitrary command" }) })).status, 400);
   assert.equal((await fetch(base + "/previews", { method: "POST", headers: { "Content-Type": "application/json", "x-user": "owner" }, body: JSON.stringify({ targetId: "static:index.html", url: "http://localhost:22" }) })).status, 400);
+});
+
+test("process input API reports closed stdin as a conflict while the backend remains responsive", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-closed-stdin-route-"));
+  const owner = { workspaceDir: workspace, owner: "alice", sessionToken: "stdin-fixture" };
+  const session = startPreviewProcessSession({ ...owner, executable: process.execPath,
+    args: ["-e", "process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>process.exit(0),300));"],
+    targetId: "closed-stdin-route", onOutput: () => {}, onExit: () => {} });
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => { (req as any).userSession = { username: owner.owner, token: owner.sessionToken, workspaceDir: workspace }; next(); });
+  app.use("/process", processSessionsRouter);
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { stopProcessSession(owner, session.id); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); fs.rmSync(workspace, { recursive: true, force: true }); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}/process`;
+  await inputProcessSession(owner, session.id, "", true);
+  const response = await fetch(`${base}/${session.id}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "after EOF" }) });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "Process session is not accepting input" });
+  assert.equal((await fetch(`${base}/${session.id}`)).status, 200);
+  assert.equal((await fetch(base)).status, 200);
+  assert.notEqual(pollProcessSession(owner, session.id).session.status, "failed");
 });

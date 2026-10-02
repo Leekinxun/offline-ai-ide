@@ -534,6 +534,20 @@ export const Editor: React.FC<EditorProps> = ({
       setInlineEditor(editor);
       onEditorReady?.(editor);
       pluginCleanupRef.current?.();
+      editor.onDidDispose(() => {
+        if (editorRef.current === editor) {
+          try {
+            saveCurrentViewState(editor);
+          } catch {
+            // Monaco may have already torn down view state during locale remount.
+          }
+          pluginCleanupRef.current?.();
+          pluginCleanupRef.current = null;
+          editorRef.current = null;
+          onEditorReady?.(null);
+        }
+        setInlineEditor((current) => current === editor ? null : current);
+      });
 
       // Cmd/Ctrl + S to save
       editor.addAction({

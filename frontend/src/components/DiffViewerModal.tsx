@@ -1,4 +1,4 @@
-import React, { FC, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { FC, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { OpenFile } from "../types";
 import { useI18n } from "../i18n";
 import { getEditorThemeName } from "../editor/themeNames";

@@ -269,7 +269,7 @@ export async function persistTranscript(
 export function splitCompactionMessages(
   messages: OpenAIMessage[],
   recentUserTurns = DEFAULT_RECENT_USER_TURNS,
-  tailMessageLimit = DEFAULT_TAIL_MESSAGE_LIMIT
+  _tailMessageLimit = DEFAULT_TAIL_MESSAGE_LIMIT
 ): { head: OpenAIMessage[]; tail: OpenAIMessage[] } {
   const userIndexes = messages
     .map((message, index) => message.role === "user" ? index : -1)

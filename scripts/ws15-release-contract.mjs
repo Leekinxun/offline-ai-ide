@@ -56,7 +56,7 @@ if (!dockerfileSource.includes("ENV TEAM_STORE_ROOT=/app/config")) failures.push
 for (const token of ["ARG NPM_REGISTRY=https://registry.npmmirror.com", "npm ci --include=dev --no-audit --no-fund --foreground-scripts", "--replace-registry-host=always", "test -x node_modules/.bin/tsc", "test -f node_modules/express/package.json", "RUN npm run build"]) if (!dockerfileSource.includes(token)) failures.push(`Dockerfile must install and verify backend build dependencies via ${JSON.stringify(token)}`);
 if (dockerfileSource.includes("RUN npx tsc")) failures.push("Dockerfile must not let npx download a compiler during the backend build");
 const dockerEntrypoint = read("scripts/docker-entrypoint.sh");
-for (const token of ["chown \"$runtime_uid:$runtime_gid\" /workspace /app/plugins", "init-mounts", "setpriv", "--no-new-privs"]) if (!dockerEntrypoint.includes(token)) failures.push(`Docker entrypoint is missing mount initialization boundary ${JSON.stringify(token)}`);
+for (const token of ["chown -R \"$runtime_uid:$runtime_gid\" /workspace /app/plugins", "init-mounts", "setpriv", "--no-new-privs"]) if (!dockerEntrypoint.includes(token)) failures.push(`Docker entrypoint is missing mount initialization boundary ${JSON.stringify(token)}`);
 for (const readme of [read("README.md"), read("README_zh.md")]) if (!readme.includes("docker-compose up -d --build")) failures.push("README Compose instructions must include the docker-compose v1 command");
 if (/rm\s+-rf/.test(releaseSources)) failures.push("release scripts must not use broad destructive cleanup");
 

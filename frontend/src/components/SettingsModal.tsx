@@ -44,6 +44,7 @@ import { ActionConfirmDialog } from "./ActionConfirmDialog";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import { ZOOM_PRESET_OPTIONS } from "../hooks/useGlobalZoom";
+import { getDesktopBridge } from "../desktop/bridge";
 
 export type SettingsTabId =
   | "general"
@@ -243,6 +244,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   initialTab,
 }) => {
   const { locale, locales, setLocale, t } = useI18n();
+  const desktop = getDesktopBridge();
   const adminSettings = useAdminSettings(token);
   const [activeTab, setActiveTab] = useState<SettingsTabId>(() => initialTab || "general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1153,6 +1155,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="settings-help-text">支持快捷键 Ctrl + / - 任意缩放，Ctrl + 0 重置为 100%</div>
                     </div>
                   </section>
+
+                  {desktop && (
+                    <section className="settings-card" aria-label={t("settings.desktopApp")}>
+                      <div className="settings-card-header">
+                        <div className="settings-card-title"><Cpu size={16} /><span>{t("settings.desktopApp")}</span></div>
+                        <span className="settings-card-meta">CrownForge {desktop.version}</span>
+                      </div>
+                      <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>
+                      {desktop.platform === "win32" && <p className="settings-help-text" role="note">{t("settings.desktopWindowsAgent")}</p>}
+                    </section>
+                  )}
 
                   {isAdmin && (
                     <section className="settings-card">

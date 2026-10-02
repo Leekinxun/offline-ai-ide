@@ -549,6 +549,7 @@ export function handleChatWs(
         }
         if (
           resumableRun.status !== "running" &&
+          resumableRun.status !== "interrupted" &&
           resumableRun.status !== "stopped" &&
           resumableRun.status !== "failed"
         ) {
@@ -569,7 +570,12 @@ export function handleChatWs(
               resumableRun.executionPlanId
             );
           } catch {
-            executionPlan = undefined;
+            wsSend(ws, { type: "error", requestId: requestIdForError, content: "Execution plan is unavailable; restore the approved plan before resuming" });
+            return;
+          }
+          if (executionPlan.conversationId !== conversationId) {
+            wsSend(ws, { type: "error", requestId: requestIdForError, content: "Execution plan does not belong to this conversation" });
+            return;
           }
         }
         if (executionPlan && !ensureApprovedPlanFresh(session.workspaceDir, executionPlan, ws, requestIdForError)) {

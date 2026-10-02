@@ -1027,7 +1027,7 @@ select:focus-visible,
   left: 50%;
   transform: translateX(-50%);
   background: var(--text-primary);
-  color: white;
+  color: var(--bg-primary);
   padding: 8px 20px;
   border-radius: 20px;
   font-size: 12.5px;

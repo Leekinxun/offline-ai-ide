@@ -8,12 +8,24 @@ import test from "node:test";
 import express from "express";
 import type { UserSession } from "../auth/sessionManager.js";
 import { createRuntimeRouter } from "../routes/runtime.js";
-import { collectSandboxDiagnostics, createSandboxDiagnosticsReader, evaluateOutsideCanary, parseSandboxProcessStatus, runSandboxSelfTest, type SandboxDiagnostics } from "./sandboxDiagnostics.js";
+import { collectSandboxDiagnostics, createSandboxDiagnosticsReader, evaluateOutsideCanary, parseSandboxProcessStatus, parseSandboxSelfTestOutput, runSandboxSelfTest, type SandboxDiagnostics } from "./sandboxDiagnostics.js";
 
 function blocked(): SandboxDiagnostics {
   const capability = { available: false, helper: "bubblewrap" as const, reasonCode: "namespace_permission_denied" as const, reason: "No permissions to create a new namespace" };
   return { checkedAt: 123, platform: "linux", kernel: "fixture", uid: 10001, gid: 10001, helperVersion: "bubblewrap 0.8.0", filesystem: capability, network: capability, executionReady: false, runtimeReadPaths: ["/opt/conda"], linux: { procMode: "private", noNewPrivs: 1, effectiveCapabilities: "0000000000000000", seccomp: 2, apparmorProfile: "docker-default (enforce)", maxUserNamespaces: 31585, unprivilegedUsernsClone: 1, apparmorRestrictUnprivilegedUserns: null } };
 }
+
+test("fixed-canary framing preserves runtime diagnostics and rejects missing, duplicate or invalid receipts", () => {
+  const marker = "CREWFORGE_SANDBOX_CANARY:fixture:";
+  const evidence = { allowedWrite: true, outsideWrite: false, secretRead: null, parentReachable: false };
+  const receipt = marker + JSON.stringify(evidence);
+  assert.deepEqual(parseSandboxSelfTestOutput(`Unsigned runtime warning\n${receipt}\n`, marker), { evidence, runtimeDiagnostics: "Unsigned runtime warning" });
+  assert.deepEqual(parseSandboxSelfTestOutput(receipt, marker), { evidence });
+  assert.throws(() => parseSandboxSelfTestOutput(JSON.stringify(evidence), marker), /missing or ambiguous/);
+  assert.throws(() => parseSandboxSelfTestOutput(`${receipt}\n${receipt}`, marker), /missing or ambiguous/);
+  assert.throws(() => parseSandboxSelfTestOutput(`${marker}[]`, marker), /receipt is invalid/);
+  assert.throws(() => parseSandboxSelfTestOutput(`${marker}{invalid}`, marker));
+});
 
 test("process metadata parser exposes only bounded sandbox fields and preserves unavailable values", () => {
   assert.deepEqual(parseSandboxProcessStatus("Name:\tnode\nNoNewPrivs:\t1\nCapEff:\t0000000000000000\nSeccomp:\t2\n"), { noNewPrivs: 1, effectiveCapabilities: "0000000000000000", seccomp: 2 });

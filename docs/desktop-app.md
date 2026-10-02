@@ -1,10 +1,44 @@
-# CrownForge desktop app
+# CrownForge desktop app · v1.1.1 preview
 
 The desktop edition packages the existing frontend and Node backend together. On
 each computer, Electron starts the backend on a random `127.0.0.1` port and opens
 the local UI. The backend, workspace, settings, users, and installed plugins are
 local to that computer. An AI model endpoint is still required for AI features;
-configure it in Settings after logging in.
+configure it in Settings after the workbench opens.
+
+## Synced Web features
+
+The desktop package builds the current shared frontend and backend. Version
+1.1.1 includes the latest workbench docks, adjustable panels, unified selection
+menus, settings layout, and global interface zoom. Editor tabs support path
+copying and grouped closing; Markdown preview, split editing, and two-file
+comparison retain linked scrolling.
+
+The AI task view and editor collaboration panel share the composer draft.
+Inline AI proposals apply to the selected editor content with version checks.
+Use `@` to attach files, directories, symbols, selected text, Problems, or terminal
+context, and inspect context sources from the context indicator. Agent changes
+can be reviewed by hunk, file, or whole run, with keep-all controls and turn undo.
+
+The terminal supports up to eight named tabs and bounded reconnection to the
+same running process after a transport interruption or page reload. Long Agent
+runs preserve goals and corrections through context compaction, and show
+server-recorded execution facts and verification evidence. Closing the app also
+stops its backend: PTY recovery does not survive that restart. Interrupted Agent
+runs can be continued from their saved record after reopening the app, but
+continuation requires the user to choose **Resume**; startup does not automatically
+restart commands or AI requests.
+
+The top-bar Web Preview can start supported static or Vite targets, inspect
+elements, return feedback to the Agent, and navigate to source candidates. It
+uses the local backend and a sandboxed frame. External preview links open through
+the desktop host's validated link handling. Preview links are temporary; create
+a fresh link when an old one expires. Vite execution and previewing a project's
+configuration retain their approval boundaries.
+
+Desktop appearance preferences use the per-user native preference store so
+changing the local backend port does not reset them after an app restart. The
+interface zoom controls and keyboard shortcuts share the same setting.
 
 ## Targets
 
@@ -33,6 +67,12 @@ installs only backend production dependencies into a temporary staging folder,
 rebuilds native dependencies against the selected Electron version, then creates
 an installer and a ZIP archive under `desktop-dist/<target>/`.
 
+Before packaging, the CI workflow checks the desktop host, local-session and
+loopback boundaries, interrupted-run recovery, and shared editor/terminal
+policies with isolated temporary user data. It also runs frontend and backend
+type/build checks, UI contracts, and the frontend bundle budget. These gates
+prepare a preview package; they do not replace the target-system checks below.
+
 The Windows 7 build downloads Microsoft's archived ripgrep 13 binary at build
 time and verifies its SHA-256 hash before packaging. The installed app itself
 does not download that binary.
@@ -51,16 +91,18 @@ cd ../desktop && npm ci
 npm run package:mac-arm64   # or another target from the table
 ```
 
-Preview 1's Windows installers were cross-built on macOS. Preview 2 and later build them
-on a Windows runner, but still needs installation checks on each target OS.
+Early 1.1.0 preview installers were cross-built on macOS. The current workflow
+builds Windows packages on a Windows runner; each target OS still needs its own
+installation checks.
 The current installers are not signed or notarized; a stable release also needs
 platform signing and malware scanning.
 
 ## First launch and local data
 
-On first launch the app creates an `admin` account with a random password and
-shows it once. Save the password; the dialog can copy it. The app stores
-`users.json`, `app-settings.json`, `workspace/`, and `plugins/` under Electron's
+On first launch the app creates a local `admin` account with a random password.
+The desktop host uses a local session to enter the workbench without a separate password login on
+normal launches. Web login remains separate. The app stores
+`users.json`, `app-settings.json`, `preferences.json`, `workspace/`, and `plugins/` under Electron's
 per-user CrownForge data directory. It never copies the repository's development
 credentials or settings into an installer. Bundled example plugins are copied to
 the per-user plugin directory only when that directory is first created.
@@ -81,24 +123,35 @@ Web sessions keep their configured workspace boundaries. A malformed `users.json
 blocks startup instead of enabling a default password.
 
 The application listens only on loopback and chooses a free port on each launch.
-The local API is unavailable to other computers. The login session is scoped to
-that port, so a login may be required again after restarting the app.
+The local API is unavailable to other computers. The desktop host establishes a
+new local session when it restarts; stored browser tokens are not portable
+credentials. Mobile remote control remains a Web deployment feature: the
+desktop listener stays on loopback and the mobile-pairing entry is hidden.
 
 ## Platform capabilities
 
 The editor, file operations, chat, and local service use the same code as the
 Web edition. The integrated terminal prefers `node-pty`; on Windows it falls
 back to `cmd.exe` pipes if a native PTY cannot start. In that fallback, terminal
-resize and some interactive console programs are limited. Git and Python tools
-require Git and Python to be installed on the computer and available on `PATH`.
+resize and some interactive console programs are limited. Git operations require
+Git on `PATH`. Python tools require a local Python installation and the project's
+Python dependencies. Python debugging additionally requires `debugpy` in the
+configured interpreter. Project npm tasks and Vite previews require local Node.js,
+npm, and the project's installed dependencies; the bundled Electron backend
+does not install these project tools or packages for you.
 
 Agent shell commands remain blocked on Windows: the current hard filesystem and
 network isolation helpers use macOS Seatbelt or Linux bubblewrap, and Windows
 has no equivalent implementation in this project. File read/write/edit tools
 remain available. Do not remove that block merely to make shell commands run.
 
-For Windows 7 acceptance, install the legacy package on Windows 7 SP1 x64 and
-check first-run account creation, login, file open/save, chat with a configured
-model, terminal fallback, Git operations (when Git is installed), app restart,
-and uninstall. Repeat the same checks on Windows 10, Windows 11, and both macOS
-architectures; verify that the backend stops after the window closes.
+Before target-system acceptance, install the matching package and check
+first-run account creation, direct workbench entry, file open/save, Inline AI,
+context references, hunk/file/run review, chat with a configured model,
+multi-terminal operation, preferences after restart, explicit interrupted-run
+continuation, preview and external links, Git operations (when Git is installed),
+and uninstall. On Windows also check the terminal fallback. Repeat on Windows 7
+SP1 x64, Windows 10, Windows 11, and both macOS architectures; verify that the
+backend stops after the window closes. A successful build or automated local
+fixture check does not establish installation and runtime acceptance on every
+target OS.

@@ -13,6 +13,10 @@ import {
   type InlineAssistantTarget,
   type InlineDocumentState,
 } from "../editor/inlineAssistantPolicy";
+import {
+  isDisposedInlineAssistantContextError,
+  isInlineAssistantEditorUsable,
+} from "../editor/inlineAssistantLifecycle";
 import "./InlineAssistant.css";
 
 export interface InlineAssistantBindings {
@@ -52,10 +56,17 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
   targetRef.current = target;
   propsRef.current = props;
 
+  const cancelPending = useCallback(() => {
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    if (pending) propsRef.current.onInlineCancel?.(pending.id);
+  }, []);
+
   const captureTarget = useCallback((): InlineAssistantTarget | null => {
     const current = propsRef.current;
-    const model = current.editor?.getModel();
-    const selection = current.editor?.getSelection();
+    if (!isInlineAssistantEditorUsable(current.editor)) return null;
+    const model = current.editor.getModel();
+    const selection = current.editor.getSelection();
     if (!model || model.isDisposed() || !selection) return null;
     return {
       path: current.path,
@@ -77,7 +88,8 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
 
   const currentDocument = useCallback((): InlineDocumentState | null => {
     const current = propsRef.current;
-    const model = current.editor?.getModel();
+    if (!isInlineAssistantEditorUsable(current.editor)) return null;
+    const model = current.editor.getModel();
     if (!model || model.isDisposed()) return null;
     return {
       path: current.path,
@@ -91,16 +103,16 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
   }, []);
 
   const close = useCallback(() => {
-    const pending = pendingRef.current;
-    pendingRef.current = null;
-    if (pending) propsRef.current.onInlineCancel?.(pending.id);
+    cancelPending();
     targetRef.current = null;
     setTarget(null);
     setRequest(null);
     setBusy(false);
     setError(null);
-    propsRef.current.editor?.focus();
-  }, []);
+    if (isInlineAssistantEditorUsable(propsRef.current.editor)) {
+      propsRef.current.editor.focus();
+    }
+  }, [cancelPending]);
 
   const open = useCallback(() => {
     if (!targetRef.current) {
@@ -116,7 +128,7 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
   }, [captureTarget]);
 
   useEffect(() => {
-    if (!editor || !onInlineSubmit) return;
+    if (!isInlineAssistantEditorUsable(editor) || !onInlineSubmit) return;
     let disposed = false;
     const node = document.createElement("div");
     node.className = "inline-assistant-host";
@@ -140,10 +152,38 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
       },
     };
     widgetRef.current = widget;
-    visibleContextRef.current = editor.createContextKey("crewforgeInlineAssistantVisible", Boolean(targetRef.current));
+    const disposeSubscription = editor.onDidDispose(() => {
+      disposed = true;
+      if (widgetRef.current === widget) {
+        widgetRef.current = null;
+        visibleContextRef.current = null;
+      }
+      cancelPending();
+      targetRef.current = null;
+      setTarget(null);
+      setRequest(null);
+      setBusy(false);
+      setError(null);
+      setHost((current) => current === node ? null : current);
+    });
+    if (!isInlineAssistantEditorUsable(editor)) {
+      disposeSubscription.dispose();
+      return;
+    }
+    try {
+      visibleContextRef.current = editor.createContextKey("crewforgeInlineAssistantVisible", Boolean(targetRef.current));
+    } catch (reason) {
+      disposeSubscription.dispose();
+      if (widgetRef.current === widget) {
+        widgetRef.current = null;
+        visibleContextRef.current = null;
+      }
+      if (isDisposedInlineAssistantContextError(reason)) return;
+      throw reason;
+    }
     editor.addContentWidget(widget);
     setHost(node);
-    const relayout = () => { if (!disposed) editor.layoutContentWidget(widget); };
+    const relayout = () => { if (!disposed && isInlineAssistantEditorUsable(editor)) editor.layoutContentWidget(widget); };
     const actions = [
       editor.addAction({
         id: "crewforge.inline-assistant.open",
@@ -163,24 +203,35 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
       editor.onDidChangeModelContent(() => setDocumentRevision((value) => value + 1)),
       editor.onDidChangeModel(() => { setDocumentRevision((value) => value + 1); relayout(); }),
       editor.onDidLayoutChange(() => { updateWidth(); relayout(); }),
-      editor.onDidDispose(() => { disposed = true; }),
+      disposeSubscription,
     ];
     const resize = new ResizeObserver(relayout);
     resize.observe(node);
     return () => {
+      cancelPending();
+      targetRef.current = null;
+      setTarget(null);
+      setRequest(null);
+      setBusy(false);
+      setError(null);
       resize.disconnect();
       for (const action of actions) action.dispose();
-      if (!disposed) editor.removeContentWidget(widget);
+      if (!disposed && isInlineAssistantEditorUsable(editor)) editor.removeContentWidget(widget);
       if (widgetRef.current === widget) widgetRef.current = null;
-      visibleContextRef.current?.reset();
+      if (!disposed && isInlineAssistantEditorUsable(editor)) visibleContextRef.current?.reset();
       visibleContextRef.current = null;
       setHost((current) => current === node ? null : current);
     };
-  }, [editor, Boolean(onInlineSubmit), open, close, t]);
+  }, [editor, Boolean(onInlineSubmit), open, close, cancelPending, t]);
 
   useEffect(() => {
-    visibleContextRef.current?.set(Boolean(target));
-    if (editor && widgetRef.current) editor.layoutContentWidget(widgetRef.current);
+    if (isInlineAssistantEditorUsable(editor)) {
+      visibleContextRef.current?.set(Boolean(target));
+      if (widgetRef.current) editor.layoutContentWidget(widgetRef.current);
+    } else {
+      visibleContextRef.current = null;
+      widgetRef.current = null;
+    }
     if (target) requestAnimationFrame(() => inputRef.current?.focus());
   }, [editor, host, target]);
 
@@ -191,9 +242,8 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
   }, [inlineResponse, request]);
 
   useEffect(() => () => {
-    const pending = pendingRef.current;
-    if (pending) propsRef.current.onInlineCancel?.(pending.id);
-  }, []);
+    cancelPending();
+  }, [cancelPending]);
 
   const submit = async () => {
     if (pendingRef.current || propsRef.current.inlineDisabled || !instruction.trim() || !propsRef.current.onInlineSubmit) return;
@@ -232,7 +282,7 @@ export const InlineAssistant: React.FC<InlineAssistantProps> = (props) => {
     const current = propsRef.current;
     const check = getInlineApplyState(request, current.inlineResponse, currentDocument());
     const activeEditor = current.editor;
-    if (pendingRef.current || !check.allowed || !request || !activeEditor) {
+    if (pendingRef.current || !check.allowed || !request || !isInlineAssistantEditorUsable(activeEditor)) {
       if (!check.allowed) setError(t(`inline.${check.reason}`));
       return;
     }

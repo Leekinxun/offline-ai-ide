@@ -1,8 +1,5 @@
 import React from "react";
 import {
-  ChevronDown,
-  ChevronUp,
-  GitCompare,
   History,
   Sparkles,
   Trash2,
@@ -47,10 +44,8 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   historyOpen,
   changesOpen,
   changedFilesCount = 0,
-  detailsCollapsed = true,
   onToggleHistory,
   onToggleChanges,
-  onToggleDetails,
   onClear,
   onOpenIsolatedWindow,
   creatingIsolatedWindow,

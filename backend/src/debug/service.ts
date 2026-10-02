@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { WebSocket } from "ws";
 import { config } from "../config.js";
 import { DapClient, type DapEvent } from "./dapClient.js";
+import { nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
 
 export type DebugStatus = "starting" | "running" | "paused" | "stopped" | "failed";
 export type DebugRuntime = "node" | "python";
@@ -400,7 +401,7 @@ function startNodeDebugSession(
   const child = spawn(process.execPath, ["--inspect-brk=127.0.0.1:0", absoluteTarget], {
     cwd: workspaceDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: debugEnvironment({ NO_COLOR: "1", FORCE_COLOR: "0" }),
+    env: nodeRuntimeEnvironment(debugEnvironment({ NO_COLOR: "1", FORCE_COLOR: "0" })),
     detached: process.platform !== "win32",
   });
   let resolveBreakpointSetup: (() => void) | undefined;

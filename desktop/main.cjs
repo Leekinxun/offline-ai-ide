@@ -1,8 +1,10 @@
-const { app, BrowserWindow, clipboard, dialog, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createPreferencesStore } = require("./preferences.cjs");
+const { isTrustedUiUrl, isTrustedSender, externalUrl, createApplicationMenu } = require("./bridge-policy.cjs");
 
 if (process.platform === "win32") {
   app.disableHardwareAcceleration();
@@ -20,6 +22,7 @@ let backendUrl;
 let mainWindow;
 let quitting = false;
 let folderPickerOpen = false;
+const registeredContents = new Set();
 
 if (!isPrimaryInstance) app.quit();
 
@@ -171,33 +174,84 @@ async function handleFolderPickerRequest(child, message) {
   }
 }
 
-function localAppUrl(url) {
+function desktopWebPreferences() {
+  return {
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    webviewTag: false,
+    preload: path.join(__dirname, "preload.cjs"),
+    additionalArguments: [`--crownforge-desktop-origin=${backendUrl}`, `--crownforge-desktop-version=${app.getVersion()}`],
+  };
+}
+
+async function openExternal(url) {
+  const checked = externalUrl(url, backendUrl);
+  if (!checked) return false;
   try {
-    const parsed = new URL(url);
-    return backendUrl && parsed.origin === backendUrl;
+    await shell.openExternal(checked);
+    return true;
   } catch {
     return false;
   }
 }
 
+function registerDesktopBridge(preferences) {
+  const authorize = (event) => {
+    if (!isTrustedSender(event, backendUrl, registeredContents)) throw new Error("Unauthorized desktop request");
+  };
+  ipcMain.handle("crownforge:preferences:get", (event) => {
+    authorize(event);
+    return preferences.get();
+  });
+  ipcMain.handle("crownforge:preferences:set", (event, patch) => {
+    authorize(event);
+    return preferences.set(patch);
+  });
+  ipcMain.handle("crownforge:external:open", (event, url) => {
+    authorize(event);
+    return openExternal(url);
+  });
+}
+
+function installApplicationMenu() {
+  const template = createApplicationMenu(process.platform, (command, focusedWindow) => {
+    const window = focusedWindow || BrowserWindow.getFocusedWindow();
+    if (!window || window.isDestroyed()) return;
+    const contents = window.webContents;
+    if (registeredContents.has(contents) && !contents.isDestroyed() && isTrustedUiUrl(contents.getURL(), backendUrl)) {
+      contents.send("crownforge:zoom", command);
+    }
+  });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function guardWindow(window) {
+  const contents = window.webContents;
+  registeredContents.add(contents);
+  contents.once("destroyed", () => registeredContents.delete(contents));
+  contents.setZoomFactor(1);
+  void contents.setVisualZoomLevelLimits(1, 1).catch(() => {});
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === "about:blank" || localAppUrl(url)) {
+    if (url === "about:blank" || isTrustedUiUrl(url, backendUrl)) {
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
-          webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+          webPreferences: desktopWebPreferences(),
         },
       };
     }
-    if (/^https:\/\//i.test(url)) void shell.openExternal(url);
+    void openExternal(url);
     return { action: "deny" };
   });
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url === "about:blank" || localAppUrl(url)) return;
+  const guardNavigation = (event, url) => {
+    if (url === "about:blank" || isTrustedUiUrl(url, backendUrl)) return;
     event.preventDefault();
-    if (/^https:\/\//i.test(url)) void shell.openExternal(url);
-  });
+    void openExternal(url);
+  };
+  window.webContents.on("will-navigate", guardNavigation);
+  window.webContents.on("will-redirect", guardNavigation);
   window.webContents.on("did-create-window", (childWindow) => guardWindow(childWindow));
 }
 
@@ -246,6 +300,8 @@ if (isPrimaryInstance) {
     try {
       const data = ensureDesktopData();
       backendUrl = await startBackend(data);
+      registerDesktopBridge(createPreferencesStore(path.join(data.dataDir, "preferences.json")));
+      installApplicationMenu();
       mainWindow = new BrowserWindow({
         width: 1440,
         height: 900,
@@ -253,7 +309,7 @@ if (isPrimaryInstance) {
         minHeight: 640,
         title: "CrownForge",
         show: true,
-        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+        webPreferences: desktopWebPreferences(),
       });
       guardWindow(mainWindow);
       await mainWindow.loadURL(backendUrl);
