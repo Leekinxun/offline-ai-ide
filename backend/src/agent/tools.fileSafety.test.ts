@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { buildFileVersion, listFileMutations } from "../files/mutationRegistry.js";
 import { atomicWriteFile, replaceUniqueText } from "./fileEditSafety.js";
@@ -225,4 +227,73 @@ test("a corrupt mutation journal blocks edits and creates before touching worksp
   assert.match(await f.invoke("write_file", { path: "new.txt", content: "after" }), /^Error: Mutation journal evidence/);
   assert.equal(f.content(), "before\n");
   assert.equal(fs.existsSync(path.join(f.workspaceDir, "new.txt")), false);
+});
+
+test("text tools reject NUL before any file or journal mutation and allow escaped text", async (t) => {
+  const f = fixture(t);
+  await f.invoke("read_file", {});
+  for (const [name, args] of [
+    ["write_file", { content: "after\0" }],
+    ["write_file", { path: "new/summary.md", content: "header\0", expected_version: "missing" }],
+    ["edit_file", { old_text: "before", new_text: "after\0" }],
+  ] as const) assert.match(await f.invoke(name, args), /^Error:.*NUL/);
+  assert.equal(f.content(), "before\n");
+  assert.equal(fs.existsSync(path.join(f.workspaceDir, "new")), false);
+  assert.equal(listFileMutations(f.workspaceDir).length, 0);
+  assert.deepEqual(fs.readdirSync(f.workspaceDir), ["code.txt"]);
+  assert.match(await f.invoke("write_file", { content: "SQLite format 3\\0\n" }), /^Wrote/);
+});
+
+test("NUL Markdown stays rejected with bounded recovery guidance and no edit authorization", async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.workspaceDir, "summary.md"), "# Summary\nSQLite format 3\0\n");
+  const result = await f.invoke("read_file", { path: "summary.md" });
+  assert.match(result, /^Error:.*binary/);
+  assert.match(result, /NUL.*regenerate.*repr.*hex/);
+  assert.doesNotMatch(result, /# Summary|version:|sha256/);
+  assert.equal(result.includes("\0"), false);
+  assert.match(await f.invoke("write_file", { path: "summary.md", content: "repaired" }), /^Error:.*binary/);
+});
+
+test("real SQLite reads expose metadata only and never authorize text overwrites", async (t) => {
+  const f = fixture(t);
+  const database = path.join(f.workspaceDir, "issues.sqlite");
+  const created = spawnSync("python3", ["-B", "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table issues (title text)'); c.execute('insert into issues values (?)', [\"O'Reilly 中文\"]); c.commit(); c.close()", database], { encoding: "utf8" });
+  assert.equal(created.status, 0, created.stderr);
+  const bytes = fs.readFileSync(database);
+  const read = JSON.parse(await f.invoke("read_file", { path: "issues.sqlite" }));
+  assert.equal(read.content_kind, "binary");
+  assert.equal(read.format, "sqlite");
+  assert.equal(read.size_bytes, bytes.length);
+  assert.equal(read.sha256, crypto.createHash("sha256").update(bytes).digest("hex"));
+  assert.equal(read.read_only, true);
+  for (const args of [{ offset: -1 }, { start_line: 0 }, { character_offset: -1 }, { limit: 0 }]) {
+    assert.match(await f.invoke("read_file", { path: "issues.sqlite", ...args }), /^Error:/);
+  }
+  for (const field of ["content", "preview", "header", "version", "complete"]) assert.equal(field in read, false);
+  assert.match(await f.invoke("write_file", { path: "issues.sqlite", content: "bad", expected_version: read.sha256 }), /^Error:.*binary/);
+  assert.match(await f.invoke("edit_file", { path: "issues.sqlite", old_text: "SQLite", new_text: "bad" }), /^Error:.*binary/);
+  assert.deepEqual(fs.readFileSync(database), bytes);
+});
+
+test("binary metadata cannot disclose secret or generated content or bypass path boundaries", async (t) => {
+  const f = fixture(t);
+  for (const [name, bytes, reason] of [
+    ["secret.bin", Buffer.from('api_key = "sk-live_LEAKCANARY_123456789"\0'), "secret"],
+    ["split.bin", Buffer.from('api_key = "sk-\0live_LEAKCANARY_123456789"\0'), "secret"],
+    ["boundary-secret.bin", Buffer.from('label\0sk-live_LEAKCANARY_123456789\n'), "secret"],
+    ["generated.bin", Buffer.from("// @generated\n\0"), "generated"],
+    ["boundary-generated.bin", Buffer.from("// @generated\0x\n"), "generated"],
+  ] as const) {
+    fs.writeFileSync(path.join(f.workspaceDir, name), bytes);
+    const read = await f.invoke("read_file", { path: name });
+    assert.match(read, new RegExp(`^Error:.*${reason}`));
+    assert.doesNotMatch(read, /LEAKCANARY|sha256|@generated/);
+  }
+  fs.writeFileSync(path.join(f.workspaceDir, "binary.bin"), Buffer.from([0, 255, 1]));
+  fs.linkSync(path.join(f.workspaceDir, "binary.bin"), path.join(f.workspaceDir, "hardlink.bin"));
+  fs.symlinkSync(path.join(f.workspaceDir, "binary.bin"), path.join(f.workspaceDir, "symlink.bin"));
+  for (const name of ["hardlink.bin", "symlink.bin", "../outside.bin", ".history/file.bin"]) {
+    assert.match(await f.invoke("read_file", { path: name }), /^Error:/);
+  }
 });

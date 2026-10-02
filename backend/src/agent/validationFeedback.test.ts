@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { compareEditorDiagnosticAdvisories, compareValidationDiagnostics, discoverValidationCommands, resolveResumedValidation, validationFileVersions, ValidationFeedback } from "./validationFeedback.js";
 import { getDiagnosticsWorkspaceVersion, type DiagnosticsResult } from "../diagnostics/service.js";
@@ -141,6 +142,83 @@ test("validation versions hash authorized binary artifacts without exposing cont
   }
   fs.writeFileSync(path.join(root, "issues.sqlite"), Buffer.from([0, 1, 2, 3, 5]));
   assert.notEqual(validationFileVersions(root, ["issues.sqlite"])["issues.sqlite"], versions["issues.sqlite"]);
+});
+
+test("NUL documentation cannot be accepted and receives bounded content-free repair feedback", (t) => {
+  const root = fixture(t);
+  const summary = path.join(root, "summary.md");
+  fs.writeFileSync(summary, "# Delivery\nSQLite format 3\0\nPRIVATE_NUL_PAYLOAD\n");
+  const validation = new ValidationFeedback(root);
+  const first = validation.assess(["summary.md"]);
+  assert.equal(first.report.status, "failed");
+  assert.match(first.report.reason, /NUL/i);
+  assert.match(first.feedback || "", /summary\.md/);
+  assert.match(first.feedback || "", /repr|hex/);
+  assert.equal(JSON.stringify(first).includes("PRIVATE_NUL_PAYLOAD"), false);
+  assert.equal(validation.assess(["summary.md"]).feedback, undefined);
+
+  fs.writeFileSync(summary, "# Delivery\nChanged summary still contains NUL\0\n");
+  const second = validation.assess(["summary.md"]);
+  assert.equal(second.report.status, "failed");
+  assert.ok(second.feedback);
+  assert.equal(second.report.repairAttempts, 2);
+  fs.writeFileSync(summary, "# Delivery\nAnother malformed summary\0\n");
+  assert.equal(validation.assess(["summary.md"]).feedback, undefined);
+
+  fs.writeFileSync(summary, "# Delivery\nHeader: b'SQLite format 3\\x00'\n");
+  const repaired = validation.assess(["summary.md"]);
+  assert.equal(repaired.report.status, "not_required");
+  assert.equal(repaired.feedback, undefined);
+});
+
+test("real SQLite remains deliverable while malformed text blocks otherwise passing verification until fresh checks", (t) => {
+  const root = fixture(t);
+  const database = path.join(root, "delivery.sqlite");
+  execFileSync("python3", ["-c", "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute('CREATE TABLE events (label TEXT)'); db.execute('INSERT INTO events VALUES (?)', (\"O'Reilly 中文验收\",)); db.commit(); db.close()", database]);
+  const rows = execFileSync("python3", ["-c", "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro', uri=True); print(db.execute('SELECT label FROM events').fetchone()[0]); db.close()", database], { encoding: "utf8" });
+  assert.equal(rows.trim(), "O'Reilly 中文验收");
+  const files = ["app.ts", "delivery.sqlite", "summary.md"];
+  const summary = path.join(root, "summary.md");
+  fs.writeFileSync(summary, "# Delivery\nSQLite format 3\0\n");
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "npm test", toolCallId: "before-repair", output: "tests passed", isError: false, denied: false, changedFiles: files });
+  const failed = validation.assess(files);
+  assert.equal(failed.report.status, "failed");
+  assert.equal(failed.report.verification[0].status, "passed");
+  assert.equal(failed.report.versions["delivery.sqlite"], `sha256:${buildFileHash(fs.readFileSync(database))}`);
+  assert.ok(failed.feedback);
+
+  fs.writeFileSync(summary, "# Delivery\nSQLite header hex: 53514c69746520666f726d6174203300\n");
+  const repaired = validation.assess(files);
+  assert.equal(repaired.report.status, "unverified");
+  assert.equal(repaired.report.verification[0].reason, "stale");
+  validation.observeCommand({ command: "npm test", toolCallId: "after-repair", output: "tests passed", isError: false, denied: false, changedFiles: files });
+  const verified = validation.assess(files).report;
+  assert.equal(verified.status, "passed");
+  assert.equal(verified.verification[0].toolCallId, "after-repair");
+});
+
+test("NUL artifact repair does not reopen denied checks or override unavailable file policy", (t) => {
+  const root = fixture(t);
+  fs.writeFileSync(path.join(root, "summary.md"), "NUL\0summary");
+  const denied = new ValidationFeedback(root);
+  denied.observeCommand({ command: "npm test", toolCallId: "denied", output: "Denied by user", isError: true, denied: true, changedFiles: ["app.ts", "summary.md"] });
+  const deniedResult = denied.assess(["app.ts", "summary.md"]);
+  assert.equal(deniedResult.report.status, "unverified");
+  assert.match(deniedResult.report.reason, /denied/i);
+  assert.equal(deniedResult.feedback, undefined);
+
+  fs.writeFileSync(path.join(root, "secret.ts"), 'const apiKey = "sk-live_VALIDATIONCANARY_123456789";\n');
+  const unavailable = new ValidationFeedback(root).assess(["secret.ts", "summary.md"]);
+  assert.equal(unavailable.report.status, "unverified");
+  assert.equal(unavailable.report.versions["secret.ts"], "unavailable");
+  assert.equal(unavailable.feedback, undefined);
+  assert.equal(JSON.stringify(unavailable).includes("VALIDATIONCANARY"), false);
+
+  fs.writeFileSync(path.join(root, "oversized.md"), Buffer.concat([Buffer.from([0]), Buffer.alloc(DEFAULT_CONTEXT_FILE_LIMIT, 65)]));
+  const oversized = new ValidationFeedback(root).assess(["oversized.md"]);
+  assert.equal(oversized.report.status, "unverified");
+  assert.equal(oversized.feedback, undefined);
 });
 
 test("denied checks remain unverified without repeated authorization prompts, even after another edit", (t) => {
