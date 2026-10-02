@@ -12,6 +12,11 @@ export interface RunTask {
   args: string[];
 }
 
+export interface RunTaskExecution {
+  executable: string;
+  args: string[];
+}
+
 export interface RunFailure {
   path: string;
   line: number;
@@ -46,6 +51,53 @@ interface ActiveRun {
 }
 const activeRuns = new Map<string, ActiveRun>();
 const MAX_OUTPUT = 200_000;
+
+function executablePathEntries(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  return (env.PATH || env.Path || "").split(platform === "win32" ? ";" : path.delimiter).filter(Boolean);
+}
+
+function existingFile(candidate: string): string | undefined {
+  try {
+    return fs.statSync(candidate).isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findOnPath(command: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) return existingFile(command);
+  const extensions = platform === "win32" && !path.extname(command)
+    ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const directory of executablePathEntries(env, platform)) {
+    for (const extension of extensions) {
+      const found = existingFile(path.join(directory, `${command}${extension}`));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function isNpmTask(task: RunTask): boolean {
+  return /^npm(?:\.cmd)?$/i.test(task.command) && task.args[0] === "run";
+}
+
+export function resolveRunTaskExecution(
+  task: RunTask,
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; execPath?: string } = {}
+): RunTaskExecution {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32" || !isNpmTask(task)) return { executable: task.command, args: [...task.args] };
+  const env = options.env || process.env;
+  const npmCommand = findOnPath(task.command, env, platform) || findOnPath("npm.cmd", env, platform);
+  const npmRoot = npmCommand ? path.dirname(npmCommand) : undefined;
+  const cli = npmRoot ? existingFile(path.join(npmRoot, "node_modules", "npm", "bin", "npm-cli.js")) : undefined;
+  const adjacentNode = npmRoot ? existingFile(path.join(npmRoot, "node.exe")) : undefined;
+  const pathNode = findOnPath("node.exe", env, platform) || findOnPath("node", env, platform);
+  const executable = adjacentNode || pathNode || (path.basename(options.execPath || process.execPath).toLowerCase() === "node.exe" ? options.execPath || process.execPath : undefined);
+  if (!executable || !cli) throw new Error("Unable to resolve Windows npm runtime for shell-free launch");
+  return { executable, args: [cli, ...task.args] };
+}
 
 function safeJson(filePath: string): any {
   try { return JSON.parse(fs.readFileSync(filePath, "utf-8")); } catch { return null; }
@@ -161,7 +213,10 @@ function signalRun(active: ActiveRun, signal: NodeJS.Signals): void {
   if (active.child.exitCode !== null || active.child.pid === undefined) return;
   try {
     if (process.platform !== "win32") process.kill(-active.child.pid, signal);
-    else active.child.kill(signal);
+    else {
+      const killer = spawn("taskkill", ["/pid", String(active.child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer.once("error", () => { try { active.child.kill(signal); } catch { /* process already exited */ } });
+    }
   } catch {
     try { active.child.kill(signal); } catch { /* process already exited */ }
   }
@@ -187,6 +242,7 @@ function finishRun(active: ActiveRun, exitCode: number | null): RunRecord {
 export function startRunTask(workspaceDir: string, taskId: string): RunRecord {
   const task = discoverRunTasks(workspaceDir).find((item) => item.id === taskId);
   if (!task) throw new Error("Unknown or unavailable task");
+  const execution = resolveRunTaskExecution(task);
   const startedAt = Date.now();
   const id = `${startedAt}-${crypto.randomBytes(3).toString("hex")}`;
   const record: RunRecord = {
@@ -203,7 +259,7 @@ export function startRunTask(workspaceDir: string, taskId: string): RunRecord {
   };
   runCache.set(workspaceDir, [record, ...(runCache.get(workspaceDir) || [])].slice(0, 20));
 
-  const child = spawn(task.command, task.args, {
+  const child = spawn(execution.executable, execution.args, {
     cwd: workspaceDir,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" },

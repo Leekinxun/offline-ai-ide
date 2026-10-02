@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { discoverRunTasks, executeRunTask, startRunTask, stopRunTask, waitForRun } from "./service.js";
+import { discoverRunTasks, executeRunTask, resolveRunTaskExecution, startRunTask, stopRunTask, waitForRun, type RunTask } from "./service.js";
 
 async function waitForOutput(record: { stdout: string }, expected: RegExp, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
@@ -47,6 +47,24 @@ test("run center discovers unittest for plain Python source trees", (t) => {
   fs.writeFileSync(path.join(workspace, "solution.py"), "def add(a, b): return a + b\n");
   const tasks = discoverRunTasks(workspace);
   assert.ok(tasks.some((task) => task.id === "python:unittest" && task.command.includes("python") && task.args.join(" ") === "-B -m unittest discover"));
+});
+
+test("Windows npm tasks launch npm-cli through node without cmd shell interpolation", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-win-npm-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "node_modules", "npm", "bin"), { recursive: true });
+  const node = path.join(root, "node.exe");
+  const npm = path.join(root, "npm.cmd");
+  const cli = path.join(root, "node_modules", "npm", "bin", "npm-cli.js");
+  fs.writeFileSync(node, "");
+  fs.writeFileSync(npm, "");
+  fs.writeFileSync(cli, "");
+  const task: RunTask = { id: "npm:build&erase", label: "npm: build&erase", kind: "build", source: "package.json", command: "npm.cmd", args: ["run", "build&erase"] };
+
+  assert.deepEqual(resolveRunTaskExecution(task, { platform: "win32", env: { PATH: root } }), {
+    executable: node,
+    args: [cli, "run", "build&erase"],
+  });
 });
 
 test("run center executes non-package Python tests without a project manifest", async (t) => {

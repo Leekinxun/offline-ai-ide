@@ -6,7 +6,7 @@ import test from 'node:test';
 import { SessionManager } from './sessionManager.js';
 
 function fixture(t: test.TestContext) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crewforge-session-namespace-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'crewforge-session-namespace-')));
   const a = path.join(root, 'a');
   const b = path.join(root, 'b');
   fs.mkdirSync(a); fs.mkdirSync(b);
@@ -14,7 +14,7 @@ function fixture(t: test.TestContext) {
   fs.writeFileSync(file, JSON.stringify({ allowedRoots: [root], users: [{ username: 'alice', password: 'fixture-password', defaultWorkspace: a, isAdmin: true }] }));
   const manager = new SessionManager(file);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { manager, a: fs.realpathSync(a), b: fs.realpathSync(b), root };
+  return { manager, a: fs.realpathSync.native(a), b: fs.realpathSync.native(b), root };
 }
 
 test('verified namespaces survive child rotation but keep isolated sessions separate', (t) => {

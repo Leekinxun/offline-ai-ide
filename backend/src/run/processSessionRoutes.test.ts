@@ -11,6 +11,24 @@ import { TeamManager } from "../team/teamManager.js";
 import { setTeamManagerForTests } from "../team/sessionBridge.js";
 import { inputProcessSession, pollProcessSession, startPreviewProcessSession, stopProcessSession } from "./processSessions.js";
 
+async function waitForPreviewClosed(owner: { workspaceDir: string; owner: string; sessionToken: string }, id: string): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try { if (pollProcessSession(owner, id).session.status !== "running") return; }
+    catch { return; }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function removeTreeEventually(target: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try { fs.rmSync(target, { recursive: true, force: true }); return; }
+    catch (error) {
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code || "") || attempt === 19) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}
+
 test("process and preview control APIs require authentication and reject viewer starts", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-session-routes-"));
   const workspace = path.join(root, "workspace"); fs.mkdirSync(workspace);
@@ -49,7 +67,13 @@ test("process input API reports closed stdin as a conflict while the backend rem
   app.use("/process", processSessionsRouter);
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(async () => { stopProcessSession(owner, session.id); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); fs.rmSync(workspace, { recursive: true, force: true }); });
+  t.after(async () => {
+    try { stopProcessSession(owner, session.id); } catch { /* already closed */ }
+    await waitForPreviewClosed(owner, session.id);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await removeTreeEventually(workspace);
+  });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}/process`;
   await inputProcessSession(owner, session.id, "", true);

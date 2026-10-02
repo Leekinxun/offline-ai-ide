@@ -66,7 +66,9 @@ test("writes racing a real supervisor exit reject closed stdin without an uncaug
   for (const result of rejected) assert.match(result.reason.message, /Process session is not accepting input/);
   await assert.rejects(inputProcessSession(owner, record.id, "late"), /Process session is not accepting input/);
   const final = await waitFor(owner, record.id, (state) => state.session.status !== "running");
-  assert.equal(final.session.status, "failed"); assert.equal(final.session.exitCode, null);
+  assert.equal(final.session.status, "failed");
+  if (process.platform === "win32") assert.equal(final.session.exitCode, 1);
+  else assert.equal(final.session.exitCode, null);
 });
 
 test("ending process stdin rejects later input while retaining its actual successful exit", async (t) => {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import { discoverRunTasks } from "./service.js";
+import { discoverRunTasks, resolveRunTaskExecution } from "./service.js";
 import { prepareWorkspaceProcess, type WorkspaceFilesystemGrant, type ProcessResourceLimits } from "../agent/processSandbox.js";
 import { DEFAULT_COMPATIBILITY_SHELL_LIMITS } from "../agent/shell.js";
 import { safePath } from "../utils/safePath.js";
@@ -135,6 +135,7 @@ export async function inputProcessSession(owner: ProcessSessionOwner, id: string
 }
 interface StartOptions extends ProcessSessionOwner {
   taskId: string; label: string; executable: string; args: string[]; timeoutMs?: number;
+  launchExecutable?: string; launchArgs?: string[];
   agent?: boolean; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits;
   runId?: string; signal?: AbortSignal; onOutput?: (event: ProcessOutputEvent) => void; onExit?: () => void;
   privateInvocation?: boolean;
@@ -152,7 +153,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (input.signal?.aborted) throw new Error("Process request was cancelled");
   if (input.nodeRuntime && input.executable !== process.execPath) throw new Error("Internal Node sessions must use the backend executable");
   const prepared = prepareWorkspaceProcess({
-    executable: input.executable, args: input.args, cwd: workspaceDir, signal: input.signal,
+    executable: input.launchExecutable || input.executable, args: input.launchArgs || input.args, cwd: workspaceDir, signal: input.signal,
     limits: { ...(input.agent ? DEFAULT_COMPATIBILITY_SHELL_LIMITS : {}), ...input.limits, wallTimeMs: timeoutMs },
     resourceLimitMode: "posix-shell", networkMode: input.agent && !input.networkAuthorized ? "deny" : "inherit",
     ...(input.agent ? { filesystem: input.filesystem || { workspaceDir, readPaths: ["."], writePaths: ["."] } } : {}),
@@ -203,7 +204,8 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
 export function startProjectTaskSession(owner: ProcessSessionOwner, taskId: string, timeoutMs?: number): ProcessSessionSummary {
   const task = discoverRunTasks(owner.workspaceDir).find((item) => item.id === taskId);
   if (!task) throw new Error("Unknown or unavailable task");
-  return startManagedSession({ ...owner, taskId, label: task.label, executable: task.command, args: task.args, timeoutMs, nodeRuntime: false });
+  const execution = resolveRunTaskExecution(task);
+  return startManagedSession({ ...owner, taskId, label: task.label, executable: task.command, args: task.args, launchExecutable: execution.executable, launchArgs: execution.args, timeoutMs, nodeRuntime: false });
 }
 /** Default network deny; a separately approved, exact-command grant is single-use. */
 export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: () => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
