@@ -59,7 +59,9 @@ assert_contains() {
   local pattern="$2"
   local description="$3"
 
-  if ! rg -q --fixed-strings "$pattern" "$file"; then
+  # Git Bash must not rewrite literal UI strings such as /register into paths.
+  # Bash opens the source file, so native ripgrep needs no path conversion.
+  if ! MSYS2_ARG_CONV_EXCL='*' rg -q --fixed-strings -- "$pattern" < "$file"; then
     echo "UI contract failed: $description" >&2
     echo "  expected '$pattern' in $file" >&2
     exit 1
@@ -71,7 +73,7 @@ assert_not_contains() {
   local pattern="$2"
   local description="$3"
 
-  if rg -q --fixed-strings "$pattern" "$file"; then
+  if MSYS2_ARG_CONV_EXCL='*' rg -q --fixed-strings -- "$pattern" < "$file"; then
     echo "UI contract failed: $description" >&2
     echo "  unexpected '$pattern' in $file" >&2
     exit 1
