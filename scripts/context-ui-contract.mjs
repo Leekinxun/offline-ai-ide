@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const hook = fs.readFileSync(path.join(root, "frontend/src/hooks/useContextManifest.ts"), "utf8");
 const editorSync = fs.readFileSync(path.join(root, "frontend/src/hooks/useEditorSync.ts"), "utf8");
 const inspector = fs.readFileSync(path.join(root, "frontend/src/components/ContextInspector.tsx"), "utf8");
