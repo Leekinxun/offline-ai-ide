@@ -23,18 +23,22 @@ const MAX_SESSIONS = 40;
 // A trusted IPC watchdog owns the process group. It kills ordinary descendants
 // if the backend disappears, including a hard crash before shutdown hooks run.
 const PROCESS_WATCHDOG = `
-const {spawn}=require("node:child_process");
+const fs=require("node:fs");
+const path=require("node:path");
+const {spawn,spawnSync}=require("node:child_process");
 const [nodeRuntime,executable,...args]=process.argv.slice(1);
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 if(nodeRuntime==="node")env.ELECTRON_RUN_AS_NODE="1";
 const child=spawn(executable,args,{env,stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
-const taskkill=(pid)=>{try{spawn("taskkill",["/pid",String(pid),"/T","/F"],{stdio:"ignore",windowsHide:true}).once("error",()=>{}).once("close",()=>process.exit(1))}catch{process.exit(1)}};
+const diagnostic=(pid,result)=>{try{const dir=path.join(process.cwd(),".history","process-sessions");fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,\`watchdog-taskkill-\${process.pid}-\${pid}.json\`),JSON.stringify({watchdogPid:process.pid,targetPid:pid,status:result.status,signal:result.signal,error:result.error?{code:result.error.code,message:result.error.message}:undefined,stdout:String(result.stdout||"").slice(-4096),stderr:String(result.stderr||"").slice(-4096)}),{mode:0o600})}catch{}};
+const taskkill=(pid)=>{try{const systemRoot=process.env.SystemRoot||process.env.WINDIR;const command=systemRoot?path.join(systemRoot,"System32","taskkill.exe"):"taskkill.exe";const result=spawnSync(command,["/pid",String(pid),"/T","/F"],{stdio:["ignore","pipe","pipe"],encoding:"utf8",windowsHide:true,timeout:15000});diagnostic(pid,result)}catch{}finally{process.exit(1)}};
 const kill=()=>{try{if(process.platform==="win32"){if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
 process.on("disconnect",kill);
 process.on("SIGTERM",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()}});
 process.on("SIGINT",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()}});
+process.stdin.on("error",()=>{});process.stdout.on("error",()=>{});process.stderr.on("error",()=>{});
 process.stdin.pipe(child.stdin);child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
-child.stdin.on("error",()=>{});child.once("error",error=>{console.error(error.message)});
+child.stdin.on("error",()=>{});child.stdout.on("error",()=>{});child.stderr.on("error",()=>{});child.once("error",error=>{try{console.error(error.message)}catch{}});
 child.once("close",code=>process.exit(code===null?1:code));
 `;
 const ownerHash = (owner: string) => crypto.createHash("sha256").update(owner).digest("hex");
@@ -50,6 +54,16 @@ function killWindowsProcessTree(pid: number | undefined): void {
     const killer = spawn(invocation.executable, invocation.args, { stdio: "ignore", windowsHide: true });
     killer.once("error", () => { /* taskkill may be unavailable or the process may have exited. */ });
   } catch { /* exited or invalid */ }
+}
+function watchdogEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
+  const result = nodeRuntimeEnvironment(environment);
+  if (process.platform === "win32") {
+    for (const key of ["SystemRoot", "WINDIR", "PATHEXT"] as const) {
+      const value = process.env[key];
+      if (value) result[key] = value;
+    }
+  }
+  return result;
 }
 function storage(workspace: string, id?: string): string {
   if (id !== undefined && !/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid process session id");
@@ -164,7 +178,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
   let child: ChildProcess;
-  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", prepared.executable, ...prepared.args], { cwd: workspaceDir, env: nodeRuntimeEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
+  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
   catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
   const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);

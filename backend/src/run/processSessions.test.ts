@@ -194,6 +194,14 @@ test("the IPC watchdog stops ordinary descendants when the backend crashes", asy
     try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") { alive = false; break; } }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  if (alive) {
+    const diagnosticDir = path.join(owner.workspaceDir, ".history", "process-sessions");
+    try {
+      for (const name of fs.readdirSync(diagnosticDir).filter((entry) => entry.startsWith("watchdog-taskkill-"))) {
+        console.error(`${name}: ${fs.readFileSync(path.join(diagnosticDir, name), "utf8")}`);
+      }
+    } catch { /* diagnostic is best-effort */ }
+  }
   assert.equal(alive, false, "The IPC watchdog must kill the task after the backend exits");
   assert.equal(pollProcessSession(owner, output.trim()).session.status, "interrupted");
 });
