@@ -39,6 +39,12 @@ export interface AuthorizedWorkspaceBytes {
 export const DEFAULT_CONTEXT_FILE_LIMIT = 1024 * 1024;
 export const DEFAULT_BINARY_VERSION_FILE_LIMIT = 2 * 1024 * 1024;
 
+export function isExpectedTextPath(filePath: string): boolean {
+  return /\.(?:md|mdx|markdown|txt|rst|adoc|json|csv|ya?ml|toml|xml|html?|css|[cm]?jsx?|tsx?|py|sh|sql|ini|log)$/i.test(filePath);
+}
+
+export const NUL_TEXT_RECOVERY = "Text contains NUL bytes; regenerate the text from its source through the normal approved command tool, using repr or hex for binary headers. Text edit tools cannot overwrite binary files. Reread the repaired text and rerun relevant checks.";
+
 const PROTECTED_SEGMENTS = new Set([
   ".git", ".history", ".checkpoints", ".team", ".tasks", ".transcripts", ".codex", ".omx", ".crewforge",
 ]);
@@ -101,14 +107,19 @@ export function isBinaryContextBuffer(buffer: Buffer): boolean {
   return decodeAuthorizedUtf8Content(buffer) === null;
 }
 
-/** Shared content policy for workspace context and explicitly granted external reads. */
-export function assertAuthorizedContextContent(buffer: Buffer): string {
-  const content = decodeAuthorizedUtf8Content(buffer);
-  if (content === null) throw new Error("Context file is not authorized: binary");
+/** Scan content restrictions only; this does not authorize bytes as text context. */
+export function assertAuthorizedContextTextPolicy(content: string): void {
   if (/^(?:\/\/|#|\/\*)\s*@generated\b/im.test(content.slice(0, 4096)) || /\bDO NOT EDIT\b/i.test(content.slice(0, 4096))) {
     throw new Error("Context file is not authorized: generated");
   }
   if (containsContextSecret(content)) throw new Error("Context file is not authorized: secret");
+}
+
+/** Shared content policy for workspace context and explicitly granted external reads. */
+export function assertAuthorizedContextContent(buffer: Buffer): string {
+  const content = decodeAuthorizedUtf8Content(buffer);
+  if (content === null) throw new Error("Context file is not authorized: binary");
+  assertAuthorizedContextTextPolicy(content);
   return content;
 }
 
