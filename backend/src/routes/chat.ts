@@ -1,3 +1,4 @@
+import { normalizeExecutionFacts, summarizeExecutionFacts } from "../chat/executionFacts.js";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import {
@@ -591,7 +592,8 @@ chatRouter.get("/runs/:runId/children", (req, res) => {
 
 chatRouter.get("/runs/:runId", (req, res) => {
   try {
-    res.json(readRunRecord(getSessionWorkspace(req), req.params.runId));
+    const record = readRunRecord(getSessionWorkspace(req), req.params.runId);
+    res.json({ ...record, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(record.executionFacts)) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load agent run";
     res.status(message === "Run not found" ? 404 : 400).json({ error: message });

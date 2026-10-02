@@ -162,6 +162,7 @@ export interface AgentRunSummary {
   executionContractKind?: ExecutionContract["kind"];
   completionEvidence?: CompletionEvidence;
   qualityGate?: CompletionQualityGateEvidence;
+  executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
   executionPlanId?: string;
 }
@@ -172,6 +173,27 @@ export interface AgentRunState extends AgentRunSummary {
 }
 
 export interface ExecutionContract { kind: "direct_code" | "approved_plan"; planId?: string; }
+export interface ExecutionFactsSummary {
+  schemaVersion: 1;
+  completeness: "complete" | "unknown";
+  toolCalls: number;
+  successfulToolCalls: number;
+  failedToolCalls: number;
+  deniedToolCalls: number;
+  fileReads: number;
+  duplicateFileReads: number;
+  pagedFileReads: number;
+  updatedFileReads: number;
+  unclassifiedFileReads: number;
+  readRanges: Array<{
+    path: string; version: string; start: number; end: number; complete: boolean; count: number;
+    firstToolCallId: string; lastToolCallId: string;
+  }>;
+  compactions: {
+    summaryCount: number; fallbackTrimCount: number; failedCount: number;
+    last?: { outcome: "summary" | "fallback_trim" | "failed"; tokensBefore?: number; tokensAfter?: number };
+  };
+}
 export type VerificationStatus = "pending" | "passed" | "failed" | "timed_out" | "cancelled";
 export interface CompletionEvidence {
   schemaVersion: number;
@@ -215,6 +237,7 @@ export interface ConversationRunSummary {
   executionContractKind?: ExecutionContract["kind"];
   completionEvidence?: CompletionEvidence;
   qualityGate?: CompletionQualityGateEvidence;
+  executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
 }
 

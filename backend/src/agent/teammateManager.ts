@@ -403,7 +403,7 @@ export class TeammateManager {
       parentToolCallId: effectiveLineage.parentToolCallId,
       parentRequestId: effectiveLineage.parentRequestId,
       agentName: `teammate:${name}`,
-    }) : undefined;
+    }, undefined, undefined, undefined, { executionFactsCompleteness: "unknown" }) : undefined;
     try {
       await recorder?.start();
       this.audit({ action: "spawn_started", outcome: "started", status: "working", ...childReferences });

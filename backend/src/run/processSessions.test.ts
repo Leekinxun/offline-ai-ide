@@ -27,6 +27,8 @@ test("sessions stream incremental output, accept stdin, and preserve exact invoc
   const owner = fixture(t, { interactive: 'node -e "console.log(\'ready\');process.stdin.once(\'data\',data=>{console.log(\'received:\'+data);process.exit(0)})"' });
   const record = startProjectTaskSession(owner, "npm:interactive");
   assert.equal(record.status, "running");
+  assert.equal(record.timeoutMs, 600_000);
+  assert.equal(record.deadlineAt, record.startedAt + record.timeoutMs);
   assert.deepEqual(record.invocation?.args, ["run", "interactive"]);
   const first = await waitFor(owner, record.id, (value) => value.events.some((event) => event.text.includes("ready")));
   await inputProcessSession(owner, record.id, "hello\n");
@@ -59,7 +61,12 @@ test("cancel and timeout terminate sessions and retain partial output", async (t
   assert.equal(cancelled.session.status, "cancelled");
   assert.match(cancelled.events.map((event) => event.text).join(""), /watching/);
   const timeout = startProjectTaskSession(owner, "npm:watch", 200);
-  assert.equal((await waitFor(owner, timeout.id, (value) => value.session.status !== "running")).session.status, "timed_out");
+  assert.equal(timeout.timeoutMs, 200);
+  assert.equal(timeout.deadlineAt, timeout.startedAt + 200);
+  const expired = (await waitFor(owner, timeout.id, (value) => value.session.status !== "running")).session;
+  assert.equal(expired.status, "timed_out");
+  assert.equal(expired.deadlineAt, timeout.deadlineAt);
+  assert.ok(expired.endedAt! >= expired.deadlineAt!);
 });
 test("restart metadata is interrupted and process environments exclude IDE secrets", async (t) => {
   process.env.CREWFORGE_TEST_SECRET = "must-not-inherit";

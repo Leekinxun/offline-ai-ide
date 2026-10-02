@@ -10,7 +10,7 @@ import { safePath } from "../utils/safePath.js";
 import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "../agent/networkAccess.js";
 
 export type ProcessSessionStatus = "running" | "exited" | "failed" | "cancelled" | "timed_out" | "interrupted";
-export interface ProcessSessionSummary { id: string; taskId: string; label: string; status: ProcessSessionStatus; startedAt: number; endedAt?: number; exitCode: number | null; nextCursor: number; runId?: string; invocation?: { executable: string; args: string[] }; }
+export interface ProcessSessionSummary { id: string; taskId: string; label: string; status: ProcessSessionStatus; startedAt: number; endedAt?: number; timeoutMs?: number; deadlineAt?: number; exitCode: number | null; nextCursor: number; runId?: string; invocation?: { executable: string; args: string[] }; }
 export interface ProcessOutputEvent { seq: number; stream: "stdout" | "stderr"; text: string; }
 export interface ProcessSessionOwner { workspaceDir: string; owner: string; sessionToken?: string; runId?: string; }
 interface StoredSession extends ProcessSessionSummary { ownerHash: string; workspaceDir: string; events: ProcessOutputEvent[]; }
@@ -129,13 +129,14 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
     ...(input.agent ? { filesystem: input.filesystem || { workspaceDir, readPaths: ["."], writePaths: ["."] } } : {}),
     env: { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1", NPM_CONFIG_USERCONFIG: process.platform === "win32" ? "NUL" : "/dev/null" },
   });
-  const record: StoredSession = { id: crypto.randomUUID(), taskId: input.taskId, label: input.label.slice(0, 200), status: "running", startedAt: Date.now(), exitCode: null, nextCursor: 0, workspaceDir, ownerHash: ownerHash(input.owner), events: [], ...(input.runId ? { runId: input.runId } : {}) };
+  const startedAt = Date.now();
+  const record: StoredSession = { id: crypto.randomUUID(), taskId: input.taskId, label: input.label.slice(0, 200), status: "running", startedAt, timeoutMs, deadlineAt: startedAt + timeoutMs, exitCode: null, nextCursor: 0, workspaceDir, ownerHash: ownerHash(input.owner), events: [], ...(input.runId ? { runId: input.runId } : {}) };
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
   let child: ChildProcess;
   try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, prepared.executable, ...prepared.args], { cwd: workspaceDir, env: prepared.env, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
   catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
-  const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), timeoutMs), signal: input.signal, token: input.sessionToken };
+  const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);
   const append = (stream: ProcessOutputEvent["stream"], text: string) => {
     if (!text) return;

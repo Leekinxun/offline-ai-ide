@@ -43,6 +43,8 @@ import {
   Trash2,
 } from "lucide-react";
 import "./ChatPanel.css";
+import "./ExecutionFactsCard.css";
+import { ExecutionFactsCard } from "./ExecutionFactsCard";
 import { ContextStrip } from "./ContextStrip";
 import { ContextInspector } from "./ContextInspector";
 import { TaskHeader } from "./TaskHeader";
@@ -616,6 +618,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {(messages.length > 0 || isStreaming || Boolean(runState)) && (
         <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
       )}
+      {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 

@@ -182,7 +182,11 @@ export async function runSubagent(
           parentToolCallId: lineage.parentToolCallId,
           parentRequestId: lineage.parentRequestId,
           agentName,
-        }
+        },
+        undefined,
+        undefined,
+        undefined,
+        { executionFactsCompleteness: "unknown" }
       )
     : undefined;
   const inheritedSandbox = runtime?.context.filesystemSandbox || { readPaths: ["."], writePaths: ["."] };

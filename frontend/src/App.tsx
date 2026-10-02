@@ -4034,6 +4034,7 @@ function AuthenticatedApp({
           )}
           <Terminal
             key={workspaceDir}
+            workspaceDir={workspaceDir}
             visible={terminalVisible}
             style={{ height: terminalHeight }}
             token={token}

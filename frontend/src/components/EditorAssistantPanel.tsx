@@ -22,6 +22,8 @@ import {
   X,
 } from "lucide-react";
 import "./EditorAssistantPanel.css";
+import "./ExecutionFactsCard.css";
+import { ExecutionFactsCard } from "./ExecutionFactsCard";
 import {
   AgentMode,
   AgentRunEvent,
@@ -425,6 +427,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         </div>
       )}
 
+      {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
       {showRunAttention && <section className="editor-assistant-context" aria-label={t("chat.evidence")}>
         {showCompletionEvidence && completionEvidence && <div className="run-check-list">
           <div className={evidenceOutcome === "completed" ? "" : "warning"} role={evidenceOutcome === "completed" ? undefined : "alert"}>{evidenceOutcome === "completed" ? <Check size={14} /> : <AlertCircle size={14} />}<span>{t("chat.outcome")}</span><strong>{t(`chat.outcome.${evidenceOutcome}`)}</strong></div>

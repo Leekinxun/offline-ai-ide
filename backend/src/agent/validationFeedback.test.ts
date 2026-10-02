@@ -116,12 +116,12 @@ test("denied checks remain unverified without repeated authorization prompts, ev
   assert.equal(validation.assess(["app.ts"]).feedback, undefined);
 });
 
-test("failed validation feeds back at most twice and missing checks never become passed", (t) => {
+test("failed validation requests one repair for unchanged evidence and missing checks never become passed", (t) => {
   const root = fixture(t);
   const validation = new ValidationFeedback(root);
   validation.observeCommand({ command: "npm run test", toolCallId: "fail", output: "Error: Process exited with code 1", isError: true, denied: false, changedFiles: ["app.ts"] });
   assert.ok(validation.assess(["app.ts"]).feedback);
-  assert.ok(validation.assess(["app.ts"]).feedback);
+  assert.equal(validation.assess(["app.ts"]).feedback, undefined);
   const final = validation.assess(["app.ts"]);
   assert.equal(final.report.status, "failed");
   assert.equal(final.feedback, undefined);
@@ -158,10 +158,84 @@ test("masked zero-test summaries enter verification even without changed files",
   ]) {
     const validation = new ValidationFeedback(root);
     validation.observeCommand({ command, toolCallId: "zero", output, isError: false, denied: false, changedFiles: [] });
-    const report = validation.assess([], false).report;
+    const assessment = validation.assess([]);
+    const report = assessment.report;
     assert.equal(report.status, "unverified", command);
+    assert.equal(assessment.feedback, undefined, command);
+    assert.equal(report.verification[0].reason, "no_tests", command);
     assert.deepEqual(report.verification.map((item) => ({ command: item.command, status: item.status, toolCallId: item.toolCallId })), [{ command, status: "pending", toolCallId: "zero" }]);
   }
+});
+
+test("zero-test evidence becomes stale after test discovery input changes and a real run restores verification", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root, ["python3 -B -m unittest discover"]);
+  validation.observeCommand({ command: "python3 -B -m unittest discover", toolCallId: "zero", output: "Ran 0 tests\nOK", isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(validation.assess(["app.ts"]).feedback, undefined);
+  fs.writeFileSync(path.join(root, "test_app.py"), "def test_app(): pass\n");
+  const stale = validation.assess(["app.ts"]);
+  assert.equal(stale.report.verification[0].reason, "stale");
+  assert.ok(stale.feedback);
+  validation.observeCommand({ command: "python3 -B -m unittest discover", toolCallId: "real", output: "Ran 1 test\nOK", isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(validation.assess(["app.ts"]).report.status, "passed");
+});
+
+test("a relevant edit permits fresh validation feedback, while unchanged missing and failed states do not loop", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root);
+  assert.ok(validation.assess(["app.ts"]).feedback);
+  assert.equal(validation.assess(["app.ts"]).feedback, undefined);
+  fs.writeFileSync(path.join(root, "app.ts"), "const value = 2;");
+  assert.ok(validation.assess(["app.ts"]).feedback);
+  assert.equal(validation.assess(["app.ts"]).feedback, undefined);
+  const failed = new ValidationFeedback(root);
+  failed.observeCommand({ command: "npm run test", toolCallId: "failed", output: "Error: exited with code 1", isError: true, denied: false, changedFiles: ["app.ts"] });
+  assert.ok(failed.assess(["app.ts"]).feedback);
+  failed.observeCommand({ command: "npm run test", toolCallId: "failed-again", output: "Error: exited with code 1\nElapsed 2.5s", isError: true, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(failed.assess(["app.ts"]).feedback, undefined, "different timing text is not a repair");
+  fs.writeFileSync(path.join(root, "app.ts"), "const value = 3;");
+  assert.ok(failed.assess(["app.ts"]).feedback);
+});
+
+test("validation digests full redacted output before clipping and invalidates passing checks when config changes", (t) => {
+  const root = fixture(t);
+  const first = new ValidationFeedback(root);
+  const second = new ValidationFeedback(root);
+  const tail = "X".repeat(5_000);
+  first.observeCommand({ command: "npm test", toolCallId: "one", output: `FIRST\n${tail}`, isError: false, denied: false, changedFiles: ["app.ts"] });
+  second.observeCommand({ command: "npm test", toolCallId: "two", output: `SECOND\n${tail}`, isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.notEqual(first.assess(["app.ts"]).report.verification[0].outputDigest, second.assess(["app.ts"]).report.verification[0].outputDigest);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "node different-check.cjs" } }));
+  const stale = first.assess(["app.ts"]);
+  assert.equal(stale.report.status, "unverified");
+  assert.equal(stale.report.verification[0].reason, "stale");
+  assert.ok(stale.feedback);
+});
+
+test("literal project check harness changes invalidate evidence without requiring source-file edits", (t) => {
+  const root = fixture(t, { test: "node scripts/verify.cjs" });
+  fs.mkdirSync(path.join(root, "scripts"));
+  fs.writeFileSync(path.join(root, "scripts/verify.cjs"), "console.log('one');");
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "npm test", toolCallId: "passed", output: "ok", isError: false, denied: false, changedFiles: ["app.ts"] });
+  assert.equal(validation.assess(["app.ts"]).report.status, "passed");
+  fs.writeFileSync(path.join(root, "scripts/verify.cjs"), "console.log('two');");
+  const stale = validation.assess(["app.ts"]);
+  assert.equal(stale.report.verification[0].reason, "stale");
+  assert.ok(stale.feedback);
+});
+
+test("timeouts receive at most one unchanged-input recovery pass and never become verification success", (t) => {
+  const root = fixture(t);
+  const validation = new ValidationFeedback(root);
+  validation.observeCommand({ command: "npm test", toolCallId: "timeout", output: "Error: command timed out after 120s", isError: true, denied: false, changedFiles: ["app.ts"] });
+  const first = validation.assess(["app.ts"]);
+  assert.equal(first.report.verification[0].reason, "timed_out");
+  assert.ok(first.feedback);
+  validation.observeCommand({ command: "npm test", toolCallId: "timeout-again", output: "Error: command timed out after 121s", isError: true, denied: false, changedFiles: ["app.ts"] });
+  const second = validation.assess(["app.ts"]);
+  assert.equal(second.report.status, "failed");
+  assert.equal(second.feedback, undefined);
 });
 
 test("reading a zero-test example is not treated as executing verification", (t) => {

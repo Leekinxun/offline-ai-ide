@@ -20,6 +20,7 @@ import {
   ExecutionContract,
   ExecutionPlan,
   CompletionEvidence,
+  ExecutionFactsSummary,
   ContextReference,
 } from "../types";
 import { useI18n } from "../i18n";
@@ -49,6 +50,7 @@ interface RunPayloadFields {
   executionContractKind?: ExecutionContract["kind"];
   completionEvidence?: CompletionEvidence;
   qualityGate?: AgentRunSummary["qualityGate"];
+  executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
 }
 
@@ -725,6 +727,7 @@ export function useChat(
               ...(fields.executionContractKind ? { executionContractKind: fields.executionContractKind } : {}),
               ...(fields.completionEvidence ? { completionEvidence: fields.completionEvidence } : {}),
               ...(fields.qualityGate ? { qualityGate: fields.qualityGate } : {}),
+              ...(fields.executionFacts || previousRun?.executionFacts ? { executionFacts: fields.executionFacts || previousRun?.executionFacts } : {}),
               ...(fields.executionPlan ? { executionPlan: fields.executionPlan } : {}),
             };
           });

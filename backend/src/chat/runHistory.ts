@@ -18,6 +18,7 @@ import type { CompletionEvidence } from "./completionEvidence.js";
 import { redactSecrets } from "../agent/secretRedaction.js";
 import { TraceStore } from "./traceStore.js";
 import { beginCompletionAttempt, CompletionQualityGateError, runRepositoryCompletionGate, type CompletionGateEvidence } from "../extensions/policy/completionGate.js";
+import { createExecutionFacts, normalizeExecutionFacts, recordExecutionFact, summarizeExecutionFacts, type ExecutionFactInput, type ExecutionFacts, type ExecutionFactsSummary } from "./executionFacts.js";
 
 const RUNS_DIR_NAME = "runs";
 const RUN_FILE_EXTENSION = ".json";
@@ -106,6 +107,7 @@ export interface AgentRunRecord {
   followUp?: AgentRunFollowUpBinding;
   completionEvidence?: CompletionEvidence;
   qualityGate?: CompletionGateEvidence;
+  executionFacts?: ExecutionFacts;
   metrics: AgentRunMetrics;
   summary?: ConversationRunSummary;
   events: AgentRunEvent[];
@@ -134,6 +136,7 @@ export interface AgentRunSummary {
   followUp?: AgentRunFollowUpBinding;
   completionEvidence?: CompletionEvidence;
   qualityGate?: CompletionGateEvidence;
+  executionFacts?: ExecutionFactsSummary;
   metrics: AgentRunMetrics;
   eventCount: number;
   summary?: ConversationRunSummary;
@@ -323,6 +326,7 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     ...(followUp ? { followUp } : {}),
     ...(completionEvidence ? { completionEvidence } : {}),
     ...(qualityGate ? { qualityGate } : {}),
+    executionFacts: normalizeExecutionFacts(value.executionFacts),
     metrics: normalizeMetrics(value.metrics),
     ...(summary ? { summary } : {}),
     events: events.slice(-MAX_STORED_EVENTS),
@@ -478,7 +482,9 @@ export class AgentRunRecorder {
     lineage?: AgentRunLineage,
     executionPlanId?: string,
     modelName?: string,
-    executionContractKind: ExecutionContractKind = executionPlanId ? "approved_plan" : "direct_code"
+    executionContractKind: ExecutionContractKind = executionPlanId ? "approved_plan" : "direct_code",
+    // Executors without a complete receipt collector must declare unknown.
+    options: { executionFactsCompleteness?: ExecutionFacts["completeness"] } = {}
   ) {
     const now = Date.now();
     this.record = {
@@ -502,6 +508,7 @@ export class AgentRunRecorder {
       events: [],
       toolExecutions: [],
       contextManifestIds: [],
+      executionFacts: createExecutionFacts(options.executionFactsCompleteness ?? "complete"),
     };
   }
 
@@ -515,6 +522,19 @@ export class AgentRunRecorder {
 
   snapshot(): AgentRunRecord {
     return clone(this.record);
+  }
+
+  getExecutionFacts(): ExecutionFactsSummary {
+    return summarizeExecutionFacts(normalizeExecutionFacts(this.record.executionFacts));
+  }
+
+  async recordExecutionFact(input: ExecutionFactInput): Promise<AgentRunRecord> {
+    return this.mutate((record) => {
+      const facts = normalizeExecutionFacts(record.executionFacts);
+      recordExecutionFact(facts, input);
+      record.executionFacts = facts;
+      return record;
+    });
   }
 
   beginCompletionAttempt(scopeId = `run:${this.record.runId}`): string {
@@ -759,6 +779,7 @@ export function listRunSummaries(
     ...(record.followUp ? { followUp: record.followUp } : {}),
     ...(record.completionEvidence ? { completionEvidence: record.completionEvidence } : {}),
     ...(record.qualityGate ? { qualityGate: record.qualityGate } : {}),
+    executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(record.executionFacts)),
     metrics: record.metrics,
     eventCount: record.events.length,
     ...(record.summary ? { summary: record.summary } : {}),

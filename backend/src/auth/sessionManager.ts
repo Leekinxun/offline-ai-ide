@@ -119,6 +119,7 @@ export class SessionManager {
   private sessionParents = new Map<string, string>();
   private windowWorkspaceRoots = new Map<string, Set<string>>();
   private revokedListeners = new Set<(token: string) => void>();
+  private workspaceListeners = new Set<(token: string, previousWorkspace: string, workspaceDir: string) => void>();
   private loadedConfigFromFile = false;
   private configRevision = 0;
   private migrationPromise: Promise<boolean> | null = null;
@@ -652,16 +653,34 @@ export class SessionManager {
     return session;
   }
 
-  /** Grants follow a verified login, while window tokens retain run ownership. */
-  getApprovalScopeToken(session: UserSession): string | null {
+  /** Resolve ownership from live server records, never from a client owner hint. */
+  getVerifiedSessionNamespace(session: UserSession): string | null {
     const registered = this.getSession(session.token, { touch: false });
-    if (!registered || registered.username !== session.username || !canWriteActiveWorkspace(session)) return null;
+    if (!registered || registered.username !== session.username) return null;
     // A worktree window never inherits its ordinary parent's approval grants.
     if (registered.isolated) return registered.token;
     const parentToken = this.sessionParents.get(registered.token);
     if (!parentToken) return registered.token;
     const parent = this.getSession(parentToken, { touch: false });
     return parent && parent.username === registered.username && !parent.isolated ? parent.token : null;
+  }
+
+  /** Grants follow a verified login, while window tokens retain run ownership. */
+  getApprovalScopeToken(session: UserSession): string | null {
+    if (!canWriteActiveWorkspace(session)) return null;
+    return this.getVerifiedSessionNamespace(session);
+  }
+
+  onWorkspaceChanged(listener: (token: string, previousWorkspace: string, workspaceDir: string) => void): () => void {
+    this.workspaceListeners.add(listener);
+    return () => this.workspaceListeners.delete(listener);
+  }
+
+  private notifyWorkspaceChanged(token: string, previousWorkspace: string, workspaceDir: string): void {
+    if (isSamePath(previousWorkspace, workspaceDir)) return;
+    for (const listener of this.workspaceListeners) {
+      try { listener(token, previousWorkspace, workspaceDir); } catch { /* Observers cannot undo an authorized workspace switch. */ }
+    }
   }
 
   logout(token: string): void {
@@ -894,6 +913,7 @@ export class SessionManager {
     const resolved = this.resolveSelectableWorkspace(newDir);
     if (!resolved) return null;
 
+    const previousWorkspace = session.workspaceDir;
     session.workspaceDir = resolved;
     const singletons = createSessionSingletonsForManager(resolved);
     session.taskManager = singletons.taskManager;
@@ -901,6 +921,7 @@ export class SessionManager {
     session.teammateManager = singletons.teammateManager;
     setActiveTeamId(session, null);
 
+    this.notifyWorkspaceChanged(token, previousWorkspace, resolved);
     return { workspaceDir: resolved };
   }
 
@@ -917,6 +938,7 @@ export class SessionManager {
     );
     if (!resolved) return null;
 
+    const previousWorkspace = session.workspaceDir;
     session.workspaceDir = resolved;
     const singletons = createSessionSingletonsForManager(resolved);
     session.taskManager = singletons.taskManager;
@@ -924,6 +946,7 @@ export class SessionManager {
     session.teammateManager = singletons.teammateManager;
     setActiveTeamId(session, null);
 
+    this.notifyWorkspaceChanged(token, previousWorkspace, resolved);
     return { workspaceDir: resolved };
   }
 
@@ -961,6 +984,7 @@ export class SessionManager {
     this.writeConfig(nextConfig);
     this.usersConfig = nextConfig;
 
+    const previousWorkspace = session.workspaceDir;
     session.workspaceDir = canonicalWorkspace;
     session.workspaceRoot = canonicalWorkspace;
     session.taskManager = singletons.taskManager;
@@ -973,6 +997,7 @@ export class SessionManager {
     if (!roots) { roots = new Set(); this.windowWorkspaceRoots.set(rootToken, roots); }
     roots.add(canonicalWorkspace);
 
+    this.notifyWorkspaceChanged(token, previousWorkspace, canonicalWorkspace);
     return { workspaceDir: canonicalWorkspace, workspaceRoot: canonicalWorkspace };
   }
 

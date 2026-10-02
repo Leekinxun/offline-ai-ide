@@ -1,3 +1,4 @@
+import { normalizeExecutionFacts, summarizeExecutionFacts } from "../chat/executionFacts.js";
 import { WebSocket } from "ws";
 import { wsSend } from "../agent/types.js";
 import type { AgentMode } from "../agent/types.js";
@@ -448,11 +449,11 @@ export function handleChatWs(
         const record = run?.currentRecorder.snapshot() || (lastRunId ? readRunRecord(session.workspaceDir, lastRunId) : null);
         const questionState = run?.ownerUsername === session.username ? run.snapshot() : undefined;
         wsSend(ws, { type: "conversation_snapshot", conversationId, ...(record ? { runId: record.runId } : {}),
-          ...transcript, run: record, pendingApprovals: run?.approvals.listPending(conversationId) || [],
+          ...transcript, run: record ? { ...record, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(record.executionFacts)) } : null, pendingApprovals: run?.approvals.listPending(conversationId) || [],
           pendingQuestionCount: questionState?.pendingQuestionCount || 0, waitingForInput: questionState?.waitingForInput || false });
         if (run && record) {
           wsSend(ws, { type: "run_state", conversationId, runId: run.runId, mode: record.mode,
-            modelName: record.modelName, status: record.status === "interrupted" ? "stopped" : record.status, metrics: record.metrics,
+            modelName: record.modelName, status: record.status === "interrupted" ? "stopped" : record.status, metrics: record.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(record.executionFacts)),
             event: record.events.at(-1), sequence: record.events.length, version: record.updatedAt });
           for (const approval of run.approvals.listPending(conversationId)) wsSend(ws, { type: "tool_approval_request", ...approval, conversationId, runId: run.runId });
           for (const state of run.liveTranscript.currentStateEvents()) wsSend(ws, { ...state, conversationId, runId: run.runId });
@@ -629,7 +630,7 @@ export function handleChatWs(
           mode: resumeMode,
           modelName: resumeModelName,
           status: "running",
-          metrics: recorder.snapshot().metrics,
+          metrics: recorder.snapshot().metrics, executionFacts: recorder.getExecutionFacts(),
           event: recorder.snapshot().events.at(-1),
           sequence: recorder.snapshot().events.length,
           version: recorder.snapshot().updatedAt,
@@ -927,7 +928,7 @@ async function beginRecordedRun(
   wsSend(run.transport, {
     type: "run_state", conversationId: turn.conversationId, runId: recorder.runId, requestId: turn.requestId,
     mode: turn.mode, modelName: turn.modelName, status: "running",
-    metrics: record.metrics, event: record.events.at(-1),
+    metrics: record.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(record.executionFacts)), event: record.events.at(-1),
     sequence: record.events.length, version: record.updatedAt,
   });
 }
@@ -968,7 +969,7 @@ async function executeRecordedRun(
         wsSend(run.transport, {
           type: "run_state", conversationId: failed.conversationId,
           runId: failed.runId, mode: failed.mode, modelName: failed.modelName,
-          status: "failed", metrics: failed.metrics, event: failed.events.at(-1),
+          status: "failed", metrics: failed.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(failed.executionFacts)), event: failed.events.at(-1),
           sequence: failed.events.length, version: failed.updatedAt,
         });
       } catch { /* Report the original failure below. */ }
@@ -1180,7 +1181,7 @@ async function processConversationQueue(
       mode: initialTurn.mode,
       modelName: initialTurn.modelName,
       status: "failed",
-      metrics: finishedRecord.metrics,
+      metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
       event: finishedRecord.events.at(-1),
       sequence: finishedRecord.events.length,
       version: finishedRecord.updatedAt,
@@ -1193,7 +1194,7 @@ async function processConversationQueue(
       conversationId: activeConversationId,
       requestId: initialTurn.requestId,
       runId: recorder.runId,
-      metrics: finishedRecord.metrics,
+      metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
       ...completedFailedSummary,
       qualityGate,
     });
@@ -1314,7 +1315,7 @@ async function processConversationQueue(
     mode: finalMode,
     modelName: initialTurn.modelName,
     status: finalStatus,
-    metrics: finishedRecord.metrics,
+    metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
     event: finishedRecord.events.at(-1),
     sequence: finishedRecord.events.length,
     version: finishedRecord.updatedAt,
@@ -1328,7 +1329,7 @@ async function processConversationQueue(
     conversationId: activeConversationId,
     requestId: initialTurn.requestId,
     runId: recorder.runId,
-    metrics: finishedRecord.metrics,
+    metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
     ...completedSummary,
     qualityGate: finishedRecord.qualityGate,
     ...(currentExecutionPlan ? { executionPlan: currentExecutionPlan } : {}),
@@ -1395,7 +1396,7 @@ async function processConversationQueue(
         type: "run_state", conversationId: nextTurn.conversationId,
         runId: nextRunId, requestId: nextTurn.requestId, mode: nextTurn.mode,
         modelName: nextTurn.modelName, status: "stopped",
-        metrics: stoppedRecord.metrics, event: stoppedRecord.events.at(-1),
+        metrics: stoppedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(stoppedRecord.executionFacts)), event: stoppedRecord.events.at(-1),
         sequence: stoppedRecord.events.length, version: stoppedRecord.updatedAt,
       });
     };
@@ -1421,7 +1422,7 @@ async function processConversationQueue(
       mode: nextTurn.mode,
       modelName: nextTurn.modelName,
       status: "running",
-      metrics: nextRecorder.snapshot().metrics,
+      metrics: nextRecorder.snapshot().metrics, executionFacts: nextRecorder.getExecutionFacts(),
       event: nextRecorder.snapshot().events.at(-1),
       sequence: nextRecorder.snapshot().events.length,
       version: nextRecorder.snapshot().updatedAt,

@@ -27,6 +27,7 @@ import { TraceStore, type CollaborationEventReferences } from "../chat/traceStor
 import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
 import { SUBAGENT_ROLES } from "./subagentRoles.js";
 import { executeProcessTool, pendingAgentProcesses, type AgentProcessResult } from "./processTools.js";
+import { readRunEvidence } from "./runEvidence.js";
 import {
   assertFileVersion, atomicWriteFile, normalizeEditablePath, readEditableFile,
   rememberFileRead, rememberFileWrite, replaceUniqueText,
@@ -358,6 +359,9 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
   compress: async () =>
     "Context compaction requested. The agent will summarize the conversation before continuing.",
 
+  read_run_evidence: async (args, ctx) =>
+    readRunEvidence(args, ctx),
+
   memory_read: async (args, ctx) =>
     readMemory(ctx.workspaceDir, args.scope),
 
@@ -636,6 +640,24 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     },
   },
   ...REPOSITORY_INSPECTION_TOOLS,
+  {
+    type: "function",
+    function: {
+      name: "read_run_evidence",
+      description: "Read bounded, data-only evidence for the current run. Uses the server-provided current run and conversation only; does not accept run ids, paths, shell commands, or regex. Views: summary, tools, transcript.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          view: { type: "string", enum: ["summary", "tools", "transcript"], default: "summary" },
+          offset: { type: "integer", minimum: 0, description: "Item offset for tools, character offset for transcript" },
+          limit: { type: "integer", minimum: 1, maximum: 20000, description: "Maximum tools or transcript characters; tool lists are capped server-side" },
+          query: { type: "string", maxLength: 200, description: "Literal substring filter or seek; regex is not supported" },
+          transcript_index: { type: "integer", minimum: 0, description: "Index from the current run context_compacted transcript references" },
+        },
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -1118,7 +1140,7 @@ export const MCP_CONTROL_TOOLS: OpenAIToolDef[] = [
   },
 ];
 
-const READ_ONLY_TOOL_NAMES = new Set(["compress", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "TodoWrite", "ask_user"]);
+const READ_ONLY_TOOL_NAMES = new Set(["compress", "read_run_evidence", "memory_read", "skill_load", "read_file", "find_files", "search_files", "list_directory", "TodoWrite", "ask_user"]);
 
 export function getAllTools(options?: {
   readOnly?: boolean;
@@ -1130,6 +1152,7 @@ export function getAllTools(options?: {
     const codeContractTools = new Set([
       "ask_user",
       "compress",
+      "read_run_evidence",
       "memory_read",
       "skill_load",
       "read_file",

@@ -7,10 +7,12 @@ import "./Terminal.css";
 import { useI18n } from "../i18n";
 import { PanelHeader, PanelState } from "./PanelChrome";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import { TerminalSessionController, readTerminalTabs, saveTerminalTabs, type TerminalTab } from "./terminalSessionController";
 
 interface TerminalProps {
   visible: boolean;
   token: string;
+  workspaceDir: string;
   disabled?: boolean;
   disabledReason?: string | null;
   drawerMode?: boolean;
@@ -18,10 +20,8 @@ interface TerminalProps {
   style?: React.CSSProperties;
 }
 
-interface TerminalSession {
-  id: string;
-  title: string;
-}
+type TerminalSession = TerminalTab;
+const terminalTabsInDocument = new Map<string, TerminalSession[]>();
 
 interface TerminalStatus {
   connected: boolean;
@@ -33,10 +33,13 @@ interface TerminalInstanceHandle {
   reconnect: () => void;
   fit: () => void;
   focus: () => void;
+  stop: () => void;
 }
 
 interface TerminalInstanceProps {
   id: string;
+  session: TerminalSession;
+  onCredentials: (id: string, sessionId: string | undefined, ticket: string | undefined) => void;
   token: string;
   active: boolean;
   visible: boolean;
@@ -48,6 +51,8 @@ interface TerminalInstanceProps {
 /** 单个独立的终端会话实例 */
 const TerminalInstance: React.FC<TerminalInstanceProps> = ({
   id,
+  session,
+  onCredentials,
   token,
   active,
   visible,
@@ -58,7 +63,7 @@ const TerminalInstance: React.FC<TerminalInstanceProps> = ({
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const controllerRef = useRef<TerminalSessionController | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const initialized = useRef(false);
   const [connectionGeneration, setConnectionGeneration] = useState(0);
@@ -77,6 +82,7 @@ const TerminalInstance: React.FC<TerminalInstanceProps> = ({
         } catch {}
       },
       focus: () => xtermRef.current?.focus(),
+      stop: () => controllerRef.current?.stop(),
     });
     return () => {
       registerHandle(id, null);
@@ -132,45 +138,20 @@ const TerminalInstance: React.FC<TerminalInstanceProps> = ({
       } catch {}
     }, 100);
 
-    // 连接专属后台 WebSocket PTY 进程
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/terminal?token=${encodeURIComponent(token)}`);
-
-    ws.onopen = () => {
-      onStatusChange({ connected: true, connecting: false });
-      if (active) xterm.focus();
-      ws.send(
-        JSON.stringify({
-          type: "resize",
-          rows: xterm.rows,
-          cols: xterm.cols,
-        })
-      );
-    };
-
-    ws.onmessage = (event) => {
-      xterm.write(event.data);
-    };
-
-    ws.onclose = () => {
-      onStatusChange({ connected: false, connecting: false });
-      xterm.write(`\r\n\x1b[90m${disconnectLabelRef.current}\x1b[0m\r\n`);
-    };
-
-    xterm.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
-      }
+    const controller = new TerminalSessionController({
+      token, tab: session,
+      write: (data) => xterm.write(data),
+      status: (connected, connecting) => onStatusChange({ connected, connecting }),
+      credentials: (sessionId, ticket) => onCredentials(id, sessionId, ticket),
+      size: () => ({ cols: xterm.cols, rows: xterm.rows }),
+      diagnostic: (event, metadata) => console.info("terminal_transport", event, metadata),
+      message: (key) => t(key),
     });
-
-    xterm.onResize(({ rows, cols }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", rows, cols }));
-      }
-    });
-
+    controllerRef.current = controller;
+    controller.connect();
+    xterm.onData((data) => controller.input(data));
+    xterm.onResize(() => controller.resize());
     xtermRef.current = xterm;
-    wsRef.current = ws;
     fitAddonRef.current = fitAddon;
 
     let rafId: number | null = null;
@@ -193,7 +174,7 @@ const TerminalInstance: React.FC<TerminalInstanceProps> = ({
       if (rafId !== null) cancelAnimationFrame(rafId);
       window.removeEventListener("resize", handleResize);
       resizeObserver?.disconnect();
-      ws.close();
+      controller.dispose();
       onStatusChange({ connected: false, connecting: false });
       xterm.dispose();
       initialized.current = false;
@@ -229,6 +210,7 @@ const TerminalInstance: React.FC<TerminalInstanceProps> = ({
 export const Terminal: React.FC<TerminalProps> = ({
   visible,
   token,
+  workspaceDir,
   disabled = false,
   disabledReason,
   drawerMode = false,
@@ -242,10 +224,27 @@ export const Terminal: React.FC<TerminalProps> = ({
   });
 
   // 多会话管理状态
-  const [sessions, setSessions] = useState<TerminalSession[]>(() => [
-    { id: "term-default", title: t("terminal.tabTitle", { index: 1 }) },
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState<string>("term-default");
+  const [sessions, setSessions] = useState<TerminalSession[]>(() => {
+    const current = terminalTabsInDocument.get(workspaceDir);
+    if (current) return current.map((tab) => ({ ...tab }));
+    const navigation = (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type || "navigate";
+    const saved = readTerminalTabs(sessionStorage, workspaceDir, navigation);
+    const initial = saved.length ? saved : [{ id: crypto.randomUUID(), title: t("terminal.tabTitle", { index: 1 }) }];
+    terminalTabsInDocument.set(workspaceDir, initial);
+    return initial;
+  });
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => sessions[0]?.id || "");
+  const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
+  useEffect(() => {
+    terminalTabsInDocument.set(workspaceDir, sessions);
+    saveTerminalTabs(sessionStorage, workspaceDir, sessions);
+  }, [workspaceDir, sessions]);
+  const handleCredentials = useCallback((id: string, sessionId: string | undefined, ticket: string | undefined) => {
+    const updated = sessionsRef.current.map((tab) => tab.id === id ? { ...tab, sessionId, ticket } : tab);
+    sessionsRef.current = updated; terminalTabsInDocument.set(workspaceDir, updated);
+    saveTerminalTabs(sessionStorage, workspaceDir, updated);
+    setSessions(updated);
+  }, [workspaceDir]);
   const [sessionStatuses, setSessionStatuses] = useState<Record<string, TerminalStatus>>({});
   const sessionHandles = useRef<Map<string, TerminalInstanceHandle>>(new Map());
 
@@ -270,7 +269,7 @@ export const Terminal: React.FC<TerminalProps> = ({
 
   // 新建终端会话
   const handleCreateSession = useCallback(() => {
-    if (disabled) return;
+    if (disabled || sessions.length >= 8) return;
     const newId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newTitle = t("terminal.tabTitle", { index: sessions.length + 1 });
     setSessions((prev) => [...prev, { id: newId, title: newTitle }]);
@@ -280,10 +279,10 @@ export const Terminal: React.FC<TerminalProps> = ({
   // 关闭指定终端会话
   const handleCloseSession = useCallback(
     (idToClose: string) => {
-      if (sessions.length <= 1) return;
       const index = sessions.findIndex((s) => s.id === idToClose);
       if (index === -1) return;
 
+      sessionHandles.current.get(idToClose)?.stop();
       const nextSessions = sessions.filter((s) => s.id !== idToClose);
       setSessions(nextSessions);
 
@@ -297,7 +296,7 @@ export const Terminal: React.FC<TerminalProps> = ({
       // 若关闭的是当前激活项，则切换到邻近的会话
       if (activeSessionId === idToClose) {
         const nextActiveIndex = Math.max(0, index - 1);
-        setActiveSessionId(nextSessions[nextActiveIndex].id);
+        setActiveSessionId(nextSessions[nextActiveIndex]?.id || "");
       }
     },
     [activeSessionId, sessions]
@@ -373,7 +372,7 @@ export const Terminal: React.FC<TerminalProps> = ({
               onClick={handleCreateSession}
               title={t("terminal.new")}
               aria-label={t("terminal.new")}
-              disabled={disabled}
+              disabled={disabled || sessions.length >= 8}
             >
               <Plus size={14} aria-hidden="true" />
             </button>
@@ -459,7 +458,7 @@ export const Terminal: React.FC<TerminalProps> = ({
                   ) : (
                     <span className="terminal-tab-title">{session.title}</span>
                   )}
-                  {sessions.length > 1 && (
+                  {sessions.length > 0 && (
                     <button
                       type="button"
                       className="terminal-tab-close-btn"
@@ -502,6 +501,8 @@ export const Terminal: React.FC<TerminalProps> = ({
             <TerminalInstance
               key={session.id}
               id={session.id}
+              session={session}
+              onCredentials={handleCredentials}
               token={token}
               active={session.id === activeSessionId}
               visible={visible}

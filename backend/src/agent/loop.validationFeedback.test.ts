@@ -108,6 +108,8 @@ test("a real pipe masking a zero-test runner exit preserves unverified completio
   assert.match(step?.result || "", /Ran 0 tests/);
   assert.equal(result.result[0].runtimeValidation?.status, "unverified");
   assert.equal(result.result[0].runtimeValidation?.verification[0].status, "pending");
+  assert.equal(result.bodies.length, 2, "Zero tests require no identical repair round");
+  assert.equal(result.result[0].runtimeValidation?.repairAttempts, 0);
   assert.equal(deriveCompletionEvidence({ messages: result.result }).outcome, "needs_attention");
 });
 
@@ -122,11 +124,11 @@ test("one successful safe check chain satisfies runtime checks without a redunda
   assert.deepEqual(result.result[0].runtimeValidation?.verification.map((item) => item.toolCallId), ["checks", "checks"]);
 });
 
-test("two failed repair feedback rounds are bounded even when the model repeatedly claims completion", async (t) => {
+test("unchanged failed evidence gets one repair feedback rather than identical repeated rounds", async (t) => {
   const f = fixture(t);
   const result = await run(t, f, [edit("edit", 1, 2), tool("failed-check", "bash", { command: "npm run test" }), stop(), stop(), stop()]);
-  assert.equal(result.bodies.length, 5);
-  assert.equal(result.result[0].runtimeValidation?.repairAttempts, 2);
+  assert.equal(result.bodies.length, 4);
+  assert.equal(result.result[0].runtimeValidation?.repairAttempts, 1);
   assert.equal(result.result[0].runtimeValidation?.status, "failed");
   assert.equal(deriveCompletionEvidence({ messages: result.result }).outcome, "validation_failed");
 });

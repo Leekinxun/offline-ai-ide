@@ -17,6 +17,7 @@ export interface ModeCapabilityDecision {
 const INSPECTION_TOOLS = new Set([
   "ask_user",
   "compress",
+  "read_run_evidence",
   "memory_read",
   "skill_load",
   "read_file",

@@ -127,7 +127,7 @@ export interface AgentRunEventInput {
 
 export type WsServerMessage = (
   | { type: "question_state"; requestId: string; pendingQuestionCount: number; waitingForInput: boolean }
-  | { type: "conversation_snapshot"; conversationId: string; messages: import("../chat/history.js").PersistedChatMessage[]; activeRequestIds: string[]; pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[]; pendingQuestionCount?: number; waitingForInput?: boolean; run: import("../chat/runHistory.js").AgentRunRecord | null }
+  | { type: "conversation_snapshot"; conversationId: string; messages: import("../chat/history.js").PersistedChatMessage[]; activeRequestIds: string[]; pendingApprovals: import("./toolApproval.js").ToolApprovalRequestEvent[]; pendingQuestionCount?: number; waitingForInput?: boolean; run: (Omit<import("../chat/runHistory.js").AgentRunRecord, "executionFacts"> & { executionFacts?: import("../chat/executionFacts.js").ExecutionFactsSummary }) | null }
   | { type: "background_run_state"; conversationId: string; runId: string; status: AgentRunStatus | "stopping"; waiting: boolean; updatedAt: number; requestId?: string; outcome?: "completed" | "cancelled" | "failed" }
   | { type: "request_accepted"; requestId: string; conversationId: string; replayed?: true }
   | { type: "conversation"; conversationId: string; created: boolean }
@@ -155,6 +155,7 @@ export type WsServerMessage = (
       completionEvidence?: import("../chat/completionEvidence.js").CompletionEvidence;
       qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
       executionPlan?: import("../chat/executionPlans.js").ExecutionPlan;
+      executionFacts?: import("../chat/executionFacts.js").ExecutionFactsSummary;
     }
   | {
       type: "context_state";
@@ -213,6 +214,7 @@ export type WsServerMessage = (
     }
   | {
       type: "summary";
+      executionFacts?: import("../chat/executionFacts.js").ExecutionFactsSummary;
       conversationId: string;
       requestId: string;
       runId?: string;

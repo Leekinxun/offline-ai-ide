@@ -32,7 +32,8 @@ import { migrationsRouter } from "./routes/migrations.js";
 import { authMiddleware } from "./auth/middleware.js";
 import { getWsSession } from "./auth/middleware.js";
 import { handleChatWs } from "./ws/chat.js";
-import { handleTerminalWs } from "./ws/terminal.js";
+import { handleTerminalWs, closeTerminalClient, stopTerminalSessionsForToken, stopTerminalSessionsForWorkspaceChange, recheckTerminalSessions, shutdownTerminalSessions } from "./ws/terminal.js";
+import { subscribeTeamAccessChanges } from "./team/teamManager.js";
 import { handleTeamWs } from "./ws/team.js";
 import { handleMobileWs } from "./ws/mobile.js";
 import { getMobileSessionFromUpgrade } from "./mobile/pairing.js";
@@ -69,6 +70,12 @@ app.use("/api/checkpoints", authMiddleware, checkpointsRouter);
 app.use("/api/diagnostics", authMiddleware, diagnosticsRouter);
 app.use("/api/run", authMiddleware, runRouter);
 app.use("/api/process-sessions", authMiddleware, processSessionsRouter);
+app.post("/api/terminal-sessions/close", authMiddleware, (req, res) => {
+  try {
+    closeTerminalClient((req as any).userSession, req.body || {});
+    res.json({ stopped: true });
+  } catch { res.status(403).json({ error: "Terminal close not permitted" }); }
+});
 app.use("/api/previews", authMiddleware, previewsRouter);
 app.use("/api/debug", authMiddleware, debugRouter);
 app.use("/api/git-delivery", authMiddleware, gitDeliveryRouter);
@@ -120,6 +127,7 @@ const connections = new Set<Socket>();
 const desktopSockets = new Map<string, Set<WebSocket>>();
 
 sessionManager.onSessionRevoked((token) => {
+  stopTerminalSessionsForToken(token);
   stopPreviewsForToken(token);
   stopProcessSessionsForToken(token);
   stopRunsForSession(token);
@@ -128,6 +136,9 @@ sessionManager.onSessionRevoked((token) => {
   }
   desktopSockets.delete(token);
 });
+
+sessionManager.onWorkspaceChanged((token, previousWorkspace) => stopTerminalSessionsForWorkspaceChange(token, previousWorkspace));
+subscribeTeamAccessChanges(() => recheckTerminalSessions());
 
 server.on("connection", (socket) => {
   connections.add(socket);
@@ -194,7 +205,7 @@ wss.on("connection", (ws: WebSocket, req: any, session: UserSession) => {
   if (url.startsWith("/ws/chat")) {
     handleChatWs(ws, session);
   } else if (url.startsWith("/ws/terminal")) {
-    handleTerminalWs(ws, session);
+    handleTerminalWs(ws, session, { framed: new URL(req.url || "", "http://localhost").searchParams.get("protocol") === "2" });
   } else if (url.startsWith("/ws/team")) {
     handleTeamWs(ws, session);
   } else {
@@ -216,13 +227,23 @@ server.on("error", (error: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-process.on("message", (message: unknown) => {
-  if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "shutdown") return;
+let shutdownStarted = false;
+const shutdown = () => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  shutdownTerminalSessions();
   shutdownPreviews();
   shutdownProcessSessions();
   wss.clients.forEach((client) => client.terminate());
   server.close(() => process.exit(0));
   connections.forEach((socket) => socket.destroy());
+  const deadline = setTimeout(() => process.exit(0), 2500); deadline.unref();
+};
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
+process.on("message", (message: unknown) => {
+  if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "shutdown") return;
+  shutdown();
 });
 
 server.listen(config.port, config.host, () => {
