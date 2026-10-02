@@ -82,23 +82,26 @@ export function evaluateWorkspaceWrite(targetPath: string): PolicyDecision {
   return { allowed: true };
 }
 
-interface ShellToken { kind: "word" | "operator"; value: string; literal?: boolean; }
+interface ShellToken { kind: "word" | "operator"; value: string; literal?: boolean; quoted?: boolean; }
+const SHELL_COMMAND_BOUNDARY_OPERATORS = new Set([";", ";;", "&&", "||", "|", "&", "(", ")"]);
+const SHELL_COMMAND_POSITION_WORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "!", "{", "}"]);
+
 function shellTokens(command: string): ShellToken[] | null {
   const result: ShellToken[] = [];
-  let value = ""; let started = false; let literal = true; let quote: "'" | '"' | undefined;
-  const flush = () => { if (started) result.push({ kind: "word", value, literal }); value = ""; started = false; literal = true; };
+  let value = ""; let started = false; let literal = true; let quoted = false; let quote: "'" | '"' | undefined;
+  const flush = () => { if (started) result.push({ kind: "word", value, literal, quoted }); value = ""; started = false; literal = true; quoted = false; };
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index];
     if (quote === "'") { if (character === "'") quote = undefined; else value += character; continue; }
     if (character === "\\") {
       const next = command[++index]; if (next === undefined) return null;
       if (next === "\n") continue;
-      started = true;
+      started = true; quoted = true;
       if (quote === '"' && !['$', '`', '"', "\\"].includes(next)) value += "\\";
       value += next; continue;
     }
     if (quote === '"') { if (character === '"') quote = undefined; else { if (character === "$" || character === "`") literal = false; value += character; } continue; }
-    if (character === "'" || character === '"') { quote = character; started = true; continue; }
+    if (character === "'" || character === '"') { quote = character; started = true; quoted = true; continue; }
     if (/\s/.test(character)) { flush(); if (character === "\n") result.push({ kind: "operator", value: ";" }); continue; }
     if (";&|<>()".includes(character)) {
       flush();
@@ -111,6 +114,68 @@ function shellTokens(command: string): ShellToken[] | null {
   }
   if (quote) return null;
   flush(); return result;
+}
+
+function shellFunctionDefinitionPolicy(tokens: ShellToken[]): PolicyDecision {
+  let commandPosition = true;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.kind === "operator") {
+      if (SHELL_COMMAND_BOUNDARY_OPERATORS.has(token.value)) commandPosition = true;
+      continue;
+    }
+    if (token.kind !== "word") continue;
+    if (!commandPosition) continue;
+    if (!token.quoted && token.value === "function") return { allowed: false, reason: "Shell function definitions are blocked" };
+    if (SHELL_COMMAND_POSITION_WORDS.has(token.value) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value)) continue;
+    const open = tokens[index + 1];
+    const close = tokens[index + 2];
+    if (!token.quoted && /^[A-Za-z_][A-Za-z0-9_]*$/.test(token.value)
+      && open?.kind === "operator" && open.value === "("
+      && close?.kind === "operator" && close.value === ")") {
+      return { allowed: false, reason: "Shell function definitions are blocked" };
+    }
+    commandPosition = false;
+  }
+  return { allowed: true };
+}
+
+function hasPythonInlineCommand(command: string): boolean {
+  const tokens = shellTokens(command);
+  if (!tokens) return false;
+  let commandPosition = true;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.kind === "operator") {
+      if (SHELL_COMMAND_BOUNDARY_OPERATORS.has(token.value)) commandPosition = true;
+      continue;
+    }
+    if (token.kind !== "word") continue;
+    if (commandPosition && (SHELL_COMMAND_POSITION_WORDS.has(token.value) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value))) continue;
+    if (!commandPosition) continue;
+    commandPosition = false;
+    if (!/^python(?:3(?:\.\d+)*)?$/.test(path.basename(token.value))) continue;
+    for (let next = index + 1; next < tokens.length; next += 1) {
+      const arg = tokens[next];
+      if (arg.kind === "operator" && SHELL_COMMAND_BOUNDARY_OPERATORS.has(arg.value)) break;
+      if (arg.kind !== "word") continue;
+      if (arg.value === "--") break;
+      if (arg.value === "--check-hash-based-pycs") { next += 1; continue; }
+      if (!arg.value.startsWith("-")) break;
+      if (arg.value.startsWith("--")) continue;
+      for (let option = 1; option < arg.value.length; option += 1) {
+        const flag = arg.value[option];
+        if (flag === "c") return true;
+        if (flag === "m") return false;
+        // -W/-X consume the remainder of this argument or the next word.
+        if (flag === "W" || flag === "X") {
+          if (option === arg.value.length - 1) next += 1;
+          break;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function outputTargetPolicy(target: ShellToken, workspaceDir?: string): PolicyDecision {
@@ -141,10 +206,12 @@ function outputTargetPolicy(target: ShellToken, workspaceDir?: string): PolicyDe
 function shellRedirectionPolicy(command: string, workspaceDir?: string): PolicyDecision {
   const tokens = shellTokens(command);
   if (!tokens) return { allowed: false, reason: "Shell command has an unterminated quote or escape" };
+  const functionPolicy = shellFunctionDefinitionPolicy(tokens);
+  if (!functionPolicy.allowed) return functionPolicy;
   let commandPosition = true;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (token.kind === "operator" && [";", ";;", "&&", "||", "|", "&", "(", ")"].includes(token.value)) { commandPosition = true; continue; }
+    if (token.kind === "operator" && SHELL_COMMAND_BOUNDARY_OPERATORS.has(token.value)) { commandPosition = true; continue; }
     if (token.kind === "operator" && [">", ">>", ">|", "<", "<>", ">&", "<&", "<<", "<<<", "&>", "&>>"].includes(token.value)) {
       if (["<<", "<<<", "&>", "&>>"].includes(token.value)) return { allowed: false, reason: "Use literal file redirection and numeric descriptor duplication instead of this shell redirection form" };
       const target = tokens[++index];
@@ -157,7 +224,7 @@ function shellRedirectionPolicy(command: string, workspaceDir?: string): PolicyD
       continue;
     }
     if (token.kind !== "word") continue;
-    if (commandPosition && (["do", "then", "else", "elif", "if", "while", "until", "!"].includes(token.value) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value))) continue;
+    if (commandPosition && (SHELL_COMMAND_POSITION_WORDS.has(token.value) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value))) continue;
     const isCommand = commandPosition; commandPosition = false;
     // tee opens its operands for writing even though it is not shell syntax.
     if (isCommand && token.literal && path.basename(token.value) === "tee") {
@@ -180,6 +247,9 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
   // Commands are passed to a shell by the legacy executor. Reject shell syntax
   // by default so callers cannot accidentally treat unstructured text as exec.
   // The executor may opt in only after a high-risk tool approval has succeeded.
+  if (!options.compatibilityShellAuthorized && hasPythonInlineCommand(normalized)) {
+    return { allowed: false, reason: "Inline Python execution requires explicit compatibility-shell authorization" };
+  }
   if (!options.compatibilityShellAuthorized && /(?:[;&|`()\n><]|\$\(|\$\{)/.test(normalized)) {
     return { allowed: false, reason: "Shell syntax requires explicit compatibility-shell authorization" };
   }
@@ -196,9 +266,8 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
     [/\bgit\s+(?:reset\s+--hard|clean\s+-[^\n]*f|checkout\s+--\s+\.|restore\s+\.)/i, "Destructive Git commands are blocked"],
     [/(?:curl|wget)[^\n|;&]*\|\s*(?:sh|bash|zsh|python|node)\b/i, "Downloaded code cannot be piped directly to an interpreter"],
     [/\b(?:sh|bash|zsh|fish|dash|ksh)\s+(?:-c|--command)\b/i, "Nested shell interpreters are blocked"],
-    [/\b(?:node|python(?:3)?|ruby|perl|php)\s+(?:-e|-c)\b/i, "Inline interpreter execution is blocked"],
+    [/\b(?:node|ruby|perl|php)\s+(?:-e|-c)\b/i, "Inline interpreter execution is blocked"],
     [/(?:\$\(|`|\$\{)/, "Command substitution is blocked"],
-    [/(?:\(\s*\)|(?:^|[;&|(\n])\s*function\s)/, "Shell function definitions are blocked"],
     [/(?:^|\s)(?:\/etc|\/usr|\/bin|\/sbin|\/System|\/Library|~\/\.ssh|~\/\.aws)(?:\/|\s|$)/i, "Commands targeting system or credential directories are blocked"],
     [/(?:^|[\s"'=])(?:\.\/)?\.crewforge(?:\/|[\s"'=]|$)/i, "Agent shell access to CrewForge control metadata is blocked"],
     [/(?:^|[\s;])(?:\.\.\/)+/i, "Commands cannot escape the workspace"],

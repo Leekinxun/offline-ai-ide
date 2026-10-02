@@ -8,7 +8,8 @@ import test from "node:test";
 import express from "express";
 import { checkpointsRouter } from "../routes/checkpoints.js";
 import { chatRouter } from "../routes/chat.js";
-import { recordFileMutation } from "../files/mutationRegistry.js";
+import { buildFileHash, captureCheckpointMutationsDetailed, recordFileMutation } from "../files/mutationRegistry.js";
+import { createCheckpoint } from "./checkpoints.js";
 import { AgentRunRecorder } from "./runHistory.js";
 import { appendConversationMessage, createConversationId, listConversationSummaries, readConversationMessages } from "./history.js";
 import { applyChangeSetDecision, captureChangeSet, computeChangeSetTransitionIntegrity, ChangeSetIntegrationCrashError, getChangeSet, setChangeSetIntegrationHookForTests, type ChangeSet } from "./changeSets.js";
@@ -23,6 +24,34 @@ async function withCheckpointApi(workspaceDir: string, run: (baseUrl: string) =>
   const address = server.address(); assert(address && typeof address === "object");
   try { await run(`http://127.0.0.1:${address.port}`); } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 }
+
+test("binary mutation API exposes audit metadata and restores exact bytes without exposing blobs", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-binary-route-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const before = Buffer.from([0, 255, 128, 1]);
+  const after = Buffer.from([0, 254, 129, 2, 3]);
+  fs.writeFileSync(path.join(workspace, "artifact.sqlite"), before);
+  const checkpoint = createCheckpoint(workspace);
+  fs.writeFileSync(path.join(workspace, "artifact.sqlite"), after);
+  const capture = captureCheckpointMutationsDetailed(workspace, { checkpointId: checkpoint.id, runId: "binary-run", toolCallId: "sqlite-update" });
+  await withCheckpointApi(workspace, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/mutations?runId=binary-run`);
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { mutations: Array<Record<string, unknown>> };
+    const mutation = payload.mutations[0];
+    assert.equal(mutation.preimageHash, buildFileHash(before));
+    assert.equal(mutation.postimageHash, buildFileHash(after));
+    assert.equal(mutation.preimageSize, before.byteLength);
+    assert.equal(mutation.postimageSize, after.byteLength);
+    assert.equal(mutation.preimageBinary, true);
+    assert.equal(mutation.postimageBinary, true);
+    assert.equal(mutation.rollbackScope, "whole-file");
+    for (const privateField of ["workspaceDir", "preimageContent", "preimageBlob", "postimageBlob"]) assert.equal(privateField in mutation, false, privateField);
+    const rollback = await fetch(`${baseUrl}/mutations/rollback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [capture.records[0].id] }) });
+    assert.equal(rollback.status, 200);
+    assert.deepEqual(fs.readFileSync(path.join(workspace, "artifact.sqlite")), before);
+  });
+});
 
 async function withChatApi(workspaceDir: string, run: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express(); app.use(express.json());

@@ -8,7 +8,7 @@ import { classifyToolApproval } from "./toolApproval.js";
 import { evaluateModeCapability } from "./modeCapabilities.js";
 import { subagentAllowsTool } from "./subagentRoles.js";
 import { getAllTools, TOOL_DISPATCH } from "./tools.js";
-import { listFileMutations, recordKnownFileMutation } from "../files/mutationRegistry.js";
+import { buildFileHash, listFileMutations, listMutationEvidenceGaps, recordKnownFileMutation, rollbackFileMutations } from "../files/mutationRegistry.js";
 import type { ToolContext } from "./types.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
 
@@ -44,6 +44,27 @@ test("Agent process polling returns real exit/output and journals delayed writes
   await executeProcessTool("process_poll", { session_id: start.process.session.id }, f.context);
   assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 1);
   assert.equal(pendingAgentProcesses(f.context).length, 0);
+});
+
+test("a completed Agent process records a binary artifact without an evidence error", async (t) => {
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128]);
+  const f = fixture(t, `setTimeout(() => { require('node:fs').writeFileSync('image.png', Buffer.from(${JSON.stringify([...bytes])})); console.log('artifact ready'); }, 50);`);
+  const start = await executeProcessTool("process_start", { command: "node task.cjs" }, f.context);
+  const done = await terminal(f.context, start.process.session.id);
+  assert.equal(done.process.session.exitCode, 0);
+  assert.equal(done.process.evidenceError, undefined);
+  assert.equal(pendingAgentProcesses(f.context).length, 0);
+  const records = listFileMutations(f.root, { toolCallId: "process-start" });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].path, "image.png");
+  assert.equal(records[0].postimageHash, buildFileHash(bytes));
+  assert.equal(records[0].rollbackScope, "whole-file");
+  assert.equal(records[0].rollbackUnavailableReason, undefined);
+  assert.deepEqual(listMutationEvidenceGaps(f.root), []);
+  await executeProcessTool("process_poll", { session_id: start.process.session.id }, f.context);
+  assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 1);
+  assert.deepEqual(rollbackFileMutations(f.root, { toolCallId: "process-start" }).applied, [records[0].id]);
+  assert.equal(fs.existsSync(path.join(f.root, "image.png")), false);
 });
 
 test("process tools enforce owner/run, active-write exclusion, input approval and read-only/child boundaries", async (t) => {

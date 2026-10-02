@@ -30,6 +30,14 @@
 .run-review-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .run-review-canvas { height: 380px; min-height: 240px; border: 1px solid var(--line-subtle); border-radius: 5px; overflow: hidden; }
 .run-review.compact .run-review-canvas { height: 300px; }
+.run-review-binary { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line-subtle); border-radius: 6px; padding: 10px; background: var(--surface-quiet); }
+.run-review-binary p { margin: 3px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.run-review-binary small { color: var(--ink-muted); line-height: 1.5; }
+.run-review-binary-grid { display: grid; gap: 7px; margin: 0; }
+.run-review-binary-grid > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; align-items: start; }
+.run-review-binary-grid dt { color: var(--ink-muted); }
+.run-review-binary-grid dd { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.run-review-binary-grid code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .run-review-hunks { min-width: 0; }
 .run-review-hunks summary { display: flex; align-items: center; gap: 5px; cursor: pointer; padding: 6px 0; }
 .run-review-hunk { margin-top: 8px; border: 1px solid var(--line-subtle); padding: 8px; border-radius: 5px; display: flex; flex-direction: column; gap: 7px; }

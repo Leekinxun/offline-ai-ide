@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AgentRunRecorder } from "./runHistory.js";
-import { readRunChanges } from "./runChanges.js";
-import { keepFileMutations, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { keepAllRunChanges, readRunChanges, RunChangesKeepError } from "./runChanges.js";
+import { buildFileHash, captureCheckpointMutationsDetailed, keepFileMutations, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { createCheckpoint } from "./checkpoints.js";
 
 async function fixture(t: test.TestContext): Promise<string> {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-run-changes-"));
@@ -14,6 +15,51 @@ async function fixture(t: test.TestContext): Promise<string> {
   await recorder.start(); await recorder.finish("completed");
   return workspace;
 }
+
+test("auditable binary changes expose hashes and sizes and support whole-file review", async (t) => {
+  const workspace = await fixture(t);
+  const before = Buffer.from([0, 255, 128, 1]);
+  const after = Buffer.from([0, 254, 129, 2, 3]);
+  fs.writeFileSync(path.join(workspace, "data.sqlite"), before);
+  const checkpoint = createCheckpoint(workspace);
+  fs.writeFileSync(path.join(workspace, "data.sqlite"), after);
+  const captured = captureCheckpointMutationsDetailed(workspace, { checkpointId: checkpoint.id, runId: "run", requestId: "turn", toolCallId: "generate" });
+  assert.deepEqual(captured.skipped, []);
+  reloadMutationJournal(workspace);
+  const changes = readRunChanges(workspace, "run", "data.sqlite", "turn");
+  const file = changes.files[0];
+  assert.equal(file.isBinary, true);
+  assert.equal(file.unavailableReason, undefined);
+  assert.equal(file.statisticsUnavailableReason, "binary");
+  assert.equal(file.originalSize, before.byteLength);
+  assert.equal(file.modifiedSize, after.byteLength);
+  assert.equal(file.originalHash, buildFileHash(before));
+  assert.equal(file.modifiedHash, buildFileHash(after));
+  assert.equal("original" in file, false);
+  assert.equal("modified" in file, false);
+  assert.deepEqual(file.hunks, []);
+  const kept = keepAllRunChanges(workspace, "run", changes.revision, "turn");
+  assert.deepEqual(kept.kept, [captured.records[0].id]);
+  assert.equal(kept.files[0].reviewState, "kept");
+  assert.deepEqual(rollbackFileMutations(workspace, { runId: "run", requestId: "turn" }).applied, [captured.records[0].id]);
+  assert.deepEqual(fs.readFileSync(path.join(workspace, "data.sqlite")), before);
+  assert.equal(readRunChanges(workspace, "run", "data.sqlite", "turn").files[0].rollbackState, "reverted");
+});
+
+test("corrupt binary evidence still blocks batch review and rollback", async (t) => {
+  const workspace = await fixture(t);
+  const checkpoint = createCheckpoint(workspace);
+  fs.writeFileSync(path.join(workspace, "image.png"), Buffer.from([0, 255, 128, 1]));
+  const captured = captureCheckpointMutationsDetailed(workspace, { checkpointId: checkpoint.id, runId: "run", toolCallId: "generate" });
+  fs.writeFileSync(path.join(workspace, ".checkpoints", "blobs", captured.records[0].postimageBlob!), Buffer.from([0, 255, 128, 2]));
+  const changes = readRunChanges(workspace, "run", "image.png");
+  assert.match(changes.files[0].unavailableReason || "", /hash/);
+  assert.throws(() => keepAllRunChanges(workspace, "run", changes.revision), RunChangesKeepError);
+  const rollback = rollbackFileMutations(workspace, { runId: "run" });
+  assert.deepEqual(rollback.applied, []);
+  assert.equal(rollback.unavailable.length, 1);
+  assert.equal(fs.existsSync(path.join(workspace, "image.png")), true);
+});
 
 test("run changes use fixed journal images after later disk edits and across rollback", async (t) => {
   const workspace = await fixture(t);

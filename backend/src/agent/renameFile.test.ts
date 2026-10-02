@@ -151,7 +151,7 @@ test("binary and invalid UTF-8 inputs cannot create un-restorable text evidence"
   fs.writeFileSync(f.source, Buffer.from([0x61, 0x00, 0x62]));
   assert.throws(() => f.rename({ expected_version: buildFileVersion("a\0b") }), /binary/);
   fs.writeFileSync(f.source, Buffer.from([0xc3, 0x28]));
-  assert.throws(() => f.rename({ expected_version: buildFileVersion("�(") }), /lossless UTF-8/);
+  assert.throws(() => f.rename({ expected_version: buildFileVersion("�(") }), /binary|lossless UTF-8/);
   assert.deepEqual(fs.readFileSync(f.source), Buffer.from([0xc3, 0x28]));
   assert.equal(fs.existsSync(f.target), false);
 });

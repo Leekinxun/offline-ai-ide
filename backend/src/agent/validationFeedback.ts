@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { discoverRunTasks, hasDirectPythonTests } from "../run/service.js";
 import { getDiagnostics, getDiagnosticsWorkspaceVersion, type DiagnosticsResult, type WorkspaceDiagnostic } from "../diagnostics/service.js";
-import { evaluateContextPath, normalizeContextPath, readAuthorizedWorkspaceFile } from "./contextPolicy.js";
-import { buildFileVersion, listFileMutations } from "../files/mutationRegistry.js";
+import { assertAuthorizedContextContent, DEFAULT_BINARY_VERSION_FILE_LIMIT, DEFAULT_CONTEXT_FILE_LIMIT, evaluateContextPath, isBinaryContextBuffer, normalizeContextPath, readAuthorizedWorkspaceBytes, readAuthorizedWorkspaceFile } from "./contextPolicy.js";
+import { buildFileHash, buildFileVersion, listFileMutations } from "../files/mutationRegistry.js";
 import { readRunRecord } from "../chat/runHistory.js";
 import { listProcessSessions } from "../run/processSessions.js";
 import { redactSecrets } from "./secretRedaction.js";
@@ -199,7 +199,10 @@ export function validationFileVersions(workspaceDir: string, changedFiles: reado
     try {
       const full = safePath(file, workspaceDir);
       if (!fs.existsSync(full)) return [file, "missing"];
-      return [file, buildFileVersion(readAuthorizedWorkspaceFile(workspaceDir, file).content)];
+      const bytes = readAuthorizedWorkspaceBytes(workspaceDir, file, DEFAULT_BINARY_VERSION_FILE_LIMIT).buffer;
+      if (isBinaryContextBuffer(bytes)) return [file, `sha256:${buildFileHash(bytes)}`];
+      if (bytes.byteLength > DEFAULT_CONTEXT_FILE_LIMIT) throw new Error("Text validation version is oversized");
+      return [file, buildFileVersion(assertAuthorizedContextContent(bytes))];
     } catch { return [file, "unavailable"]; }
   }));
 }

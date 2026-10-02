@@ -524,6 +524,10 @@ export interface GitDiffPayload {
   isTooLarge: boolean;
   updatedAt: number;
   revision?: string;
+  originalHash?: string;
+  modifiedHash?: string;
+  originalSize?: number;
+  modifiedSize?: number;
 }
 
 export interface GitStatus {

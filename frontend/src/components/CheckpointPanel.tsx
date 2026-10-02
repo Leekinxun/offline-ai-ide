@@ -21,6 +21,7 @@ import { TaskStateStrip } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import "./CheckpointPanel.css";
 import { changeSetReviewRevision, isCurrentChangeSet } from "../hooks/changeSetContract";
+import { binaryEvidenceForFile } from "./runReviewPolicy";
 import {
   changeSetDecisionAllowed,
   changeSetRecoveryDecisions,
@@ -53,6 +54,24 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function mutationIsBinary(mutation: { isBinary?: boolean; preimageBinary?: boolean; postimageBinary?: boolean }): boolean {
+  return Boolean(mutation.isBinary || mutation.preimageBinary || mutation.postimageBinary);
+}
+function binaryMutationEvidence(mutation: {
+  operation: "create" | "modify" | "delete"; originalExists?: boolean; modifiedExists?: boolean;
+  originalHash?: string; modifiedHash?: string; originalSize?: number; modifiedSize?: number;
+  preimageSize?: number; postimageSize?: number;
+}) {
+  return binaryEvidenceForFile({
+    operation: mutation.operation,
+    originalExists: mutation.originalExists ?? mutation.operation !== "create",
+    modifiedExists: mutation.modifiedExists ?? mutation.operation !== "delete",
+    originalHash: mutation.originalHash,
+    modifiedHash: mutation.modifiedHash,
+    originalSize: mutation.originalSize ?? mutation.preimageSize,
+    modifiedSize: mutation.modifiedSize ?? mutation.postimageSize,
+  });
 }
 
 export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
@@ -298,7 +317,14 @@ export const CheckpointPanel: React.FC<CheckpointPanelProps> = ({
           {mutations.length === 0 && <div className="workbench-panel-empty"><RefreshCw size={24} /><strong>{t("recovery.mutationsEmpty")}</strong></div>}
           {mutations.map((mutation) => <article className="checkpoint-card" key={mutation.id}>
             <div className="checkpoint-card-head"><strong>{mutation.path}</strong><time>{new Date(mutation.recordedAt).toLocaleString()}</time></div>
-            <div className="checkpoint-meta"><span>{mutation.operation}</span><span>{mutation.rollbackScope}</span>{mutation.runId && <code>{mutation.runId}</code>}{mutation.toolCallId && <code>{mutation.toolCallId}</code>}</div>
+            <div className="checkpoint-meta"><span>{mutation.operation}</span><span>{mutation.rollbackScope}</span>{mutationIsBinary(mutation) && <span>{t("review.binaryBadge")}</span>}{mutation.runId && <code>{mutation.runId}</code>}{mutation.toolCallId && <code>{mutation.toolCallId}</code>}</div>
+            {mutationIsBinary(mutation) ? (() => {
+              const evidence = binaryMutationEvidence(mutation);
+              return <div className="checkpoint-meta" aria-label={t("recovery.binaryEvidence")}>
+                <span>{t("review.original")}: {evidence.originalHash || "—"} · {typeof evidence.originalSize === "number" ? formatSize(evidence.originalSize) : "—"}</span>
+                <span>{t("review.modified")}: {evidence.modifiedHash || "—"} · {typeof evidence.modifiedSize === "number" ? formatSize(evidence.modifiedSize) : "—"}</span>
+              </div>;
+            })() : null}
             <button type="button" className="dialog-btn" disabled={readOnly || busyId !== null} onClick={() => void handleRollback(mutation.id, mutation.path)}><ArchiveRestore size={13} /> {t("recovery.rollback")}</button>
             {mutation.hunks?.length ? <div className="worktree-actions" aria-label={t("recovery.hunks")}><span>{t("recovery.hunks")}</span>{mutation.hunks.map((hunk, index) => <button type="button" className="dialog-btn" key={hunk.id} disabled={readOnly || busyId !== null} onClick={() => void handleHunkRollback(mutation.id, hunk.id, mutation.path)}>{t("recovery.rollbackHunk", { count: index + 1 })}</button>)}</div> : null}
           </article>)}

@@ -11,7 +11,7 @@ export interface MutationHunk {
   anchor?: { version: 1; beforeOffset: number; afterOffset: number; beforeContext: string; afterContext: string };
 }
 export interface KnownFileMutationRecord { workspaceDir: string; path: string; source: KnownFileMutationSource; actor?: string; recordedAt: number; mtimeMs: number; version: string; }
-export interface FileMutationRecord extends KnownFileMutationRecord { id: string; sequence?: number; runId?: string; requestId?: string; toolCallId?: string; operation: "create" | "modify" | "delete"; preimageHash: string; postimageHash: string; preimageContent?: string; preimageBlob?: string; postimageBlob?: string; rollbackScope: "whole-file" | "hunks"; rollbackUnavailableReason?: "binary" | "oversized"; hunks?: MutationHunk[]; hunkSelections?: Array<{ start: number; end: number; label?: string }>; revertedAt?: number; revertedHunkIds?: string[]; keptAt?: number; keptHunkIds?: string[]; }
+export interface FileMutationRecord extends KnownFileMutationRecord { id: string; sequence?: number; runId?: string; requestId?: string; toolCallId?: string; operation: "create" | "modify" | "delete"; preimageHash: string; postimageHash: string; preimageContent?: string; preimageBlob?: string; postimageBlob?: string; preimageSize?: number; postimageSize?: number; preimageBinary?: boolean; postimageBinary?: boolean; rollbackScope: "whole-file" | "hunks"; rollbackUnavailableReason?: "binary" | "oversized"; hunks?: MutationHunk[]; hunkSelections?: Array<{ start: number; end: number; label?: string }>; revertedAt?: number; revertedHunkIds?: string[]; keptAt?: number; keptHunkIds?: string[]; }
 export interface MutationRollbackResult { applied: string[]; alreadyReverted: string[]; conflicts: Array<{ id: string; path: string; expectedPostimageHash: string; actualHash: string }>; unavailable: Array<{ id: string; path: string; reason: string }>; }
 export interface MutationCaptureResult { records: FileMutationRecord[]; skipped: Array<{ path: string; reason: "binary" | "oversized" | "unreadable" }>; }
 export interface MutationEvidenceGap { workspaceDir: string; path: string; runId: string; requestId?: string; toolCallId: string; reason: MutationCaptureResult["skipped"][number]["reason"]; recordedAt: number; }
@@ -27,7 +27,7 @@ export class MutationReviewConflictError extends Error {
 }
 export interface WorkspaceMutationEvent { workspaceDir: string; path: string; operation: "create" | "modify" | "delete" | "rename"; previousPath?: string; scope?: "file" | "prefix"; recordedAt: number; }
 interface MutationJournal { schemaVersion: 1; records: FileMutationRecord[]; skipped?: MutationEvidenceGap[]; }
-interface CapturedFile { content?: string; hash?: string; reason?: MutationCaptureResult["skipped"][number]["reason"]; }
+interface CapturedFile { content?: string; bytes?: Buffer; hash?: string; size?: number; reason?: MutationCaptureResult["skipped"][number]["reason"]; }
 const mutationRegistry = new Map<string, KnownFileMutationRecord>();
 const mutationHistory = new Map<string, FileMutationRecord>();
 const mutationEvidenceGaps = new Map<string, MutationEvidenceGap>();
@@ -42,6 +42,13 @@ const journalPath = (workspaceDir: string) => path.join(path.resolve(workspaceDi
 const blobPath = (workspaceDir: string, hash: string) => path.join(path.resolve(workspaceDir), JOURNAL_DIR, "blobs", hash);
 export function buildFileVersion(content: string): string { return crypto.createHash("sha1").update(content).digest("hex"); }
 export function buildFileHash(content: string | Buffer): string { return crypto.createHash("sha256").update(content).digest("hex"); }
+function buffersEqual(left: Buffer | undefined, right: Buffer | undefined): boolean {
+  return left === undefined ? right === undefined : right !== undefined && left.equals(right);
+}
+function decodeUtf8RoundTrip(bytes: Buffer): string | null {
+  const content = bytes.toString("utf8");
+  return Buffer.from(content, "utf8").equals(bytes) ? content : null;
+}
 
 interface TextChange { start: number; end: number; text: string; afterStart: number; }
 
@@ -135,6 +142,7 @@ function inspectJournalTarget(workspaceDir: string, relativePath: string): strin
 export function readMutationImage(workspaceDir: string, mutation: FileMutationRecord, side: "preimage" | "postimage"): string | undefined {
   if (mutation.workspaceDir !== path.resolve(workspaceDir) || !safeRelativePath(mutation.path)) throw new Error("Mutation evidence does not belong to this workspace");
   if (mutation.rollbackUnavailableReason) throw new Error(mutation.rollbackUnavailableReason);
+  if (side === "preimage" ? mutation.preimageBinary : mutation.postimageBinary) throw new Error("binary");
   const absent = side === "preimage" ? mutation.operation === "create" : mutation.operation === "delete";
   const expectedHash = side === "preimage" ? mutation.preimageHash : mutation.postimageHash;
   if (absent) {
@@ -156,16 +164,41 @@ export function readMutationImage(workspaceDir: string, mutation: FileMutationRe
   if (Buffer.byteLength(content) > MAX_CAPTURE_FILE_BYTES || content.includes("\0") || buildFileHash(content) !== expectedHash) throw new Error("Mutation image hash does not match recorded evidence");
   return content;
 }
+/** Read hash-verified, bounded bytes. Absent and empty files are distinct. */
+export function readMutationBytes(workspaceDir: string, mutation: FileMutationRecord, side: "preimage" | "postimage"): Buffer | undefined {
+  if (mutation.workspaceDir !== path.resolve(workspaceDir) || !safeRelativePath(mutation.path)) throw new Error("Mutation evidence does not belong to this workspace");
+  if (mutation.rollbackUnavailableReason) throw new Error(mutation.rollbackUnavailableReason);
+  const absent = side === "preimage" ? mutation.operation === "create" : mutation.operation === "delete";
+  const expectedHash = side === "preimage" ? mutation.preimageHash : mutation.postimageHash;
+  if (absent) {
+    if (expectedHash !== buildFileHash("")) throw new Error("Absent mutation image hash is invalid");
+    return undefined;
+  }
+  const blob = side === "preimage" ? mutation.preimageBlob : mutation.postimageBlob;
+  const expectedSize = side === "preimage" ? mutation.preimageSize : mutation.postimageSize;
+  let bytes: Buffer;
+  if (blob) {
+    if (!/^[a-f0-9]{64}$/.test(blob) || blob !== expectedHash) throw new Error("Mutation blob reference is invalid");
+    const target = inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/blobs/${blob}`);
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.size > MAX_CAPTURE_FILE_BYTES) throw new Error("Mutation blob is not bounded");
+    bytes = fs.readFileSync(target);
+  } else if (side === "preimage" && typeof mutation.preimageContent === "string") bytes = Buffer.from(mutation.preimageContent, "utf8");
+  else throw new Error("Mutation image was not recorded");
+  if (bytes.byteLength > MAX_CAPTURE_FILE_BYTES || buildFileHash(bytes) !== expectedHash) throw new Error("Mutation image hash does not match recorded evidence");
+  if (expectedSize !== undefined && bytes.byteLength !== expectedSize) throw new Error("Mutation image size does not match recorded evidence");
+  return bytes;
+}
 function inspectWorkspaceTarget(workspaceDir: string, relativePath: string): { target: string; exists: boolean } {
   const safe = safeRelativePath(relativePath); if (!safe) throw new Error("unsafe workspace path");
   const workspace = path.resolve(workspaceDir); const target = safePath(safe, workspace); let cursor = workspace;
   for (const [index, part] of safe.split("/").entries()) { cursor = path.join(cursor, part); if (!fs.existsSync(cursor)) break; const stat = fs.lstatSync(cursor); if (stat.isSymbolicLink()) throw new Error("workspace path contains a symbolic link"); const final = index === safe.split("/").length - 1; if (!final && !stat.isDirectory()) throw new Error("workspace path parent is not a directory"); if (final && !stat.isFile()) throw new Error("workspace target is not a regular file"); }
   return { target, exists: fs.existsSync(target) };
 }
-function atomicSafeWrite(workspaceDir: string, relativePath: string, content: string, expectedHash: string, expectedExists: boolean): void {
+function atomicSafeWrite(workspaceDir: string, relativePath: string, content: string | Buffer, expectedHash: string, expectedExists: boolean): void {
   const inspected = inspectWorkspaceTarget(workspaceDir, relativePath); const initial = inspected.exists ? fs.readFileSync(inspected.target) : Buffer.alloc(0); if (inspected.exists !== expectedExists || buildFileHash(initial) !== expectedHash) throw new Error("rollback target changed before write"); fs.mkdirSync(path.dirname(inspected.target), { recursive: true }); inspectWorkspaceTarget(workspaceDir, relativePath);
   const temporary = `${inspected.target}.rollback-${process.pid}-${crypto.randomBytes(3).toString("hex")}`;
-  try { fs.writeFileSync(temporary, content, { encoding: "utf8", flag: "wx" }); const revalidated = inspectWorkspaceTarget(workspaceDir, relativePath); const live = revalidated.exists ? fs.readFileSync(revalidated.target) : Buffer.alloc(0); if (revalidated.exists !== expectedExists || buildFileHash(live) !== expectedHash) throw new Error("rollback target changed before commit"); fs.renameSync(temporary, inspected.target); } catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
+  try { fs.writeFileSync(temporary, content, { flag: "wx" }); const revalidated = inspectWorkspaceTarget(workspaceDir, relativePath); const live = revalidated.exists ? fs.readFileSync(revalidated.target) : Buffer.alloc(0); if (revalidated.exists !== expectedExists || buildFileHash(live) !== expectedHash) throw new Error("rollback target changed before commit"); fs.renameSync(temporary, inspected.target); } catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
 }
 function isMutation(value: unknown, workspaceDir: string): value is FileMutationRecord {
   if (!value || typeof value !== "object") return false; const x = value as Partial<FileMutationRecord>;
@@ -173,12 +206,23 @@ function isMutation(value: unknown, workspaceDir: string): value is FileMutation
   if (x.sequence !== undefined && (!Number.isSafeInteger(x.sequence) || x.sequence < 1)) return false;
   if (x.revertedAt !== undefined && (typeof x.revertedAt !== "number" || !Number.isFinite(x.revertedAt))) return false;
   if (x.keptAt !== undefined && (typeof x.keptAt !== "number" || !Number.isFinite(x.keptAt))) return false;
+  if (x.preimageSize !== undefined && (!Number.isSafeInteger(x.preimageSize) || x.preimageSize < 0 || x.preimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
+  if (x.postimageSize !== undefined && (!Number.isSafeInteger(x.postimageSize) || x.postimageSize < 0 || x.postimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
+  if (x.preimageBinary !== undefined && typeof x.preimageBinary !== "boolean") return false;
+  if (x.postimageBinary !== undefined && typeof x.postimageBinary !== "boolean") return false;
   if (x.keptHunkIds !== undefined && (!Array.isArray(x.keptHunkIds) || !x.keptHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
   if (x.revertedHunkIds !== undefined && (!Array.isArray(x.revertedHunkIds) || !x.revertedHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
   return typeof x.id === "string" && typeof x.path === "string" && safeRelativePath(x.path) !== null && path.resolve(x.workspaceDir || "") === workspaceDir && (x.source === "user" || x.source === "assistant_tool") && typeof x.recordedAt === "number" && typeof x.mtimeMs === "number" && typeof x.version === "string" && typeof x.preimageHash === "string" && typeof x.postimageHash === "string" && (x.operation === "create" || x.operation === "modify" || x.operation === "delete") && (x.rollbackScope === "whole-file" || x.rollbackScope === "hunks");
 }
-function atomicWrite(target: string, content: string): void { fs.mkdirSync(path.dirname(target), { recursive: true }); const temporary = `${target}.tmp-${process.pid}-${crypto.randomBytes(3).toString("hex")}`; fs.writeFileSync(temporary, content, "utf8"); fs.renameSync(temporary, target); }
-function storeBlob(workspaceDir: string, content: string): string { const hash = buildFileHash(content); const target = inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/blobs/${hash}`); if (!fs.existsSync(target)) atomicWrite(target, content); return hash; }
+function atomicWrite(target: string, content: string | Buffer): void { fs.mkdirSync(path.dirname(target), { recursive: true }); const temporary = `${target}.tmp-${process.pid}-${crypto.randomBytes(3).toString("hex")}`; fs.writeFileSync(temporary, content); fs.renameSync(temporary, target); }
+function storeBlob(workspaceDir: string, content: string | Buffer): string {
+  const hash = buildFileHash(content); const target = inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/blobs/${hash}`);
+  if (fs.existsSync(target)) {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.size > MAX_CAPTURE_FILE_BYTES || buildFileHash(fs.readFileSync(target)) !== hash) throw new Error("Mutation blob hash mismatch");
+  } else atomicWrite(target, content);
+  return hash;
+}
 function workspaceRecords(workspaceDir: string): FileMutationRecord[] { const target = path.resolve(workspaceDir); return [...mutationHistory.values()].filter((x) => x.workspaceDir === target); }
 function workspaceEvidenceGaps(workspaceDir: string): MutationEvidenceGap[] { const target = path.resolve(workspaceDir); return [...mutationEvidenceGaps.values()].filter((x) => x.workspaceDir === target); }
 function evidenceGapKey(gap: Pick<MutationEvidenceGap, "workspaceDir" | "runId" | "toolCallId" | "path">): string { return `${gap.workspaceDir}::${gap.runId}::${gap.toolCallId}::${gap.path}`; }
@@ -275,6 +319,52 @@ export function listFileMutations(workspaceDir: string, selection: { runId?: str
 export function listMutationEvidenceGaps(workspaceDir: string, selection: { runId?: string; requestId?: string; toolCallId?: string; path?: string } = {}): MutationEvidenceGap[] { const target = path.resolve(workspaceDir); loadJournal(target, true); const selectedPath = selection.path === undefined ? undefined : safeRelativePath(selection.path); if (selection.path !== undefined && !selectedPath) return []; return workspaceEvidenceGaps(target).filter((x) => (!selection.runId || x.runId === selection.runId) && (!selection.requestId || x.requestId === selection.requestId) && (!selection.toolCallId || x.toolCallId === selection.toolCallId) && (!selectedPath || x.path === selectedPath)).sort((a, b) => b.recordedAt - a.recordedAt); }
 /** Records exact pre/post images for durable, whole-file-only rollback. */
 export function recordFileMutation(input: Omit<FileMutationRecord, "id" | "recordedAt" | "version" | "workspaceDir" | "mtimeMs" | "postimageHash" | "preimageHash" | "rollbackScope" | "operation" | "preimageBlob" | "postimageBlob" | "hunks"> & { workspaceDir: string; mtimeMs?: number; postimageContent?: string; preimageContent?: string; hunks?: Array<{ id: string; preimage: string; postimage: string }>; }): FileMutationRecord { const known = recordKnownFileMutation({ workspaceDir: input.workspaceDir, path: input.path, source: input.source, actor: input.actor, mtimeMs: input.mtimeMs || Date.now(), content: input.postimageContent, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimageContent: input.preimageContent, hunkSelections: input.hunkSelections, hunks: input.hunks }); return listFileMutations(input.workspaceDir, { path: known.path }).find((x) => x.recordedAt === known.recordedAt)!; }
+
+function recordCapturedFileMutation(input: {
+  workspaceDir: string; path: string; source: KnownFileMutationSource; actor?: string;
+  runId: string; requestId?: string; toolCallId: string;
+  preimage?: CapturedFile; postimage?: CapturedFile;
+}): FileMutationRecord {
+  if (input.requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId)) throw new Error("Invalid mutation request id");
+  const relativePath = safeRelativePath(input.path); if (!relativePath) throw new Error("Mutation path must be a workspace-relative file path");
+  const workspaceDir = path.resolve(input.workspaceDir); loadJournal(workspaceDir, true);
+  const recordedAt = Date.now();
+  const sideBlob = (side: CapturedFile | undefined): string | undefined => {
+    if (!side) return undefined;
+    if (side.bytes) return storeBlob(workspaceDir, side.bytes);
+    if (side.content !== undefined) return storeBlob(workspaceDir, side.content);
+    throw new Error("Captured mutation side has no restorable image");
+  };
+  const preimageBlob = sideBlob(input.preimage);
+  const postimageBlob = sideBlob(input.postimage);
+  const preimageHash = input.preimage?.hash || buildFileHash("");
+  const postimageHash = input.postimage?.hash || buildFileHash("");
+  const preimageBinary = input.preimage?.reason === "binary" || undefined;
+  const postimageBinary = input.postimage?.reason === "binary" || undefined;
+  const mutation: FileMutationRecord = {
+    workspaceDir, path: relativePath, source: input.source, ...(input.actor ? { actor: input.actor } : {}),
+    id: `${recordedAt}-${crypto.randomBytes(4).toString("hex")}`, recordedAt, mtimeMs: recordedAt,
+    sequence: workspaceRecords(workspaceDir).reduce((maximum, entry, index) => Math.max(maximum, entry.sequence ?? index + 1), 0) + 1,
+    version: input.postimage?.content !== undefined ? buildFileVersion(input.postimage.content) : input.postimage?.hash || buildFileVersion(""),
+    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
+    ...(input.requestId?.trim() ? { requestId: input.requestId.trim() } : {}),
+    ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}),
+    operation: input.preimage === undefined ? "create" : input.postimage === undefined ? "delete" : "modify",
+    preimageHash, postimageHash,
+    ...(input.preimage?.content !== undefined && !preimageBinary ? { preimageContent: input.preimage.content } : {}),
+    ...(preimageBlob ? { preimageBlob } : {}),
+    ...(postimageBlob ? { postimageBlob } : {}),
+    ...(input.preimage ? { preimageSize: input.preimage.size ?? (input.preimage.bytes?.byteLength ?? Buffer.byteLength(input.preimage.content || "")) } : {}),
+    ...(input.postimage ? { postimageSize: input.postimage.size ?? (input.postimage.bytes?.byteLength ?? Buffer.byteLength(input.postimage.content || "")) } : {}),
+    ...(preimageBinary ? { preimageBinary } : {}),
+    ...(postimageBinary ? { postimageBinary } : {}),
+    rollbackScope: "whole-file",
+  };
+  mutationHistory.set(mutation.id, mutation); mutationRegistry.set(key(workspaceDir, relativePath), mutation); trimHistory(); persistJournal(workspaceDir);
+  notifyWorkspaceMutation({ workspaceDir, path: relativePath, operation: mutation.operation, recordedAt });
+  try { new CollaborationStore(workspaceDir).recordMutation(relativePath, input.actor || "system"); } catch { /* best-effort collaboration notification */ }
+  return mutation;
+}
 
 export interface FileMutationBatchInput {
   workspaceDir: string; path: string; source: KnownFileMutationSource; actor?: string;
@@ -406,8 +496,13 @@ export function keepRunMutationBatch(workspaceDir: string, selection: {
   if (journal.skipped?.some((gap) => gap.runId === selection.runId && (!selection.requestId || gap.requestId === selection.requestId))) throw new MutationJournalEvidenceError(journalPath(workspace), "batch review has incomplete mutation evidence");
   for (const record of selected) {
     if (record.rollbackUnavailableReason) throw new MutationJournalEvidenceError(journalPath(workspace), record.rollbackUnavailableReason);
-    readMutationImage(workspace, record, "preimage");
-    readMutationImage(workspace, record, "postimage");
+    if (record.preimageBinary || record.postimageBinary) {
+      readMutationBytes(workspace, record, "preimage");
+      readMutationBytes(workspace, record, "postimage");
+    } else {
+      readMutationImage(workspace, record, "preimage");
+      readMutationImage(workspace, record, "postimage");
+    }
   }
   const kept = selected.map((record) => record.id);
   const keptIds = new Set(kept); const keptAt = Date.now();
@@ -439,13 +534,24 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
     && (!selection.ids || selection.ids.includes(entry.id)));
   const result: MutationRollbackResult = { applied: [], alreadyReverted: [], conflicts: [], unavailable: [] };
   const effectiveImages = new Map<string, EffectiveMutationImages | Error>();
+  const effectiveBytes = new Map<string, EffectiveMutationBytes | Error>();
   for (const filePath of new Set(candidates.map((mutation) => mutation.path))) {
-    for (const [id, images] of buildEffectiveMutationImages(workspaceDir, allRecords.filter((record) => record.path === filePath).reverse())) effectiveImages.set(id, images);
+    const fileRecords = allRecords.filter((record) => record.path === filePath).reverse();
+    for (const [id, images] of buildEffectiveMutationImages(workspaceDir, fileRecords)) effectiveImages.set(id, images);
+    for (const [id, images] of buildEffectiveMutationBytes(workspaceDir, fileRecords)) effectiveBytes.set(id, images);
   }
   interface PendingFile {
-    path: string; initialContent: string; initialExists: boolean; content: string; exists: boolean;
+    path: string; initialContent: string | Buffer; initialExists: boolean; content: string | Buffer; exists: boolean;
     mutations: Array<{ mutation: FileMutationRecord; hunkIds?: string[] }>;
   }
+  const pendingText = (file: PendingFile): string => {
+    if (typeof file.content === "string") return file.content;
+    if (file.content.includes(0)) throw new Error("target is binary");
+    const content = decodeUtf8RoundTrip(file.content);
+    if (content === null) throw new Error("target is binary");
+    file.content = content;
+    return content;
+  };
   const pending = new Map<string, PendingFile>();
   const invalidPaths = new Set<string>();
   for (const mutation of candidates) {
@@ -460,40 +566,50 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
       invalidPaths.add(mutation.path);
       continue;
     }
+    const binaryMutation = Boolean(mutation.preimageBinary || mutation.postimageBinary);
     let file = pending.get(mutation.path);
     try {
+      if (binaryMutation && selectedHunks) throw new Error("selected hunk is unavailable for binary evidence");
       if (!file) {
         const inspected = inspectWorkspaceTarget(workspaceDir, mutation.path);
-        let current = "";
+        let current: string | Buffer = binaryMutation ? Buffer.alloc(0) : "";
         if (inspected.exists) {
           const stat = fs.lstatSync(inspected.target);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CAPTURE_FILE_BYTES) throw new Error("target is not a bounded regular file");
           const bytes = fs.readFileSync(inspected.target);
-          if (bytes.includes(0)) throw new Error("target is binary");
-          current = bytes.toString("utf8");
+          if (binaryMutation) current = bytes;
+          else {
+            if (bytes.includes(0)) throw new Error("target is binary");
+            const content = decodeUtf8RoundTrip(bytes);
+            if (content === null) throw new Error("target is binary");
+            current = content;
+          }
         }
         file = { path: mutation.path, initialContent: current, initialExists: inspected.exists, content: current, exists: inspected.exists, mutations: [] };
         pending.set(mutation.path, file);
       }
       const currentHash = buildFileHash(file.content);
-      const images = effectiveImages.get(mutation.id);
+      const images = binaryMutation ? effectiveBytes.get(mutation.id) : effectiveImages.get(mutation.id);
       if (!images || images instanceof Error) throw images || new Error("Mutation image evidence is unavailable");
       if (selectedHunks) {
+        const current = pendingText(file);
+        if (!("originalBefore" in images) || typeof images.originalBefore !== "string" || typeof images.originalAfter !== "string") throw new Error("selected hunk is unavailable");
         if (!file.exists || !selectedHunks.length) throw new Error("selected hunk is unavailable");
         const remaining = selectedHunks.filter((hunk) => !mutation.revertedHunkIds?.includes(hunk.id));
         // Legacy snippets have no position evidence. Only a verified, complete
         // effective postimage authorizes them; never search a diverged file.
-        if (remaining.some((hunk) => !hunk.anchor) && file.content !== images.after) throw new MutationHunkConflictError(mutation.postimageHash);
-        file.content = reverseMutationHunks(images.originalBefore, images.originalAfter, file.content, remaining, true);
+        if (remaining.some((hunk) => !hunk.anchor) && current !== images.after) throw new MutationHunkConflictError(mutation.postimageHash);
+        file.content = reverseMutationHunks(images.originalBefore, images.originalAfter, current, remaining, true);
         file.mutations.push({ mutation, hunkIds: remaining.map((hunk) => hunk.id) });
       } else {
         const { before, after } = images;
-        if (file.exists !== (after !== undefined) || currentHash !== buildFileHash(after ?? "")) {
-          result.conflicts.push({ id: mutation.id, path: mutation.path, expectedPostimageHash: buildFileHash(after ?? ""), actualHash: currentHash });
+        const expectedPostimageHash = buildFileHash(after ?? (binaryMutation ? Buffer.alloc(0) : ""));
+        if (file.exists !== (after !== undefined) || currentHash !== expectedPostimageHash) {
+          result.conflicts.push({ id: mutation.id, path: mutation.path, expectedPostimageHash, actualHash: currentHash });
           invalidPaths.add(mutation.path);
           continue;
         }
-        file.content = before ?? "";
+        file.content = before ?? (binaryMutation ? Buffer.alloc(0) : "");
         file.exists = before !== undefined;
         file.mutations.push({ mutation });
       }
@@ -622,6 +738,11 @@ interface EffectiveMutationImages {
   before: string | undefined; after: string | undefined;
 }
 
+interface EffectiveMutationBytes {
+  originalBefore: Buffer | undefined; originalAfter: Buffer | undefined;
+  before: Buffer | undefined; after: Buffer | undefined;
+}
+
 /** Reconstruct recorded reversions across the complete file history before comparing live data. */
 function buildEffectiveMutationImages(workspaceDir: string, records: FileMutationRecord[]): Map<string, EffectiveMutationImages | Error> {
   const result = new Map<string, EffectiveMutationImages | Error>();
@@ -657,6 +778,27 @@ function buildEffectiveMutationImages(workspaceDir: string, records: FileMutatio
   }
   return result;
 }
+function buildEffectiveMutationBytes(workspaceDir: string, records: FileMutationRecord[]): Map<string, EffectiveMutationBytes | Error> {
+  const result = new Map<string, EffectiveMutationBytes | Error>();
+  let previous: EffectiveMutationBytes | undefined;
+  for (const mutation of records) {
+    try {
+      if (mutation.hunks?.length || mutation.revertedHunkIds?.length) throw new Error("Binary rollback requires whole-file evidence");
+      const originalBefore = readMutationBytes(workspaceDir, mutation, "preimage");
+      const originalAfter = readMutationBytes(workspaceDir, mutation, "postimage");
+      const before = previous && buffersEqual(originalBefore, previous.originalAfter) ? previous.after : originalBefore;
+      let after = originalAfter;
+      if (!buffersEqual(before, originalBefore)) throw new Error("Interleaved binary rollback evidence is unavailable");
+      if (mutation.revertedAt !== undefined) after = before;
+      previous = { originalBefore, originalAfter, before, after };
+      result.set(mutation.id, previous);
+    } catch (error) {
+      result.set(mutation.id, error instanceof Error ? error : new Error("Invalid mutation history"));
+      previous = undefined;
+    }
+  }
+  return result;
+}
 function safeRollbackReason(error: unknown): string {
   // Filesystem errors include absolute storage paths; they are not API data.
   return (error as NodeJS.ErrnoException)?.code ? "Rollback evidence or target could not be read" : error instanceof Error ? error.message : "Rollback failed";
@@ -668,7 +810,7 @@ function assertRollbackTarget(workspaceDir: string, relativePath: string, expect
   return inspected;
 }
 function readCapturedFile(target: string, knownSize?: number, knownHash?: string): CapturedFile {
-  try { const size = knownSize ?? fs.statSync(target).size; if (size > MAX_CAPTURE_FILE_BYTES) return { hash: knownHash, reason: "oversized" }; const buffer = fs.readFileSync(target); if (buffer.includes(0)) return { hash: knownHash || buildFileHash(buffer), reason: "binary" }; return { content: buffer.toString("utf8"), hash: knownHash || buildFileHash(buffer) }; } catch { return { reason: "unreadable" }; }
+  try { const size = knownSize ?? fs.statSync(target).size; if (size > MAX_CAPTURE_FILE_BYTES) return { hash: knownHash, size, reason: "oversized" }; const buffer = fs.readFileSync(target); if (knownSize !== undefined && buffer.byteLength !== knownSize) return { reason: "unreadable" }; const hash = buildFileHash(buffer); if (knownHash !== undefined && hash !== knownHash) return { reason: "unreadable" }; const content = buffer.includes(0) ? null : decodeUtf8RoundTrip(buffer); if (content === null) return { bytes: buffer, hash, size, reason: "binary" }; return { content, hash, size }; } catch { return { reason: "unreadable" }; }
 }
 function checkpointFiles(workspaceDir: string, checkpointId: string): Map<string, CapturedFile> {
   const index = JSON.parse(fs.readFileSync(path.join(workspaceDir, JOURNAL_DIR, "index.json"), "utf8")) as Array<{ id?: string; storageVersion?: number; manifest?: string; files?: string[] }>;
@@ -714,7 +856,22 @@ function currentWorkspaceFiles(workspaceDir: string): Map<string, CapturedFile> 
 /** Compare the workspace against a checkpoint and persist exact create/modify/delete mutation records. */
 export function captureCheckpointMutationsDetailed(workspaceDir: string, input: { checkpointId: string; runId: string; requestId?: string; toolCallId: string; actor?: string }): MutationCaptureResult {
   const before = checkpointFiles(workspaceDir, input.checkpointId); const after = currentWorkspaceFiles(workspaceDir); const paths = new Set([...before.keys(), ...after.keys()]); const result: MutationCaptureResult = { records: [], skipped: [] };
-  for (const relative of [...paths].sort()) { const preimage = before.get(relative); const postimage = after.get(relative); if (preimage?.reason || postimage?.reason) { if (preimage?.reason === "unreadable" || postimage?.reason === "unreadable" || preimage?.hash !== postimage?.hash || preimage?.reason !== postimage?.reason) result.skipped.push({ path: relative, reason: postimage?.reason || preimage?.reason || "unreadable" }); continue; } const preimageContent = preimage?.content; const postimageContent = postimage?.content; if (preimageContent === postimageContent) continue; result.records.push(recordFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimageContent, postimageContent })); }
+  for (const relative of [...paths].sort()) {
+    const preimage = before.get(relative); const postimage = after.get(relative);
+    const blockingReason = [preimage?.reason, postimage?.reason].find((reason) => reason === "unreadable" || reason === "oversized");
+    if (blockingReason) {
+      if (!preimage?.hash || !postimage?.hash || preimage.hash !== postimage.hash || preimage.size !== postimage.size || preimage.reason !== postimage.reason) result.skipped.push({ path: relative, reason: blockingReason });
+      continue;
+    }
+    if (preimage?.hash === postimage?.hash && preimage?.reason === postimage?.reason) continue;
+    if (preimage?.reason === "binary" || postimage?.reason === "binary") {
+      result.records.push(recordCapturedFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimage, postimage }));
+      continue;
+    }
+    const preimageContent = preimage?.content; const postimageContent = postimage?.content;
+    if (preimageContent === postimageContent) continue;
+    result.records.push(recordFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimageContent, postimageContent }));
+  }
   if (result.skipped.length) {
     const workspace = path.resolve(workspaceDir); loadJournal(workspace, true); const recordedAt = Date.now();
     for (const skipped of result.skipped) { const gap: MutationEvidenceGap = { workspaceDir: workspace, path: skipped.path, runId: input.runId, ...(input.requestId ? { requestId: input.requestId } : {}), toolCallId: input.toolCallId, reason: skipped.reason, recordedAt }; mutationEvidenceGaps.set(evidenceGapKey(gap), gap); }

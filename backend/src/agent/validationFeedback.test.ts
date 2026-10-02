@@ -3,10 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { compareEditorDiagnosticAdvisories, compareValidationDiagnostics, discoverValidationCommands, resolveResumedValidation, ValidationFeedback } from "./validationFeedback.js";
+import { compareEditorDiagnosticAdvisories, compareValidationDiagnostics, discoverValidationCommands, resolveResumedValidation, validationFileVersions, ValidationFeedback } from "./validationFeedback.js";
 import { getDiagnosticsWorkspaceVersion, type DiagnosticsResult } from "../diagnostics/service.js";
 import { publishEditorDiagnostics, type EditorDiagnosticSnapshot } from "../chat/editorDiagnostics.js";
-import { buildFileVersion } from "../files/mutationRegistry.js";
+import { DEFAULT_CONTEXT_FILE_LIMIT } from "./contextPolicy.js";
+import { buildFileHash, buildFileVersion } from "../files/mutationRegistry.js";
 
 function fixture(t: test.TestContext, scripts: Record<string, string> = { test: "node check.cjs" }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-validation-"));
@@ -103,6 +104,43 @@ test("passing command evidence is invalidated by later edits and a fresh run res
   assert.equal(validation.assess(["app.ts"]).report.verification[0].status, "pending");
   validation.observeCommand({ command: "npm run test", toolCallId: "pass-2", output: "ok", isError: false, denied: false, changedFiles: ["app.ts"] });
   assert.equal(validation.assess(["app.ts"]).report.verification[0].toolCallId, "pass-2");
+});
+
+test("validation versions hash authorized binary artifacts without exposing context", (t) => {
+  const root = fixture(t);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-validation-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const binary = Buffer.from([0, 1, 2, 3, 4]);
+  const invalidA = Buffer.from([0xc3, 0x28]);
+  const invalidB = Buffer.from([0xe2, 0x28, 0xa1]);
+  const mediumBinary = Buffer.concat([Buffer.from([0]), Buffer.alloc(1_500_000, 1)]);
+  fs.writeFileSync(path.join(root, "issues.sqlite"), binary);
+  fs.writeFileSync(path.join(root, "invalid-a.bin"), invalidA);
+  fs.writeFileSync(path.join(root, "invalid-b.bin"), invalidB);
+  fs.writeFileSync(path.join(root, "medium.sqlite"), mediumBinary);
+  fs.writeFileSync(path.join(root, "huge.sqlite"), Buffer.concat([Buffer.from([0]), Buffer.alloc(2 * 1024 * 1024, 1)]));
+  fs.writeFileSync(path.join(root, "large.txt"), Buffer.alloc(DEFAULT_CONTEXT_FILE_LIMIT + 1, 65));
+  fs.writeFileSync(path.join(root, "generated.ts"), "// @generated\nexport const generated = true;\n");
+  fs.writeFileSync(path.join(root, "secret.ts"), "export const apiKey = \"sk-live_VERSIONCANARY_123456789\";\n");
+  fs.mkdirSync(path.join(root, ".history"));
+  fs.writeFileSync(path.join(root, ".history", "run.json"), "{}");
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(path.join(root, "dist", "out.js"), "generated");
+  fs.writeFileSync(path.join(outside, "outside.bin"), Buffer.from([0, 9]));
+  fs.symlinkSync(path.join(outside, "outside.bin"), path.join(root, "linked.sqlite"));
+
+  const versions = validationFileVersions(root, ["app.ts", "issues.sqlite", "invalid-a.bin", "invalid-b.bin", "medium.sqlite", "huge.sqlite", "large.txt", "generated.ts", "secret.ts", ".history/run.json", "dist/out.js", "linked.sqlite", "../outside.bin"]);
+  assert.equal(versions["app.ts"], buildFileVersion("const value = 1;"));
+  assert.equal(versions["issues.sqlite"], `sha256:${buildFileHash(binary)}`);
+  assert.equal(versions["invalid-a.bin"], `sha256:${buildFileHash(invalidA)}`);
+  assert.equal(versions["invalid-b.bin"], `sha256:${buildFileHash(invalidB)}`);
+  assert.notEqual(versions["invalid-a.bin"], versions["invalid-b.bin"]);
+  assert.equal(versions["medium.sqlite"], `sha256:${buildFileHash(mediumBinary)}`);
+  for (const denied of ["huge.sqlite", "large.txt", "generated.ts", "secret.ts", ".history/run.json", "dist/out.js", "linked.sqlite", "../outside.bin"]) {
+    assert.equal(versions[denied], "unavailable", denied);
+  }
+  fs.writeFileSync(path.join(root, "issues.sqlite"), Buffer.from([0, 1, 2, 3, 5]));
+  assert.notEqual(validationFileVersions(root, ["issues.sqlite"])["issues.sqlite"], versions["issues.sqlite"]);
 });
 
 test("denied checks remain unverified without repeated authorization prompts, even after another edit", (t) => {

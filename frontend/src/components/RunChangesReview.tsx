@@ -6,7 +6,7 @@ import { useRunChanges } from "../hooks/useRunChanges";
 import { getEditorThemeName } from "../editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { getLanguage } from "../types";
-import { bulkReviewPolicy, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
+import { binaryEvidenceForFile, bulkReviewPolicy, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
 import "./RunChangesReview.css";
 
 const DiffEditor = lazy(() => import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor })));
@@ -18,6 +18,38 @@ export interface RunChangesReviewProps {
   onComment?: (comment: RunReviewComment) => void; onChanged?: () => void;
 }
 type LineSelection = { side: "original" | "modified"; startLine: number; endLine: number };
+
+function formatBytes(bytes: number | undefined): string {
+  if (typeof bytes !== "number") return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function BinaryReviewPanel({ file }: { file: ReviewFile }) {
+  const { t } = useI18n();
+  const evidence = binaryEvidenceForFile(file);
+  const rows = [
+    file.originalExists || evidence.originalHash || typeof evidence.originalSize === "number"
+      ? { key: "original", label: t("review.original"), hash: evidence.originalHash, bytes: evidence.originalSize }
+      : null,
+    file.modifiedExists || evidence.modifiedHash || typeof evidence.modifiedSize === "number"
+      ? { key: "modified", label: t("review.modified"), hash: evidence.modifiedHash, bytes: evidence.modifiedSize }
+      : null,
+  ].filter(Boolean) as Array<{ key: string; label: string; hash?: string; bytes?: number }>;
+  return <div className="run-review-binary" role="note">
+    <div>
+      <strong>{t("review.binaryTitle")}</strong>
+      <p>{t(evidence.complete ? "review.binaryDescription" : "review.binaryUnavailable")}</p>
+    </div>
+    <dl className="run-review-binary-grid">
+      {rows.map((row) => <div key={row.key}>
+        <dt>{row.label}</dt>
+        <dd><span>{t("review.binaryBytes", { size: formatBytes(row.bytes) })}</span><code title={row.hash || undefined}>{row.hash || "—"}</code></dd>
+      </div>)}
+    </dl>
+    <small>{t("review.binaryNoComments")}</small>
+  </div>;
+}
 
 function ReviewCanvas({ file, theme, onSelection }: { file: ReviewFile; theme: "light" | "dark"; onSelection: (selection: LineSelection) => void }) {
   const { t } = useI18n();
@@ -96,7 +128,7 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
         className={review.selectedPath === entry.path ? "selected" : ""} aria-pressed={review.selectedPath === entry.path}
         onClick={() => review.setSelectedPath(entry.path)}>
         <span className="run-review-file-name">{entry.path}</span>
-        <span className="run-review-stats"><span className="added">+{entry.additions ?? "—"}</span><span className="removed">−{entry.deletions ?? "—"}</span></span>
+        <span className="run-review-stats">{entry.isBinary ? <span>{t("review.binaryBadge")}</span> : <><span className="added">+{entry.additions ?? "—"}</span><span className="removed">−{entry.deletions ?? "—"}</span></>}</span>
         <small className={`run-review-state ${reviewStatus(entry)}`}>{t(`review.state.${reviewStatus(entry)}`)}</small>
       </button>)}
     </div>
@@ -112,10 +144,11 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
       </div>
       {review.stale && <div className="run-review-notice" role="status">{t("review.updating")}</div>}
       {file.unavailableReason ? <div className="run-review-error">{t("review.evidenceUnavailable")}<small>{file.unavailableReason}</small></div>
+        : file.isBinary ? <BinaryReviewPanel file={file} />
         : typeof file.original === "string" && typeof file.modified === "string" ? <ReviewCanvas key={file.path} file={file} theme={theme} onSelection={setSelection} />
-        : <div className="run-review-notice">{t("review.loading")}</div>}
+        : <div className="run-review-error">{t("review.evidenceUnavailable")}</div>}
       {file.rollbackState !== "applied" && <p className="run-review-notice">{t("review.historicalHint")}</p>}
-      {!readOnly && onComment && <div className="run-review-comment">
+      {!readOnly && onComment && !file.isBinary && <div className="run-review-comment">
         {!commentOpen ? <button type="button" disabled={!policy?.comment} onClick={() => { setCommentOpen(true); setCommentRevision(file.revision); setCommentSent(false); }}><MessageSquare size={13} />{t("review.addComment")}</button>
           : <form onSubmit={(event) => { event.preventDefault(); submitComment(); }}>
             <div className="run-review-comment-range">
@@ -130,7 +163,7 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
           </form>}
         {commentSent && <p role="status">{t("review.commentSent")}</p>}
       </div>}
-      {!!file.hunks.length && <details className="run-review-hunks">
+      {!!file.hunks.length && !file.isBinary && <details className="run-review-hunks">
         <summary><ChevronDown size={13} />{t("review.hunks", { count: file.hunks.length })}</summary>
         <p className="run-review-description">{t("review.hunkHint")}</p>
         {file.hunks.map((hunk, index) => <section key={`${hunk.mutationId}:${hunk.id}`} className="run-review-hunk">

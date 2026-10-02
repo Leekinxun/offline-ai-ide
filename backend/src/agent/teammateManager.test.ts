@@ -7,7 +7,7 @@ import test from "node:test";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
 import { TeammateManager } from "./teammateManager.js";
-import { applyChangeSetDecision, captureChangeSet, listChangeSets } from "../chat/changeSets.js";
+import { applyChangeSetDecision, captureChangeSet, listChangeSets, readChangeSetPatch } from "../chat/changeSets.js";
 import { listManagedWorktrees, removeManagedWorktree, updateManagedWorktreeMetadata, type ManagedWorktree } from "../chat/worktrees.js";
 import { registerAgentHooks } from "./agentHooks.js";
 import { TEAMMATE_CAPABILITY } from "./types.js";
@@ -348,37 +348,80 @@ test("write-capable teammate fails before mutation when its required checkpoint 
   removeManagedWorktree(workspaceDir, child.id);
 });
 
-test("teammate mutation evidence gaps fail hook, member/run state, and worktree consistently", async (t) => {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-evidence-gap-"));
+test("teammate oversized mutation evidence gaps fail hook, member/run state, and worktree consistently", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-oversized-gap-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
   let completion = 0;
   let hookError = "";
-  const unregister = registerAgentHooks({ name: "observe-teammate-gap", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "teammate-gap") hookError = context.error || ""; } } });
+  const unregister = registerAgentHooks({ name: "observe-teammate-oversized-gap", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "teammate-gap") hookError = context.error || ""; } } });
   globalThis.fetch = async (input) => {
     if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
     completion += 1;
     return Response.json({ choices: [{ message: completion === 1
-      ? { role: "assistant", content: null, tool_calls: [{ id: "teammate-gap", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf OK && printf '\\0binary' > evidence.bin" }) } }] }
+      ? { role: "assistant", content: null, tool_calls: [{ id: "teammate-gap", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf '%*s' 2097153 '' > evidence.bin" }) } }] }
       : { role: "assistant", content: "handled" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
   };
   t.after(async () => { unregister(); globalThis.fetch = originalFetch; await fs.rm(workspaceDir, { recursive: true, force: true }); });
   const bus = new MessageBus(workspaceDir);
   const manager = new TeammateManager(workspaceDir, bus, new TaskManager(workspaceDir));
-  assert.match(await manager.spawn("gap", "implementation", "make binary", async () => ({ allowed: true }), undefined, {
+  assert.match(await manager.spawn("gap", "implementation", "make oversized evidence", async () => ({ allowed: true }), undefined, {
     parentRunId: "parent-gap", parentConversationId: "conversation-gap", parentRequestId: "request-gap", parentToolCallId: "spawn-gap",
   }), /Spawned/);
   for (let attempt = 0; attempt < 100 && manager.listDetails()[0]?.status !== "failed"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   const member = manager.listDetails()[0];
   const worktree = listManagedWorktrees(workspaceDir)[0];
-  assert.match(hookError, /mutation evidence incomplete/i);
+  assert.match(hookError, /mutation evidence incomplete.*evidence\.bin:oversized/is);
   assert.equal(member.status, "failed");
   assert.equal(readRunRecord(workspaceDir, member.childRunId!).status, "failed");
   assert.equal(worktree.status, "needs_attention");
-  assert.equal(listChangeSets(workspaceDir)[0]?.status, "needs_attention");
+  assert.deepEqual(listChangeSets(workspaceDir), []);
+  assert.doesNotMatch(bus.readInbox("lead").map((message) => message.content).join("\n"), /ready for review/i);
+  await fs.rm(path.join(worktree.path, "evidence.bin"), { force: true });
+  await fs.rm(path.join(worktree.path, ".checkpoints"), { recursive: true, force: true });
+  updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");
+  removeManagedWorktree(workspaceDir, worktree.id);
+});
+
+test("bounded teammate binary mutation evidence reaches ready review with binary patch", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-binary-success-"));
+  initializeGitWorkspace(workspaceDir);
+  const originalFetch = globalThis.fetch;
+  let completion = 0;
+  let hookError = "";
+  const unregister = registerAgentHooks({ name: "observe-teammate-binary-success", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "teammate-binary") hookError = context.error || ""; } } });
+  globalThis.fetch = async (input) => {
+    if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
+    completion += 1;
+    return Response.json({ choices: [{ message: completion === 1
+      ? { role: "assistant", content: null, tool_calls: [{ id: "teammate-binary", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf OK && printf '\\0binary' > evidence.bin" }) } }] }
+      : { role: "assistant", content: "handled" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+  };
+  t.after(async () => { unregister(); globalThis.fetch = originalFetch; await fs.rm(workspaceDir, { recursive: true, force: true }); });
+  const bus = new MessageBus(workspaceDir);
+  const manager = new TeammateManager(workspaceDir, bus, new TaskManager(workspaceDir));
+  assert.match(await manager.spawn("binary", "implementation", "make binary", async () => ({ allowed: true }), undefined, {
+    parentRunId: "parent-binary", parentConversationId: "conversation-binary", parentRequestId: "request-binary", parentToolCallId: "spawn-binary",
+  }), /Spawned/);
+  for (let attempt = 0; attempt < 100 && listManagedWorktrees(workspaceDir)[0]?.status !== "ready_for_review"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  const member = manager.listDetails()[0];
+  const worktree = listManagedWorktrees(workspaceDir)[0];
+  const run = readRunRecord(workspaceDir, member.childRunId!);
+  const changeSet = listChangeSets(workspaceDir)[0];
+  const patch = readChangeSetPatch(workspaceDir, changeSet.id).toString("utf8");
   const notification = bus.readInbox("lead").find((message) => message.content.includes("ChangeSet"))?.content || "";
-  assert.match(notification, /needs_attention.*mutation evidence.*(?:request revision|reject)/i);
-  assert.doesNotMatch(notification, /ready for review/i);
+
+  assert.equal(hookError, "");
+  assert.equal(member.status, "idle");
+  assert.equal(run.status, "completed");
+  assert.equal(worktree.status, "ready_for_review");
+  assert.equal(changeSet.status, "ready_for_review");
+  assert.deepEqual(changeSet.changedFiles, ["evidence.bin"]);
+  assert.equal(changeSet.patchManifest?.length, 1);
+  assert.match(patch, /GIT binary patch/);
+  assert.match(patch, /evidence\.bin/);
+  assert.match(notification, /ready for review/i);
+  assert.doesNotMatch(notification, /mutation evidence/i);
   await fs.rm(path.join(worktree.path, "evidence.bin"), { force: true });
   await fs.rm(path.join(worktree.path, ".checkpoints"), { recursive: true, force: true });
   updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");

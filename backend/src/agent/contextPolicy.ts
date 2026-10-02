@@ -27,8 +27,17 @@ export interface AuthorizedWorkspaceFile {
   mtimeMs: number;
   content: string;
 }
+export interface AuthorizedWorkspaceBytes {
+  path: string;
+  fullPath: string;
+  generated: boolean;
+  size: number;
+  mtimeMs: number;
+  buffer: Buffer;
+}
 
 export const DEFAULT_CONTEXT_FILE_LIMIT = 1024 * 1024;
+export const DEFAULT_BINARY_VERSION_FILE_LIMIT = 2 * 1024 * 1024;
 
 const PROTECTED_SEGMENTS = new Set([
   ".git", ".history", ".checkpoints", ".team", ".tasks", ".transcripts", ".codex", ".omx", ".crewforge",
@@ -82,10 +91,20 @@ export function containsContextSecret(content: string): boolean {
   return false;
 }
 
+export function decodeAuthorizedUtf8Content(buffer: Buffer): string | null {
+  if (buffer.includes(0)) return null;
+  const content = buffer.toString("utf8");
+  return Buffer.from(content, "utf8").equals(buffer) ? content : null;
+}
+
+export function isBinaryContextBuffer(buffer: Buffer): boolean {
+  return decodeAuthorizedUtf8Content(buffer) === null;
+}
+
 /** Shared content policy for workspace context and explicitly granted external reads. */
 export function assertAuthorizedContextContent(buffer: Buffer): string {
-  if (buffer.includes(0)) throw new Error("Context file is not authorized: binary");
-  const content = buffer.toString("utf8");
+  const content = decodeAuthorizedUtf8Content(buffer);
+  if (content === null) throw new Error("Context file is not authorized: binary");
   if (/^(?:\/\/|#|\/\*)\s*@generated\b/im.test(content.slice(0, 4096)) || /\bDO NOT EDIT\b/i.test(content.slice(0, 4096))) {
     throw new Error("Context file is not authorized: generated");
   }
@@ -97,15 +116,11 @@ function contained(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
 
-/**
- * Authorize and read a context file using the same fail-closed checks used by
- * indexing, indexed retrieval, definition lookup, and pinned context.
- */
-export function readAuthorizedWorkspaceFile(
+function resolveAuthorizedWorkspaceFile(
   workspaceDir: string,
   candidatePath: string,
   maxBytes = DEFAULT_CONTEXT_FILE_LIMIT
-): AuthorizedWorkspaceFile {
+): Omit<AuthorizedWorkspaceBytes, "buffer"> {
   const decision = evaluateContextPath(candidatePath);
   if (!decision.allowed || !decision.normalizedPath) {
     throw new Error(`Context file is not authorized: ${decision.reason || "invalid_path"}`);
@@ -123,14 +138,38 @@ export function readAuthorizedWorkspaceFile(
   const stat = fs.lstatSync(fullPath);
   if (!stat.isFile()) throw new Error("Context file is not authorized: not_file");
   if (stat.size > Math.max(1, maxBytes)) throw new Error("Context file is not authorized: oversized");
-  const buffer = fs.readFileSync(fullPath);
-  const content = assertAuthorizedContextContent(buffer);
   return {
     path: decision.normalizedPath,
     fullPath,
     generated: decision.generated,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
-    content,
   };
+}
+
+/** Authorize and read raw bytes without making them model context. */
+export function readAuthorizedWorkspaceBytes(
+  workspaceDir: string,
+  candidatePath: string,
+  maxBytes = DEFAULT_CONTEXT_FILE_LIMIT
+): AuthorizedWorkspaceBytes {
+  const authorized = resolveAuthorizedWorkspaceFile(workspaceDir, candidatePath, maxBytes);
+  const buffer = fs.readFileSync(authorized.fullPath);
+  if (!isBinaryContextBuffer(buffer)) assertAuthorizedContextContent(buffer);
+  return { ...authorized, buffer };
+}
+
+/**
+ * Authorize and read a context file using the same fail-closed checks used by
+ * indexing, indexed retrieval, definition lookup, and pinned context.
+ */
+export function readAuthorizedWorkspaceFile(
+  workspaceDir: string,
+  candidatePath: string,
+  maxBytes = DEFAULT_CONTEXT_FILE_LIMIT
+): AuthorizedWorkspaceFile {
+  const authorized = readAuthorizedWorkspaceBytes(workspaceDir, candidatePath, maxBytes);
+  const content = assertAuthorizedContextContent(authorized.buffer);
+  const { buffer: _buffer, ...metadata } = authorized;
+  return { ...metadata, content };
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createCheckpoint, restoreCheckpoint } from "../chat/checkpoints.js";
-import { captureCheckpointMutationsDetailed, keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
+import { captureCheckpointMutationsDetailed, fileMutationRevision, keepFileMutations, keepRunMutationBatch, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, readMutationBytes, readMutationImage, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
 
 test("older snapshots containing binary caches remain restorable without creating validation gaps", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-old-cache-snapshot-"));
@@ -154,16 +154,167 @@ test("capture auto-generates selectable non-adjacent text hunks", (t) => {
   assert.equal(fs.readFileSync(path.join(workspace, "multi.txt"), "utf8"), "one old\nstable\ntwo new\n");
 });
 
-test("capture bounds binary and oversized files and reports skipped mutations", (t) => {
+test("checkpoint capture records bounded SQLite/binary create as auditable bytes", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-binary-create-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, "data"), { recursive: true });
+  const baseline = createCheckpoint(workspace);
+  const sqlite = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.from([1, 2, 3, 4])]);
+  fs.writeFileSync(path.join(workspace, "data/issues.sqlite"), sqlite);
+  const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", requestId: "turn", toolCallId: "demo", actor: "agent" });
+  assert.deepEqual(result.skipped, []);
+  assert.equal(result.records.length, 1);
+  const [record] = result.records;
+  assert.equal(record.path, "data/issues.sqlite");
+  assert.equal(record.operation, "create");
+  assert.equal(record.postimageBinary, true);
+  assert.equal(record.postimageSize, sqlite.length);
+  assert.equal(record.postimageHash, crypto.createHash("sha256").update(sqlite).digest("hex"));
+  assert.equal(record.runId, "run");
+  assert.equal(record.requestId, "turn");
+  assert.equal(record.toolCallId, "demo");
+  assert.deepEqual(readMutationBytes(workspace, record, "postimage"), sqlite);
+  assert.throws(() => readMutationImage(workspace, record, "postimage"), /binary/);
+  assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run" }), []);
+  reloadMutationJournal(workspace);
+  const [persisted] = listFileMutations(workspace, { runId: "run" });
+  assert.equal(persisted.postimageBinary, true);
+  assert.equal(persisted.postimageSize, sqlite.length);
+  assert.deepEqual(readMutationBytes(workspace, persisted, "postimage"), sqlite);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [persisted.id] }).applied, [persisted.id]);
+  assert.equal(fs.existsSync(path.join(workspace, "data/issues.sqlite")), false);
+});
+
+test("checkpoint capture records binary update and delete with reversible whole-file bytes", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-binary-update-delete-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, "data"), { recursive: true });
+  const first = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.from([1, 1, 1])]);
+  const second = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.from([2, 2, 2, 2])]);
+  const file = path.join(workspace, "data/issues.sqlite");
+  fs.writeFileSync(file, first);
+  const baseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, second);
+  const update = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "update" });
+  assert.deepEqual(update.skipped, []);
+  assert.equal(update.records[0].preimageBinary, true);
+  assert.equal(update.records[0].postimageBinary, true);
+  assert.equal(update.records[0].preimageSize, first.length);
+  assert.equal(update.records[0].postimageSize, second.length);
+  assert.deepEqual(readMutationBytes(workspace, update.records[0], "preimage"), first);
+  assert.deepEqual(readMutationBytes(workspace, update.records[0], "postimage"), second);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [update.records[0].id] }).applied, [update.records[0].id]);
+  assert.deepEqual(fs.readFileSync(file), first);
+
+  const deleteBaseline = createCheckpoint(workspace);
+  fs.unlinkSync(file);
+  const removed = captureCheckpointMutationsDetailed(workspace, { checkpointId: deleteBaseline.id, runId: "run-delete", toolCallId: "delete" });
+  assert.deepEqual(removed.skipped, []);
+  assert.equal(removed.records[0].operation, "delete");
+  assert.equal(removed.records[0].preimageBinary, true);
+  assert.equal(removed.records[0].postimageBinary, undefined);
+  assert.deepEqual(readMutationBytes(workspace, removed.records[0], "preimage"), first);
+  assert.equal(readMutationBytes(workspace, removed.records[0], "postimage"), undefined);
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [removed.records[0].id] }).applied, [removed.records[0].id]);
+  assert.deepEqual(fs.readFileSync(file), first);
+});
+
+test("binary rollback does not permanently block earlier text whole-file and hunk history", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mixed-binary-text-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const file = path.join(workspace, "mixed.txt");
+  fs.writeFileSync(file, "one\n");
+  const textBaseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, "two\n");
+  const [text] = captureCheckpointMutationsDetailed(workspace, { checkpointId: textBaseline.id, runId: "run-text", toolCallId: "text" }).records;
+  const binaryBaseline = createCheckpoint(workspace);
+  const binary = Buffer.from([0, 1, 2, 3]);
+  fs.writeFileSync(file, binary);
+  const [binaryRecord] = captureCheckpointMutationsDetailed(workspace, { checkpointId: binaryBaseline.id, runId: "run-binary", toolCallId: "binary" }).records;
+
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [binaryRecord.id] }).applied, [binaryRecord.id]);
+  assert.equal(fs.readFileSync(file, "utf8"), "two\n");
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [text.id] }).applied, [text.id]);
+  assert.equal(fs.readFileSync(file, "utf8"), "one\n");
+});
+
+test("one rollback batch can undo a later binary mutation and an earlier text whole-file mutation", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mixed-batch-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const file = path.join(workspace, "mixed.txt");
+  fs.writeFileSync(file, "one\n");
+  const textBaseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, "two\n");
+  const [text] = captureCheckpointMutationsDetailed(workspace, { checkpointId: textBaseline.id, runId: "run", toolCallId: "text" }).records;
+  const binaryBaseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, Buffer.from([0, 9, 9]));
+  const [binaryRecord] = captureCheckpointMutationsDetailed(workspace, { checkpointId: binaryBaseline.id, runId: "run", toolCallId: "binary" }).records;
+  const result = rollbackFileMutations(workspace, { runId: "run" });
+  assert.deepEqual(result.applied, [binaryRecord.id, text.id]);
+  assert.deepEqual(result.unavailable, []);
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(fs.readFileSync(file, "utf8"), "one\n");
+});
+
+test("partial text hunk rollback still works after a later binary mutation is restored", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mixed-hunk-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const file = path.join(workspace, "mixed.txt");
+  fs.writeFileSync(file, "A=one\nB=one\n");
+  const textBaseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, "A=two\nB=one\n");
+  const [text] = captureCheckpointMutationsDetailed(workspace, { checkpointId: textBaseline.id, runId: "run-text", toolCallId: "text" }).records;
+  const hunkId = text.hunks![0].id;
+  const binaryBaseline = createCheckpoint(workspace);
+  fs.writeFileSync(file, Buffer.from([0, 7, 7, 7]));
+  const [binaryRecord] = captureCheckpointMutationsDetailed(workspace, { checkpointId: binaryBaseline.id, runId: "run-binary", toolCallId: "binary" }).records;
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [binaryRecord.id] }).applied, [binaryRecord.id]);
+  assert.equal(fs.readFileSync(file, "utf8"), "A=two\nB=one\n");
+  assert.deepEqual(rollbackFileMutations(workspace, { ids: [text.id], hunkIds: [hunkId] }).applied, [text.id]);
+  assert.equal(fs.readFileSync(file, "utf8"), "A=one\nB=one\n");
+});
+
+test("no-NUL invalid UTF-8 and PNG-like bytes are captured as binary without loss", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-invalid-utf8-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const baseline = createCheckpoint(workspace);
+  const invalid = Buffer.from([0xff, 0xfe, 0xfd, 0x41]);
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  fs.writeFileSync(path.join(workspace, "invalid.bin"), invalid);
+  fs.writeFileSync(path.join(workspace, "image.png"), pngHeader);
+  const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "bytes" });
+  assert.deepEqual(result.skipped, []);
+  const byPath = new Map(result.records.map((record) => [record.path, record]));
+  assert.equal(byPath.get("invalid.bin")?.postimageBinary, true);
+  assert.equal(byPath.get("image.png")?.postimageBinary, true);
+  assert.deepEqual(readMutationBytes(workspace, byPath.get("invalid.bin")!, "postimage"), invalid);
+  assert.deepEqual(readMutationBytes(workspace, byPath.get("image.png")!, "postimage"), pngHeader);
+  assert.throws(() => readMutationImage(workspace, byPath.get("invalid.bin")!, "postimage"), /binary/);
+});
+
+test("complete binary evidence can be kept while legacy binary records still fail batch review", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-binary-keep-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const baseline = createCheckpoint(workspace);
+  const bytes = Buffer.from([0, 1, 2, 3]);
+  fs.writeFileSync(path.join(workspace, "artifact.bin"), bytes);
+  const [binary] = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "binary" }).records;
+  const legacy = recordFileMutation({ workspaceDir: workspace, path: "legacy.bin", source: "assistant_tool", runId: "legacy-run", toolCallId: "legacy", postimageContent: "\0legacy" });
+  const expectedFileRevisions = {
+    "artifact.bin": fileMutationRevision([binary]),
+  };
+  assert.deepEqual(keepRunMutationBatch(workspace, { runId: "run", ids: [binary.id], expectedFileRevisions }), [binary.id]);
+  assert.throws(() => keepRunMutationBatch(workspace, { runId: "legacy-run", ids: [legacy.id], expectedFileRevisions: { "legacy.bin": fileMutationRevision([legacy]) } }), MutationJournalEvidenceError);
+});
+
+test("capture bounds oversized and unreadable files and reports skipped mutations", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-bounded-capture-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(workspace, "binary.bin"), Buffer.from([0, 1, 2]));
   const baseline = createCheckpoint(workspace);
-  fs.writeFileSync(path.join(workspace, "binary.bin"), Buffer.from([0, 3, 4]));
   fs.writeFileSync(path.join(workspace, "huge.txt"), Buffer.alloc(2 * 1024 * 1024 + 1, 65));
   const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" });
   assert.deepEqual(result.records, []);
-  assert.deepEqual(result.skipped, [{ path: "binary.bin", reason: "binary" }, { path: "huge.txt", reason: "oversized" }]);
+  assert.deepEqual(result.skipped, [{ path: "huge.txt", reason: "oversized" }]);
   assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run", toolCallId: "tool" }).map(({ path, reason }) => ({ path, reason })), result.skipped);
   reloadMutationJournal(workspace);
   assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run" }).map(({ path, reason }) => ({ path, reason })), result.skipped);
@@ -182,8 +333,45 @@ test("unreadable checkpoint evidence is persisted as a skipped mutation", (t) =>
   fs.rmSync(path.join(workspace, ".checkpoints", "blobs", source.sha256));
   fs.writeFileSync(path.join(workspace, "source.txt"), "after");
   const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" });
+  assert.deepEqual(result.records, []);
   assert.deepEqual(result.skipped, [{ path: "source.txt", reason: "unreadable" }]);
   assert.equal(listMutationEvidenceGaps(workspace, { runId: "run" })[0]?.reason, "unreadable");
+});
+
+test("tampered checkpoint binary blobs are rejected before mutation evidence is recorded", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-tampered-checkpoint-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const original = Buffer.from([0, 1, 2, 3]);
+  fs.writeFileSync(path.join(workspace, "artifact.bin"), original);
+  const baseline = createCheckpoint(workspace);
+  const manifest = JSON.parse(fs.readFileSync(baseline.manifest!, "utf8")) as {
+    changes: Array<{ operation: "upsert" | "delete"; path: string; sha256?: string; size?: number }>;
+  };
+  const artifact = manifest.changes.find((entry) => entry.operation === "upsert" && entry.path === "artifact.bin")!;
+  assert.ok(artifact.sha256);
+  assert.equal(artifact.size, original.byteLength);
+  fs.writeFileSync(path.join(workspace, ".checkpoints", "blobs", artifact.sha256), Buffer.from([0, 9, 9, 9]));
+  fs.writeFileSync(path.join(workspace, "artifact.bin"), Buffer.from([0, 4, 5, 6]));
+  const result = captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" });
+  assert.deepEqual(result.records, []);
+  assert.deepEqual(result.skipped, [{ path: "artifact.bin", reason: "unreadable" }]);
+  assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run" }).map(({ path, reason }) => ({ path, reason })), result.skipped);
+});
+
+test("existing corrupt mutation blob paths fail closed instead of being reused", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-corrupt-mutation-blob-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const baseline = createCheckpoint(workspace);
+  const bytes = Buffer.from([0, 7, 8, 9]);
+  const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+  fs.mkdirSync(path.join(workspace, ".checkpoints", "blobs"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".checkpoints", "blobs", hash), Buffer.from([0, 0, 0, 0]));
+  fs.writeFileSync(path.join(workspace, "artifact.bin"), bytes);
+  assert.throws(
+    () => captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "tool" }),
+    /Mutation blob hash mismatch/,
+  );
+  assert.deepEqual(listFileMutations(workspace, { runId: "run" }), []);
 });
 
 test("future and unreadable mutation journals fail closed while ENOENT remains empty", (t) => {

@@ -45,10 +45,65 @@ test("shell policy rejects shell escape syntax and alternate interpreters", () =
     "echo `cat .env`",
     "npm test > ../result",
     "bash -c 'rm -rf dist'",
-    "python -c 'import os'",
+    "node -e 'console.log(1)'",
   ]) assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, false, command);
   assert.equal(evaluateShellCommand("npm test && git status").allowed, false);
   assert.equal(evaluateShellCommand("npm test && git status", { compatibilityShellAuthorized: true }).allowed, true);
+});
+
+test("authorized Python inline checks are quote-aware and keep shell approval boundaries", () => {
+  const commands = [
+    "python3 -c pass",
+    "python3 -B -c pass",
+    "python -I -s -E -c pass",
+    "python3 -W ignore -c pass",
+    "python3 -X dev -c pass",
+    "python3 --check-hash-based-pycs default -c pass",
+    "python3 -Bcpass",
+    "python3 -c 'from pathlib import Path; print(Path(\"data.txt\").read_text())'",
+    "python3 -B -c \"from pathlib import Path; print(Path('data.txt').read_text())\"",
+    "python -I -s -E -c \"import sqlite3; print(sqlite3.connect('app.db').execute('select 1').fetchone())\"",
+  ];
+  for (const command of commands) {
+    assert.equal(evaluateShellCommand(command).allowed, false, command);
+    assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, true, command);
+  }
+  assert.equal(evaluateShellCommand("python3 -B -m unittest discover").allowed, true);
+  assert.equal(evaluateShellCommand("python -I -s -E -m unittest discover").allowed, true);
+  assert.equal(evaluateShellCommand("python3 -W once -X dev -m unittest discover").allowed, true);
+});
+
+test("shell function and substitution blocks stay active with authorized shell", () => {
+  for (const command of [
+    "build() { echo ok; }",
+    "build() ( echo ok )",
+    "echo ok\nbuild() { echo ok; }",
+    "function build { echo ok; }",
+    "VAR=1 build() { echo ok; }",
+    "true && build() { echo ok; }",
+    "{ build() { echo ok; }; }",
+  ]) {
+    const decision = evaluateShellCommand(command, { compatibilityShellAuthorized: true });
+    assert.equal(decision.allowed, false, command);
+    assert.match(decision.reason || "", /function definitions/i);
+  }
+  for (const command of [
+    "printf '%s\\n' 'function'",
+    "'function' build { echo ok; }",
+    "\\function build { echo ok; }",
+    "python3 -c 'def function():\\n    print(\"ok\")\\nfunction()'",
+  ]) {
+    assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, true, command);
+  }
+  for (const command of [
+    "echo $(cat .env)",
+    "echo `cat .env`",
+    "python3 -c \"print($(id))\"",
+  ]) {
+    const decision = evaluateShellCommand(command, { compatibilityShellAuthorized: true });
+    assert.equal(decision.allowed, false, command);
+    assert.match(decision.reason || "", /Command substitution/i);
+  }
 });
 
 test("agent compatibility shell defaults common network launchers and remote operations to deny", () => {

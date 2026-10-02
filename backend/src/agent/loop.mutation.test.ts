@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 import { WebSocket } from "ws";
 import { MessageBus } from "./messageBus.js";
 import { runAgentLoop } from "./loop.js";
@@ -10,7 +11,9 @@ import { TaskManager } from "./taskManager.js";
 import { TeammateManager } from "./teammateManager.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import { AgentRunRecorder } from "../chat/runHistory.js";
-import { listFileMutations, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { listFileMutations, listMutationEvidenceGaps, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { collectAuthoritativeChangeEvidence, deriveCompletionEvidence } from "../chat/completionEvidence.js";
+import type { ExecutionPlan } from "../chat/executionPlans.js";
 
 function sessionFor(workspaceDir: string): UserSession {
   const taskManager = new TaskManager(workspaceDir);
@@ -26,6 +29,7 @@ async function runSingleTool(
   workspaceDir: string,
   toolCall: { id: string; name: string; arguments: Record<string, unknown> },
   approve: () => Promise<"allow_once" | "deny"> = async () => "allow_once",
+  executionPlan?: ExecutionPlan,
 ) {
   const recorder = new AgentRunRecorder(workspaceDir, "run-primary", "conversation-primary", "code", undefined, undefined, undefined, "test-model");
   await recorder.start();
@@ -41,7 +45,7 @@ async function runSingleTool(
   try {
     return await runAgentLoop(ws, "make a change", "request-primary", sessionFor(workspaceDir), undefined, undefined, undefined, undefined, undefined, undefined, {
       isStopped: () => false, createAbortSignal: () => undefined, mode: "code", modelName: "test-model",
-      conversationId: "conversation-primary", runRecorder: recorder, requestToolApproval: approve,
+      conversationId: "conversation-primary", runRecorder: recorder, requestToolApproval: approve, executionPlan,
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -65,6 +69,75 @@ test("primary shell changes are captured from the step checkpoint as create, mod
     ["moved.txt", "create", undefined],
   ]);
   assert.ok(records.every((record) => record.actor === "primary-user"));
+});
+
+test("approved SQLite creation preserves successful execution and completion evidence", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sqlite-completion-"));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  const verification = `python3 -B -c "import sqlite3; c=sqlite3.connect('issues.sqlite'); c.execute('create table issues (id integer primary key, title text)'); c.execute('insert into issues values (1, ?)',['generated']); c.commit(); assert c.execute('select count(*) from issues').fetchone()[0] == 1; c.close(); print('SQLite verified')"`;
+  fs.writeFileSync(path.join(workspaceDir, "package.json"), JSON.stringify({ name: "sqlite-fixture", scripts: { test: verification } }));
+  const command = "npm test";
+  const executionPlan: ExecutionPlan = {
+    id: "sqlite-plan", conversationId: "conversation-primary", planRunId: "plan-run",
+    status: "approved", createdAt: 1, updatedAt: 1, executionRunIds: [],
+    goal: "Generate and verify SQLite", files: ["issues.sqlite"], steps: ["Create and check the database"],
+    risks: [], verificationCommands: [command], acceptanceCriteria: [],
+  };
+  const persisted = await runSingleTool(workspaceDir, {
+    id: "sqlite-create", name: "bash", arguments: { command },
+  }, async () => { throw new Error("The approved plan already authorizes this exact command"); }, executionPlan);
+  const tool = persisted.flatMap((message) => message.toolCalls || []).find((call) => call.toolCallId === "sqlite-create");
+  assert.equal(tool?.isError, false);
+  assert.match(tool?.result || "", /SQLite verified/);
+  assert.doesNotMatch(tool?.result || "", /Mutation evidence incomplete/);
+  const database = path.join(workspaceDir, "issues.sqlite");
+  assert.equal(fs.readFileSync(database).subarray(0, 16).toString(), "SQLite format 3\0");
+  const independentlyRead = spawnSync("python3", ["-B", "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select title from issues where id=1').fetchone()[0]); c.close()", database], { encoding: "utf8" });
+  assert.equal(independentlyRead.status, 0, independentlyRead.stderr);
+  assert.equal(independentlyRead.stdout.trim(), "generated");
+  const authoritative = collectAuthoritativeChangeEvidence(workspaceDir, "run-primary");
+  assert.deepEqual(authoritative.changedFiles, ["issues.sqlite"]);
+  assert.deepEqual(authoritative.mutationEvidenceGaps, []);
+  const completion = deriveCompletionEvidence({
+    plan: executionPlan, messages: persisted, changedFiles: authoritative.changedFiles,
+    blockers: { changeEvidence: authoritative.mutationEvidenceGaps.length > 0 },
+  });
+  assert.equal(completion.outcome, "completed", JSON.stringify({ completion, validation: persisted.map((message) => message.runtimeValidation) }));
+  assert.equal(completion.ledger.verification[0]?.status, "passed");
+});
+
+test("an inline Python read reaches ordinary approval and executes quoted method calls", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-python-inline-"));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspaceDir, "input.txt"), "local check");
+  let approvals = 0;
+  const persisted = await runSingleTool(workspaceDir, {
+    id: "python-check", name: "bash",
+    arguments: { command: `python3 -c "from pathlib import Path; print(Path('input.txt').read_text())"` },
+  }, async () => { approvals += 1; return "allow_once"; });
+  const tool = persisted.flatMap((message) => message.toolCalls || []).find((call) => call.toolCallId === "python-check");
+  assert.equal(approvals, 1);
+  assert.equal(tool?.isError, false);
+  assert.match(tool?.result || "", /local check/);
+  assert.deepEqual(listMutationEvidenceGaps(workspaceDir), []);
+});
+
+test("a failing SQLite command still reports its real exit failure and journals its artifact", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sqlite-failure-"));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  const persisted = await runSingleTool(workspaceDir, {
+    id: "sqlite-fail", name: "bash",
+    arguments: { command: `python3 -B -c "import sqlite3; c=sqlite3.connect('partial.sqlite'); c.execute('create table items (id integer)'); c.commit(); c.close(); raise SystemExit(7)"` },
+  });
+  const tool = persisted.flatMap((message) => message.toolCalls || []).find((call) => call.toolCallId === "sqlite-fail");
+  assert.equal(tool?.isError, true);
+  assert.match(tool?.result || "", /Process exited with code 7/);
+  assert.doesNotMatch(tool?.result || "", /Mutation evidence incomplete/);
+  const records = listFileMutations(workspaceDir, { toolCallId: "sqlite-fail" });
+  assert.deepEqual(records.map((record) => [record.path, record.operation]), [["partial.sqlite", "create"]]);
+  const rollback = rollbackFileMutations(workspaceDir, { toolCallId: "sqlite-fail" });
+  assert.deepEqual(rollback.applied, [records[0].id], JSON.stringify(rollback));
+  assert.equal(fs.existsSync(path.join(workspaceDir, "partial.sqlite")), false);
 });
 
 test("a failed primary shell tool journals partial side effects and supports rollback", async (t) => {

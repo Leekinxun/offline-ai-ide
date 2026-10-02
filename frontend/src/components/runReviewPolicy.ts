@@ -2,21 +2,53 @@ export interface ReviewHunk {
   id: string; mutationId: string; preimageHash: string; postimageHash: string;
   reverted: boolean; kept: boolean; preimage?: string; postimage?: string; truncated?: boolean;
 }
+export interface BinaryReviewSubject {
+  operation?: "create" | "modify" | "delete"; originalExists?: boolean; modifiedExists?: boolean;
+  originalHash?: string; modifiedHash?: string; originalSize?: number; modifiedSize?: number;
+}
 export interface ReviewFile {
   path: string; operation: "create" | "modify" | "delete";
   original?: string; modified?: string; originalExists: boolean; modifiedExists: boolean;
   originalHash: string; modifiedHash: string; revision: string; mutationIds: string[];
   hunks: ReviewHunk[]; additions: number | null; deletions: number | null; hasChanges: boolean;
-  isBinary: boolean; isTooLarge: boolean; updatedAt: number;
+  isBinary: boolean; isTooLarge: boolean; updatedAt: number; statisticsUnavailableReason?: string;
   rollbackState: "applied" | "partially_reverted" | "reverted";
   reviewState: "pending" | "partially_kept" | "kept"; unavailableReason?: string;
+  originalSize?: number; modifiedSize?: number;
 }
 export interface ReviewChanges { runId: string; requestId?: string; revision: string; files: ReviewFile[]; unavailableReason?: string; }
 export interface RunReviewComment { path: string; revision: string; startLine: number; endLine: number; text: string; side?: "original" | "modified"; }
 
+const HASH_64_HEX = /^[a-f0-9]{64}$/i;
+function validHash(value: string | undefined): value is string {
+  return typeof value === "string" && HASH_64_HEX.test(value);
+}
+function validSize(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+export function binaryEvidenceForFile(file: BinaryReviewSubject): {
+  originalHash?: string; modifiedHash?: string; originalSize?: number; modifiedSize?: number; complete: boolean;
+} {
+  const originalRequired = file.originalExists !== false && file.operation !== "create";
+  const modifiedRequired = file.modifiedExists !== false && file.operation !== "delete";
+  const originalHash = validHash(file.originalHash) ? file.originalHash : undefined;
+  const modifiedHash = validHash(file.modifiedHash) ? file.modifiedHash : undefined;
+  const originalSize = validSize(file.originalSize) ? file.originalSize : undefined;
+  const modifiedSize = validSize(file.modifiedSize) ? file.modifiedSize : undefined;
+  const originalComplete = !originalRequired || (Boolean(originalHash) && typeof originalSize === "number");
+  const modifiedComplete = !modifiedRequired || (Boolean(modifiedHash) && typeof modifiedSize === "number");
+  return { originalHash, modifiedHash, originalSize, modifiedSize, complete: originalComplete && modifiedComplete };
+}
+export function hasBinaryReviewEvidence(file: ReviewFile): boolean {
+  return binaryEvidenceForFile(file).complete;
+}
+function hasReviewEvidence(file: ReviewFile): boolean {
+  if (file.unavailableReason || file.isTooLarge || !file.mutationIds.length) return false;
+  return file.isBinary ? hasBinaryReviewEvidence(file) : true;
+}
 export function bulkReviewPolicy(changes: ReviewChanges | null, state: { readOnly: boolean; busy: boolean; loading: boolean }): { count: number; allowed: boolean; unavailable: boolean } {
   const pending = changes?.files.filter((file) => file.reviewState !== "kept" && file.rollbackState !== "reverted") || [];
-  const unavailable = Boolean(changes?.unavailableReason || pending.some((file) => file.unavailableReason || file.isBinary || file.isTooLarge || !file.mutationIds.length));
+  const unavailable = Boolean(changes?.unavailableReason || pending.some((file) => !hasReviewEvidence(file)));
   return { count: pending.length, unavailable, allowed: Boolean(changes && pending.length && !unavailable && !state.readOnly && !state.busy && !state.loading) };
 }
 
@@ -43,9 +75,14 @@ export function reviewStatus(file: ReviewFile, hunk?: ReviewHunk): "pending" | "
   return file.reviewState === "kept" ? "kept" : "pending";
 }
 export function reviewActionPolicy(file: ReviewFile, input: { readOnly: boolean; running: boolean; busy: boolean; stale: boolean }, hunk?: ReviewHunk): { keep: boolean; revert: boolean; comment: boolean } {
-  const available = !file.unavailableReason && !file.isBinary && !file.isTooLarge && !input.readOnly && !input.busy && !input.stale;
+  const fileAvailable = hasReviewEvidence(file) && !input.readOnly && !input.busy && !input.stale;
+  const available = fileAvailable && !(hunk && file.isBinary);
   const status = reviewStatus(file, hunk);
-  return { keep: available && status !== "kept" && status !== "reverted", revert: available && !input.running && status !== "reverted", comment: available && typeof file.original === "string" && typeof file.modified === "string" };
+  return {
+    keep: available && status !== "kept" && status !== "reverted",
+    revert: available && !input.running && status !== "reverted",
+    comment: available && !file.isBinary && typeof file.original === "string" && typeof file.modified === "string",
+  };
 }
 export function reviewSelection(file: ReviewFile, requestId?: string, hunk?: ReviewHunk): Record<string, unknown> {
   return { path: file.path, expectedRevision: file.revision, ...(requestId ? { requestId } : {}), ...(hunk ? { ids: [hunk.mutationId], hunkIds: [hunk.id] } : { ids: file.mutationIds }) };

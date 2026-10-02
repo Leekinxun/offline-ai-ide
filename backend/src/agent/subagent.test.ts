@@ -7,7 +7,7 @@ import test from "node:test";
 import { listChildRuns, readRunRecord } from "../chat/runHistory.js";
 import { clearModelCapabilityCache } from "./modelCapabilities.js";
 import { runSubagent } from "./subagent.js";
-import { listChangeSets } from "../chat/changeSets.js";
+import { listChangeSets, readChangeSetPatch } from "../chat/changeSets.js";
 import { listManagedWorktrees } from "../chat/worktrees.js";
 import { listFileMutations } from "../files/mutationRegistry.js";
 import { registerAgentHooks } from "./agentHooks.js";
@@ -306,33 +306,75 @@ test("failed child bash records partial file mutations with child attribution", 
   assert.equal(mutations[0].runId, child.runId);
 });
 
-test("child mutation evidence gaps fail tool lifecycle, hooks, run result, and worktree consistently", async (t) => {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-evidence-gap-"));
+test("child oversized mutation evidence gaps fail tool lifecycle, hooks, run result, and worktree consistently", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-oversized-gap-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
   let completion = 0;
   let hookError = "";
   clearModelCapabilityCache();
-  const unregister = registerAgentHooks({ name: "observe-subagent-gap", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "bash-gap") hookError = context.error || ""; } } });
+  const unregister = registerAgentHooks({ name: "observe-subagent-oversized-gap", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "bash-gap") hookError = context.error || ""; } } });
   globalThis.fetch = async (input) => {
     if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
     completion += 1;
     return Response.json({ choices: [{ message: completion === 1
-      ? { role: "assistant", content: null, tool_calls: [{ id: "bash-gap", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf OK && printf '\\0binary' > evidence.bin" }) } }] }
+      ? { role: "assistant", content: null, tool_calls: [{ id: "bash-gap", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf '%*s' 2097153 '' > evidence.bin" }) } }] }
       : { role: "assistant", content: "handled evidence gap" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
   };
   t.after(async () => { unregister(); globalThis.fetch = originalFetch; clearModelCapabilityCache(); await fs.rm(workspaceDir, { recursive: true, force: true }); });
 
-  const output = await runSubagent("binary evidence", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, async () => ({ allowed: true }), undefined, {
+  const output = await runSubagent("oversized evidence", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, async () => ({ allowed: true }), undefined, {
     parentRunId: "parent-gap", parentConversationId: "conversation-gap", parentRequestId: "request-gap", parentToolCallId: "task-gap",
   });
   const child = listManagedWorktrees(workspaceDir)[0];
   const run = readRunRecord(workspaceDir, child.runId!);
   assert.match(output, /^Error: .*mutation evidence/i);
   assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "bash-gap")?.status, "failed");
-  assert.match(hookError, /mutation evidence incomplete/i);
+  assert.match(hookError, /mutation evidence incomplete.*evidence\.bin:oversized/is);
   assert.equal(run.status, "failed");
   assert.equal(child.status, "needs_attention");
-  assert.equal(listChangeSets(workspaceDir)[0]?.status, "needs_attention");
+  assert.deepEqual(listChangeSets(workspaceDir), []);
   assert.doesNotMatch(output, /ready for review/i);
+});
+
+test("bounded child binary mutation evidence reaches ready review with binary patch", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-binary-success-"));
+  initializeGitWorkspace(workspaceDir);
+  const originalFetch = globalThis.fetch;
+  let completion = 0;
+  let hookError = "";
+  clearModelCapabilityCache();
+  const unregister = registerAgentHooks({ name: "observe-subagent-binary-success", handlers: { afterToolExecute: (context) => { if (context.toolCallId === "bash-binary") hookError = context.error || ""; } } });
+  globalThis.fetch = async (input) => {
+    if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
+    completion += 1;
+    return Response.json({ choices: [{ message: completion === 1
+      ? { role: "assistant", content: null, tool_calls: [{ id: "bash-binary", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf OK && printf '\\0binary' > evidence.bin" }) } }] }
+      : { role: "assistant", content: "binary ready" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+  };
+  t.after(async () => { unregister(); globalThis.fetch = originalFetch; clearModelCapabilityCache(); await fs.rm(workspaceDir, { recursive: true, force: true }); });
+
+  const output = await runSubagent("binary evidence", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, async () => ({ allowed: true }), undefined, {
+    parentRunId: "parent-binary", parentConversationId: "conversation-binary", parentRequestId: "request-binary", parentToolCallId: "task-binary",
+  });
+  const child = listManagedWorktrees(workspaceDir)[0];
+  const run = readRunRecord(workspaceDir, child.runId!);
+  const mutations = listFileMutations(child.path, { toolCallId: "bash-binary" });
+  const changeSet = listChangeSets(workspaceDir)[0];
+  const patch = readChangeSetPatch(workspaceDir, changeSet.id).toString("utf8");
+
+  assert.match(output, /ChangeSet [a-f0-9]+ \(ready_for_review\)$/);
+  assert.equal(hookError, "");
+  assert.equal(run.status, "completed");
+  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "bash-binary")?.status, "completed");
+  assert.equal(child.status, "ready_for_review");
+  assert.equal(changeSet.status, "ready_for_review");
+  assert.deepEqual(changeSet.changedFiles, ["evidence.bin"]);
+  assert.equal(changeSet.patchManifest?.length, 1);
+  assert.match(patch, /GIT binary patch/);
+  assert.match(patch, /evidence\.bin/);
+  assert.equal(mutations.length, 1);
+  assert.equal(mutations[0].path, "evidence.bin");
+  assert.equal(mutations[0].postimageBinary, true);
+  assert.equal(mutations[0].rollbackUnavailableReason, undefined);
 });

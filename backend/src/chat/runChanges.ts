@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  buildFileHash, listFileMutations, listMutationEvidenceGaps, readMutationImage,
+  buildFileHash, listFileMutations, listMutationEvidenceGaps, readMutationImage, readMutationBytes,
   safeMutationRelativePath, type FileMutationRecord,
   fileMutationRevision, isMutationReviewComplete, keepRunMutationBatch,
 } from "../files/mutationRegistry.js";
@@ -15,6 +15,7 @@ export interface RunFileChange {
   path: string; operation: "create" | "modify" | "delete";
   original?: string; modified?: string; originalExists: boolean; modifiedExists: boolean;
   originalHash: string; modifiedHash: string; revision: string; mutationIds: string[];
+  originalSize?: number; modifiedSize?: number;
   hunks: RunChangeHunk[]; additions: number | null; deletions: number | null;
   hasChanges: boolean; isBinary: boolean; isTooLarge: boolean; updatedAt: number;
   rollbackState: "applied" | "partially_reverted" | "reverted";
@@ -89,7 +90,7 @@ export function keepAllRunChanges(workspaceDir: string, runId: string, expectedR
   const changes = readRunChanges(workspaceDir, runId, undefined, requestId);
   if (changes.revision !== expectedRevision) throw new RunChangesKeepError("stale", changes);
   const pending = changes.files.filter((file) => file.reviewState !== "kept" && file.rollbackState !== "reverted");
-  const unavailable = pending.filter((file) => file.unavailableReason || file.isBinary || file.isTooLarge);
+  const unavailable = pending.filter((file) => file.unavailableReason || file.isTooLarge);
   if (changes.unavailableReason || unavailable.length) throw new RunChangesKeepError("unavailable", changes, unavailable.map((file) => file.path));
   if (!pending.length) return { kept: [], ...changes };
   const kept = keepRunMutationBatch(workspaceDir, {
@@ -117,7 +118,7 @@ function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMut
       ...(includeContent ? { preimage: hunk.preimage.slice(0, 4000), postimage: hunk.postimage.slice(0, 4000), truncated: hunk.preimage.length > 4000 || hunk.postimage.length > 4000 } : {}),
     }))),
     additions: null, deletions: null, hasChanges: originalExists !== modifiedExists || first.preimageHash !== last.postimageHash,
-    isBinary: mutations.some((mutation) => mutation.rollbackUnavailableReason === "binary"),
+    isBinary: mutations.some((mutation) => mutation.preimageBinary || mutation.postimageBinary || mutation.rollbackUnavailableReason === "binary"),
     isTooLarge: mutations.some((mutation) => mutation.rollbackUnavailableReason === "oversized"),
     updatedAt: last.recordedAt, rollbackState: allReverted ? "reverted" : someReverted ? "partially_reverted" : "applied",
     reviewState: mutations.every(isMutationReviewComplete)
@@ -130,6 +131,13 @@ function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMut
       if (previous.postimageHash !== current.preimageHash || (previous.operation !== "delete") !== (current.operation !== "create")) throw new Error("interleaved_changes");
     }
     // Validate every image, so a missing intermediate blob is reported instead of silently hidden.
+    if (file.isBinary) {
+      const images = mutations.map((mutation) => ({ before: readMutationBytes(workspaceDir, mutation, "preimage"), after: readMutationBytes(workspaceDir, mutation, "postimage") }));
+      file.originalSize = images[0].before?.byteLength ?? 0;
+      file.modifiedSize = images[images.length - 1].after?.byteLength ?? 0;
+      file.statisticsUnavailableReason = "binary";
+      return file;
+    }
     const images = mutations.map((mutation) => ({ before: readMutationImage(workspaceDir, mutation, "preimage"), after: readMutationImage(workspaceDir, mutation, "postimage") }));
     const original = images[0].before ?? ""; const modified = images[images.length - 1].after ?? "";
     if (includeContent) { file.original = original; file.modified = modified; }

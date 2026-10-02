@@ -18,7 +18,12 @@ export interface WorkspaceCheckpoint {
   fileCount: number;
   totalBytes: number;
 }
-export interface FileMutation { id: string; path: string; runId?: string; toolCallId?: string; operation: "create" | "modify" | "delete"; rollbackScope: "whole-file" | "hunks"; recordedAt: number; hunks?: Array<{ id: string }> }
+export interface FileMutation {
+  id: string; path: string; runId?: string; toolCallId?: string; operation: "create" | "modify" | "delete";
+  rollbackScope: "whole-file" | "hunks"; recordedAt: number; hunks?: Array<{ id: string }>;
+  originalExists?: boolean; modifiedExists?: boolean; originalHash?: string; modifiedHash?: string; originalSize?: number; modifiedSize?: number;
+  preimageSize?: number; postimageSize?: number; preimageBinary?: boolean; postimageBinary?: boolean; isBinary?: boolean;
+}
 export interface ChangeSetReviewRun { schemaVersion: 1; id: string; changeSetId: string; revision: string; baseSha: string; stage: "review" | "reverify"; attempt: number; status: "queued" | "running" | "completed" | "failed"; requestedBy: string; reviewer: { id: string; modelName: string; profile: "change_set_reviewer" }; verifier?: { id: string; modelName: string; profile: "change_set_verifier" }; checkoutDigest: string; createdAt: string; startedAt?: string; completedAt?: string; error?: string; findingIds: string[]; }
 export interface CheckpointStorage { logicalBytes: number; blobBytes: number; manifestBytes: number; journalBytes: number; blobCount: number; checkpointCount: number; retention: { schemaVersion: 1; maxCheckpoints: number } }
 
