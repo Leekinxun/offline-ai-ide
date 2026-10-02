@@ -26,16 +26,21 @@ const PROCESS_WATCHDOG = `
 const fs=require("node:fs");
 const path=require("node:path");
 const {spawn,spawnSync}=require("node:child_process");
-const [nodeRuntime,executable,...args]=process.argv.slice(1);
+const [nodeRuntime,parentPidValue,executable,...args]=process.argv.slice(1);
+const parentPid=Number(parentPidValue)||process.ppid;
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 if(nodeRuntime==="node")env.ELECTRON_RUN_AS_NODE="1";
 const child=spawn(executable,args,{env,stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
-const diagnostic=(pid,result)=>{try{const dir=path.join(process.cwd(),".history","process-sessions");fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,\`watchdog-taskkill-\${process.pid}-\${pid}.json\`),JSON.stringify({watchdogPid:process.pid,targetPid:pid,status:result.status,signal:result.signal,error:result.error?{code:result.error.code,message:result.error.message}:undefined,stdout:String(result.stdout||"").slice(-4096),stderr:String(result.stderr||"").slice(-4096)}),{mode:0o600})}catch{}};
+const diagnosticDir=()=>path.join(process.cwd(),".history","process-sessions");
+const writeDiagnostic=(name,value)=>{try{const dir=diagnosticDir();fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,name),JSON.stringify(value),{mode:0o600})}catch{}};
+const diagnostic=(pid,result)=>writeDiagnostic(\`watchdog-taskkill-\${process.pid}-\${pid}.json\`,{watchdogPid:process.pid,parentPid,targetPid:pid,status:result.status,signal:result.signal,error:result.error?{code:result.error.code,message:result.error.message}:undefined,stdout:String(result.stdout||"").slice(-4096),stderr:String(result.stderr||"").slice(-4096)});
 const taskkill=(pid)=>{try{const systemRoot=process.env.SystemRoot||process.env.WINDIR;const command=systemRoot?path.join(systemRoot,"System32","taskkill.exe"):"taskkill.exe";const result=spawnSync(command,["/pid",String(pid),"/T","/F"],{stdio:["ignore","pipe","pipe"],encoding:"utf8",windowsHide:true,timeout:15000});diagnostic(pid,result)}catch{}finally{process.exit(1)}};
-const kill=()=>{try{if(process.platform==="win32"){if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
+let cleaning=false;
+const kill=(reason)=>{if(cleaning)return;cleaning=true;try{if(process.platform==="win32"){writeDiagnostic(\`watchdog-parent-\${process.pid}.json\`,{watchdogPid:process.pid,parentPid,childPid:child.pid,reason});if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
 process.on("disconnect",kill);
 process.on("SIGTERM",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()}});
 process.on("SIGINT",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()}});
+if(process.platform==="win32"){const timer=setInterval(()=>{try{process.kill(parentPid,0)}catch(error){if(error&&error.code==="ESRCH")kill("parent-esrch")}},250);timer.unref()}
 process.stdin.on("error",()=>{});process.stdout.on("error",()=>{});process.stderr.on("error",()=>{});
 process.stdin.pipe(child.stdin);child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
 child.stdin.on("error",()=>{});child.stdout.on("error",()=>{});child.stderr.on("error",()=>{});child.once("error",error=>{try{console.error(error.message)}catch{}});
@@ -178,7 +183,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
   let child: ChildProcess;
-  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
+  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", String(process.pid), prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
   catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
   const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);

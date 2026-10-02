@@ -197,7 +197,7 @@ test("the IPC watchdog stops ordinary descendants when the backend crashes", asy
   if (alive) {
     const diagnosticDir = path.join(owner.workspaceDir, ".history", "process-sessions");
     try {
-      for (const name of fs.readdirSync(diagnosticDir).filter((entry) => entry.startsWith("watchdog-taskkill-"))) {
+      for (const name of fs.readdirSync(diagnosticDir).filter((entry) => entry.startsWith("watchdog-"))) {
         console.error(`${name}: ${fs.readFileSync(path.join(diagnosticDir, name), "utf8")}`);
       }
     } catch { /* diagnostic is best-effort */ }
