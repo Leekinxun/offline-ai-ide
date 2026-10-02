@@ -28,23 +28,28 @@ const path=require("node:path");
 const {spawn,spawnSync}=require("node:child_process");
 const [nodeRuntime,parentPidValue,executable,...args]=process.argv.slice(1);
 const parentPid=Number(parentPidValue)||process.ppid;
+const diagnosticsEnabled=process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS==="1";
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 if(nodeRuntime==="node")env.ELECTRON_RUN_AS_NODE="1";
 const child=spawn(executable,args,{env,stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
 const diagnosticDir=()=>path.join(process.cwd(),".history","process-sessions");
-const writeDiagnostic=(name,value)=>{try{const dir=diagnosticDir();fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,name),JSON.stringify(value),{mode:0o600})}catch{}};
+const writeDiagnostic=(name,value)=>{if(!diagnosticsEnabled)return;try{const dir=diagnosticDir();fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,name),JSON.stringify(value),{mode:0o600})}catch{}};
+const marker=(event,value={})=>writeDiagnostic(\`watchdog-\${event}-\${process.pid}.json\`,{event,watchdogPid:process.pid,parentPid,childPid:child.pid,platform:process.platform,cwd:process.cwd(),...value});
+marker("started",{executable,args:args.slice(0,8)});
 const diagnostic=(pid,result)=>writeDiagnostic(\`watchdog-taskkill-\${process.pid}-\${pid}.json\`,{watchdogPid:process.pid,parentPid,targetPid:pid,status:result.status,signal:result.signal,error:result.error?{code:result.error.code,message:result.error.message}:undefined,stdout:String(result.stdout||"").slice(-4096),stderr:String(result.stderr||"").slice(-4096)});
 const taskkill=(pid)=>{try{const systemRoot=process.env.SystemRoot||process.env.WINDIR;const command=systemRoot?path.join(systemRoot,"System32","taskkill.exe"):"taskkill.exe";const result=spawnSync(command,["/pid",String(pid),"/T","/F"],{stdio:["ignore","pipe","pipe"],encoding:"utf8",windowsHide:true,timeout:15000});diagnostic(pid,result)}catch{}finally{process.exit(1)}};
 let cleaning=false;
 const kill=(reason)=>{if(cleaning)return;cleaning=true;try{if(process.platform==="win32"){writeDiagnostic(\`watchdog-parent-\${process.pid}.json\`,{watchdogPid:process.pid,parentPid,childPid:child.pid,reason});if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
+process.on("exit",code=>marker("exit",{code}));
 process.on("disconnect",kill);
 process.on("SIGTERM",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()}});
 process.on("SIGINT",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()}});
-if(process.platform==="win32"){const timer=setInterval(()=>{try{process.kill(parentPid,0)}catch(error){if(error&&error.code==="ESRCH")kill("parent-esrch")}},250);timer.unref()}
+if(process.platform==="win32"){let firstPoll=true;const timer=setInterval(()=>{try{process.kill(parentPid,0);if(firstPoll){firstPoll=false;marker("parent-poll",{result:"alive"})}}catch(error){marker("parent-poll-error",{code:error&&error.code,message:error&&error.message});if(error&&error.code==="ESRCH")kill("parent-esrch")}},250);timer.unref()}
 process.stdin.on("error",()=>{});process.stdout.on("error",()=>{});process.stderr.on("error",()=>{});
 process.stdin.pipe(child.stdin);child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
-child.stdin.on("error",()=>{});child.stdout.on("error",()=>{});child.stderr.on("error",()=>{});child.once("error",error=>{try{console.error(error.message)}catch{}});
-child.once("close",code=>process.exit(code===null?1:code));
+child.stdin.on("error",()=>{});child.stdout.on("error",()=>{});child.stderr.on("error",()=>{});child.once("error",error=>{marker("child-error",{message:error.message,code:error.code});try{console.error(error.message)}catch{}});
+child.once("exit",(code,signal)=>marker("child-exit",{code,signal}));
+child.once("close",code=>{marker("child-close",{code});process.exit(code===null?1:code)});
 `;
 const ownerHash = (owner: string) => crypto.createHash("sha256").update(owner).digest("hex");
 const summary = ({ ownerHash: _owner, workspaceDir: _workspace, events: _events, ...record }: StoredSession): ProcessSessionSummary => ({ ...record });
@@ -62,6 +67,7 @@ function killWindowsProcessTree(pid: number | undefined): void {
 }
 function watchdogEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
   const result = nodeRuntimeEnvironment(environment);
+  if (process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS === "1") result.CROWNFORGE_WATCHDOG_DIAGNOSTICS = "1";
   if (process.platform === "win32") {
     for (const key of ["SystemRoot", "WINDIR", "PATHEXT"] as const) {
       const value = process.env[key];

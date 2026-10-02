@@ -180,9 +180,12 @@ test("the IPC watchdog stops ordinary descendants when the backend crashes", asy
   const owner = fixture(t, { watch: 'node -e "require(\'fs\').writeFileSync(\'task.pid\',String(process.pid));setInterval(()=>{},1000)"' });
   const moduleUrl = pathToFileURL(path.resolve("src/run/processSessions.ts")).href;
   const script = `import {startProjectTaskSession} from ${JSON.stringify(moduleUrl)};const record=startProjectTaskSession(${JSON.stringify(owner)},"npm:watch");console.log(record.id);`;
-  const backend = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+  const backend = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CROWNFORGE_WATCHDOG_DIAGNOSTICS: "1" } });
   t.after(() => backend.kill("SIGKILL"));
-  let output = ""; backend.stdout.on("data", (chunk) => output += chunk.toString());
+  let output = ""; let backendStderr = ""; let backendExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  backend.stdout.on("data", (chunk) => output += chunk.toString());
+  backend.stderr.on("data", (chunk) => backendStderr += chunk.toString());
+  backend.once("exit", (code, signal) => { backendExit = { code, signal }; });
   const pidFile = path.join(owner.workspaceDir, "task.pid");
   for (let attempt = 0; attempt < 160 && !fs.existsSync(pidFile); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
   assert.ok(fs.existsSync(pidFile), "The supervised project task must start before the crash");
@@ -196,11 +199,15 @@ test("the IPC watchdog stops ordinary descendants when the backend crashes", asy
   }
   if (alive) {
     const diagnosticDir = path.join(owner.workspaceDir, ".history", "process-sessions");
+    console.error(`backend stdout: ${JSON.stringify(output.slice(-4096))}`);
+    console.error(`backend stderr: ${JSON.stringify(backendStderr.slice(-4096))}`);
+    console.error(`backend exit: ${JSON.stringify(backendExit)}`);
     try {
+      console.error(`watchdog diagnostic dir exists: ${fs.existsSync(diagnosticDir)}`);
       for (const name of fs.readdirSync(diagnosticDir).filter((entry) => entry.startsWith("watchdog-"))) {
         console.error(`${name}: ${fs.readFileSync(path.join(diagnosticDir, name), "utf8")}`);
       }
-    } catch { /* diagnostic is best-effort */ }
+    } catch (error) { console.error(`watchdog diagnostic read failed: ${(error as Error).message}`); }
   }
   assert.equal(alive, false, "The IPC watchdog must kill the task after the backend exits");
   assert.equal(pollProcessSession(owner, output.trim()).session.status, "interrupted");
