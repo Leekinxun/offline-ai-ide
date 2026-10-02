@@ -259,10 +259,13 @@ export function startRunTask(workspaceDir: string, taskId: string): RunRecord {
   };
   runCache.set(workspaceDir, [record, ...(runCache.get(workspaceDir) || [])].slice(0, 20));
 
+  const environment = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" };
+  // A user project task must not inherit the desktop backend's Node-only mode.
+  delete environment.ELECTRON_RUN_AS_NODE;
   const child = spawn(execution.executable, execution.args, {
     cwd: workspaceDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" },
+    env: environment,
     detached: process.platform !== "win32",
   });
 
