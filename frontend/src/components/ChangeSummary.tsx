@@ -13,6 +13,7 @@ import {
 import { ConversationRunSummary, ReviewFinding, ReviewFindingLifecycle } from "../types";
 import { useI18n } from "../i18n";
 import { allowedFindingTransitions, useFindings } from "../hooks/useFindings";
+import "./ChangeSummary.css";
 import { RunChangesReview, type RunReviewComment } from "./RunChangesReview";
 
 interface ChangeSummaryProps {

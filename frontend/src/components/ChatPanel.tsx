@@ -39,12 +39,19 @@ import {
   Activity,
   ArchiveRestore,
   GitFork,
+  GitCompare,
   RotateCcw,
   Trash2,
+  FileCode2,
+  X,
+  Layers,
+  History,
+  AtSign,
 } from "lucide-react";
 import "./ChatPanel.css";
 import "./ExecutionFactsCard.css";
 import { ExecutionFactsCard } from "./ExecutionFactsCard";
+import { BrandMark } from "./BrandMark";
 import { ContextStrip } from "./ContextStrip";
 import { ContextInspector } from "./ContextInspector";
 import { TaskHeader } from "./TaskHeader";
@@ -281,10 +288,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     || t("workbench.modelDefault");
   const input = draftText;
   const setInput = onDraftTextChange;
+  const contextPercent = Math.min(
+    100,
+    Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100)
+  );
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [runTimelineOpen, setRunTimelineOpen] = useState(false);
   const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [busyHistoryAction, setBusyHistoryAction] = useState<string | null>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const [creatingIsolatedWindow, setCreatingIsolatedWindow] = useState(false);
@@ -296,11 +308,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const approvalStackRef = useRef<HTMLElement>(null);
+  const contextContainerRef = useRef<HTMLDivElement>(null);
   const contextInspectorTriggerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const handledNewConversationRef = useRef(0);
   const previousMessageCountRef = useRef(messages.length);
   const previousConversationIdRef = useRef(currentConversationId);
+
+  useEffect(() => {
+    if (!input && textareaRef.current) {
+      textareaRef.current.style.height = "48px";
+    }
+  }, [input]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -368,6 +387,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return () => window.removeEventListener("keydown", handleEscape);
   }, [contextInspectorOpen]);
 
+  useEffect(() => {
+    if (!contextPopoverOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextContainerRef.current && !contextContainerRef.current.contains(e.target as Node)) {
+        setContextPopoverOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setContextPopoverOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contextPopoverOpen]);
+
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     if (!connected) return;
@@ -386,7 +425,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     setChangesOpen(false);
     setInput("");
     if (textareaRef.current) {
-      textareaRef.current.style.height = "38px";
+      textareaRef.current.style.height = "48px";
     }
   }, [attachmentDeliveryChecking, attachmentDraft.blocked, attachmentDraft.readyRefs.length, attachmentWarning, connected, contextReferences, input, isStreaming, onContextReferencesChange, onSend, onSteer, setInput]);
 
@@ -526,8 +565,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInput(e.target.value);
       const el = e.target;
-      el.style.height = "38px";
-      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+      el.style.height = "auto";
+      el.style.height = `${Math.max(48, Math.min(el.scrollHeight, 240))}px`;
     },
     [setInput]
   );
@@ -593,7 +632,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="chat-panel panel-shell workspace-drawer" style={style} tabIndex={-1} data-workspace-drawer="chat">
+    <div className={`chat-panel panel-shell workspace-drawer${messages.length === 0 ? " is-empty-session" : ""}`} style={style} tabIndex={-1} data-workspace-drawer="chat">
       <TaskHeader
         taskTitle={taskTitle}
         connected={connected}
@@ -604,10 +643,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         hasMessages={messages.length > 0}
         historyOpen={historyOpen}
         changesOpen={changesOpen}
-        detailsCollapsed={detailsCollapsed}
+        changedFilesCount={currentRunSummary?.changedFiles?.length || 0}
         onToggleHistory={() => setHistoryOpen((open) => !open)}
         onToggleChanges={() => setChangesOpen((open) => !open)}
-        onToggleDetails={handleToggleDetails}
         onClear={onClear}
         onOpenIsolatedWindow={() => void handleOpenIsolatedWindow()}
         creatingIsolatedWindow={creatingIsolatedWindow}
@@ -615,335 +653,78 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         executionContract={runState?.executionContract || (runState?.executionContractKind ? { kind: runState.executionContractKind, planId: runState.executionPlan?.id || runState.executionPlanId } : currentRunSummary?.executionContract || (currentRunSummary?.executionContractKind ? { kind: currentRunSummary.executionContractKind, planId: currentRunSummary.executionPlan?.id } : undefined))}
         completionEvidence={runState?.completionEvidence || currentRunSummary?.completionEvidence}
       />
-      {(messages.length > 0 || isStreaming || Boolean(runState)) && (
-        <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
-      )}
-      {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 
-      <div className="chat-details-region" hidden={detailsCollapsed}>
-
-      <div ref={contextInspectorTriggerRef} className="chat-context-strip-host">
-      <ContextStrip
-        contextState={contextState}
-        contextManifest={contextManifest.draftManifest}
-        contextIndexState={contextManifest.indexState}
-        inspectorOpen={contextInspectorOpen}
-        onToggleInspector={() => {
-          setContextInspectorOpen((open) => {
-            if (open) window.requestAnimationFrame(() => {
-              const trigger = contextInspectorTriggerRef.current?.querySelector<HTMLElement>("button[aria-expanded]");
-              trigger?.focus();
-            });
-            return !open;
-          });
-        }}
-        mcpState={mcpState}
-        knowledgeState={knowledgeState}
-        onOpenSettings={onOpenSettings}
-        collaboration={collaboration}
-        activeFilePath={activeFilePath}
-        onOpenCollaboration={onOpenCollaboration}
-      />
-      </div>
-
-      {contextInspectorOpen && (
-        <div className="chat-context-inspector">
-          <ContextInspector
-            manifests={contextManifest.draftManifests}
-            selectedManifestId={contextManifest.draftManifest?.id}
-            indexState={contextManifest.indexState}
-            mode="draft"
-            loading={contextManifest.loading}
-            readOnly={contextReadOnly}
-            preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
-            error={contextManifest.error}
-            emptyHint={t("context.noPreviewSources")}
-            mutationBySource={contextManifest.mutationBySource}
-            onPin={(key) => void contextManifest.pinSource(key)}
-            onUnpin={(key) => void contextManifest.unpinSource(key)}
-            onExclude={(key) => void contextManifest.excludeSource(key)}
-            onRestore={(key) => void contextManifest.restoreSource(key)}
-            onRefreshSource={(key) => void contextManifest.refreshSources([key])}
-            onRefreshAll={() => void (
-              contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
-                ? contextManifest.rebuildIndex()
-                : contextManifest.refreshSources()
-            )}
-            onRetry={() => void contextManifest.retryPreview()}
-          />
-        </div>
-      )}
-
-      {contextState.preview && (
-        <div className="chat-context-preview">
-          <div className="chat-context-preview-heading">
-            <span><Sparkles size={12} /> {t("chat.contextPreview")}</span>
-            <code>{contextState.preview.transcriptPath}</code>
-          </div>
-          <div className="chat-context-preview-stats">
-            <span>{t("chat.contextProtected", { count: contextState.preview.protectedMessageCount })}</span>
-            <span>{t("chat.contextCompactedMessages", { count: contextState.preview.compactedMessageCount })}</span>
-            <span>{t("chat.contextRecoverable")}</span>
-          </div>
-        </div>
-      )}
-
-      {historyOpen && (
-        <div className="chat-history-panel">
-          <div className="chat-history-toolbar">
+      {changesOpen ? (
+        <div className="chat-changes-view-container" role="region" aria-label={t("chat.changes")}>
+          <div className="chat-changes-view-header">
+            <div className="chat-changes-view-title">
+              <GitCompare size={16} />
+              <strong>{t("chat.changes")}</strong>
+              <span className="chat-changes-count-pill">
+                {currentRunSummary?.changedFiles?.length || 0} 个文件修改
+              </span>
+            </div>
             <button
-              className="chat-history-toolbar-btn primary"
-              onClick={() => {
-                onClear();
-                setHistoryOpen(false);
-              }}
-              disabled={historyLoadingId !== null}
+              type="button"
+              className="chat-changes-back-btn"
+              onClick={() => setChangesOpen(false)}
             >
-              <Plus size={14} />
-              {t("chat.newConversation")}
-            </button>
-            <button
-              className="chat-history-toolbar-btn"
-              onClick={() => void onRefreshConversations()}
-              disabled={historyLoading}
-            >
-              <RefreshCw size={14} className={historyLoading ? "chat-spin" : ""} />
-              {t("chat.refreshHistory")}
+              返回对话
             </button>
           </div>
 
-          {historyError && (
-            <div className="chat-history-message error">{historyError}</div>
-          )}
-
-          {conversations.length === 0 && !historyLoading ? (
-            <div className="chat-history-empty">{t("chat.noHistory")}</div>
-          ) : (
-            <div className="chat-history-list">
-              {conversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  className={`chat-history-item${
-                    conversation.id === currentConversationId ? " active" : ""
-                  }`}
+          <div className="chat-changes-view-content">
+            {currentRunSummary && currentRunSummary.changedFiles.length > 0 ? (
+              <ChangeSummary
+                token={token}
+                workspaceDir={workspaceDir}
+                theme={theme}
+                readOnly={contextReadOnly}
+                onComment={onReviewComment}
+                onChanged={onChangesApplied}
+                runId={runState?.runId}
+                summary={currentRunSummary}
+                expanded={true}
+                onToggle={() => setChangesOpen(false)}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                onOpenLocation={onOpenReviewFinding}
+                onRetry={onRetry}
+                onPlanAmendmentDecision={onPlanAmendmentDecision}
+              />
+            ) : (
+              <div className="chat-changes-fullscreen-empty">
+                <div className="chat-changes-empty-icon-wrap">
+                  <GitCompare size={36} />
+                </div>
+                <strong>当前任务暂无代码变更</strong>
+                <p>当 AI 助手执行代码修改、重构或生成文件后，将在此集中展示文件差异对比与改动清单。</p>
+                <button
+                  type="button"
+                  className="chat-changes-return-action"
+                  onClick={() => setChangesOpen(false)}
                 >
-                  <button
-                    type="button"
-                    className="chat-history-item-main"
-                    onClick={() => {
-                      void onLoadConversation(conversation.id);
-                      setHistoryOpen(false);
-                    }}
-                    disabled={historyLoadingId === conversation.id || busyHistoryAction !== null}
-                  >
-                    <div className="chat-history-item-header">
-                      <span className="chat-history-item-title">
-                        {conversation.title || t("chat.untitledConversation")}
-                      </span>
-                      <span className="chat-history-item-time">
-                        {formatTimestamp(conversation.updatedAt)}
-                      </span>
-                    </div>
-                    <div className="chat-history-item-badges">
-                      <span className={`chat-task-mode mode-${conversation.mode || "code"}`}>
-                        {t(`chat.mode.${conversation.mode || "code"}.label`)}
-                      </span>
-                      <span className={`chat-task-status status-${conversation.status || "completed"}`}>
-                        {t(`chat.taskStatus.${conversation.status || "completed"}`)}
-                      </span>
-                    </div>
-                    {conversation.preview && (
-                      <div className="chat-history-item-preview">{conversation.preview}</div>
-                    )}
-                    <div className="chat-history-item-meta">
-                      {t("chat.messageCount", { count: conversation.messageCount })}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-history-item-fork"
-                    onClick={() => void handleForkConversation(conversation.id)}
-                    disabled={isStreaming || busyHistoryAction !== null}
-                    title={t("chat.forkConversation")}
-                    aria-label={t("chat.forkConversation")}
-                  >
-                    <GitFork size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-history-item-delete"
-                    onClick={() => void handleDeleteConversation(conversation)}
-                    disabled={isStreaming || busyHistoryAction !== null}
-                    title={t("chat.deleteConversation")}
-                    aria-label={t("chat.deleteConversationNamed", {
-                      title: conversation.title || t("chat.untitledConversation"),
-                    })}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {currentConversationId && (
-            <div className="chat-run-history">
-              <div className="chat-run-history-heading">
-                <span><Activity size={12} /> {t("chat.runHistory")}</span>
-                {runHistoryLoading && <RefreshCw size={12} className="chat-spin" />}
+                  返回任务对话
+                </button>
               </div>
-              {runHistoryError && (
-                <div className="chat-history-message error">{runHistoryError}</div>
-              )}
-              {!runHistoryLoading && runHistory.length === 0 && (
-                <div className="chat-run-history-empty">{t("chat.noRunHistory")}</div>
-              )}
-              {runHistory.length > 0 && (
-                <div className="chat-run-history-list">
-                  {runHistory.slice(0, 8).map((run) => (
-                    <div className="chat-run-history-item" key={run.runId}>
-                      <button
-                        type="button"
-                        className="chat-run-history-main"
-                        onClick={() => void onLoadRun(run.runId)}
-                        disabled={runHistoryLoading}
-                      >
-                        <span className="chat-run-history-title">
-                          {t(`chat.taskStatus.${run.status}`)} · {run.mode}
-                        </span>
-                        <span className="chat-run-history-meta">
-                          {formatTimestamp(run.startedAt)} · {run.metrics.modelCalls} {t("chat.runModels")}
-                        </span>
-                      </button>
-                      {!run.parentRunId &&
-                        (run.status === "running" || run.status === "stopped" || run.status === "failed") && (
-                        <button
-                          type="button"
-                          className="chat-run-history-resume"
-                          onClick={() => void onResumeRun(run.conversationId, run.runId)}
-                          disabled={isStreaming}
-                          title={t("chat.resumeRun")}
-                        >
-                          <RotateCcw size={12} />
-                        </button>
-                      )}
-                      {!run.parentRunId &&
-                        run.mode === "code" &&
-                        (run.status === "completed" || run.status === "stopped" || run.status === "failed") && (
-                          <button
-                            type="button"
-                            className="chat-run-history-revert"
-                            onClick={() => void handleRevertRun(run.runId)}
-                            disabled={isStreaming || busyHistoryAction !== null}
-                            title={t("chat.revertRun")}
-                            aria-label={t("chat.revertRun")}
-                          >
-                            <ArchiveRestore size={12} className={busyHistoryAction === `revert:${run.runId}` ? "chat-spin" : ""} />
-                          </button>
-                        )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {isStreaming && (
-        <div className="chat-run-status">
-          <span className="chat-run-status-dot" />
-          <div className="chat-run-status-copy">
-            <strong>{t("chat.runInProgress")}</strong>
-            <span>
-              {activeTool
-                ? t("chat.runCurrentTool", { tool: activeTool.name })
-                : t("chat.runPreparing")}
-            </span>
-          </div>
-          <span className="chat-run-status-count">
-            {t("chat.runSteps", { count: activeAssistantMessage?.toolCalls?.length || 0 })}
-          </span>
-          <button
-            type="button"
-            className="chat-run-stop"
-            onClick={onStop}
-            title={t("chat.stop")}
-          >
-            <Square size={12} />
-            <span>{t("chat.stop")}</span>
-          </button>
-        </div>
-      )}
-
-      {runState && !isStreaming && (
-        <div className="chat-run-telemetry">
-          <button
-            type="button"
-            className="chat-run-telemetry-header"
-            onClick={() => setRunTimelineOpen((open) => !open)}
-          >
-            <span><Activity size={13} /> {t("chat.runTelemetry")}</span>
-            <span className={`chat-summary-status${runState.status === "failed" ? " failed" : ""}`}>
-              {t(`chat.taskStatus.${runState.status}`)}
-            </span>
-          </button>
-          <div className="chat-run-telemetry-stats">
-            <span>{t("chat.runDuration", { value: Math.round((runState.metrics.durationMs || 0) / 1000) })}</span>
-            <span>{t("chat.runModels", { count: runState.metrics.modelCalls })}</span>
-            <span>{t("chat.runTokens", { count: runState.metrics.totalTokens || runState.metrics.estimatedTokensPeak })}</span>
-            {runState.metrics.estimatedCostUsd > 0 && (
-              <span>{t("chat.runCost", { value: runState.metrics.estimatedCostUsd.toFixed(6) })}</span>
             )}
-            <span>{t("chat.runErrors", { count: runState.metrics.toolErrors + runState.metrics.modelErrors })}</span>
           </div>
-          {runTimelineOpen && (
-            <div className="chat-run-timeline">
-              {timelineEvents.map((event) => (
-                <div className={`chat-run-timeline-event${event.isError ? " error" : ""}`} key={event.id}>
-                  <span className="chat-run-timeline-dot" />
-                  <div>
-                    <strong>{event.label}</strong>
-                    <small>
-                      {formatTimestamp(event.timestamp)}
-                      {event.durationMs !== undefined && ` · ${event.durationMs}ms`}
-                    </small>
-                    {event.detail && <p>{event.detail}</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      )}
-      </div>
+      ) : (
+        <div className="chat-conversation-view">
+          {(messages.length > 0 || isStreaming || Boolean(runState)) && (
+            <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
+          )}
+          {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
 
-      {!isStreaming && currentRunSummary && (
-        <ChangeSummary
-          token={token}
-          workspaceDir={workspaceDir}
-          theme={theme}
-          readOnly={contextReadOnly}
-          onComment={onReviewComment}
-          onChanged={onChangesApplied}
-          runId={runState?.runId}
-          summary={currentRunSummary}
-          expanded={changesOpen}
-          onToggle={() => setChangesOpen((open) => !open)}
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-          onOpenLocation={onOpenReviewFinding}
-          onRetry={onRetry}
-          onPlanAmendmentDecision={onPlanAmendmentDecision}
-        />
-      )}
-
-      <div className="chat-messages">
+          <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty-state">
-            <div className="chat-empty-icon"><Sparkles size={20} /></div>
+            <div className="chat-empty-icon">
+              <BrandMark size={32} />
+            </div>
             <strong>{t("chat.emptyPrimary")}</strong>
             <span>{t("chat.emptySecondary")}</span>
             <div className="chat-empty-quick-prompts">
@@ -958,8 +739,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     textareaRef.current?.focus();
                   }}
                 >
-                  {quickPromptIcon(prompt.id)}
-                  <span>{t(prompt.labelKey)}</span>
+                  <div className="chat-empty-quick-icon">
+                    {quickPromptIcon(prompt.id)}
+                  </div>
+                  <div className="chat-empty-quick-copy">
+                    <strong>{t(prompt.labelKey)}</strong>
+                    <span>{t(prompt.promptKey)}</span>
+                  </div>
                 </button>
               ))}
             </div>
@@ -986,6 +772,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           />
         ))}
         <AssistantActivity messages={messages} isStreaming={isStreaming} connected={connected} runState={runState} activeRequestIds={activeRequestIds} pendingApprovals={pendingApprovals} />
+
+        {!isStreaming && currentRunSummary && currentRunSummary.changedFiles.length > 0 && (
+          <div className="chat-changes-banner-card">
+            <div className="chat-changes-banner-info">
+              <GitCompare size={15} />
+              <span>本次运行修改了 {currentRunSummary.changedFiles.length} 个文件</span>
+            </div>
+            <button
+              type="button"
+              className="chat-changes-banner-btn"
+              onClick={() => setChangesOpen(true)}
+            >
+              查看文件 Diff
+            </button>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -1024,8 +826,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               selectionInfo
                 ? t("chat.askSelectedCode")
                 : messages.length === 0
-                  ? t("workbench.describeTask")
-                  : t("workbench.followUpTask")
+                  ? `${t("workbench.describeTask")} (键入 @ 引用上下文)`
+                  : `${t("workbench.followUpTask")} (键入 @ 引用上下文)`
             }
             value={input}
             onChange={handleInputChange}
@@ -1106,6 +908,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 <Plus size={15} aria-hidden="true" />
               </button>
+              <button
+                type="button"
+                className="chat-composer-at-btn"
+                onClick={() => {
+                  const textarea = textareaRef.current;
+                  if (textarea) {
+                    const start = textarea.selectionStart ?? input.length;
+                    const end = textarea.selectionEnd ?? input.length;
+                    const next = input.slice(0, start) + "@" + input.slice(end);
+                    setInput(next);
+                    requestAnimationFrame(() => {
+                      textarea.focus();
+                      textarea.setSelectionRange(start + 1, start + 1);
+                    });
+                  }
+                }}
+                disabled={isStreaming || !connected}
+                title="添加上下文引用 (@)"
+                aria-label="添加上下文引用"
+              >
+                <AtSign size={14} aria-hidden="true" />
+              </button>
               <div className="chat-composer-mode-select">
                 <span className="sr-only">{t("workbench.workMode")}</span>
                 <WorkbenchSelect
@@ -1123,6 +947,97 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
 
             <div className="chat-composer-right">
+              <div
+                ref={contextContainerRef}
+                className="chat-composer-context-container"
+              >
+                <button
+                  type="button"
+                  className={`chat-composer-context-ring-btn${contextPopoverOpen ? " active" : ""}`}
+                  role="progressbar"
+                  aria-label={`${t("workbench.currentContext")}: ${Math.round(contextPercent)}%`}
+                  aria-valuenow={Math.round(contextPercent)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  onClick={() => setContextPopoverOpen((open) => !open)}
+                  title={`${t("workbench.currentContext")}: ${contextState.estimatedTokens.toLocaleString()} / ${contextState.threshold.toLocaleString()} tokens (${Math.round(contextPercent)}%)`}
+                >
+                  <svg width="18" height="18" viewBox="0 0 20 20" className="chat-context-svg" aria-hidden="true">
+                    <circle
+                      cx="10"
+                      cy="10"
+                      r="7.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.4"
+                      className="chat-context-ring-bg"
+                    />
+                    <circle
+                      cx="10"
+                      cy="10"
+                      r="7.5"
+                      fill="none"
+                      stroke={contextPercent > 90 ? "var(--danger)" : contextPercent > 75 ? "var(--warning)" : "var(--accent)"}
+                      strokeWidth="2.4"
+                      strokeDasharray="47.12"
+                      strokeDashoffset={47.12 * (1 - contextPercent / 100)}
+                      strokeLinecap="round"
+                      transform="rotate(-90 10 10)"
+                      className="chat-context-ring-val"
+                    />
+                  </svg>
+                  <span className="chat-context-percent-text">{Math.round(contextPercent)}%</span>
+                </button>
+
+                {contextPopoverOpen && (
+                  <div className="chat-context-popover" role="tooltip">
+                    <div className="chat-context-popover-head">
+                      <strong>{t("workbench.currentContext")}</strong>
+                      <span className="chat-context-popover-badge">{Math.round(contextPercent)}%</span>
+                    </div>
+                    <div className="chat-context-popover-progress">
+                      <div
+                        className="chat-context-popover-progress-bar"
+                        style={{
+                          width: `${contextPercent}%`,
+                          backgroundColor: contextPercent > 90 ? "var(--danger)" : contextPercent > 75 ? "var(--warning)" : "var(--accent)"
+                        }}
+                      />
+                    </div>
+                    <div className="chat-context-popover-stats">
+                      <div className="chat-context-popover-item">
+                        <span>Tokens</span>
+                        <strong>{contextState.estimatedTokens.toLocaleString()} / {contextState.threshold.toLocaleString()}</strong>
+                      </div>
+                      <div className="chat-context-popover-item">
+                        <span>工作区来源</span>
+                        <strong>{contextManifest.draftManifest ? `${contextManifest.draftManifest.totals.includedSources} 个来源` : contextManifest.indexState.status === "ready" ? "索引已就绪" : `状态: ${contextManifest.indexState.status}`}</strong>
+                      </div>
+                      <div className="chat-context-popover-item">
+                        <span>MCP 工具</span>
+                        <strong>{mcpState.toolCount} 个可用 ({mcpState.serverCount} 服务)</strong>
+                      </div>
+                      <div className="chat-context-popover-item">
+                        <span>知识库</span>
+                        <strong>{knowledgeState.memoryFiles} 记忆 · {knowledgeState.skillCount} 技能</strong>
+                      </div>
+                    </div>
+                    <div className="chat-context-popover-footer">
+                      <button
+                        type="button"
+                        className="chat-context-popover-btn"
+                        onClick={() => {
+                          setContextPopoverOpen(false);
+                          setContextInspectorOpen(true);
+                        }}
+                      >
+                        <Layers size={13} />
+                        <span>查看来源清单</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="chat-composer-model-select">
                 <span className="sr-only">{t("workbench.model")}</span>
                 <ModelSelector
@@ -1130,7 +1045,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   onChange={onModelNameChange}
                   disabled={isStreaming || runtimeOptions.models.length === 0}
                   models={runtimeOptions.models}
-                  automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+                  automaticLabel={modeModelName || "自动"}
                   label={t("workbench.model")}
                 />
               </div>
@@ -1162,7 +1077,159 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         </div>
       </div>
-      <ActionConfirmDialog
+    </div>
+  )}
+
+  {contextInspectorOpen && (
+    <div className="chat-drawer-backdrop" onClick={() => setContextInspectorOpen(false)}>
+      <aside className="chat-drawer chat-drawer-context" role="dialog" aria-modal="true" aria-label={t("workbench.currentContext")} onClick={(e) => e.stopPropagation()}>
+        <div className="chat-drawer-header">
+          <div className="chat-drawer-title">
+            <Layers size={15} />
+            <strong>{t("workbench.currentContext")}</strong>
+          </div>
+          <button
+            type="button"
+            className="chat-drawer-close"
+            onClick={() => setContextInspectorOpen(false)}
+            title={t("chat.close")}
+            aria-label={t("chat.close")}
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="chat-drawer-body">
+          <ContextInspector
+            manifests={contextManifest.draftManifests}
+            selectedManifestId={contextManifest.draftManifest?.id}
+            indexState={contextManifest.indexState}
+            mode="draft"
+            loading={contextManifest.loading}
+            readOnly={contextReadOnly}
+            preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
+            error={contextManifest.error}
+            emptyHint={t("context.noPreviewSources")}
+            mutationBySource={contextManifest.mutationBySource}
+            onPin={(key) => void contextManifest.pinSource(key)}
+            onUnpin={(key) => void contextManifest.unpinSource(key)}
+            onExclude={(key) => void contextManifest.excludeSource(key)}
+            onRestore={(key) => void contextManifest.restoreSource(key)}
+            onRefreshSource={(key) => void contextManifest.refreshSources([key])}
+            onRefreshAll={() => void (
+              contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
+                ? contextManifest.rebuildIndex()
+                : contextManifest.refreshSources()
+            )}
+            onRetry={() => void contextManifest.retryPreview()}
+          />
+        </div>
+      </aside>
+    </div>
+  )}
+
+  {historyOpen && (
+    <div className="chat-drawer-backdrop" onClick={() => setHistoryOpen(false)}>
+      <aside className="chat-drawer chat-drawer-history" role="dialog" aria-modal="true" aria-label={t("chat.tasks")} onClick={(e) => e.stopPropagation()}>
+        <div className="chat-drawer-header">
+          <div className="chat-drawer-title">
+            <History size={15} />
+            <strong>{t("chat.tasks")}</strong>
+          </div>
+          <div className="chat-drawer-actions">
+            <button
+              type="button"
+              className="chat-drawer-action-btn"
+              onClick={() => {
+                onClear();
+                setHistoryOpen(false);
+              }}
+              disabled={isStreaming}
+            >
+              <Plus size={13} />
+              <span>{t("chat.newConversation")}</span>
+            </button>
+            <button
+              type="button"
+              className="chat-drawer-close"
+              onClick={() => setHistoryOpen(false)}
+              title={t("chat.close")}
+              aria-label={t("chat.close")}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+        <div className="chat-drawer-body">
+          {historyError && (
+            <div className="chat-history-message error">{historyError}</div>
+          )}
+          {conversations.length === 0 && !historyLoading ? (
+            <div className="chat-history-empty">{t("chat.noHistory")}</div>
+          ) : (
+            <div className="chat-history-list">
+              {conversations.map((conversation) => (
+                <div
+                  key={conversation.id}
+                  className={`chat-history-item${
+                    conversation.id === currentConversationId ? " active" : ""
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="chat-history-item-main"
+                    onClick={() => {
+                      void onLoadConversation(conversation.id);
+                      setHistoryOpen(false);
+                    }}
+                    disabled={historyLoadingId === conversation.id || isStreaming || busyHistoryAction !== null}
+                  >
+                    <div className="chat-history-item-header">
+                      <span className="chat-history-item-title">
+                        {conversation.title || t("chat.untitledConversation")}
+                      </span>
+                      <span className="chat-history-item-time">
+                        {formatTimestamp(conversation.updatedAt)}
+                      </span>
+                    </div>
+                    <div className="chat-history-item-badges">
+                      <span className={`chat-task-mode mode-${conversation.mode || "code"}`}>
+                        {t(`chat.mode.${conversation.mode || "code"}.label`)}
+                      </span>
+                      <span className={`chat-task-status status-${conversation.status || "completed"}`}>
+                        {t(`chat.taskStatus.${conversation.status || "completed"}`)}
+                      </span>
+                    </div>
+                    {conversation.preview && (
+                      <div className="chat-history-item-preview">{conversation.preview}</div>
+                    )}
+                    <div className="chat-history-item-meta">
+                      {t("chat.messageCount", { count: conversation.messageCount })}
+                    </div>
+                  </button>
+                  <div className="chat-history-item-actions">
+                    <button
+                      type="button"
+                      className="chat-history-item-delete"
+                      onClick={() => void handleDeleteConversation(conversation)}
+                      disabled={isStreaming || busyHistoryAction !== null}
+                      title={t("chat.deleteConversation")}
+                      aria-label={t("chat.deleteConversationNamed", {
+                        title: conversation.title || t("chat.untitledConversation"),
+                      })}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  )}
+
+  <ActionConfirmDialog
         intent={confirmIntent}
         busy={busyHistoryAction !== null}
         error={confirmError}

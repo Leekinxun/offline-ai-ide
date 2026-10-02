@@ -1,0 +1,218 @@
+/* ==========================================================================
+   KnowledgeManagerPanel Component Styles - Physical Isolation & UI Polish
+   ========================================================================== */
+
+.knowledge-memory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.knowledge-memory-card,
+.knowledge-skill-preview {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  background: var(--surface-panel);
+}
+
+.knowledge-memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.knowledge-card-heading,
+.knowledge-preview-header,
+.knowledge-skill-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.knowledge-card-heading > div,
+.knowledge-preview-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.knowledge-card-heading span,
+.knowledge-preview-header span,
+.knowledge-skill-copy > span,
+.knowledge-skill-copy small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-memory-editor {
+  min-height: 150px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-workbench);
+  color: var(--text-primary);
+  padding: 8px 10px;
+}
+
+.knowledge-memory-editor:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.knowledge-card-actions,
+.knowledge-skill-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.knowledge-skill-toolbar {
+  justify-content: space-between;
+}
+
+.knowledge-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  color: var(--text-secondary);
+}
+
+.knowledge-search .settings-input {
+  flex: 1;
+}
+
+.knowledge-skills-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  min-height: 320px;
+}
+
+.knowledge-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.knowledge-skill-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.knowledge-skill-row:hover,
+.knowledge-skill-row.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-panel));
+}
+
+.knowledge-skill-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.knowledge-skill-title {
+  justify-content: flex-start;
+}
+
+.knowledge-status-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.knowledge-status-dot.enabled {
+  background: var(--status-success-fg);
+}
+
+.knowledge-skill-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.knowledge-skill-toggle:hover {
+  color: var(--accent);
+}
+
+.knowledge-skill-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.knowledge-skill-metadata {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.knowledge-skill-metadata span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--surface-workbench);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.knowledge-skill-body {
+  max-height: 230px;
+  margin: 0;
+  padding: 11px;
+  overflow: auto;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-workbench);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.knowledge-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+@media (max-width: 768px) {
+  .knowledge-memory-grid,
+  .knowledge-skills-layout {
+    grid-template-columns: 1fr;
+  }
+}

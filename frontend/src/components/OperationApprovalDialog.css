@@ -1,0 +1,156 @@
+/* OperationApprovalDialog.css - 操作审批与确认弹窗专用样式 */
+.delivery-approval-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, black 52%, transparent);
+}
+
+.delivery-approval-overlay.action-confirm-overlay {
+  z-index: 1500;
+}
+
+.delivery-approval-dialog {
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 36px));
+  overflow: auto;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface-panel-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.delivery-approval-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.delivery-approval-header > div {
+  flex: 1;
+}
+
+.delivery-approval-header strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.delivery-approval-header p {
+  margin: 5px 0 0;
+  color: var(--ink-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.delivery-approval-header > button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.delivery-approval-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+}
+
+.delivery-approval-impact {
+  display: grid;
+  gap: 5px;
+  margin: 14px 0;
+}
+
+.delivery-approval-impact > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border-radius: 7px;
+  background: var(--surface-quiet);
+}
+
+.delivery-approval-impact dt {
+  color: var(--ink-muted);
+  font-size: 9px;
+}
+
+.delivery-approval-impact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: 10px/1.45 var(--font-mono);
+}
+
+.delivery-approval-impact .warning dd {
+  color: var(--status-warning-fg);
+}
+
+.delivery-approval-warnings {
+  display: flex;
+  gap: 7px;
+  padding: 9px;
+  border-radius: 7px;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+  font-size: 10px;
+}
+
+.delivery-approval-warnings ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.delivery-approval-reason {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.delivery-approval-reason textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.delivery-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.delivery-approval-actions .dialog-btn {
+  min-height: 40px;
+}
+
+@media (max-width: 720px) {
+  .delivery-approval-overlay {
+    align-items: end;
+    padding: 0;
+  }
+
+  .delivery-approval-dialog {
+    width: 100%;
+    max-height: 94vh;
+    border-radius: 14px 14px 0 0;
+  }
+
+  .delivery-approval-impact > div {
+    grid-template-columns: 1fr;
+  }
+}

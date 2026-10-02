@@ -1,0 +1,240 @@
+/* ============================================================================
+   WorkbenchEditorArea 专属样式
+   遵循 AGENTS.md 增量止血与就近解耦原则：
+   包含远端冲突与团队协作横幅、双栏比对容器、富文本预览分栏等
+   ============================================================================ */
+
+/* --- 远端冲突横幅与协作提示 --- */
+.editor-conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+  border-bottom: 1px solid rgba(255, 149, 0, 0.2);
+}
+
+.editor-collaboration-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.editor-conflict-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editor-conflict-copy strong {
+  font-size: 12.5px;
+}
+
+.editor-conflict-copy span {
+  font-size: 12px;
+}
+
+.editor-conflict-source {
+  opacity: 0.9;
+}
+
+.editor-conflict-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.editor-conflict-btn {
+  border: 1px solid rgba(255, 149, 0, 0.25);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: var(--radius-xs);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.editor-conflict-btn.danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.editor-conflict-btn.danger:hover {
+  filter: brightness(0.96);
+}
+
+.editor-conflict-btn.primary {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #fff;
+}
+
+/* --- 双栏比对容器 (Compare View) --- */
+.editor-compare-workbench {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.editor-compare-pane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-compare-pane-header {
+  display: flex;
+  flex: 0 0 30px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+}
+
+.editor-compare-pane-header span {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.editor-compare-pane-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-compare-divider {
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
+/* --- 富文档与分屏预览容器 (Preview Workbench) --- */
+.editor-workbench {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.editor-workbench-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-workbench);
+}
+
+.editor-workbench-segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-toolbar);
+  border: 1px solid var(--border-light);
+  gap: 2px;
+}
+
+.editor-workbench-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.editor-workbench-btn:hover {
+  color: var(--text-primary);
+}
+
+.editor-workbench-btn.active {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-workbench-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-workbench-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-workbench-pane > .editor-container {
+  height: 100%;
+}
+
+.editor-workbench-divider {
+  flex: 0 0 1px;
+  background: var(--border-light);
+}
+
+/* --- 响应式小屏适配 --- */
+@media (max-width: 780px) {
+  .editor-workbench-toolbar {
+    padding: 6px 8px;
+  }
+
+  .editor-workbench-segmented {
+    width: 100%;
+  }
+
+  .editor-workbench-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .editor-workbench-body.mode-split {
+    flex-direction: column;
+  }
+
+  .editor-workbench-body.mode-split .editor-workbench-divider {
+    height: 1px;
+    width: 100%;
+  }
+
+  .editor-compare-workbench {
+    flex-direction: column;
+  }
+
+  .editor-compare-divider {
+    height: 1px;
+    width: 100%;
+  }
+}

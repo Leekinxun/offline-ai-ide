@@ -3,6 +3,7 @@ import { Plus, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { ContextState, ConversationSummary } from "../types";
 import { useI18n } from "../i18n";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import "./TaskSidebar.css";
 import type { ConversationActivity } from "../utils/chatScope";
 
 interface TaskSidebarProps {
@@ -10,7 +11,7 @@ interface TaskSidebarProps {
   workspaceDir: string;
   conversations: ConversationSummary[];
   currentConversationId: string | null;
-  contextState: ContextState;
+  contextState?: ContextState;
   loading: boolean;
   loadingId: string | null;
   isStreaming: boolean;
@@ -46,7 +47,6 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
   workspaceDir,
   conversations,
   currentConversationId,
-  contextState,
   loading,
   loadingId,
   activity = {},
@@ -68,10 +68,6 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
       return `${conversation.title} ${conversation.preview}`.toLocaleLowerCase(locale).includes(normalizedQuery);
     }),
     [conversations, locale, normalizedQuery]
-  );
-  const contextPercent = Math.min(
-    100,
-    Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100)
   );
 
   const handleDeleteConversation = (
@@ -105,15 +101,12 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
     <aside className="task-sidebar" aria-label={t("workbench.conversations")}> 
       <header className="task-sidebar-header">
         <div className="task-sidebar-workspace">
-          <span className="task-sidebar-mark"><Sparkles size={13} /></span>
-          <div>
-            <strong>{workspaceLabel}</strong>
-            <span title={workspaceDir}>{workspaceDir}</span>
-          </div>
+          <span className="task-sidebar-badge">{t("workbench.aiTasks")}</span>
+          <strong className="task-sidebar-title" title={workspaceDir}>{workspaceLabel}</strong>
         </div>
         <button
           type="button"
-          className="task-sidebar-refresh"
+          className="task-sidebar-btn"
           onClick={() => void onRefresh()}
           disabled={loading}
           title={t("chat.refreshHistory")}
@@ -192,15 +185,6 @@ export const TaskSidebar: React.FC<TaskSidebarProps> = ({
         )}
       </div>
 
-      <footer className="task-sidebar-footer">
-        <div className="task-context-row">
-          <span>{t("workbench.currentContext")}</span>
-          <strong>{Math.round(contextPercent)}%</strong>
-        </div>
-        <div className="task-context-meter" role="progressbar" aria-label={t("workbench.currentContext")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(contextPercent)}>
-          <span style={{ width: `${contextPercent}%` }} />
-        </div>
-      </footer>
       <ActionConfirmDialog
         intent={confirmIntent}
         busy={deletingId !== null}

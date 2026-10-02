@@ -3,6 +3,7 @@ import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import "./OperationApprovalDialog.css";
 
 export interface ApprovalIntent {
   id: string;

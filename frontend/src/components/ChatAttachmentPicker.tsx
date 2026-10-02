@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImage, FileText, FileType2, Paperclip, RotateCcw, X } from "lucide-react";
 import type { ChatAttachmentRef } from "../types";
 import { useI18n } from "../i18n";
+import "./ChatAttachmentPicker.css";
 
 export interface ChatDraftAttachment {
   localId: string;
@@ -219,7 +220,17 @@ export function useChatAttachmentDraft(token: string): ChatAttachmentDraftContro
 
   const readyRefs = useMemo(() => attachments.flatMap((attachment) => attachment.status === "ready" && attachment.ref ? [attachment.ref] : []), [attachments]);
   const blocked = attachments.some((attachment) => attachment.status !== "ready");
-  return { attachments, readyRefs, blocked, add, remove, retry, restore, removeRefs, clear };
+  return useMemo(() => ({
+    attachments,
+    readyRefs,
+    blocked,
+    add,
+    remove,
+    retry,
+    restore,
+    removeRefs,
+    clear,
+  }), [attachments, readyRefs, blocked, add, remove, retry, restore, removeRefs, clear]);
 }
 
 function AttachmentIcon({ kind }: { kind?: ChatAttachmentRef["kind"] }) {

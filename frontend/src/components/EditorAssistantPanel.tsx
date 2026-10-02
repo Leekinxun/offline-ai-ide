@@ -20,6 +20,11 @@ import {
   TerminalSquare,
   TestTube2,
   X,
+  AtSign,
+  History,
+  MessageSquare,
+  Trash2,
+  Layers,
 } from "lucide-react";
 import "./EditorAssistantPanel.css";
 import "./ExecutionFactsCard.css";
@@ -35,6 +40,8 @@ import {
   ContextReference,
   FileNode,
   SelectionInfo,
+  ContextState,
+  ConversationSummary,
 } from "../types";
 import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
@@ -84,6 +91,11 @@ interface EditorAssistantPanelProps {
   currentRunSummary: ConversationRunSummary | null;
   contextManifest: ContextManifestController;
   contextReadOnly: boolean;
+  contextState?: ContextState;
+  conversations?: ConversationSummary[];
+  currentConversationId?: string | null;
+  onLoadConversation?: (id: string) => Promise<void> | void;
+  onDeleteConversation?: (id: string) => Promise<void> | void;
   pendingApprovals: ToolApprovalRequest[];
   onAgentModeChange: (mode: AgentMode) => void;
   onModelNameChange: (modelName: string) => void;
@@ -148,6 +160,11 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   currentRunSummary,
   contextManifest,
   contextReadOnly,
+  contextState,
+  conversations = [],
+  currentConversationId,
+  onLoadConversation,
+  onDeleteConversation,
   pendingApprovals,
   onAgentModeChange,
   onModelNameChange,
@@ -169,14 +186,19 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const approvalStackRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
+  const historyContainerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
   const [now, setNow] = useState(Date.now());
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [detailsCollapsed, setDetailsCollapsed] = useState(() =>
     localStorage.getItem("editorAssistantDetailsCollapsed") !== "0"
   );
+  const contextPercent = contextState
+    ? Math.min(100, Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100))
+    : 0;
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
     () => messages.filter(isAssistantMessageVisible),
@@ -234,6 +256,17 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [contextInspectorOpen]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (historyContainerRef.current && !historyContainerRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [historyOpen]);
 
   useEffect(() => {
     followLatestMessageRef.current = true;
@@ -337,6 +370,59 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           >
             {detailsCollapsed ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
           </button>}
+          <div className="editor-assistant-history-container" ref={historyContainerRef}>
+            <button
+              type="button"
+              className={`editor-assistant-history-btn${historyOpen ? " active" : ""}`}
+              onClick={() => setHistoryOpen((open) => !open)}
+              title="查看与切换历史会话"
+              aria-label="历史会话"
+              aria-expanded={historyOpen}
+            >
+              <History size={14} />
+            </button>
+            {historyOpen && (
+              <div className="editor-assistant-history-popover" role="dialog">
+                <div className="editor-assistant-history-head">
+                  <span>历史会话 ({conversations.length})</span>
+                </div>
+                <div className="editor-assistant-history-list">
+                  {conversations.length === 0 ? (
+                    <div className="editor-assistant-history-empty">暂无历史会话</div>
+                  ) : (
+                    conversations.map((c) => (
+                      <div
+                        key={c.id}
+                        className={`editor-assistant-history-item${c.id === currentConversationId ? " active" : ""}`}
+                        onClick={() => {
+                          void onLoadConversation?.(c.id);
+                          setHistoryOpen(false);
+                        }}
+                      >
+                        <MessageSquare size={13} className="editor-assistant-history-item-icon" />
+                        <span className="editor-assistant-history-item-title" title={c.title || c.id}>
+                          {c.title || "未命名会话"}
+                        </span>
+                        {onDeleteConversation && (
+                          <button
+                            type="button"
+                            className="editor-assistant-history-item-delete"
+                            title="删除会话"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void onDeleteConversation(c.id);
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={handleNewConversation}
@@ -372,31 +458,6 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               : t("workbench.synced")
             : t("workbench.waiting")}</small>
         </button>
-        {contextInspectorOpen && (
-          <ContextInspector
-            manifests={contextManifest.draftManifests}
-            selectedManifestId={contextManifest.draftManifest?.id}
-            indexState={contextManifest.indexState}
-            mode="draft"
-            loading={contextManifest.loading}
-            readOnly={contextReadOnly}
-            preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
-            error={contextManifest.error}
-            emptyHint={t("context.noPreviewSources")}
-            mutationBySource={contextManifest.mutationBySource}
-            onPin={(key) => void contextManifest.pinSource(key)}
-            onUnpin={(key) => void contextManifest.unpinSource(key)}
-            onExclude={(key) => void contextManifest.excludeSource(key)}
-            onRestore={(key) => void contextManifest.restoreSource(key)}
-            onRefreshSource={(key) => void contextManifest.refreshSources([key])}
-            onRefreshAll={() => void (
-              contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
-                ? contextManifest.rebuildIndex()
-                : contextManifest.refreshSources()
-            )}
-            onRetry={() => void contextManifest.retryPreview()}
-          />
-        )}
         {!isStreaming && runState && (runState.status === "failed" || runState.status === "stopped") && (
           <button
             type="button"
@@ -637,7 +698,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
               handleSubmit();
             }
           }}
-          placeholder={t(`workbench.assistantPlaceholder.${agentMode}`)}
+          placeholder={`${t(`workbench.assistantPlaceholder.${agentMode}`)} (键入 @ 引用上下文)`}
           aria-label={t("workbench.askAboutCurrentFile")}
         />
 
@@ -712,6 +773,28 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
             >
               <Plus size={14} aria-hidden="true" />
             </button>
+            <button
+              type="button"
+              className="editor-assistant-at-btn"
+              onClick={() => {
+                const textarea = textareaRef.current;
+                if (textarea) {
+                  const start = textarea.selectionStart ?? input.length;
+                  const end = textarea.selectionEnd ?? input.length;
+                  const next = input.slice(0, start) + "@" + input.slice(end);
+                  setInput(next);
+                  requestAnimationFrame(() => {
+                    textarea.focus();
+                    textarea.setSelectionRange(start + 1, start + 1);
+                  });
+                }
+              }}
+              disabled={isStreaming || !connected}
+              title="添加上下文引用 (@)"
+              aria-label="添加上下文引用"
+            >
+              <AtSign size={14} aria-hidden="true" />
+            </button>
             <div className="editor-assistant-composer-mode">
               <span className="sr-only">{t("workbench.workMode")}</span>
               <WorkbenchSelect
@@ -735,7 +818,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                 onChange={onModelNameChange}
                 disabled={isStreaming || runtimeOptions.models.length === 0}
                 models={runtimeOptions.models}
-                automaticLabel={t("workbench.modelAutomatic", { model: modeModelName })}
+                automaticLabel={modeModelName || "自动"}
                 label={t("workbench.model")}
               />
             </div>
@@ -744,6 +827,43 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                 <FileCode2 size={11} aria-hidden="true" />
                 <span>{fileName}</span>
               </span>
+            )}
+            {contextState && (
+              <button
+                type="button"
+                className={`editor-assistant-context-ring-btn${contextInspectorOpen ? " active" : ""}`}
+                role="progressbar"
+                aria-label={`${t("workbench.currentContext")}: ${Math.round(contextPercent)}%`}
+                aria-valuenow={Math.round(contextPercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                onClick={() => setContextInspectorOpen((open) => !open)}
+                title={`${t("workbench.currentContext")}: ${contextState.estimatedTokens.toLocaleString()} / ${contextState.threshold.toLocaleString()} tokens (${Math.round(contextPercent)}%) · 点击查看详情`}
+              >
+                <svg width="18" height="18" viewBox="0 0 20 20" className="editor-assistant-context-svg" aria-hidden="true">
+                  <circle
+                    cx="10"
+                    cy="10"
+                    r="7.5"
+                    fill="none"
+                    strokeWidth="2.4"
+                    className="editor-assistant-context-ring-bg"
+                  />
+                  <circle
+                    cx="10"
+                    cy="10"
+                    r="7.5"
+                    fill="none"
+                    stroke={contextPercent > 90 ? "var(--danger)" : contextPercent > 75 ? "var(--warning)" : "var(--accent)"}
+                    strokeWidth="2.4"
+                    strokeDasharray="47.12"
+                    strokeDashoffset={Math.max(0, 47.12 * (1 - Math.max(contextPercent, 5) / 100))}
+                    strokeLinecap="round"
+                    transform="rotate(-90 10 10)"
+                    className="editor-assistant-context-ring-val"
+                  />
+                </svg>
+              </button>
             )}
             {isStreaming && <button type="button" className="editor-assistant-stop-btn" onClick={onStop} disabled={!connected} title={t("chat.stop")} aria-label={t("chat.stop")}>
               <Square size={12} aria-hidden="true" />
@@ -763,6 +883,65 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {contextInspectorOpen && (
+        <div className="chat-drawer-backdrop" onClick={() => setContextInspectorOpen(false)}>
+          <aside
+            className="chat-drawer chat-drawer-context"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("workbench.currentContext")}
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: "100%" }}
+          >
+            <div className="chat-drawer-header">
+              <div className="chat-drawer-title">
+                <Layers size={15} />
+                <strong>{t("workbench.currentContext")}</strong>
+                {contextState && (
+                  <span style={{ fontSize: "11px", color: "var(--ink-muted)", fontWeight: "normal", marginLeft: "6px" }}>
+                    {contextState.estimatedTokens.toLocaleString()} / {contextState.threshold.toLocaleString()} tokens ({Math.round(contextPercent)}%)
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="chat-drawer-close"
+                onClick={() => setContextInspectorOpen(false)}
+                title={t("chat.close")}
+                aria-label={t("chat.close")}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="chat-drawer-body">
+              <ContextInspector
+                manifests={contextManifest.draftManifests}
+                selectedManifestId={contextManifest.draftManifest?.id}
+                indexState={contextManifest.indexState}
+                mode="draft"
+                loading={contextManifest.loading}
+                readOnly={contextReadOnly}
+                preferencesDisabledReason={contextManifest.preferenceMutationsAvailable ? undefined : t("context.startConversationToChange")}
+                error={contextManifest.error}
+                emptyHint={t("context.noPreviewSources")}
+                mutationBySource={contextManifest.mutationBySource}
+                onPin={(key) => void contextManifest.pinSource(key)}
+                onUnpin={(key) => void contextManifest.unpinSource(key)}
+                onExclude={(key) => void contextManifest.excludeSource(key)}
+                onRestore={(key) => void contextManifest.restoreSource(key)}
+                onRefreshSource={(key) => void contextManifest.refreshSources([key])}
+                onRefreshAll={() => void (
+                  contextManifest.indexState.status === "unavailable" || contextManifest.indexState.status === "error"
+                    ? contextManifest.rebuildIndex()
+                    : contextManifest.refreshSources()
+                )}
+                onRetry={() => void contextManifest.retryPreview()}
+              />
+            </div>
+          </aside>
+        </div>
+      )}
     </aside>
   );
 };

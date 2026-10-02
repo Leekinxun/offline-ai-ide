@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import "./ToolCallStep.css";
 import { FileUpdate, ToolCallStep as ToolCallStepType } from "../types";
 import {
   Terminal,

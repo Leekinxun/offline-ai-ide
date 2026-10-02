@@ -3,6 +3,7 @@ import { BrandMark } from "./BrandMark";
 import { useI18n } from "../i18n";
 import { PRODUCT_NAME, PRODUCT_VERSION } from "../brand";
 import { ArrowLeft, Moon, ShieldCheck, Sun } from "lucide-react";
+import "./LoginPage.css";
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<string | null>;

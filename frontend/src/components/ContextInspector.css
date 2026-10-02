@@ -88,14 +88,20 @@
 
 /* 只读提示 */
 .context-read-only {
-  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 7px 12px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
   color: var(--status-warning-fg, #f59e0b);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
   flex-shrink: 0;
+  word-break: break-word;
+  box-sizing: border-box;
 }
 
 /* 索引状态单行微卡 */

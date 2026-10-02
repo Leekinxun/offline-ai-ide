@@ -12,6 +12,7 @@ import {
   X,
   XCircle,
   CheckCheck,
+  Globe,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { WorkbenchSelect } from "./WorkbenchSelect";
@@ -37,6 +38,8 @@ export interface EditorToolbarProps {
   chatConnected?: boolean;
   editorAssistantVisible?: boolean;
   onToggleEditorAssistant?: () => void;
+  webPreviewVisible?: boolean;
+  onToggleWebPreview?: () => void;
   terminalVisible?: boolean;
   onToggleTerminal?: () => void;
   runDetailsVisible?: boolean;
@@ -72,6 +75,8 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onSelectPreviewMode,
   editorAssistantVisible = false,
   onToggleEditorAssistant,
+  webPreviewVisible = false,
+  onToggleWebPreview,
   terminalVisible = false,
   onToggleTerminal,
   runDetailsVisible = false,
@@ -170,6 +175,17 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
             >
               <Bot size={14} />
               <span>{t("workbench.editorAssistant")}</span>
+            </button>
+          )}
+          {onToggleWebPreview && (
+            <button
+              type="button"
+              className={`editor-toolbar-btn${webPreviewVisible ? " active" : ""}`}
+              onClick={onToggleWebPreview}
+              title={t("preview.title")}
+            >
+              <Globe size={14} />
+              <span>{t("preview.title")}</span>
             </button>
           )}
           {onToggleTerminal && (

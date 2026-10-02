@@ -10,6 +10,7 @@ import {
   SkillUsageRecord,
 } from "../types";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
+import "./KnowledgeManagerPanel.css";
 
 interface KnowledgeManagerPanelProps {
   token: string;

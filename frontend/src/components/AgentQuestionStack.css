@@ -1,10 +1,120 @@
-.agent-question-stack { padding: 8px; flex: 0 0 auto; max-height: 50vh; overflow: auto; }
-.agent-question-card { padding: 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary); color: var(--text-primary); }
-.agent-question-card fieldset { border: 0; padding: 10px 0; margin: 0; min-width: 0; }
-.agent-question-card legend { white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-question-card label { display: flex; gap: 8px; align-items: center; min-height: 36px; }
-.agent-question-card textarea { width: 100%; min-height: 60px; resize: vertical; box-sizing: border-box; color: inherit; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; }
-.agent-question-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.agent-question-actions button { min-height: 36px; padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: inherit; cursor: pointer; }
-.agent-question-actions button:disabled { opacity: .5; cursor: default; }
-.agent-question-card :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Agent 提问交互卡片堆栈 */
+.agent-question-stack {
+  padding: 8px 10px;
+  flex: 0 0 auto;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.agent-question-card {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-color));
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-question-card fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-question-card legend {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.agent-question-card label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.12s ease;
+}
+
+.agent-question-card label:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.agent-question-card label input[type="radio"],
+.agent-question-card label input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.agent-question-card textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  box-sizing: border-box;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agent-question-card textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.agent-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.agent-question-actions button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.agent-question-actions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-primary));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.agent-question-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.agent-question-card :focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1.5px var(--accent);
+}

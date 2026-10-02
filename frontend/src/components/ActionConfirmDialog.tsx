@@ -3,6 +3,7 @@ import { AlertTriangle, Check, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { claimModalEscape } from "./modalKeyboardContract";
+import "./OperationApprovalDialog.css";
 
 export interface ActionConfirmIntent {
   id: string;

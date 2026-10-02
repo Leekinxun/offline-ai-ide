@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { EN_MESSAGES, ZH_CN_MESSAGES } from "../frontend/src/i18n/messages.js";
 
 interface ReleaseFixture {
-  responsiveBaselines: Array<{ id: string; component: string; componentTokens: string[]; cssTokens: string[] }>;
+  responsiveBaselines: Array<{ id: string; component: string; componentTokens: string[]; cssTokens: string[]; cssFiles?: string[] }>;
 }
 
 interface VisualFixture {
@@ -90,10 +90,12 @@ test("recorded visual baselines retain exact dimensions and approved digests", (
 });
 
 test("responsive baseline components retain their viewport state contracts", () => {
-  const css = fs.readFileSync(path.join(root, "frontend/src/App.css"), "utf8");
   assert.equal(releaseFixture.responsiveBaselines.length, 4);
   for (const baseline of releaseFixture.responsiveBaselines) {
     const component = fs.readFileSync(path.join(root, baseline.component), "utf8");
+    const css = (baseline.cssFiles || ["frontend/src/App.css"])
+      .map((file) => fs.readFileSync(path.join(root, file), "utf8"))
+      .join("\n");
     for (const token of baseline.componentTokens) assert.ok(component.includes(token), `${baseline.id} missing component token ${token}`);
     for (const token of baseline.cssTokens) assert.ok(css.includes(token), `${baseline.id} missing CSS token ${token}`);
   }

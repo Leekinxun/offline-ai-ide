@@ -1,0 +1,338 @@
+/* ==========================================================================
+   TaskSidebar Component Styles - Physical Isolation & 2026 CrownForge Contract
+   ========================================================================== */
+
+.task-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0;
+  overflow: hidden;
+  border: none !important;
+  background: transparent !important;
+  box-sizing: border-box;
+}
+
+/* 紧凑单行整合顶栏 (38px 黄金单行聚合) */
+.task-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  min-height: 38px;
+  max-height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 50%, var(--surface-workbench));
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.task-sidebar-workspace {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.task-sidebar-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.task-sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-sidebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.task-sidebar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.task-sidebar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 工具栏：主新建按钮 + 搜索框 */
+.task-sidebar-toolbar {
+  display: grid;
+  gap: 8px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+/* 主操作按钮：深邃磨砂深蓝微卡 (CrownForge 4.1 规范) */
+.task-new-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 82%, #1d4ed8);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all var(--transition);
+}
+
+.task-new-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 92%, #2563eb);
+  border-color: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 32%, transparent);
+  transform: translateY(-0.5px);
+}
+
+.task-new-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.task-new-button span {
+  flex: 1;
+  text-align: left;
+}
+
+.task-new-button kbd {
+  font: 10px var(--font-mono);
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* 搜索框：磨砂蓝漫反射微光聚焦 */
+.task-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-panel);
+  color: var(--text-tertiary);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.task-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-subtle));
+  background: var(--surface-workbench);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 2px 8px -1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.task-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: 12px var(--font-sans);
+}
+
+.task-search input::placeholder {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+/* 任务列表 */
+.task-list {
+  min-height: 0;
+  flex: 1;
+  padding: 6px 8px 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-subtle) transparent;
+}
+
+.task-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.task-list::-webkit-scrollbar-thumb {
+  background: var(--line-subtle);
+  border-radius: 3px;
+}
+
+.task-list-label {
+  padding: 6px 6px 4px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.task-list-empty {
+  padding: 24px 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.task-list-error {
+  margin: 4px 4px 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* 列表条目微卡 */
+.task-list-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.task-list-item:hover {
+  background: var(--bg-hover);
+}
+
+/* 激活态：磨砂蓝柔和微浸润胶囊 */
+.task-list-item.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.task-list-item-main {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 8px 32px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.task-list-item-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.task-list-item-title strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.task-list-item.active .task-list-item-title strong {
+  color: var(--accent);
+}
+
+.task-list-item-title time {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.task-list-item-preview {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-list-item-meta {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  margin-top: 1px;
+}
+
+/* 删除按钮 */
+.task-list-item-delete {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.task-list-item:hover .task-list-item-delete,
+.task-list-item:focus-within .task-list-item-delete {
+  opacity: 1;
+}
+
+.task-list-item-delete:hover,
+.task-list-item-delete:focus-visible {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.task-list-item-main:disabled,
+.task-list-item-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
