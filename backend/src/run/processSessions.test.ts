@@ -16,7 +16,7 @@ function fixture(t: test.TestContext, scripts: Record<string, string>): ProcessS
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-process-"));
   fs.writeFileSync(path.join(workspaceDir, "package.json"), JSON.stringify({ scripts }));
   // Windows can briefly retain the watchdog's cwd handle after its payload exits.
-  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(() => fs.promises.rm(workspaceDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
   return { workspaceDir, owner: "alice", sessionToken: "session-alice" };
 }
 async function waitFor(owner: ProcessSessionOwner, id: string, predicate: (value: ReturnType<typeof pollProcessSession>) => boolean) {

@@ -391,8 +391,10 @@ try {
   const heartbeatDir = path.join(workspace, "allowednested");
   const workerFile = path.join(heartbeatDir, "fixture-worker.cjs");
   const descendantFile = path.join(heartbeatDir, "fixture-descendant.cjs");
+  const launcherFile = path.join(heartbeatDir, "fixture-detached-launcher.cjs");
   fs.writeFileSync(descendantFile, "const fs=require('node:fs'),path=require('node:path');const tag=process.argv[2];fs.writeFileSync(path.join(__dirname,tag+'-grandchild.pid'),String(process.pid));let i=0;setInterval(()=>fs.writeFileSync(path.join(__dirname,tag+'-grandchild.heartbeat'),String(++i)),150);\n");
   fs.writeFileSync(workerFile, "const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');const tag=process.argv[2];fs.writeFileSync(path.join(__dirname,tag+'-child.pid'),String(process.pid));spawn(process.execPath,[path.join(__dirname,'fixture-descendant.cjs'),tag],{stdio:'ignore'});let i=0;setInterval(()=>fs.writeFileSync(path.join(__dirname,tag+'-child.heartbeat'),String(++i)),150);\n");
+  fs.writeFileSync(launcherFile, "const path=require('node:path'),{spawn}=require('node:child_process');const tag=process.argv[2];const child=spawn(process.execPath,[path.join(__dirname,'fixture-worker.cjs'),tag],{detached:true,stdio:'ignore',windowsHide:true});child.once('error',error=>{console.error('BACKGROUND-LAUNCH-FAILED:'+error.code);process.exitCode=1});child.unref();console.log('NORMAL-EXIT-BACKGROUND-PID:'+child.pid);\n");
   const subtreeSource = (tag) => `[IO.File]::WriteAllText((Join-Path (Get-Location) ${psLiteral(`allowednested/${tag}-parent.pid`)}), [string]$PID); $child = Start-Process -FilePath ${psLiteral(process.execPath)} -ArgumentList @('allowednested/fixture-worker.cjs', ${psLiteral(tag)}) -NoNewWindow -PassThru; while ($true) { Start-Sleep -Milliseconds 150 }`;
   async function subtreeEvidence(tag, backendPid = process.pid) {
     const pids = await until(() => {
@@ -410,11 +412,10 @@ try {
   await step("normal Codex root exit preserves background descendants and the fixture explicitly cleans them", async () => {
     const tag = `normal-${fixtureId}`;
     backgroundCanaries.push({ tag, directory: heartbeatDir });
-    // Start inside the guest token/job, with all standard handles directed to
-    // owned files/NUL. PowerShell 5 Start-Process redirection uses output pumps
-    // that can keep the root's pipes open after its script has finished.
-    const command = `start "" /b "${process.execPath}" "${workerFile}" ${tag} <NUL >"${path.join(heartbeatDir, `${tag}-stdout.txt`)}" 2>"${path.join(heartbeatDir, `${tag}-stderr.txt`)}"`;
-    const source = `& ${psLiteral(system32("cmd.exe"))} /d /s /c ${psLiteral(command)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Write-Output 'NORMAL-EXIT-BACKGROUND-LAUNCHED'; exit 0`;
+    // Launch inside the guest token/job using libuv's explicit ignored-stdio
+    // handle list. PS5 output pumps and cmd start can retain otherwise unused
+    // inherited SDK pipe handles even after their root script has exited.
+    const source = `& ${psLiteral(process.execPath)} ${psLiteral(launcherFile)} ${psLiteral(tag)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 0`;
     const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: 120_000 });
     const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "normal root exit", 125_000);
     assert.equal(finished.session.status, "exited", text(finished));
@@ -425,7 +426,7 @@ try {
       const values = files.map((file) => Number(fs.readFileSync(file, "utf8").trim()));
       return values.every((pid) => Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) ? values : undefined;
     }, "background child and grandchild after normal root exit");
-    assert.match(text(finished), /NORMAL-EXIT-BACKGROUND-LAUNCHED/);
+    assert.ok(text(finished).includes(`NORMAL-EXIT-BACKGROUND-PID:${pids[0]}`), "The launcher PID must match the owned worker receipt after a real root exit");
     const heartbeats = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.heartbeat`));
     await until(() => heartbeats.every((file) => fs.existsSync(file)), "normal-exit background heartbeats");
     const before = heartbeats.map((file) => fs.readFileSync(file, "utf8"));
@@ -435,7 +436,7 @@ try {
     normalExitPreservesBackground = true;
     assert.equal(terminateOwnedBackground(pids[0], tag, "fixture-worker.cjs"), true);
     const cleanup = await assertSubtreeStopped({ pids, heartbeats });
-    return { sessionId: session.id, actualCliExitCode: 0, backgroundLaunch: "guest System32 cmd start with owned stdio redirection", pidEvidence: "worker and grandchild fixture files after real root exit", normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
+    return { sessionId: session.id, actualCliExitCode: 0, backgroundLaunch: "guest Node spawn detached with ignored stdio and unref", pidEvidence: "launcher PID marker and worker/grandchild fixture files after real root exit", normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
   });
 
   await step("session stop reaps PowerShell and its child/grandchild subtree", async () => {
