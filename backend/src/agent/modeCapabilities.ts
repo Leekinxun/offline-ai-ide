@@ -5,6 +5,7 @@ import {
   resolveCodeExecutionContract,
 } from "./executionContract.js";
 import { evaluateContextPath } from "./contextPolicy.js";
+import { usesNativeWindowsAgent } from "./windowsShell.js";
 
 export interface ModeCapabilityDecision {
   allowed: boolean;
@@ -115,7 +116,7 @@ export function evaluateInspectionCommand(commandValue: unknown, validatePath?: 
   if (tokens.some((token) => token.includes("\0"))) return denied("Inspection command contains an invalid argument");
 
   const powershellName = tokens[0].toLowerCase();
-  if (["get-location", "get-childitem", "get-content"].includes(powershellName)) {
+  if (["get-location", "get-childitem", "get-content"].includes(powershellName) && usesNativeWindowsAgent()) {
     if (/[$(){}]/.test(command)) return denied("PowerShell inspection requires literal arguments");
     if (powershellName === "get-location") return tokens.length === 1 ? { allowed: true } : denied("Get-Location does not accept arguments in read-only modes");
     const paths: string[] = [];

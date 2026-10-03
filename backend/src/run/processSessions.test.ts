@@ -15,7 +15,8 @@ import { startAgentProcessSession, startProjectTaskSession, startPreviewProcessS
 function fixture(t: test.TestContext, scripts: Record<string, string>): ProcessSessionOwner {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-process-"));
   fs.writeFileSync(path.join(workspaceDir, "package.json"), JSON.stringify({ scripts }));
-  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  // Windows can briefly retain the watchdog's cwd handle after its payload exits.
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   return { workspaceDir, owner: "alice", sessionToken: "session-alice" };
 }
 async function waitFor(owner: ProcessSessionOwner, id: string, predicate: (value: ReturnType<typeof pollProcessSession>) => boolean) {
@@ -180,7 +181,9 @@ test("Agent long sessions keep mandatory filesystem and network isolation", asyn
 test("Agent sessions fail closed on Windows when the WSL executor is unavailable", (t) => {
   const owner = fixture(t, {});
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const previousDesktop = process.env.CREWFORGE_DESKTOP;
   const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+  process.env.CREWFORGE_DESKTOP = "1";
   process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "wsl";
   setWslExecutionTestHooks({
     platform: "win32", env: { SystemRoot: "C:\\Windows" },
@@ -190,6 +193,8 @@ test("Agent sessions fail closed on Windows when the WSL executor is unavailable
   t.after(() => {
     Object.defineProperty(process, "platform", descriptor);
     setWslExecutionTestHooks(undefined);
+    if (previousDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
+    else process.env.CREWFORGE_DESKTOP = previousDesktop;
     if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
     else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
   });

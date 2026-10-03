@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "node:fs";
 import { safePath } from "../utils/safePath.js";
+import { usesNativeWindowsAgent } from "./windowsShell.js";
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -254,17 +255,20 @@ export function evaluateShellCommand(command: string, options: ShellPolicyOption
     return { allowed: false, reason: "Shell syntax requires explicit compatibility-shell authorization" };
   }
 
-  const rules: Array<[RegExp, string]> = [
-    ...(options.networkAccessAuthorized
-      ? NON_OVERRIDABLE_NETWORK_PATTERNS.map((pattern): [RegExp, string] => [pattern, "Network approval does not authorize publishing, remote/system control, credentials, or remote mutations"])
-      : NETWORK_COMMAND_PATTERNS.map((pattern): [RegExp, string] => [pattern, AGENT_SHELL_NETWORK_BLOCKED])),
-    [/\bsudo\b/i, "Privilege escalation is blocked"],
+  const nativeWindowsRules: Array<[RegExp, string]> = usesNativeWindowsAgent() ? [
     [/\bStart-Process\b[^\n]*-Verb\s+['"]?RunAs\b/i, "Privilege escalation is blocked"],
     [/\b(?:Stop-Computer|Restart-Computer|Stop-Service|Restart-Service|Set-Service)\b/i, "System control commands are blocked"],
     [/\b(?:Format-Volume|Clear-Disk|Initialize-Disk|Remove-Partition)\b/i, "Disk modification commands are blocked"],
     [/\b(?:Set-Acl|takeown|icacls)\b/i, "Permission and ownership changes require manual approval"],
     [/(?:^|[;&|(\n])\s*(?:Remove-Item|ri|rd|del|erase|rmdir)\b/i, "File deletion requires manual approval"],
     ...(!options.networkAccessAuthorized ? [[/\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i, AGENT_SHELL_NETWORK_BLOCKED] as [RegExp, string]] : []),
+  ] : [];
+  const rules: Array<[RegExp, string]> = [
+    ...(options.networkAccessAuthorized
+      ? NON_OVERRIDABLE_NETWORK_PATTERNS.map((pattern): [RegExp, string] => [pattern, "Network approval does not authorize publishing, remote/system control, credentials, or remote mutations"])
+      : NETWORK_COMMAND_PATTERNS.map((pattern): [RegExp, string] => [pattern, AGENT_SHELL_NETWORK_BLOCKED])),
+    [/\bsudo\b/i, "Privilege escalation is blocked"],
+    ...nativeWindowsRules,
     [/\b(?:shutdown|reboot|halt|poweroff|launchctl|systemctl)\b/i, "System control commands are blocked"],
     [/\b(?:mkfs|fdisk|diskutil|dd)\b/i, "Disk modification commands are blocked"],
     [/\b(?:chmod|chown|chgrp)\b/i, "Permission and ownership changes require manual approval"],

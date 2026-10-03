@@ -121,6 +121,8 @@ test("native scripts keep PowerShell source out of launcher argv and carry priva
   assert.equal(prepared.args.includes(source), false); assert.equal(prepared.args.includes("-EncodedCommand"), false);
   assert.equal(prepared.timeoutMs, 4567); assert.equal(prepared.maxOutputBytes, 200);
   const script = prepared.args[prepared.args.indexOf("-File") + 1]; const text = fs.readFileSync(script, "utf8");
+  assert.equal(path.relative(path.join(f.workspace, ".history"), script).startsWith("native-command-"), true);
+  assert.ok(preparedProfile(prepared, f).includes(`${JSON.stringify(path.join(f.workspace, ".history"))} = "read"`));
   assert.ok(text.includes(source)); assert.ok(text.startsWith("\uFEFF")); assert.ok(text.includes("$crownforgeCommandSucceeded = $?"));
   const profile = preparedProfile(prepared, f);
   assert.ok(profile.includes('\":root\" = \"read\"'));
@@ -295,10 +297,11 @@ test("a malformed or unregistered dead-owner lease cannot silently authorize a n
 function lifecycleFaults(t: test.TestContext, f: Fixture, successfulLeaseWrites: number) {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
-  const keys = ["APP_SETTINGS_CONFIG", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT"];
+  const keys = ["APP_SETTINGS_CONFIG", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CREWFORGE_DESKTOP"];
   const previous = keys.map((key) => process.env[key]);
   process.env.APP_SETTINGS_CONFIG = path.join(f.root, "fixture-app-settings.json");
   process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+  process.env.CREWFORGE_DESKTOP = "1";
   const child = new EventEmitter() as childProcess.ChildProcess;
   Object.defineProperty(child, "pid", { value: 424242 });
   Object.defineProperty(child, "exitCode", { value: null, writable: true });

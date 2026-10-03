@@ -99,18 +99,24 @@ test("custom base keeps runtime mode and read-only constraints", () => {
   }
 });
 
-test("Windows Agent context describes WSL Bash and relative Linux command paths", (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-wsl-prompt-"));
+function windowsPromptFixture(t: test.TestContext, environment: "native" | "wsl"): string {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-windows-prompt-"));
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
-  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "wsl";
+  const keys = ["CREWFORGE_DESKTOP", "APP_SETTINGS_CONFIG", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  process.env.CREWFORGE_DESKTOP = "1"; process.env.APP_SETTINGS_CONFIG = path.join(workspace, "app-settings.json");
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = environment; process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE = "elevated";
   Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
   t.after(() => {
     Object.defineProperty(process, "platform", descriptor);
-    if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
-    else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
+    for (const key of keys) { const value = previous[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(workspace, { recursive: true, force: true });
   });
+  return workspace;
+}
+
+test("Windows Agent context describes WSL Bash and relative Linux command paths", (t) => {
+  const workspace = windowsPromptFixture(t, "wsl");
   const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
   assert.match(prompt, /Linux Bash through WSL 2/);
   assert.match(prompt, /Use relative POSIX paths/);
@@ -118,21 +124,20 @@ test("Windows Agent context describes WSL Bash and relative Linux command paths"
 });
 
 test("Windows default Agent context describes native PowerShell and explicit sandbox setup", (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-native-prompt-"));
-  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
-  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
-  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
-  t.after(() => {
-    Object.defineProperty(process, "platform", descriptor);
-    if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
-    else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
-    fs.rmSync(workspace, { recursive: true, force: true });
-  });
+  const workspace = windowsPromptFixture(t, "native");
   const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
   assert.match(prompt, /native Windows PowerShell in the Codex Windows sandbox/);
   assert.match(prompt, /compatibility tool named bash also runs PowerShell/);
   assert.match(prompt, /Sandbox setup is a separate user action/);
+});
+
+test("Windows Web context retains WSL instructions despite a desktop native override", (t) => {
+  const workspace = windowsPromptFixture(t, "native");
+  for (const desktop of [undefined, "0"]) {
+    if (desktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = desktop;
+    const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
+    assert.match(prompt, /Linux Bash through WSL 2/); assert.doesNotMatch(prompt, /native Windows PowerShell in the Codex Windows sandbox/);
+  }
 });
 
 test("system prompt bundle preserves section-level provenance without changing text", () => {

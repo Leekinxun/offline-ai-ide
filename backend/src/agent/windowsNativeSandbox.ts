@@ -29,7 +29,7 @@ export interface WindowsNativeSandboxCapability {
   weakerNetworkIsolation: boolean;
 }
 
-interface NativeLocations { backendRoot: string; runtimeRoot: string; home: string; scriptsRoot: string; privateFiles: string[] }
+interface NativeLocations { backendRoot: string; runtimeRoot: string; home: string; privateFiles: string[] }
 interface VerifiedRuntime { root: string; executable: string; fingerprint: string }
 interface NativeHooks {
   platform?: NodeJS.Platform;
@@ -183,10 +183,7 @@ async function resolveLocations(): Promise<NativeLocations> {
   const runtimeRoot = path.resolve(hooks.runtimeRoot ?? path.join(backendRoot, "vendor", "codex", `win-${arch}`));
   rejectSymlinkComponents(home); rejectSymlinkComponents(runtimeRoot);
   const absoluteHome = path.resolve(home);
-  // Missing App-owned config files are guarded through their existing parent.
-  // Scripts therefore live beside the settings directory, not beneath it.
-  const scriptNamespace = crypto.createHash("sha256").update(comparePath(absoluteHome)).digest("hex").slice(0, 16);
-  locations = { backendRoot, runtimeRoot, home: absoluteHome, scriptsRoot: path.join(path.dirname(path.dirname(absoluteHome)), `codex-native-scripts-${scriptNamespace}`), privateFiles: privateFiles.map((file) => path.resolve(file)) };
+  locations = { backendRoot, runtimeRoot, home: absoluteHome, privateFiles: privateFiles.map((file) => path.resolve(file)) };
   return locations;
 }
 function runtimeFingerprint(root: string, files: string[]): string {
@@ -255,7 +252,7 @@ function safeEnvironment(local: NativeLocations, workspace?: string, overrides?:
     if (!entry || !path.isAbsolute(entry) || entry.includes("\0")) continue;
     try {
       rejectSymlinkComponents(entry); const canonical = fs.realpathSync.native(entry);
-      if (!fs.statSync(canonical).isDirectory() || workspace && overlaps(canonical, workspace) || inside(canonical, local.home) || inside(canonical, local.scriptsRoot)) continue;
+      if (!fs.statSync(canonical).isDirectory() || workspace && overlaps(canonical, workspace) || inside(canonical, local.home)) continue;
       if (!paths.some((value) => comparePath(value) === comparePath(canonical))) paths.push(canonical);
     } catch { /* Missing or shadowable PATH directories grant no launch authority. */ }
   }
@@ -370,7 +367,7 @@ function validateWorkspace(local: NativeLocations, value: string): string {
   if (!path.isAbsolute(value) || value.includes("\0")) throw new Error("The Windows workspace must be an absolute local path");
   rejectSymlinkComponents(value); const workspace = fs.realpathSync.native(value);
   if (!fs.statSync(workspace).isDirectory() || /^\\\\/.test(workspace)) throw new Error("The native Windows sandbox requires a local filesystem workspace");
-  const controls = [local.backendRoot, local.runtimeRoot, local.home, local.scriptsRoot, ...local.privateFiles];
+  const controls = [local.backendRoot, local.runtimeRoot, local.home, ...local.privateFiles];
   if (controls.some((control) => overlaps(workspace, control))) throw new Error("The Agent workspace must be separate from the App installation, private settings and sandbox control directories");
   const powershell = windowsNativePowerShellExecutable();
   if (inside(powershell, workspace)) throw new Error("The workspace cannot contain the system PowerShell executable");
@@ -379,13 +376,13 @@ function validateWorkspace(local: NativeLocations, value: string): string {
 function filesystemEntries(local: NativeLocations, workspace: string, writes: string[], script?: string): Map<string, "read" | "write" | "deny"> {
   const entries = new Map<string, "read" | "write" | "deny">([[":root", "read"]]);
   for (const value of writes) entries.set(value, "write");
-  for (const control of [local.backendRoot, local.runtimeRoot, local.scriptsRoot]) entries.set(control, "read");
+  for (const control of [local.backendRoot, local.runtimeRoot]) entries.set(control, "read");
   entries.set(local.home, "deny");
   for (const secret of local.privateFiles) {
     const guard = fs.existsSync(secret) ? secret : path.dirname(secret);
     rejectSymlinkComponents(guard);
     if (!fs.existsSync(guard) || !fs.statSync(guard).isDirectory() && guard !== secret) throw new Error("The private App configuration directory must exist before sandbox setup");
-    if (overlaps(guard, workspace) || inside(local.scriptsRoot, guard)) throw new Error("Private App configuration guards must be separate from the workspace and command scripts");
+    if (overlaps(guard, workspace)) throw new Error("Private App configuration guards must be separate from the workspace and command scripts");
     entries.set(guard, "deny");
   }
   const userHome = sourceValue("USERPROFILE");
@@ -532,12 +529,15 @@ export function prepareWindowsNativeProcess(options: WorkspaceProcessOptions): P
   try {
     // Managed sessions persist their records under .history after preparation.
     // Reserve that App-owned control directory before snapshotting ACL rules.
-    makePrivateDirectory(path.join(workspace, ".history"));
+    const history = makePrivateDirectory(path.join(workspace, ".history"));
     const powershell = windowsNativePowerShellExecutable(); const command = powershellCommand(options, powershell);
     let argv = [...(options.args ?? [])]; let target = executable; let script: string | undefined;
     if (command !== undefined) {
       if (Buffer.byteLength(command) > 2_097_152) throw new Error("Native Agent command source exceeds the script size limit");
-      makePrivateDirectory(local.scriptsRoot); scriptDir = fs.mkdtempSync(path.join(local.scriptsRoot, "command-"));
+      // The official Windows CLI grants traversal/read ACLs to workspace roots,
+      // but excludes unrelated user-temp roots even with logical root-read.
+      // .history is App-owned and a whole-directory read-only ACL carveout.
+      scriptDir = fs.mkdtempSync(path.join(history, "native-command-")); rejectSymlinkComponents(scriptDir);
       script = path.join(scriptDir, "command.ps1"); fs.writeFileSync(script, scriptSource(command), { flag: "wx", mode: 0o600 });
       target = powershell; argv = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script];
     }

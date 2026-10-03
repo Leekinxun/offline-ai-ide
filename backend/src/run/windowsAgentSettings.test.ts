@@ -8,11 +8,12 @@ const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "crown
 const server = path.join(root, "server");
 const workspace = path.join(root, "workspace");
 fs.mkdirSync(server); fs.mkdirSync(workspace);
-const environmentKeys = ["APP_SETTINGS_CONFIG", "USERS_CONFIG", "WORKSPACE_DIR", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
+const environmentKeys = ["APP_SETTINGS_CONFIG", "USERS_CONFIG", "WORKSPACE_DIR", "CREWFORGE_DESKTOP", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
 const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
 process.env.APP_SETTINGS_CONFIG = path.join(server, "app-settings.json");
 process.env.USERS_CONFIG = path.join(server, "users.json");
 process.env.WORKSPACE_DIR = workspace;
+process.env.CREWFORGE_DESKTOP = "1";
 delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE;
 const appSettingsBytes = '{"schemaVersion":1,"app":{"uploadMaxFileSizeMb":71}}\n';
 fs.writeFileSync(process.env.APP_SETTINGS_CONFIG, appSettingsBytes);
@@ -25,8 +26,9 @@ after(() => {
 function reset(t: TestContext): string {
   const file = windowsAgentSettingsPath();
   fs.rmSync(file, { force: true });
+  process.env.CREWFORGE_DESKTOP = "1";
   delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE;
-  t.after(() => { fs.rmSync(file, { force: true }); delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE; });
+  t.after(() => { fs.rmSync(file, { force: true }); process.env.CREWFORGE_DESKTOP = "1"; delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE; });
   return file;
 }
 
@@ -35,6 +37,28 @@ test("missing settings lazily default to Windows native elevated without writes"
   assert.deepEqual(getWindowsAgentSettings(), { environment: "native", sandboxMode: "elevated" });
   assert.equal(fs.existsSync(file), false);
   assert.equal(fs.readFileSync(process.env.APP_SETTINGS_CONFIG!, "utf8"), appSettingsBytes);
+});
+
+test("Web Windows keeps WSL without reading desktop settings or applying native overrides", (t) => {
+  const file = reset(t);
+  const persisted = JSON.stringify({ environment: "native", sandboxMode: "unelevated" });
+  fs.writeFileSync(file, persisted);
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+  process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE = "unelevated";
+  for (const desktop of [undefined, "0"]) {
+    if (desktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = desktop;
+    assert.deepEqual(getWindowsAgentSettings(), { environment: "wsl", sandboxMode: "elevated" });
+    assert.equal(fs.readFileSync(file, "utf8"), persisted);
+    fs.writeFileSync(file, "malformed desktop-only settings");
+    process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "invalid-native-override";
+    process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE = "invalid-native-mode";
+    assert.deepEqual(getWindowsAgentSettings(), { environment: "wsl", sandboxMode: "elevated" });
+    fs.writeFileSync(file, persisted);
+    process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+    process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE = "unelevated";
+  }
+  process.env.CREWFORGE_DESKTOP = "1";
+  assert.deepEqual(getWindowsAgentSettings(), { environment: "native", sandboxMode: "unelevated" });
 });
 
 test("execution selection persists independently and leaves App settings intact", (t) => {

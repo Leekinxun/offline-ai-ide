@@ -19,6 +19,7 @@ const supervisors = new Set();
 const backgroundCanaries = [];
 let normalExitPreservesBackground = false;
 let root;
+let outsideFixture;
 let shutdownProcessSessions;
 let listener;
 let report;
@@ -97,7 +98,10 @@ try {
 
   root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `crownforge-native-${fixtureId}-`)));
   const workspace = path.join(root, "workspace");
-  const outside = path.join(root, "outside");
+  // Codex excludes private AppData paths from broad read-root ACL grants.
+  // A Public fixture represents an ordinary readable path outside the workspace.
+  const publicRoot = fs.realpathSync.native(process.env.PUBLIC || path.win32.join(path.win32.parse(system32("cmd.exe")).root, "Users", "Public"));
+  const outside = outsideFixture = fs.mkdtempSync(path.join(publicRoot, `crownforge-native-outside-${fixtureId}-`));
   const settingsDir = path.join(root, "settings");
   const plugins = path.join(root, "plugins");
   for (const directory of [workspace, outside, settingsDir, plugins, path.join(workspace, "allowednested"), path.join(workspace, ".codex"), path.join(workspace, ".ssh")]) fs.mkdirSync(directory, { recursive: true });
@@ -334,7 +338,10 @@ try {
     } catch (error) { report.status = "FAIL"; report.backgroundCleanupError = error.message; process.exitCode = 1; }
   }
   for (const [key, value] of previousEnvironment) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-  if (root) { try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 4, retryDelay: 500 }); } catch (error) { report.status = "FAIL"; report.cleanupError = error.message; process.exitCode = 1; } }
+  for (const fixture of [root, outsideFixture].filter(Boolean)) {
+    try { fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 4, retryDelay: 500 }); }
+    catch (error) { report.status = "FAIL"; report.cleanupError = error.message; process.exitCode = 1; }
+  }
   report.endedAt = new Date().toISOString();
   writeJson(reportPath, report);
   console.log(`${report.status} windows-native-sandbox-smoke ${reportPath}`);

@@ -11,11 +11,12 @@ import type { WindowsAgentSettings } from "./windowsAgentSettings.js";
 
 const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-runtime-execution-"));
 const workspace = path.join(fixtureDirectory, "workspace"); fs.mkdirSync(workspace);
-const previousEnvironment = { USERS_CONFIG: process.env.USERS_CONFIG, APP_SETTINGS_CONFIG: process.env.APP_SETTINGS_CONFIG, WORKSPACE_DIR: process.env.WORKSPACE_DIR };
+const previousEnvironment = { USERS_CONFIG: process.env.USERS_CONFIG, APP_SETTINGS_CONFIG: process.env.APP_SETTINGS_CONFIG, WORKSPACE_DIR: process.env.WORKSPACE_DIR, CREWFORGE_DESKTOP: process.env.CREWFORGE_DESKTOP };
 process.env.USERS_CONFIG = path.join(fixtureDirectory, "users.json");
 process.env.APP_SETTINGS_CONFIG = path.join(fixtureDirectory, "settings.json");
 process.env.WORKSPACE_DIR = workspace;
-fs.writeFileSync(process.env.USERS_CONFIG, JSON.stringify({ users: [], allowedRoots: [fixtureDirectory] }));
+process.env.CREWFORGE_DESKTOP = "1";
+fs.writeFileSync(process.env.USERS_CONFIG, JSON.stringify({ users: [{ username: "fixture", password: "fixture-password", defaultWorkspace: workspace, isAdmin: true }], allowedRoots: [fixtureDirectory] }));
 fs.writeFileSync(process.env.APP_SETTINGS_CONFIG, "{}");
 const { createRuntimeRouter } = await import("../routes/runtime.js");
 after(() => {
@@ -74,6 +75,24 @@ test("Windows defaults to a safe PowerShell native capability whitelist for ordi
   assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(await response.json(), { hostPlatform: "win32", executor: "windows-native", shell: "powershell", settings: nativeSettings, available: true, status: "ready", setupRequired: false, weakerNetworkIsolation: false, runtimeVersion: "0.116.0" });
   assert.equal((await fetch(`${base}/sandbox`, { headers: userHeaders })).status, 403);
+});
+
+test("Windows Web keeps the old WSL execution DTO and ignores desktop native overrides", async (t) => {
+  const keys = ["CREWFORGE_DESKTOP", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  t.after(() => { for (const key of keys) { const value = previous[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native"; process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE = "unelevated";
+  let wslProbes = 0;
+  const route = createRuntimeRouter(nativeDiagnostics, { platform: "win32", readNativeCapability: () => { throw new Error("Web must not probe native Windows execution"); },
+    readSettings: () => { throw new Error("Web must not read desktop settings"); }, readWslCapability: () => { wslProbes += 1; return { available: true, distro: "Ubuntu" }; } });
+  const base = await serve(t, route);
+  for (const desktop of [undefined, "0"]) {
+    if (desktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = desktop;
+    assert.deepEqual(await (await fetch(`${base}/execution`, { headers: userHeaders })).json(), { hostPlatform: "win32", executor: "wsl", available: true, distro: "Ubuntu" });
+  }
+  assert.equal(wslProbes, 2);
+  const failedBase = await serve(t, createRuntimeRouter(nativeDiagnostics, { platform: "win32", readWslCapability: () => { throw new Error("fixture WSL probe failure"); } }));
+  assert.deepEqual(await (await fetch(`${failedBase}/execution`, { headers: userHeaders })).json(), { hostPlatform: "win32", executor: "wsl", available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
 });
 
 test("WSL is used only when explicitly selected and preserves its bounded diagnostics", async (t) => {

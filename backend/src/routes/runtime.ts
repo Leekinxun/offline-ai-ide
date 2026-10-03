@@ -88,6 +88,7 @@ export function createRuntimeRouter(
   const router = Router();
   let setupPending = false;
   const platform = () => executionReaders.platform ?? process.platform;
+  const desktop = () => executionReaders.desktop ?? process.env.CREWFORGE_DESKTOP === "1";
   const settings = () => executionReaders.readSettings ? executionReaders.readSettings() : getWindowsAgentSettings();
   const busy = () => setupPending || (executionReaders.hasRunningAgentProcesses ? executionReaders.hasRunningAgentProcesses() : hasRunningAgentProcessSessions());
   function authorizeMutation(req: Request, res: Response): UserSession | undefined {
@@ -95,7 +96,7 @@ export function createRuntimeRouter(
     const session = sessionFor(req);
     if (!session?.username) { res.status(401).json({ error: "Unauthorized" }); return; }
     if (!session.isAdmin) { res.status(403).json({ error: "Admin access required" }); return; }
-    if (platform() !== "win32" || !(executionReaders.desktop ?? process.env.CREWFORGE_DESKTOP === "1")) {
+    if (platform() !== "win32" || !desktop()) {
       res.status(403).json({ error: "Windows desktop access required" }); return;
     }
     if (!isLoopback(req.socket.remoteAddress) || !sameOrigin(req)) {
@@ -120,9 +121,20 @@ export function createRuntimeRouter(
     res.setHeader("Cache-Control", "no-store");
     if (Object.keys(req.query).length) { res.status(400).json({ error: "Execution diagnostics do not accept parameters" }); return; }
     const hostPlatform = platform();
-    let executor: "wsl" | "native" | "windows-native" = hostPlatform === "win32" ? "windows-native" : "native";
+    const windowsWeb = hostPlatform === "win32" && !desktop();
+    let executor: "wsl" | "native" | "windows-native" = hostPlatform === "win32" ? windowsWeb ? "wsl" : "windows-native" : "native";
     let currentSettings: WindowsAgentSettings | undefined;
     try {
+      if (windowsWeb) {
+        const capability = await (executionReaders.readWslCapability ? executionReaders.readWslCapability() : probeWslExecution({ refresh: true }));
+        const distro = diagnosticText(capability.distro, 128);
+        const reasonCode = typeof capability.reasonCode === "string" && Object.hasOwn(WSL_FAILURE_REASONS, capability.reasonCode) ? capability.reasonCode : "probe_failed";
+        return res.json({
+          hostPlatform, executor, available: capability.available === true,
+          ...(distro && /^[A-Za-z0-9._ -]+$/.test(distro) ? { distro } : {}),
+          ...(capability.available !== true ? { reasonCode, reason: WSL_FAILURE_REASONS[reasonCode] } : {}),
+        });
+      }
       if (hostPlatform === "win32") {
         const current = validateWindowsAgentSettings(settings());
         currentSettings = current;
@@ -156,6 +168,7 @@ export function createRuntimeRouter(
         });
       }
     } catch {
+      if (windowsWeb) return res.json({ hostPlatform, executor, available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
       res.json({ hostPlatform, executor, available: false, status: "unavailable", ...(currentSettings ? { settings: currentSettings, shell: executor === "wsl" ? "bash" : "powershell" } : {}), reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
     }
   });

@@ -50,6 +50,9 @@ function readPersistedSettings(): WindowsAgentSettings {
 
 /** Read lazily so imports never create files, change policy, or initialize the sandbox. */
 export function getWindowsAgentSettings(): WindowsAgentSettings {
+  // Web deployments retain their existing WSL execution path. Desktop-private
+  // settings and native overrides are not read outside an App-owned backend.
+  if (process.env.CREWFORGE_DESKTOP !== "1") return { environment: "wsl", sandboxMode: "elevated" };
   const settings = readPersistedSettings();
   const environment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
   const sandboxMode = process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE;
