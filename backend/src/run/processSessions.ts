@@ -36,6 +36,7 @@ const parentPid=Number(parentPidValue)||process.ppid;
 const diagnosticsEnabled=process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS==="1";
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 if(nodeRuntime==="node")env.ELECTRON_RUN_AS_NODE="1";
+if(process.connected===false)process.exit(1);
 const child=spawn(executable,args,{env,stdio:["pipe","pipe","pipe"],shell:false,windowsHide:true});
 const diagnosticDir=()=>path.join(process.cwd(),".history","process-sessions");
 const writeDiagnostic=(name,value)=>{if(!diagnosticsEnabled)return;try{const dir=diagnosticDir();fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,name),JSON.stringify(value),{mode:0o600})}catch{}};
@@ -47,6 +48,7 @@ let cleaning=false;
 const kill=(reason)=>{if(cleaning)return;cleaning=true;try{if(process.platform==="win32"){writeDiagnostic(\`watchdog-parent-\${process.pid}.json\`,{watchdogPid:process.pid,parentPid,childPid:child.pid,reason});if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
 process.on("exit",code=>marker("exit",{code}));
 process.on("disconnect",kill);
+process.on("message",message=>{if(message&&message.type==="stop")kill("stop-request")});
 process.on("SIGTERM",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGTERM")}catch{};setTimeout(kill,1200).unref()}});
 process.on("SIGINT",()=>{if(process.platform==="win32")kill();else{try{child.kill("SIGINT")}catch{};setTimeout(kill,1200).unref()}});
 if(process.platform==="win32"){let firstPoll=true;const timer=setInterval(()=>{try{process.kill(parentPid,0);if(firstPoll){firstPoll=false;marker("parent-poll",{result:"alive"})}}catch(error){marker("parent-poll-error",{code:error&&error.code,message:error&&error.message});if(error&&error.code==="ESRCH")kill("parent-esrch")}},250);timer.unref()}
@@ -71,6 +73,15 @@ function killWindowsProcessTree(pid: number | undefined): void {
     const killer = spawn(invocation.executable, invocation.args, { stdio: "ignore", windowsHide: true });
     killer.once("error", () => { /* taskkill may be unavailable or the process may have exited. */ });
   } catch { /* exited or invalid */ }
+}
+function requestWindowsSupervisorStop(child: ChildProcess): void {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    if (child.connected) child.send({ type: "stop" }, (error) => {
+      if (error && child.exitCode === null && child.signalCode === null) killWindowsProcessTree(child.pid);
+    });
+    else killWindowsProcessTree(child.pid);
+  } catch { killWindowsProcessTree(child.pid); }
 }
 function watchdogEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
   const result = nodeRuntimeEnvironment(environment);
@@ -131,8 +142,16 @@ export function pollProcessSession(owner: ProcessSessionOwner, id: string, curso
   return { session: summary(record), events: record.events.filter((event) => event.seq > cursor), nextCursor: record.nextCursor, truncated: cursor < (record.events[0]?.seq ?? 1) - 1 };
 }
 function signalGroup(live: LiveSession, signal: NodeJS.Signals): void {
-  if (!live.child.pid) return;
-  try { if (process.platform === "win32") killWindowsProcessTree(live.child.pid); else process.kill(-live.child.pid, signal); } catch { /* exited */ }
+  if (!live.child.pid || process.platform === "win32" && (live.child.exitCode !== null || live.child.signalCode !== null)) return;
+  try {
+    if (process.platform === "win32" && signal === "SIGTERM" && live.child.connected) {
+      // A queued IPC request is handled after watchdog startup has registered
+      // its actual payload PID. Killing the watchdog directly can race /T's
+      // process snapshot against that payload's creation.
+      requestWindowsSupervisorStop(live.child);
+    } else if (process.platform === "win32") killWindowsProcessTree(live.child.pid);
+    else process.kill(-live.child.pid, signal);
+  } catch { if (process.platform === "win32") killWindowsProcessTree(live.child.pid); }
 }
 function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   if (live.requestedStatus) return;
@@ -142,7 +161,9 @@ function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   try { if (live.cancel) live.cancel(); else live.cleanup(); }
   catch { /* A failed lease marker must not prevent process-tree termination. */ }
   signalGroup(live, "SIGTERM");
-  live.force = setTimeout(() => signalGroup(live, "SIGKILL"), 1500); live.force.unref();
+  // The Windows watchdog owns a bounded synchronous taskkill (15 seconds).
+  // Do not kill that supervisor while it is still reaping its payload tree.
+  live.force = setTimeout(() => signalGroup(live, "SIGKILL"), process.platform === "win32" ? 17_000 : 1500); live.force.unref();
 }
 export function stopProcessSession(owner: ProcessSessionOwner, id: string): ProcessSessionSummary {
   const record = owned(owner, id);
@@ -208,8 +229,17 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   } catch (error) {
     if (child?.pid) {
       try { prepared.cancel?.(); } catch { /* Preserve cleanup and termination when a lease write fails. */ }
-      child.once("close", prepared.cleanup);
-      try { if (process.platform === "win32") killWindowsProcessTree(child.pid); else process.kill(-child.pid, "SIGKILL"); } catch { /* Already closed. */ }
+      const startedChild = child;
+      let force: NodeJS.Timeout | undefined;
+      child.once("close", () => { if (force) clearTimeout(force); prepared.cleanup(); });
+      try {
+        if (process.platform === "win32") {
+          requestWindowsSupervisorStop(startedChild);
+          force = setTimeout(() => {
+            if (startedChild.exitCode === null && startedChild.signalCode === null) killWindowsProcessTree(startedChild.pid);
+          }, 17_000); force.unref();
+        } else process.kill(-child.pid, "SIGKILL");
+      } catch { /* Already closed. */ }
     } else prepared.cleanup();
     record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error;
   }
@@ -238,7 +268,9 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   child.once("close", (code) => {
     append("stdout", decoders.stdout.end()); append("stderr", decoders.stderr.end());
     clearTimeout(live.timer); if (live.save) clearTimeout(live.save);
-    // Keep an already scheduled force kill alive for descendants after cancellation.
+    // The Windows watchdog has reaped its target tree before close. Never send
+    // a delayed taskkill to a released PID that another process can reuse.
+    if (process.platform === "win32" && live.force) clearTimeout(live.force);
     record.status = live.requestedStatus || (code === 0 ? "exited" : "failed");
     record.exitCode = code; record.endedAt = Date.now();
     input.signal?.removeEventListener("abort", live.abort!);

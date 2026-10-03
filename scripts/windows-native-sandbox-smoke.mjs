@@ -20,7 +20,8 @@ const checks = [];
 const backendChildren = new Set();
 const supervisors = new Set();
 const backgroundCanaries = [];
-let normalExitPreservesBackground = false;
+let backgroundHandlesHoldSessionOpen = false;
+let backgroundHandleCharacterization;
 let root;
 let outsideFixture;
 let shutdownProcessSessions;
@@ -394,7 +395,7 @@ try {
   const launcherFile = path.join(heartbeatDir, "fixture-detached-launcher.cjs");
   fs.writeFileSync(descendantFile, "const fs=require('node:fs'),path=require('node:path');const tag=process.argv[2];fs.writeFileSync(path.join(__dirname,tag+'-grandchild.pid'),String(process.pid));let i=0;setInterval(()=>fs.writeFileSync(path.join(__dirname,tag+'-grandchild.heartbeat'),String(++i)),150);\n");
   fs.writeFileSync(workerFile, "const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');const tag=process.argv[2];fs.writeFileSync(path.join(__dirname,tag+'-child.pid'),String(process.pid));spawn(process.execPath,[path.join(__dirname,'fixture-descendant.cjs'),tag],{stdio:'ignore'});let i=0;setInterval(()=>fs.writeFileSync(path.join(__dirname,tag+'-child.heartbeat'),String(++i)),150);\n");
-  fs.writeFileSync(launcherFile, "const path=require('node:path'),{spawn}=require('node:child_process');const tag=process.argv[2];const child=spawn(process.execPath,[path.join(__dirname,'fixture-worker.cjs'),tag],{detached:true,stdio:'ignore',windowsHide:true});child.once('error',error=>{console.error('BACKGROUND-LAUNCH-FAILED:'+error.code);process.exitCode=1});child.unref();console.log('NORMAL-EXIT-BACKGROUND-PID:'+child.pid);\n");
+  fs.writeFileSync(launcherFile, "const path=require('node:path'),{spawn}=require('node:child_process');const tag=process.argv[2];const child=spawn(process.execPath,[path.join(__dirname,'fixture-worker.cjs'),tag],{detached:true,stdio:'ignore',windowsHide:true});child.once('error',error=>{console.error('BACKGROUND-LAUNCH-FAILED:'+error.code);process.exitCode=1});child.unref();console.log('BACKGROUND-LAUNCH-PID:'+child.pid);\n");
   const subtreeSource = (tag) => `[IO.File]::WriteAllText((Join-Path (Get-Location) ${psLiteral(`allowednested/${tag}-parent.pid`)}), [string]$PID); $child = Start-Process -FilePath ${psLiteral(process.execPath)} -ArgumentList @('allowednested/fixture-worker.cjs', ${psLiteral(tag)}) -NoNewWindow -PassThru; while ($true) { Start-Sleep -Milliseconds 150 }`;
   async function subtreeEvidence(tag, backendPid = process.pid) {
     const pids = await until(() => {
@@ -409,34 +410,46 @@ try {
     return { pids, heartbeats };
   }
 
-  await step("normal Codex root exit preserves background descendants and the fixture explicitly cleans them", async () => {
-    const tag = `normal-${fixtureId}`;
+  await step("background handles keep the native session pending until verified fixture cleanup", async () => {
+    const tag = `background-${fixtureId}`;
     backgroundCanaries.push({ tag, directory: heartbeatDir });
-    // Launch inside the guest token/job using libuv's explicit ignored-stdio
-    // handle list. PS5 output pumps and cmd start can retain otherwise unused
-    // inherited SDK pipe handles even after their root script has exited.
-    const source = `& ${psLiteral(process.execPath)} ${psLiteral(launcherFile)} ${psLiteral(tag)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 0`;
+    const parentFile = path.join(heartbeatDir, `${tag}-parent.pid`);
+    // This tests the bridge's observed completion behavior, rather than
+    // equating the guest PowerShell exit with an App/CLI completion receipt.
+    const source = `[IO.File]::WriteAllText(${psLiteral(parentFile)}, [string]$PID); & ${psLiteral(process.execPath)} ${psLiteral(launcherFile)} ${psLiteral(tag)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 0`;
     const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: 120_000 });
-    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "normal root exit", 125_000);
-    assert.equal(finished.session.status, "exited", text(finished));
-    assert.equal(finished.session.exitCode, 0, "The real sandbox CLI must return zero before background retention is characterized");
     const pids = await until(() => {
       const files = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.pid`));
       if (!files.every((file) => fs.existsSync(file))) return;
       const values = files.map((file) => Number(fs.readFileSync(file, "utf8").trim()));
       return values.every((pid) => Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) ? values : undefined;
-    }, "background child and grandchild after normal root exit");
-    assert.ok(text(finished).includes(`NORMAL-EXIT-BACKGROUND-PID:${pids[0]}`), "The launcher PID must match the owned worker receipt after a real root exit");
+    }, "background child and grandchild PID evidence", 40_000);
+    assert.ok(fs.existsSync(parentFile), "The guest root must record its own PID before launching descendants");
+    const guestRootPid = Number(fs.readFileSync(parentFile, "utf8").trim());
+    assert.ok(Number.isSafeInteger(guestRootPid) && guestRootPid > 0);
+    await until(() => !pidAlive(guestRootPid), "the original guest PowerShell root to exit", 10_000);
     const heartbeats = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.heartbeat`));
-    await until(() => heartbeats.every((file) => fs.existsSync(file)), "normal-exit background heartbeats");
+    await until(() => heartbeats.every((file) => fs.existsSync(file)), "background descendant heartbeats");
     const before = heartbeats.map((file) => fs.readFileSync(file, "utf8"));
     await new Promise((resolve) => setTimeout(resolve, 800));
-    assert.ok(pids.every(pidAlive), "Background descendants must still be alive after the CLI has exited");
-    assert.ok(heartbeats.every((file, index) => fs.readFileSync(file, "utf8") !== before[index]), "Background descendants must still advance their heartbeats");
-    normalExitPreservesBackground = true;
+    assert.ok(pids.every(pidAlive), "The observed background descendants must remain alive after the guest root exits");
+    assert.ok(heartbeats.every((file, index) => fs.readFileSync(file, "utf8") !== before[index]), "Background descendants must advance their heartbeats");
+    const pending = sessions.pollProcessSession(owner, session.id);
+    assert.equal(pending.session.status, "running", "The current pinned bridge keeps its App session open while background handles remain");
+    assert.equal(pending.session.exitCode, null);
+    assert.ok(text(pending).includes(`BACKGROUND-LAUNCH-PID:${pids[0]}`), "The launcher marker must match the owned worker PID receipt");
+    backgroundHandlesHoldSessionOpen = true;
+    backgroundHandleCharacterization = { sessionId: session.id, guestRootPid, guestRootGone: true, backgroundHandlesHoldSessionOpen: true, appSessionPendingBeforeCleanup: true, backgroundPids: pids, appAutomaticallyCleanedBackground: false };
     assert.equal(terminateOwnedBackground(pids[0], tag, "fixture-worker.cjs"), true);
     const cleanup = await assertSubtreeStopped({ pids, heartbeats });
-    return { sessionId: session.id, actualCliExitCode: 0, backgroundLaunch: "guest Node spawn detached with ignored stdio and unref", pidEvidence: "launcher PID marker and worker/grandchild fixture files after real root exit", normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
+    backgroundHandleCharacterization.fixtureBackgroundCleaned = true;
+    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "the actual CLI to complete after owned background cleanup", 30_000);
+    backgroundHandleCharacterization.finalSessionStatus = finished.session.status;
+    backgroundHandleCharacterization.actualCliExitCode = finished.session.exitCode;
+    assert.equal(finished.session.status, "exited", text(finished));
+    assert.equal(finished.session.exitCode, 0, "Only the real CLI's final zero exit code establishes bridge completion after cleanup");
+    backgroundHandleCharacterization.bridgeCompletedAfterCleanup = true;
+    return { ...backgroundHandleCharacterization, backgroundLaunch: "guest Node spawn detached with ignored stdio and unref", cleanup: "explicit fixture-owned taskkill", ...cleanup };
   });
 
   await step("session stop reaps PowerShell and its child/grandchild subtree", async () => {
@@ -474,12 +487,12 @@ try {
   });
 
   shutdownProcessSessions();
-  report = { status: "PASS", startedAt, endedAt: new Date().toISOString(), runtime: "windows-native", shell: "powershell", fixtureId, normalExitPreservesBackground, loopbackIsolation: false, networkIsolation: "external", weakerNetworkIsolation: true, checks,
-    limitations: ["This validates real Windows native execution in disposable fixtures, not App installer acceptance on every Windows version.", "Native read access follows Codex's broader root-read boundary with App-sensitive data denied; WSL remains available for narrower filesystem reads.", "Normal Codex root exit preserves independently backgrounded descendants; this fixture explicitly terminates its verified owned PIDs. Stop/timeout/backend-crash cleanup checks apply to foreground App-managed sessions.", "The pinned 0.160.0 runtime blocked external TCP 443 but allowed localhost TCP on Windows Server 2022 despite active Codex loopback firewall rules; this is disclosed as limited external isolation, never full network denial. Other Windows versions require separate acceptance.", "Local fixture auth boundary requests are tested alongside execution, readiness and sandbox setup; no model or Codex account request is made."] };
+  report = { status: "PASS", startedAt, endedAt: new Date().toISOString(), runtime: "windows-native", shell: "powershell", fixtureId, backgroundHandlesHoldSessionOpen, backgroundHandleCharacterization, loopbackIsolation: false, networkIsolation: "external", weakerNetworkIsolation: true, checks,
+    limitations: ["This validates real Windows native execution in disposable fixtures, not App installer acceptance on every Windows version.", "Native read access follows Codex's broader root-read boundary with App-sensitive data denied; WSL remains available for narrower filesystem reads.", "The guest root can exit while inherited background handles keep the native bridge/App session open. Completion is measured only after verified fixture-owned background cleanup and a real CLI exit code; managed stop/timeout/backend-crash cleanup checks use foreground payload trees.", "The pinned 0.160.0 runtime blocked external TCP 443 but allowed localhost TCP on Windows Server 2022 despite active Codex loopback firewall rules; this is disclosed as limited external isolation, never full network denial. Other Windows versions require separate acceptance.", "Local fixture auth boundary requests are tested alongside execution, readiness and sandbox setup; no model or Codex account request is made."] };
 } catch (error) {
   if (spawnObserverInstalled) await Promise.all(nativeLaunches.filter((record) => !record.closedAt).map((record) => queueNativeSnapshot(record, "failure-before-cleanup")));
   await Promise.all([...diagnosticTasks]);
-  report = { status: "FAIL", startedAt, endedAt: new Date().toISOString(), fixtureId, checks, error: error instanceof Error ? error.stack || error.message : String(error) };
+  report = { status: "FAIL", startedAt, endedAt: new Date().toISOString(), fixtureId, backgroundHandlesHoldSessionOpen, backgroundHandleCharacterization, checks, error: error instanceof Error ? error.stack || error.message : String(error) };
   console.error(error); process.exitCode = 1;
 } finally {
   for (const timer of diagnosticTimers) clearTimeout(timer); diagnosticTimers.clear();

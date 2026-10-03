@@ -182,14 +182,16 @@ Choose WSL when a task needs narrow filesystem read grants or explicitly
 required POSIX CPU, memory, or open-file hard limits. Native execution enforces
 wall-clock deadlines; it does not claim those POSIX limits.
 
-The native runtime also retains Codex's normal-exit behavior: a command that
-launches an independent background process can exit successfully while that
-descendant continues running. A zero exit code does not establish that these
-background processes were cleaned up. Keep App-managed long-running work in the
-foreground and use `process_start`; its explicit stop, timeout, and backend-loss
-paths supervise and terminate the still-active payload tree. Independently
-backgrounded work that outlives a normal root exit is outside that cleanup
-guarantee.
+The pinned native bridge has an observed background-handle limitation: a guest
+PowerShell root can exit while background descendants continue to hold inherited
+I/O handles, leaving the App's command session open. A printed completion marker
+or the disappearance of the guest root is not a final CLI exit receipt. Native
+acceptance explicitly verifies this pending state, then terminates only its
+verified fixture-owned background processes and waits for the actual CLI exit
+code. Keep App-managed long-running work in the foreground and use
+`process_start`; its stop, timeout, and backend-loss checks cover still-active
+foreground payload trees. Do not assume that independently backgrounded work
+will complete the App session or be cleaned up after the guest root exits.
 
 The compatibility (unelevated) mode remains visible to describe the upstream
 choice, but it cannot enforce the App's current sensitive-file protection policy.
@@ -250,11 +252,12 @@ read-only queries, secret/case-alias protection, ordinary outside reads with
 outside writes denied, mandatory external network denial despite malicious workspace
 configuration, explicit characterization of the localhost limitation, stdin/EOF,
 and child/grandchild cleanup after stop, timeout, and a
-real backend crash. It separately characterizes Codex's preservation of
-background descendants after a real zero root exit, reports
-`normalExitPreservesBackground=true`, and explicitly cleans only its verified
-fixture-owned PIDs. That characterization is not reported as automatic App
-cleanup. PID exit and stopped heartbeat evidence are required for the explicit
+real backend crash. It separately characterizes the native bridge's held-I/O
+behavior: the guest root is gone, background descendants remain active, and the
+App session is pending. It reports `backgroundHandlesHoldSessionOpen=true`,
+explicitly cleans only verified fixture-owned background PIDs, and then requires
+the actual CLI to finish with exit code zero. It does not report guest-root
+termination or background survival as automatic App completion or cleanup. PID exit and stopped heartbeat evidence are required for the explicit
 stop, timeout, crash, and fixture cleanup checks;
 unstarted or skipped payloads cannot count as success. Its report is saved to
 `.artifacts/windows-native-sandbox-smoke/report.json`, including failures.

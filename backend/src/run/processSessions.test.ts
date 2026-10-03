@@ -26,6 +26,38 @@ async function waitFor(owner: ProcessSessionOwner, id: string, predicate: (value
   }
   throw new Error("Process session did not reach the expected state");
 }
+function diagnosticPids(owner: ProcessSessionOwner): number[] {
+  const directory = path.join(owner.workspaceDir, ".history", "process-sessions");
+  const pids = new Set<number>();
+  for (const name of fs.existsSync(directory) ? fs.readdirSync(directory) : []) {
+    if (!/^watchdog-started-\d+\.json$/.test(name)) continue;
+    const record = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8")) as { cwd: string; watchdogPid: number; childPid?: number };
+    assert.equal(fs.realpathSync(record.cwd), fs.realpathSync(owner.workspaceDir));
+    for (const pid of [record.watchdogPid, record.childPid]) if (Number.isSafeInteger(pid) && pid! > 0) pids.add(pid!);
+  }
+  for (const name of fs.readdirSync(owner.workspaceDir)) {
+    if (!/^fixture-payload-\d+\.json$/.test(name)) continue;
+    const record = JSON.parse(fs.readFileSync(path.join(owner.workspaceDir, name), "utf8")) as { cwd: string; pid: number; parentPid: number };
+    assert.equal(fs.realpathSync(record.cwd), fs.realpathSync(owner.workspaceDir));
+    for (const pid of [record.pid, record.parentPid]) if (Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+async function assertOwnedProcessesExited(owner: ProcessSessionOwner, requireWatchdog: boolean) {
+  const pids = diagnosticPids(owner);
+  if (requireWatchdog) assert.ok(pids.length, "The fixture must capture actual watchdog/payload PIDs before cleanup can pass");
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; } };
+  let remaining = pids.filter(alive);
+  for (let attempt = 0; remaining.length && attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50)); remaining = pids.filter(alive);
+  }
+  assert.deepEqual(remaining, [], `Owned processes survived session close: ${JSON.stringify({ pids, remaining })}`);
+}
+function enableWatchdogDiagnostics(t: test.TestContext) {
+  const previous = process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS;
+  process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS; else process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS = previous; });
+}
 
 test("Windows process tree cleanup invokes the absolute system taskkill for the owned supervisor pid only", (t) => {
   const previous = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR };
@@ -127,13 +159,16 @@ test("sessions enforce owner, workspace, run selection and bounded output", asyn
   assert.throws(() => startProjectTaskSession(owner, "node -e arbitrary"), /Unknown/);
 });
 test("cancel and timeout terminate sessions and retain partial output", async (t) => {
-  const owner = fixture(t, { watch: 'node -e "console.log(\'watching\');setInterval(()=>{},1000)"' });
+  enableWatchdogDiagnostics(t);
+  const owner = fixture(t, { watch: "node watch.cjs" });
+  fs.writeFileSync(path.join(owner.workspaceDir, "watch.cjs"), "require('fs').writeFileSync('fixture-payload-'+process.pid+'.json',JSON.stringify({pid:process.pid,parentPid:process.ppid,cwd:process.cwd()}));console.log('watching');setInterval(()=>{},1000);\n");
   const running = startProjectTaskSession(owner, "npm:watch");
   await waitFor(owner, running.id, (value) => value.events.some((event) => event.text.includes("watching")));
   stopProcessSession(owner, running.id);
   const cancelled = await waitFor(owner, running.id, (value) => value.session.status !== "running");
   assert.equal(cancelled.session.status, "cancelled");
   assert.match(cancelled.events.map((event) => event.text).join(""), /watching/);
+  await assertOwnedProcessesExited(owner, true);
   const timeout = startProjectTaskSession(owner, "npm:watch", 200);
   assert.equal(timeout.timeoutMs, 200);
   assert.equal(timeout.deadlineAt, timeout.startedAt + 200);
@@ -141,6 +176,18 @@ test("cancel and timeout terminate sessions and retain partial output", async (t
   assert.equal(expired.status, "timed_out");
   assert.equal(expired.deadlineAt, timeout.deadlineAt);
   assert.ok(expired.endedAt! >= expired.deadlineAt!);
+  await assertOwnedProcessesExited(owner, true);
+});
+test("immediate cancellation cannot leave a payload spawned after the supervisor tree snapshot", async (t) => {
+  enableWatchdogDiagnostics(t);
+  const owner = fixture(t, { watch: "node watch.cjs" });
+  fs.writeFileSync(path.join(owner.workspaceDir, "watch.cjs"), "require('fs').writeFileSync('fixture-payload-'+process.pid+'.json',JSON.stringify({pid:process.pid,parentPid:process.ppid,cwd:process.cwd()}));setInterval(()=>{},1000);\n");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const session = startProjectTaskSession(owner, "npm:watch"); stopProcessSession(owner, session.id);
+    const stopped = await waitFor(owner, session.id, (value) => value.session.status !== "running");
+    assert.equal(stopped.session.status, "cancelled");
+    await assertOwnedProcessesExited(owner, process.platform === "win32");
+  }
 });
 test("restart metadata is interrupted and process environments exclude IDE secrets", async (t) => {
   process.env.CREWFORGE_TEST_SECRET = "must-not-inherit";
