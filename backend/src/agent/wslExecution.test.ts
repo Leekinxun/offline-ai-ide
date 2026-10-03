@@ -246,7 +246,7 @@ test("host validation fails closed for control roots, symlink grants, invalid en
   }), /case-ambiguous/);
 });
 
-test("Linux helper converts Windows grants, rejects grant escapes, and preserves bash -c as argv", (t) => {
+test("Linux helper converts Windows grants, rejects grant escapes, and preserves bash -c as argv", { skip: process.platform === "win32" ? "Linux helper filesystem checks run inside WSL, not Windows Node" : false }, (t) => {
   const f = fixture(t);
   const manifestPath = path.join(f.outside, "manifest.json");
   const controlPath = path.join(f.outside, "control.json");
@@ -338,6 +338,7 @@ test("host manifest helper seam rejects workspace placement before launching WSL
 
 test("host pure manifest helper keeps cwd inside workspace", (t) => {
   const f = fixture(t);
+  installWslPathMock(t, f.helper, f.temp);
   const outside = path.join(f.root, "outside-cwd");
   fs.mkdirSync(outside);
   assert.throws(() => __wslExecutionForTests.prepareManifest({
@@ -352,7 +353,7 @@ test("host manifest serializes nested Windows grants as POSIX relative paths", (
   assert.equal(__wslExecutionForTests.posixRelative("C:\\repo", "C:\\repo\\nested\\dir"), "nested/dir");
 });
 
-test("Linux helper fails closed when workspace case sensitivity cannot be verified read-only", (t) => {
+test("Linux helper fails closed when workspace case sensitivity cannot be verified read-only", { skip: process.platform === "win32" ? "Linux helper filesystem checks run inside WSL, not Windows Node" : false }, (t) => {
   const f = fixture(t);
   const emptyWorkspace = path.join(f.root, "empty-workspace");
   fs.mkdirSync(emptyWorkspace);
@@ -379,7 +380,7 @@ test("Linux helper fails closed when workspace case sensitivity cannot be verifi
   }, manifestPath), /case sensitivity could not be verified/);
 });
 
-test("Linux helper accepts an empty workspace when the Windows host proved case sensitivity", (t) => {
+test("Linux helper accepts an empty workspace when the Windows host proved case sensitivity", { skip: process.platform === "win32" ? "Linux helper filesystem checks run inside WSL, not Windows Node" : false }, (t) => {
   const f = fixture(t);
   const emptyWorkspace = path.join(f.root, "empty-proved-workspace");
   fs.mkdirSync(emptyWorkspace);
