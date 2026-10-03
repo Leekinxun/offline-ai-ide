@@ -1,13 +1,15 @@
 # Agent 命令的显式网络授权
 
-Agent 的 `bash` 和 `process_start` 默认仍使用操作系统沙箱禁网。此次增加的 `allow_network: true` 是单次请求，只有以下条件同时成立才允许该命令使用网络：
+Agent 的 `bash` 和 `process_start` 默认使用所选环境的操作系统网络限制。macOS、Linux 和可选 WSL2 通过现有沙箱禁网；Windows App 原生模式采用 Codex 官方防火墙方案，默认阻断外部连接，但不保证阻断 localhost。固定运行时 0.160.0 在 Windows Server 2022 的实测中，低权限账户及防火墙规则均正确启用，外部 TCP 443 被拒绝，本机回环连接仍可建立。需要严格回环隔离时请选择 WSL2。
+
+`allow_network: true` 是单次放开外部网络的请求，只有以下条件同时成立才允许该命令获得该授权：
 
 - 当前执行者是可写工作区中的主 Code Agent，不能是 Ask、Plan、Review、subagent 或 teammate。
 - 管理员配置的 Code profile 中，`isolation.network` 为 `true`。
 - 管理员与工作区 sandbox 的有效交集中，`networkOrigins` 包含字面值 `"*"`。
 - 用户对这一次工具调用明确选择 `allow_once`。
 
-缺少任一条件都不会获得联网授权。只有具体 origin 的名单仍保持 shell 禁网；当前实现没有声称对 shell 做按域名代理或域名过滤。
+缺少任一条件都不会获得外部网络放开授权；这不会消除 Windows 原生模式的本机回环边界。只有具体 origin 的名单仍保持 shell 禁网；当前实现没有声称对 shell 做按域名代理或域名过滤。
 
 ## 管理员配置
 
@@ -50,4 +52,4 @@ node --import tsx --test src/agent/networkAccess.test.ts src/agent/toolApproval.
 npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 ```
 
-联网回归只连接测试创建的临时 loopback HTTP 服务，不发外网请求。覆盖缺少任一管理员授权、窄 origin 交集、默认禁网、只读／子 Agent、Plan 软授权、对话／会话缓存、批量批准、审批期间撤销、授权重放与跨工具使用，以及 bash／process_start 全部条件满足后的真实连接。
+上述授权回归只连接测试创建的临时 loopback HTTP 服务，不发外网请求；它们不代表 Windows 原生模式的回环隔离证明。Windows 原生验收另使用无认证的外部 TCP 443 正向对照，核实外部阻断并记录本机回环限制。覆盖缺少任一管理员授权、窄 origin 交集、默认禁网、只读／子 Agent、Plan 软授权、对话／会话缓存、批量批准、审批期间撤销、授权重放与跨工具使用，以及 bash／process_start 全部条件满足后的真实连接。

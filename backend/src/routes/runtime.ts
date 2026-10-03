@@ -14,6 +14,8 @@ interface ExecutionCapability {
   status?: string;
   runtimeVersion?: string;
   weakerNetworkIsolation?: boolean;
+  loopbackIsolation?: boolean;
+  networkIsolation?: "external";
 }
 
 interface RuntimeExecutionReaders {
@@ -151,7 +153,13 @@ export function createRuntimeRouter(
           available: capability.available === true,
           status: capability.available === true ? "ready" : reasonCode === "setup_pending" ? "setup_pending" : reasonCode === "setup_required" ? "setup_required" : "unavailable",
           setupRequired: executor === "windows-native" && capability.available !== true && reasonCode === "setup_required",
-          ...(executor === "windows-native" ? { weakerNetworkIsolation: current.sandboxMode === "unelevated" } : {}),
+          ...(executor === "windows-native" ? {
+            // The pinned native runtime does not establish localhost isolation.
+            // Never promote a missing or unknown diagnostic to a full-deny claim.
+            weakerNetworkIsolation: true,
+            loopbackIsolation: false,
+            networkIsolation: capability.networkIsolation === "external" ? capability.networkIsolation : "external",
+          } : {}),
           ...(executor === "wsl" && distro && /^[A-Za-z0-9._ -]+$/.test(distro) ? { distro } : {}),
           ...(runtimeVersion && /^\d+(?:\.\d+){0,3}$/.test(runtimeVersion) ? { runtimeVersion } : {}),
           ...(capability.available !== true ? { reasonCode, reason: reasons[reasonCode] } : {}),
@@ -168,7 +176,7 @@ export function createRuntimeRouter(
         });
       }
     } catch {
-      if (windowsWeb) return res.json({ hostPlatform, executor, available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
+      if (!desktop()) return res.json({ hostPlatform, executor, available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
       res.json({ hostPlatform, executor, available: false, status: "unavailable", ...(currentSettings ? { settings: currentSettings, shell: executor === "wsl" ? "bash" : "powershell" } : {}), reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
     }
   });

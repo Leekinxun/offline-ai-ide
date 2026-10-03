@@ -190,6 +190,8 @@ interface DesktopExecutionCapability {
   settings?: DesktopAgentSettings;
   status?: "ready" | "setup_pending" | "setup_required" | "unavailable";
   weakerNetworkIsolation?: boolean;
+  loopbackIsolation?: boolean;
+  networkIsolation?: "external";
   distro?: string;
   reason?: string;
   reasonCode?: string;
@@ -399,6 +401,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ...(settings ? { settings } : {}),
         ...("status" in capability && ["ready", "setup_pending", "setup_required", "unavailable"].includes(String(capability.status)) ? { status: capability.status as DesktopExecutionCapability["status"] } : {}),
         ...("weakerNetworkIsolation" in capability && typeof capability.weakerNetworkIsolation === "boolean" ? { weakerNetworkIsolation: capability.weakerNetworkIsolation } : {}),
+        ...("loopbackIsolation" in capability && typeof capability.loopbackIsolation === "boolean" ? { loopbackIsolation: capability.loopbackIsolation } : {}),
+        ...("networkIsolation" in capability && capability.networkIsolation === "external" ? { networkIsolation: capability.networkIsolation } : {}),
         ...("distro" in capability && typeof capability.distro === "string" ? { distro: capability.distro } : {}),
         ...("reason" in capability && typeof capability.reason === "string" ? { reason: capability.reason } : {}),
         ...("reasonCode" in capability && typeof capability.reasonCode === "string" ? { reasonCode: capability.reasonCode } : {}),
@@ -1350,6 +1354,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           {desktopSettings.environment === "native" ? (
                             <>
                               <p className="settings-help-text">{t("settings.desktopNativeDescription")}</p>
+                              <p className="settings-help-text" role="note">{t("settings.desktopNativeNetworkBoundary")}</p>
                               {desktopSettings.sandboxMode === "unelevated" && <p className="settings-help-text" role="note">{t("settings.desktopNativeWeakerNetwork")}</p>}
                               <details className="settings-help-text"><summary>{t("settings.desktopSandboxDetails")}</summary><p>{t("settings.desktopNativeReadScope")}</p></details>
                             </>

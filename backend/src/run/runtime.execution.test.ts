@@ -73,7 +73,7 @@ test("Windows defaults to a safe PowerShell native capability whitelist for ordi
   }), readWslCapability: () => { throw new Error("Default Windows execution must not probe WSL"); } }));
   const response = await fetch(`${base}/execution`, { headers: userHeaders });
   assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await response.json(), { hostPlatform: "win32", executor: "windows-native", shell: "powershell", settings: nativeSettings, available: true, status: "ready", setupRequired: false, weakerNetworkIsolation: false, runtimeVersion: "0.116.0" });
+  assert.deepEqual(await response.json(), { hostPlatform: "win32", executor: "windows-native", shell: "powershell", settings: nativeSettings, available: true, status: "ready", setupRequired: false, weakerNetworkIsolation: true, loopbackIsolation: false, networkIsolation: "external", runtimeVersion: "0.116.0" });
   assert.equal((await fetch(`${base}/sandbox`, { headers: userHeaders })).status, 403);
 });
 
@@ -93,11 +93,20 @@ test("Windows Web keeps the old WSL execution DTO and ignores desktop native ove
   assert.equal(wslProbes, 2);
   const failedBase = await serve(t, createRuntimeRouter(nativeDiagnostics, { platform: "win32", readWslCapability: () => { throw new Error("fixture WSL probe failure"); } }));
   assert.deepEqual(await (await fetch(`${failedBase}/execution`, { headers: userHeaders })).json(), { hostPlatform: "win32", executor: "wsl", available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
+  const linuxBase = await serve(t, createRuntimeRouter(() => { throw new Error("fixture Linux probe failure"); }, { platform: "linux", desktop: false }));
+  assert.deepEqual(await (await fetch(`${linuxBase}/execution`, { headers: userHeaders })).json(), { hostPlatform: "linux", executor: "native", available: false, reasonCode: "probe_failed", reason: "Execution capability could not be checked" });
 });
 
 test("WSL is used only when explicitly selected and preserves its bounded diagnostics", async (t) => {
   const base = await serve(t, router({ readSettings: () => wslSettings, readNativeCapability: () => { throw new Error("Native must not probe for explicit WSL"); }, readWslCapability: () => ({ available: true, distro: "Ubuntu", executable: "/private/helper" }) }));
   assert.deepEqual(await (await fetch(`${base}/execution`, { headers: userHeaders })).json(), { hostPlatform: "win32", executor: "wsl", shell: "bash", settings: wslSettings, available: true, status: "ready", setupRequired: false, distro: "Ubuntu" });
+});
+
+test("native network diagnostics disclose the pinned localhost limit and cannot promote unknown fields to full isolation", async (t) => {
+  const base = await serve(t, router({ readNativeCapability: () => ({ available: true, weakerNetworkIsolation: false, loopbackIsolation: true, networkIsolation: "unknown-full-isolation", rawFirewallRules: "private-token" }) as unknown as { available: boolean; networkIsolation: "external" } }));
+  const value = await (await fetch(`${base}/execution`, { headers: userHeaders })).json();
+  assert.equal(value.loopbackIsolation, false); assert.equal(value.networkIsolation, "external"); assert.equal(value.weakerNetworkIsolation, true);
+  assert.equal(JSON.stringify(value).includes("private-token"), false);
 });
 
 test("compatibility mode reports weaker isolation and stays unavailable when sensitive-file protection is unsupported", async (t) => {

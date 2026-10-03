@@ -31,7 +31,7 @@ export interface WorkspaceProcessOptions {
    * exec. The executable and args are passed as positional arguments.
    */
   resourceLimitMode?: "none" | "posix-shell";
-  /** Explicit egress behavior. Agent shells use `deny`; other callers default to `inherit`. */
+  /** Agent shells use `deny`; native Windows projects this to Codex external firewall restrictions, without guaranteed loopback isolation. Other callers default to `inherit`. */
   networkMode?: "inherit" | "deny";
   /** Literal workspace-relative filesystem grants enforced by the OS helper. */
   filesystem?: WorkspaceFilesystemGrant;

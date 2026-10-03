@@ -161,11 +161,23 @@ Agent process sessions must stop before these settings can change.
 
 The recommended native sandbox follows Codex's Windows permission boundary:
 commands can read ordinary local files that the Windows account can access,
-write only to authorized workspace paths, and use no network by default. App
+write only to authorized workspace paths, and block external network access by
+default. App
 credentials and settings, sandbox state, and protected workspace secrets such as
 `.env` and `.ssh` remain unreadable. Workspace control files are not writable,
 and a project's `.codex/config.toml` cannot expand App-granted permissions.
 This read boundary is broader than the isolated filesystem view used by WSL.
+
+Native networking is **external isolation**, not a full network-deny guarantee.
+Acceptance of the pinned Codex `0.160.0` runtime on Windows Server 2022 observed
+external TCP 443 denied while localhost TCP remained reachable, even with all
+firewall profiles enabled and Codex's offline and loopback block rules present.
+The App exposes `networkIsolation: "external"`, `loopbackIsolation: false`, and
+`weakerNetworkIsolation: true`; it does not promise isolation from local services.
+This is the tested boundary on that Windows version, not proof of identical
+behavior on every Windows build. Choose WSL2 when strict network denial is
+required.
+
 Choose WSL when a task needs narrow filesystem read grants or explicitly
 required POSIX CPU, memory, or open-file hard limits. Native execution enforces
 wall-clock deadlines; it does not claim those POSIX limits.
@@ -235,8 +247,9 @@ sandbox state, and makes no model requests. It validates a nonempty ordinary
 case-insensitive NTFS workspace, actual PowerShell output and both direct-shell
 and external-program exit codes,
 read-only queries, secret/case-alias protection, ordinary outside reads with
-outside writes denied, default network denial despite malicious workspace
-configuration, stdin/EOF, and child/grandchild cleanup after stop, timeout, and a
+outside writes denied, mandatory external network denial despite malicious workspace
+configuration, explicit characterization of the localhost limitation, stdin/EOF,
+and child/grandchild cleanup after stop, timeout, and a
 real backend crash. It separately characterizes Codex's preservation of
 background descendants after a real zero root exit, reports
 `normalExitPreservesBackground=true`, and explicitly cleans only its verified

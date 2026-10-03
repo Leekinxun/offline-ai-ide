@@ -26,6 +26,9 @@ export interface WindowsNativeSandboxCapability {
   reason?: string;
   sandboxMode: SandboxMode;
   runtimeVersion: typeof WINDOWS_NATIVE_RUNTIME_VERSION;
+  /** Verified pinned Codex boundary: external traffic is restricted; host loopback is not guaranteed isolated. */
+  networkIsolation: "external";
+  loopbackIsolation: false;
   weakerNetworkIsolation: boolean;
 }
 
@@ -83,7 +86,8 @@ function capability(status: WindowsNativeSandboxCapability["status"], reasonCode
   let mode: SandboxMode = "elevated";
   try { mode = sandboxMode(); } catch { /* invalid configuration is reported by the caller */ }
   return { available: status === "ready", executor: "windows-native", shell: "powershell", status, sandboxMode: mode,
-    runtimeVersion: WINDOWS_NATIVE_RUNTIME_VERSION, weakerNetworkIsolation: mode === "unelevated", ...(reasonCode ? { reasonCode } : {}), ...(reason ? { reason } : {}) };
+    runtimeVersion: WINDOWS_NATIVE_RUNTIME_VERSION, networkIsolation: "external", loopbackIsolation: false, weakerNetworkIsolation: true,
+    ...(reasonCode ? { reasonCode } : {}), ...(reason ? { reason } : {}) };
 }
 function comparePath(value: string): string { return path.resolve(value).replaceAll("\\", "/").replace(/\/$/, "").toLowerCase(); }
 function inside(candidate: string, root: string): boolean { const c = comparePath(candidate); const r = comparePath(root); return c === r || c.startsWith(`${r}/`); }
@@ -260,6 +264,9 @@ function safeEnvironment(local: NativeLocations, workspace?: string, overrides?:
   if (systemRoot) for (const entry of [path.join(systemRoot, "System32"), systemRoot]) if (!workspace || !overlaps(entry, workspace)) paths.push(entry);
   result.PATH = [...new Set(paths)].join(";");
   result.CODEX_HOME = local.home;
+  // Windows PowerShell must load its own built-in modules, not inherited PS7
+  // modules or a project's/user's module-discovery directories.
+  result.PSMODULEPATH = path.join(path.dirname(windowsNativePowerShellExecutable()), "Modules");
   result.NPM_CONFIG_USERCONFIG = "NUL";
   result.GIT_OPTIONAL_LOCKS = "0";
   result.GIT_PAGER = "";
@@ -497,7 +504,7 @@ function powershellCommand(options: WorkspaceProcessOptions, trustedPowerShell: 
   return args[index + 1];
 }
 function scriptSource(command: string): string {
-  return `\uFEFF$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n$global:LASTEXITCODE = $null\ntry {\n& {\n${command}\n}\n$crownforgeCommandSucceeded = $?\n$crownforgeNativeExitCode = $global:LASTEXITCODE\nif ($null -ne $crownforgeNativeExitCode -and [int]$crownforgeNativeExitCode -ne 0) { exit ([int]$crownforgeNativeExitCode) }\nif (-not $crownforgeCommandSucceeded) { exit 1 }\nexit 0\n} catch {\n[Console]::Error.WriteLine($_.ToString())\nexit 1\n}\n`;
+  return `\uFEFF$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n$global:LASTEXITCODE = $null\ntry {\n& {\n${command}\n}\n$crownforgeCommandSucceeded = $?\n$crownforgeNativeExitCode = $global:LASTEXITCODE\nif ($null -ne $crownforgeNativeExitCode -and [int]$crownforgeNativeExitCode -ne 0) { exit ([int]$crownforgeNativeExitCode) }\nif (-not $crownforgeCommandSucceeded) { exit 1 }\nexit 0\n} catch {\n[Console]::Error.WriteLine($_.ToString())\nexit 1\n}\n`;
 }
 
 export function prepareWindowsNativeProcess(options: WorkspaceProcessOptions): PreparedWorkspaceProcess {
@@ -541,6 +548,9 @@ export function prepareWindowsNativeProcess(options: WorkspaceProcessOptions): P
       script = path.join(scriptDir, "command.ps1"); fs.writeFileSync(script, scriptSource(command), { flag: "wx", mode: 0o600 });
       target = powershell; argv = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script];
     }
+    // `deny` selects the pinned Codex offline account and external-firewall
+    // restriction. It cannot promise host-loopback isolation on Windows;
+    // callers requiring complete network isolation must select WSL instead.
     profile = profileFile(local, workspace, monotonicDenyEntries(local, filesystemEntries(local, workspace, writes, script)), options.networkMode === "inherit");
     const args = ["-p", profile.name, "-c", `windows.sandbox=${tomlString(mode)}`, "-c", "features.prefer_mxc=false", "sandbox", "-P", profile.name, "-C", cwd, "--", target, ...argv];
     if (args.reduce((size, argument) => size + argument.length + 3, runtime.executable.length) > 30_000) throw new Error("Native command arguments exceed the Windows launch limit; use a script or WSL");

@@ -43,7 +43,7 @@ function install(f: Fixture, extra: { status?: unknown; mode?: "elevated" | "une
   const calls: Array<{ method: string; params?: unknown }> = []; const clients: CodexSandboxClientOptions[] = [];
   setWindowsNativeSandboxTestHooks({ platform: "win32", arch: "x64", backendRoot: f.backendRoot, runtimeRoot: f.runtimeRoot, stateHome: f.stateHome, privateFiles: [f.privateFile], powershellExecutable: f.powershellExecutable,
     sandboxMode: extra.mode ?? "elevated", env: { SystemRoot: path.join(f.root, "Windows"), USERPROFILE: path.join(f.root, "user"), PATH: `${f.workspace};${path.dirname(f.powershellExecutable)}`,
-      OPENAI_API_KEY: "fixture-do-not-inherit", MODEL_TOKEN: "fixture-do-not-inherit", NODE_OPTIONS: "--require injection", ELECTRON_RUN_AS_NODE: "1", CODEX_WINDOWS_REGISTERED_CORE: "1", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: "fixture-do-not-inherit" },
+      OPENAI_API_KEY: "fixture-do-not-inherit", MODEL_TOKEN: "fixture-do-not-inherit", NODE_OPTIONS: "--require injection", ELECTRON_RUN_AS_NODE: "1", CODEX_WINDOWS_REGISTERED_CORE: "1", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: "fixture-do-not-inherit", PSModulePath: `${f.workspace};C:\\Program Files\\PowerShell\\7\\Modules` },
     clientFactory: (options) => {
       clients.push(options);
       return { initialize: async () => { calls.push({ method: "initialize" }); },
@@ -65,10 +65,13 @@ test("native readiness uses only the pinned sidecar and no auth or inherited sec
   const configFile = path.join(f.stateHome, "config.toml"); const before = fs.statSync(configFile);
   const result = await probeWindowsNativeSandbox();
   assert.equal(result.available, true); assert.equal(result.shell, "powershell"); assert.equal(result.runtimeVersion, "0.160.0");
+  assert.equal(result.networkIsolation, "external"); assert.equal(result.loopbackIsolation, false); assert.equal(result.weakerNetworkIsolation, true);
   assert.deepEqual(calls.map((call) => call.method), ["initialize", "windowsSandbox/readiness"]);
   assert.equal(clients[0].executable, path.join(f.runtimeRoot, "bin", "codex.exe"));
   for (const key of ["OPENAI_API_KEY", "MODEL_TOKEN", "NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "CODEX_WINDOWS_REGISTERED_CORE", "CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN"]) assert.equal(clients[0].env[key], undefined);
   assert.equal(clients[0].env.CODEX_HOME, f.stateHome);
+  assert.equal(clients[0].env.PSMODULEPATH, path.join(path.dirname(f.powershellExecutable), "Modules"));
+  assert.equal(clients[0].env.PSModulePath, undefined);
   const config = fs.readFileSync(path.join(f.stateHome, "config.toml"), "utf8");
   assert.ok(config.includes("http://127.0.0.1:9")); assert.ok(config.includes("enabled = false"));
   assert.equal(fs.statSync(configFile).mtimeMs, before.mtimeMs);
@@ -124,6 +127,8 @@ test("native scripts keep PowerShell source out of launcher argv and carry priva
   assert.equal(path.relative(path.join(f.workspace, ".history"), script).startsWith("native-command-"), true);
   assert.ok(preparedProfile(prepared, f).includes(`${JSON.stringify(path.join(f.workspace, ".history"))} = "read"`));
   assert.ok(text.includes(source)); assert.ok(text.startsWith("\uFEFF")); assert.ok(text.includes("$crownforgeCommandSucceeded = $?"));
+  assert.ok(text.includes("[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)"));
+  assert.ok(text.includes("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"));
   const profile = preparedProfile(prepared, f);
   assert.ok(profile.includes('\":root\" = \"read\"'));
   for (const file of [path.join(f.workspace, ".ENV.production"), path.join(f.workspace, "src", ".env"), f.privateFile, f.stateHome]) assert.ok(profile.includes(`${JSON.stringify(file)} = "deny"`));
@@ -153,6 +158,7 @@ test("native never drops explicit POSIX limits or executable/environment injecti
   const f = fixture(t); install(f); await probeWindowsNativeSandbox();
   for (const limits of [{ cpuTimeMs: 1 }, { memoryBytes: 1000 }, { maxOpenFiles: 10 }]) assert.throws(() => prepareWindowsNativeProcess(command(f, { limits })), /does not expose POSIX/);
   for (const key of ["PATH", "NODE_OPTIONS", "OPENAI_API_KEY", "ELECTRON_RUN_AS_NODE", "SystemRoot"]) assert.throws(() => prepareWindowsNativeProcess(command(f, { env: { [key]: "inject" } })), /safe Windows tool variables/);
+  for (const key of ["PSModulePath", "PSMODULEPATH"]) assert.throws(() => prepareWindowsNativeProcess(command(f, { env: { [key]: f.workspace } })), /safe Windows tool variables/);
   assert.throws(() => prepareWindowsNativeProcess(command(f, { executable: "powershell.exe" })), /absolute trusted tool/);
   assert.throws(() => prepareWindowsNativeProcess(command(f, { args: ["-NoProfile", "-File", f.privateFile] })), /non-interactive -Command/);
   const prepared = prepareWindowsNativeProcess(command(f, { env: { NPM_CONFIG_USERCONFIG: "NUL" } })); f.cleanupBeforeRemoval(prepared.cleanup);
