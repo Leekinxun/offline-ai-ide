@@ -12,3 +12,9 @@ if (!files.length) throw new Error("Desktop backend regression tests are missing
 const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...files], { cwd: backend, stdio: "inherit" });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
+if (!process.exitCode) {
+  const cursorTest = fileURLToPath(new URL("../../../frontend/tests/workspaceChangeCursor.test.tsx", import.meta.url));
+  const frontendResult = spawnSync(process.execPath, ["--import", "tsx", "--test", cursorTest], { cwd: backend, stdio: "inherit" });
+  if (frontendResult.error) throw frontendResult.error;
+  process.exitCode = frontendResult.status ?? 1;
+}

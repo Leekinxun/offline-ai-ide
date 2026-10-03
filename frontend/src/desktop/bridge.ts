@@ -10,6 +10,7 @@ export type DesktopZoomCommand = "in" | "out" | "reset";
 export interface DesktopBridge {
   platform: string;
   version: string;
+  readonly workspaceChanges?: "cursor";
   getPreferences(): Promise<DesktopPreferences>;
   setPreferences(patch: DesktopPreferences): Promise<DesktopPreferences>;
   openExternal(url: string): Promise<boolean>;

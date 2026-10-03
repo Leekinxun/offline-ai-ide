@@ -45,7 +45,8 @@ test("only the exact bootstrap endpoint receives the private header", async () =
   assert.equal(forwarded.credentials, "same-origin");
   assert.deepEqual(init.headers, { accept: "application/json" });
   assert.equal(Object.values(app.window).some((value) => value === masterToken), false);
-  assert.deepEqual(Object.keys(app.window.crownforgeDesktop).sort(), ["getPreferences", "onZoomCommand", "openExternal", "platform", "setPreferences", "version"]);
+  assert.deepEqual(Object.keys(app.window.crownforgeDesktop).sort(), ["getPreferences", "onZoomCommand", "openExternal", "platform", "setPreferences", "version", "workspaceChanges"]);
+  assert.equal(app.window.crownforgeDesktop.workspaceChanges, "cursor");
   await app.window.crownforgeDesktop.getPreferences();
   assert.equal(app.invocations[0][1].token, "window-private-token");
   assert.equal(Object.values(app.invocations[0][1]).includes(masterToken), false);

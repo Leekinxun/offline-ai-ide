@@ -1,5 +1,6 @@
 //! Trusted desktop service. The Agent command sandbox is deliberately a separate service.
 
+mod change_version;
 mod error;
 mod git;
 mod pty;
@@ -36,6 +37,7 @@ pub struct Task {
 
 pub struct Core {
     emit: EventSink,
+    change_versions: change_version::ChangeVersions,
     terminals: pty::Terminals,
     watches: watch::Watches,
     requests: Mutex<HashMap<u64, Arc<AtomicBool>>>,
@@ -45,6 +47,7 @@ pub struct Core {
 impl Core {
     pub fn new(emit: EventSink) -> Self {
         Self {
+            change_versions: change_version::ChangeVersions::new(emit.clone()),
             emit,
             terminals: Default::default(),
             watches: Default::default(),
@@ -109,10 +112,11 @@ impl Core {
     fn dispatch(&self, method: &str, params: Value, cancelled: Arc<AtomicBool>) -> Result<Value> {
         match method {
             "ping" => Ok(
-                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "search", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
+                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "search", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
             ),
             "fs.entries" => serialize(workspace::entries(parse(params)?)?),
             "fs.read" => serialize(workspace::read(parse(params)?)?),
+            "fs.changeVersion" => serialize(self.change_versions.query(parse(params)?)?),
             "search" => serialize(search::search(parse(params)?, cancelled)?),
             "git.exec" => serialize(git::execute(parse(params)?, cancelled)?),
             "watch.start" => self.watches.start(parse(params)?, self.emit.clone()),
@@ -150,6 +154,7 @@ impl Core {
             }
         }
         self.watches.shutdown();
+        self.change_versions.shutdown();
         self.terminals.shutdown();
     }
 }

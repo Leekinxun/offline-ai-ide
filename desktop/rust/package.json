@@ -9,7 +9,8 @@
     "package": "node ../scripts/prepare-rust-desktop.mjs package",
     "test": "cargo test --workspace && node --test runtime/bootstrap.test.cjs runtime/desktop-bridge.test.cjs && node runtime/run-backend-tests.mjs",
     "test:backend": "node runtime/run-backend-tests.mjs",
-    "smoke": "node ../../scripts/desktop-rust-smoke.mjs"
+    "smoke": "node ../../scripts/desktop-rust-smoke.mjs",
+    "benchmark:changes": "node ../../scripts/desktop-rust-changes-benchmark.mjs"
   },
   "devDependencies": { "@tauri-apps/cli": "2.12.1" }
 }

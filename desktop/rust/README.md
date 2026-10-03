@@ -168,7 +168,44 @@ report to `.artifacts/app-rust/smoke-report.json`. The macOS UI has additionally
 been checked with an isolated data directory. No Windows native sandbox result
 is inferred from macOS compilation or mocked Windows adapter tests. See
 [Windows acceptance](../../docs/app-rust-windows.md) for the separate smoke.
-The manually dispatched `desktop-rust.yml` workflow additionally builds the
+The `desktop-rust.yml` workflow runs on `APP_RUST` pushes and additionally builds the
 native Windows host and exercises the real PowerShell PTY without provisioning
-the Agent sandbox. The separate sandbox workflow verifies OS isolation. Neither
-workflow has been run by the macOS development checks.
+the Agent sandbox. `app-rust-sandbox.yml` provisions only its disposable Windows
+runner and retains strict OS isolation assertions. A compiled host or a passing
+protocol test does not substitute for those assertions.
+
+### Workspace change detection
+
+In the native desktop profile, `/api/files/changes` now queries Rust
+`fs.changeVersion` instead of recursively traversing the workspace in Node.
+Each workspace has an epoch and monotonic revision maintained by `notify`.
+Watcher errors fail the request; overflow requests a full UI refresh. Root
+replacement, native service restart and cache expiration invalidate old cursors.
+The service keeps at most 32 watchers and reclaims them after five idle minutes.
+It does not build an index or persist mutation evidence from filesystem events.
+
+The HTTP response remains `{ changed, latestMtime }`. For this desktop endpoint,
+`latestMtime` is an opaque refresh watermark; file reads still report actual file
+mtime. Tauri exposes a read-only `workspaceChanges: "cursor"` capability so a tree
+refresh preserves the acknowledged watermark even if the clock goes backwards.
+Web and legacy Electron retain their timestamp traversal and tree behavior.
+Multiple windows cannot consume one another's change notifications.
+
+After building the backend and debug core, reproduce the idle-workspace comparison:
+
+```sh
+npm --prefix desktop/rust run benchmark:changes
+```
+
+The benchmark creates and removes 10,000/100,000-file fixtures, compares the
+unchanged traversal with native cursor RPC on the same workspace, and writes
+`.artifacts/app-rust/changes-benchmark.json`. It includes RPC and Node projection
+cost, excludes HTTP transport, and reports watcher startup separately. One local
+macOS arm64 debug run (Node 20.15.1, 20 warm samples) measured 100,000-file p95 at
+314.41ms for traversal and 0.56ms for the native query. This does not establish
+Windows performance, startup indexing cost or whole-application speed.
+
+The remaining index rebuild, AST parsing, programmatic writes and rollback stay
+in Node. Moving writes across asynchronous RPC requires a shared workspace
+admission fence, durable recovery intent and preserved hunk/secret-file policies;
+a filesystem notification alone cannot provide that evidence.

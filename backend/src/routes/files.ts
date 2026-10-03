@@ -26,6 +26,7 @@ import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { desktopNativeIdeEnabled, NativeIdeError } from "../desktop/nativeIdeClient.js";
 import { readDesktopFile, readDesktopFileTree, readDesktopGitStatus } from "../desktop/nativeIdeServices.js";
+import { readDesktopWorkspaceChanges } from "../desktop/nativeWorkspaceChanges.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
 import { MoveEntryError, moveWorkspaceEntry } from "../files/moveEntry.js";
 import {
@@ -527,12 +528,27 @@ filesRouter.get("/search", async (req, res) => {
 });
 
 // GET /changes?since=timestamp
-filesRouter.get("/changes", (req, res) => {
+filesRouter.get("/changes", async (req, res) => {
   const workspaceDir = getWorkspace(req);
   const since = getTimestamp(req.query.since);
 
   if (since === null) {
     return res.status(400).json({ detail: "since required" });
+  }
+
+  if (desktopNativeIdeEnabled()) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    req.once("aborted", abort); res.once("close", abort);
+    try {
+      const result = await readDesktopWorkspaceChanges(workspaceDir, since, controller.signal);
+      if (!controller.signal.aborted) return res.json(result);
+    } catch (error) {
+      if (!controller.signal.aborted) return res.status(error instanceof NativeIdeError && error.code === "INVALID_PARAMS" ? 400 : 503).json({
+        detail: error instanceof Error ? error.message : "Desktop change detection is unavailable",
+      });
+    } finally { req.off("aborted", abort); res.off("close", abort); }
+    return;
   }
 
   try {

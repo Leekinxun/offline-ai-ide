@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef } from "react";
 import { FileNode, OpenFile, FileSelectionRange, getLanguage } from "../types";
 import { FilePreviewMode } from "../plugins/types";
 import { useFileSystem } from "./useFileSystem";
+import { getDesktopBridge } from "../desktop/bridge";
 import {
   collectVisiblePaths,
   pruneNestedPaths,
@@ -90,7 +91,7 @@ export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspa
         }
         return next;
       });
-      lastWorkspaceMtimeRef.current = Date.now();
+      if (getDesktopBridge()?.workspaceChanges !== "cursor") lastWorkspaceMtimeRef.current = Date.now();
       setTreeRefreshNonce((prev) => prev + 1);
     } catch {
       showToast(t("app.failedToLoadFileTree"));

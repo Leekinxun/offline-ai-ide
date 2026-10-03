@@ -58,6 +58,7 @@
   };
   Object.defineProperty(window, "crownforgeDesktop", { configurable: false, writable: false, value: Object.freeze({
     platform: __CROWNFORGE_PLATFORM_JSON__, version: __CROWNFORGE_VERSION_JSON__,
+    workspaceChanges: "cursor",
     getPreferences: () => invoke("get_preferences"),
     setPreferences: (patch) => invoke("set_preferences", { patch }),
     openExternal: (url) => invoke("open_external", { url }),
