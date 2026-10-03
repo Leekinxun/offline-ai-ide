@@ -22,8 +22,8 @@ function pidAlive(pid: number): boolean {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
-function fixture(t: test.TestContext, failFirstWatch = false) {
-  shutdownDesktopNativeIde();
+async function fixture(t: test.TestContext, failFirstWatch = false) {
+  await shutdownDesktopNativeIde();
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-native-diagnostics-")));
   const workspace = path.join(root, "workspace"); const bin = path.join(root, "bin"); const state = path.join(root, "state");
   for (const directory of [workspace, bin, state]) fs.mkdirSync(directory);
@@ -97,9 +97,10 @@ else {
 
   t.after(async () => {
     try {
-      stopDiagnosticsSession(workspace); shutdownDesktopNativeIde();
+      stopDiagnosticsSession(workspace); const stopped = shutdownDesktopNativeIde();
       fs.writeFileSync(path.join(state, "release-all"), "release");
       await Promise.allSettled([...tracked]);
+      await stopped;
       await until(() => fs.readdirSync(state).filter((name) => name === "core.pid" || /^ruff-\d+\.started$/.test(name))
         .every((name) => !pidAlive(Number(fs.readFileSync(path.join(state, name), "utf8")))), "fixture processes to exit");
     } finally {
@@ -119,7 +120,7 @@ else {
 }
 
 test("native watcher changes during a running check trigger a second check of the changed file", unixOnly, async (t) => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const first = f.track(startDiagnosticsSession(f.workspace));
   await until(f.firstRunning, "the first Ruff check to start");
   assert.equal(getDiagnostics(f.workspace).session.status, "running");
@@ -137,7 +138,7 @@ test("native watcher changes during a running check trigger a second check of th
 });
 
 test("native watcher disconnect remains an error after the running check finishes", unixOnly, async (t) => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const first = f.track(startDiagnosticsSession(f.workspace));
   await until(f.firstRunning, "the first Ruff check to start");
   await getDesktopNativeIde().request("fixture.disconnect", {});
@@ -151,7 +152,7 @@ test("native watcher disconnect remains an error after the running check finishe
 });
 
 test("a failed native watcher startup can be retried without a stuck diagnostic session", unixOnly, async (t) => {
-  const f = fixture(t, true);
+  const f = await fixture(t, true);
   await assert.rejects(startDiagnosticsSession(f.workspace), /fixture watcher startup failure/);
   assert.equal(getDiagnostics(f.workspace).session.status, "error"); assert.equal(f.attempts(), 1); assert.equal(f.runs(), 0);
   const retry = f.track(startDiagnosticsSession(f.workspace));

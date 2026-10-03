@@ -274,7 +274,9 @@ export function launchTerminalProcess(workspaceDir: string, forceFallback = fals
     const command = process.platform === "win32"
       ? { executable: path.join(process.env.SystemRoot || process.env.WINDIR || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ptyArgs: ["-NoLogo", "-NoProfile"] }
       : terminalShell();
-    return launchDesktopPty(workspaceRoot(workspaceDir), { executable: command.executable, args: command.ptyArgs }, terminalEnvironment());
+    const env = terminalEnvironment();
+    if (process.platform === "win32") env.PSMODULEPATH = path.join(path.dirname(command.executable), "Modules");
+    return launchDesktopPty(workspaceRoot(workspaceDir), { executable: command.executable, args: command.ptyArgs }, env);
   }
   if (!forceFallback) try { return launchPty(workspaceDir); } catch { /* optional native binding fallback */ }
   return launchFallback(workspaceDir);

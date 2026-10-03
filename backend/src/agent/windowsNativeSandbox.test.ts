@@ -43,7 +43,7 @@ function install(f: Fixture, extra: { status?: unknown; mode?: "elevated" | "une
   const calls: Array<{ method: string; params?: unknown }> = []; const clients: CodexSandboxClientOptions[] = [];
   setWindowsNativeSandboxTestHooks({ platform: "win32", arch: "x64", backendRoot: f.backendRoot, runtimeRoot: f.runtimeRoot, stateHome: f.stateHome, privateFiles: [f.privateFile], powershellExecutable: f.powershellExecutable,
     sandboxMode: extra.mode ?? "elevated", env: { SystemRoot: path.join(f.root, "Windows"), USERPROFILE: path.join(f.root, "user"), PATH: `${f.workspace};${path.dirname(f.powershellExecutable)}`,
-      OPENAI_API_KEY: "fixture-do-not-inherit", MODEL_TOKEN: "fixture-do-not-inherit", NODE_OPTIONS: "--require injection", ELECTRON_RUN_AS_NODE: "1", CODEX_WINDOWS_REGISTERED_CORE: "1", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: "fixture-do-not-inherit" },
+      OPENAI_API_KEY: "fixture-do-not-inherit", MODEL_TOKEN: "fixture-do-not-inherit", NODE_OPTIONS: "--require injection", ELECTRON_RUN_AS_NODE: "1", CODEX_WINDOWS_REGISTERED_CORE: "1", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: "fixture-do-not-inherit", PSModulePath: `${f.workspace};C:\\Program Files\\PowerShell\\7\\Modules` },
     clientFactory: (options) => {
       clients.push(options);
       return { initialize: async () => { calls.push({ method: "initialize" }); },
@@ -69,6 +69,8 @@ test("native readiness uses only the pinned sidecar and no auth or inherited sec
   assert.equal(clients[0].executable, path.join(f.runtimeRoot, "bin", "codex.exe"));
   for (const key of ["OPENAI_API_KEY", "MODEL_TOKEN", "NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "CODEX_WINDOWS_REGISTERED_CORE", "CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN"]) assert.equal(clients[0].env[key], undefined);
   assert.equal(clients[0].env.CODEX_HOME, f.stateHome);
+  assert.equal(clients[0].env.PSMODULEPATH, path.join(path.dirname(f.powershellExecutable), "Modules"));
+  assert.equal(clients[0].env.PSModulePath, undefined);
   const config = fs.readFileSync(path.join(f.stateHome, "config.toml"), "utf8");
   assert.ok(config.includes("http://127.0.0.1:9")); assert.ok(config.includes("enabled = false"));
   assert.equal(fs.statSync(configFile).mtimeMs, before.mtimeMs);

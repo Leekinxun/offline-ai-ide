@@ -349,7 +349,7 @@ impl Backend {
 
     pub fn stop(&self) {
         let _ = self.send(&json!({"type":"shutdown"}));
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             if self.exited() {
                 return;

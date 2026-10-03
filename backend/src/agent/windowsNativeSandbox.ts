@@ -260,6 +260,8 @@ function safeEnvironment(local: NativeLocations, workspace?: string, overrides?:
   if (systemRoot) for (const entry of [path.join(systemRoot, "System32"), systemRoot]) if (!workspace || !overlaps(entry, workspace)) paths.push(entry);
   result.PATH = [...new Set(paths)].join(";");
   result.CODEX_HOME = local.home;
+  // Keep Windows PowerShell module discovery on its trusted system modules.
+  result.PSMODULEPATH = path.join(path.dirname(windowsNativePowerShellExecutable()), "Modules");
   result.NPM_CONFIG_USERCONFIG = "NUL";
   result.GIT_OPTIONAL_LOCKS = "0";
   result.GIT_PAGER = "";

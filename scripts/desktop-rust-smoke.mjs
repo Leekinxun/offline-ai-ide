@@ -115,11 +115,22 @@ try {
   stage = "terminal attach readiness";
   const ready = await waitForFrame((frame) => frame.type === "ready");
   socket.send(JSON.stringify({ type: "ready_ack", ticket: ready.ticket }));
+  const outputText = () => frames.filter((frame) => frame.type === "output").map((frame) => frame.data).join("");
+  const displayText = () => outputText().replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  if (process.platform === "win32") {
+    stage = "PowerShell interactive prompt after ConPTY handshake";
+    await waitForFrame(() => /PS [\s\S]*>\s*$/.test(displayText()));
+    socket.send(JSON.stringify({ type: "input", data: "[Console]::WriteLine('RUST_SMOKE_' + 'ASCII_READY')" }));
+    socket.send(JSON.stringify({ type: "input", data: "\r" }));
+    stage = "PowerShell ASCII execution after prompt readiness";
+    await waitForFrame(() => outputText().includes("RUST_SMOKE_ASCII_READY"));
+    checks.push("PowerShell prompt readiness and actual ASCII execution");
+  }
   socket.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
   // Split the marker in the command so an echoed input line cannot satisfy the output assertion.
   socket.send(JSON.stringify({ type: "input", data: process.platform === "win32" ? "Write-Output ('RUST_SMOKE_' + 'UTF8_中文')\r" : "printf 'RUST_SMOKE_%s\\n' 'UTF8_中文'\n" }));
   stage = "terminal UTF-8 command output";
-  await waitForFrame(() => frames.filter((frame) => frame.type === "output").map((frame) => frame.data).join("").includes("RUST_SMOKE_UTF8_中文"));
+  await waitForFrame(() => outputText().includes("RUST_SMOKE_UTF8_中文"));
   checks.push("framed WebSocket to Rust PTY, resize and UTF-8 output");
   socket.send(JSON.stringify({ type: "stop" }));
   stage = "terminal stop cleanup";

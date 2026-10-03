@@ -52,6 +52,16 @@ test("host pipe closure shuts down its retained daemon", { timeout: 5000 }, asyn
   assert.equal((await exited)[0], 0);
 });
 
+test("host EOF allows delayed owner cleanup beyond the former three-second deadline", { timeout: 10000 }, async (t) => {
+  const { child } = fixture(t, `process.on("message", (message) => { if (message.type === "shutdown") setTimeout(() => process.exit(0), 5000); });`);
+  const exited = once(child, "exit");
+  const started = Date.now();
+  child.stdin.end();
+  const [code] = await exited;
+  assert.equal(code, 0);
+  assert.ok(Date.now() - started >= 4900, "The wrapper must not exit before its backend cleanup completes");
+});
+
 test("relative backend paths are rejected before loading code", { timeout: 5000 }, async (t) => {
   const child = spawn(process.execPath, [path.join(__dirname, "bootstrap.cjs")], {
     env: { ...process.env, CROWNFORGE_BACKEND_BOOTSTRAP: "backend.cjs" }, stdio: ["pipe", "pipe", "pipe"],

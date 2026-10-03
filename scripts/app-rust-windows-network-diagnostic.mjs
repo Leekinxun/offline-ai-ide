@@ -11,11 +11,14 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const reportPath = path.join(repo, ".artifacts/app-rust-sandbox/network-diagnostic-report.json");
 const fixtureId = crypto.randomUUID();
 const ruleName = `CrownForge_APP_RUST_Loopback_Diagnostic_${fixtureId}`;
+const PROBE_TIMEOUT_MS = 30_000;
 const report = {
   schemaVersion: 1, status: "DIAGNOSTIC_ERROR", sourceCommit: process.env.GITHUB_SHA || null,
   startedAt: new Date().toISOString(), fixtureId, platform: process.platform,
   originalDenial: null, allUsersDenial: null, sandboxWhoamiSid: null,
-  temporaryRuleRemoved: null, fullSandboxAcceptance: false, steps: [],
+  temporaryRuleCreated: false, temporaryRuleCreationAttempted: false,
+  temporaryRuleRemoved: null, comparisonBaseline: null, comparisonOriginalDenial: null,
+  fullSandboxAcceptance: false, steps: [], probes: [],
 };
 let root;
 let listener;
@@ -130,26 +133,76 @@ try {
   assert.equal(report.hostPositiveControl, true, "A blocked or unstarted listener cannot establish sandbox denial");
 
   const filesystem = { workspaceDir: workspace, readPaths: ["."], writePaths: [] };
-  const execute = (source) => runWorkspaceProcess({ executable: native.windowsNativePowerShellExecutable(), args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source],
-    cwd: workspace, filesystem, networkMode: "deny", limits: { wallTimeMs: 15_000 }, maxOutputBytes: 16_384 });
-  const whoami = path.join(systemRoot, "System32/whoami.exe");
-  const identity = await bounded(() => execute(`$identity = & ${psLiteral(whoami)} /user /fo csv /nh; [regex]::Match(($identity -join ' '), 'S-1-[0-9-]+').Value`), "read actual sandbox whoami SID", 30_000);
-  const sid = identity.trim(); assert.match(sid, /^S-1-[0-9-]+$/); report.sandboxWhoamiSid = sid;
-  report.before.codexBlockRules = report.before.codexBlockRules.map((rule) => ({ ...rule, matchesWhoamiSid: Boolean(rule.localUserAuthorizedList?.includes(sid)) }));
-  const command = `$client = [Net.Sockets.TcpClient]::new(); $connected = $false; try { $task = $client.ConnectAsync('127.0.0.1', ${port}); try { $connected = $task.Wait(4000) -and $client.Connected } catch {} } catch {} finally { $client.Dispose() }; if ($connected) { Write-Output 'DIAG_NETWORK_CONNECTED' } else { Write-Output 'DIAG_NETWORK_DENIED' }`;
-  report.probeCommandSha256 = crypto.createHash("sha256").update(command).digest("hex");
-  const probe = async (label) => {
-    const prior = accepted; const output = await bounded(() => execute(command), label, 30_000);
-    assert.doesNotMatch(output, /^Error:/, "An execution failure cannot be counted as network denial");
-    assert.ok(/DIAG_NETWORK_(CONNECTED|DENIED)/.test(output), "The TCP probe must produce a factual result");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const connected = output.includes("DIAG_NETWORK_CONNECTED"); const acceptedConnections = accepted - prior;
-    return { connected, acceptedConnections, denied: !connected && acceptedConnections === 0 };
+  const execute = async (name, source) => {
+    const started = Date.now(); const controller = new AbortController(); let deadlineReached = false;
+    const timeout = setTimeout(() => { deadlineReached = true; controller.abort(); }, PROBE_TIMEOUT_MS);
+    let output;
+    const metadata = { name, timeoutMs: PROBE_TIMEOUT_MS, elapsedMs: 0, errorKind: null, exitCode: null, success: false };
+    try {
+      // The 30k deadline includes readiness/launch. Five seconds only permit
+      // cancellation bookkeeping to finish; they do not authorize a longer payload.
+      output = await bounded(() => runWorkspaceProcess({ executable: native.windowsNativePowerShellExecutable(), args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source],
+        cwd: workspace, filesystem, networkMode: "deny", signal: controller.signal, limits: { wallTimeMs: PROBE_TIMEOUT_MS }, maxOutputBytes: 16_384 }), name, PROBE_TIMEOUT_MS + 5_000);
+      const exit = output.match(/^Error: Process exited with code (-?\d+)/);
+      if (deadlineReached || /^Error: Timeout/.test(output)) metadata.errorKind = "timeout";
+      else if (exit) { metadata.errorKind = "exit"; metadata.exitCode = Number(exit[1]); }
+      else if (/^Error: Stopped/.test(output)) metadata.errorKind = "cancelled";
+      else if (/^Error:/.test(output)) metadata.errorKind = "launcher";
+      else { metadata.success = true; metadata.exitCode = 0; }
+    } catch { metadata.errorKind = deadlineReached ? "timeout" : "launcher"; }
+    finally {
+      clearTimeout(timeout); metadata.elapsedMs = Date.now() - started; report.probes.push(metadata);
+      console.log(JSON.stringify({ probe: name, elapsedMs: metadata.elapsedMs, errorKind: metadata.errorKind, exitCode: metadata.exitCode }));
+    }
+    // Cancellation preserves the native lease until actual process close. Allow
+    // its existing forced-termination window to finish before the next probe.
+    if (metadata.errorKind === "timeout" || metadata.errorKind === "cancelled") await new Promise((resolve) => setTimeout(resolve, 1_500));
+    return { output: metadata.success ? output : undefined, metadata };
   };
-  report.originalProbe = await probe("original offline TCP probe"); report.originalDenial = report.originalProbe.denied;
+  const checkMarker = (probe, marker) => {
+    if (probe.metadata.success && !probe.output.includes(marker)) { probe.metadata.success = false; probe.metadata.errorKind = "unexpected_output"; }
+    return probe.metadata;
+  };
+  const consoleStart = await execute("console startup control", "[Console]::WriteLine('DIAG_CONSOLE_STARTED')");
+  report.consoleStartup = checkMarker(consoleStart, "DIAG_CONSOLE_STARTED");
+  const cmdletStart = await execute("Write-Output startup control", "Write-Output 'DIAG_CMDLET_STARTED'");
+  report.cmdletStartup = checkMarker(cmdletStart, "DIAG_CMDLET_STARTED");
+  const modules = await execute("PowerShell module categories", "$paths = [Environment]::GetEnvironmentVariable('PSModulePath'); $ps5 = $paths -match '(?i)WindowsPowerShell[\\\\/]v1[.]0[\\\\/]Modules'; $ps7 = $paths -match '(?i)PowerShell[\\\\/]7([\\\\/]|$)'; [Console]::WriteLine('DIAG_MODULES:' + $PSVersionTable.PSVersion.Major + ':' + $ps5.ToString().ToLowerInvariant() + ':' + $ps7.ToString().ToLowerInvariant())");
+  const moduleCategories = modules.output?.match(/DIAG_MODULES:(\d+):(true|false):(true|false)/);
+  report.moduleCategories = moduleCategories ? { powershellMajor: Number(moduleCategories[1]), hasPS5Modules: moduleCategories[2] === "true", hasPS7Modules: moduleCategories[3] === "true" } : null;
+  if (modules.metadata.success && !moduleCategories) { modules.metadata.success = false; modules.metadata.errorKind = "unexpected_output"; }
+  const whoami = path.join(systemRoot, "System32/whoami.exe");
+  const identity = await execute("read actual sandbox whoami SID", `$identity = & ${psLiteral(whoami)} /user /fo csv /nh; [regex]::Match(($identity -join ' '), 'S-1-[0-9-]+').Value`);
+  const sid = identity.output?.trim();
+  report.sandboxWhoamiSid = sid && /^S-1-[0-9-]+$/.test(sid) ? sid : null;
+  if (identity.metadata.success && !report.sandboxWhoamiSid) { identity.metadata.success = false; identity.metadata.errorKind = "unexpected_output"; }
+  report.before.codexBlockRules = report.before.codexBlockRules.map((rule) => ({ ...rule, matchesWhoamiSid: report.sandboxWhoamiSid ? Boolean(rule.localUserAuthorizedList?.includes(sid)) : null }));
+  const tcp = `$client = [Net.Sockets.TcpClient]::new(); $connected = $false; try { $task = $client.ConnectAsync('127.0.0.1', ${port}); try { $connected = $task.Wait(4000) -and $client.Connected } catch {} } catch {} finally { $client.Dispose() }; `;
+  const originalCommand = tcp + "if ($connected) { Write-Output 'DIAG_NETWORK_CONNECTED' } else { Write-Output 'DIAG_NETWORK_DENIED' }";
+  const consoleCommand = tcp + "if ($connected) { [Console]::WriteLine('DIAG_NETWORK_CONNECTED') } else { [Console]::WriteLine('DIAG_NETWORK_DENIED') }";
+  const commandHash = (command) => crypto.createHash("sha256").update(command).digest("hex");
+  report.originalCommandSha256 = commandHash(originalCommand); report.consoleCommandSha256 = commandHash(consoleCommand);
+  const probe = async (label, command) => {
+    const prior = accepted; const execution = await execute(label, command);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const acceptedConnections = accepted - prior;
+    if (!execution.metadata.success) return { execution: execution.metadata, connected: null, acceptedConnections, denied: null };
+    const connected = execution.output.includes("DIAG_NETWORK_CONNECTED"); const markedDenied = execution.output.includes("DIAG_NETWORK_DENIED");
+    if (connected === markedDenied) { execution.metadata.success = false; execution.metadata.errorKind = "unexpected_output"; return { execution: execution.metadata, connected: null, acceptedConnections, denied: null }; }
+    return { execution: execution.metadata, connected, acceptedConnections, denied: !connected && acceptedConnections === 0 };
+  };
+  report.originalProbe = await probe("original offline TCP probe", originalCommand); report.originalDenial = report.originalProbe.denied;
+  // Always run the Console control, including after a cmdlet execution failure.
+  report.consoleTcpProbe = await probe("Console offline TCP control", consoleCommand);
+  const baseline = report.consoleTcpProbe.denied !== null ? { name: "console_tcp", command: consoleCommand, probe: report.consoleTcpProbe }
+    : report.originalProbe.denied !== null ? { name: "original_tcp", command: originalCommand, probe: report.originalProbe } : null;
+  assert.ok(baseline, "Neither controlled TCP command produced a network result; execution errors are not denial");
+  report.comparisonBaseline = baseline.name; report.comparisonOriginalDenial = baseline.probe.denied;
+  report.probeCommandSha256 = commandHash(baseline.command);
 
   // This unique all-user rule affects only this fixture's one remote loopback TCP port.
   ruleMayExist = true;
+  report.temporaryRuleCreationAttempted = true; report.temporaryRuleCreated = null;
   trustedPowerShell(`
     $rule = New-Object -ComObject HNetCfg.FWRule
     $rule.Name = ${psLiteral(ruleName)}; $rule.Description = 'Disposable APP_RUST fixed-port network comparison'
@@ -161,9 +214,11 @@ try {
         $actual.RemoteAddresses -ne '127.0.0.1' -or $actual.RemotePorts -ne '${port}') { throw 'Unexpected fixture firewall rule scope' }
     try { if ($actual.LocalUserAuthorizedList) { throw 'The fixture comparison requires all users' } } catch [System.Management.Automation.PropertyNotFoundException] {}
   `, 20_000);
+  report.temporaryRuleCreated = true;
   report.temporaryRule = { name: ruleName, direction: "outbound", action: "block", protocol: "TCP", remoteAddress: "127.0.0.1", remotePort: port, users: "all" };
   await new Promise((resolve) => setTimeout(resolve, 500));
-  report.allUsersProbe = await probe("same offline TCP probe with the all-user fixture rule"); report.allUsersDenial = report.allUsersProbe.denied;
+  report.allUsersProbe = await probe("same offline TCP probe with the all-user fixture rule", baseline.command); report.allUsersDenial = report.allUsersProbe.denied;
+  assert.ok(report.allUsersDenial !== null, "The all-user comparison returned an execution error, not network denial");
   report.withTemporaryRule = firewallSnapshot();
   report.status = "DIAGNOSTIC_COMPLETE";
 } catch (error) {
@@ -191,7 +246,8 @@ try {
   }
   report.endedAt = new Date().toISOString(); saveReport();
   console.log(`${report.status} network diagnostic; this is not full sandbox acceptance`);
-  console.log(JSON.stringify({ originalDenial: report.originalDenial, allUsersDenial: report.allUsersDenial, temporaryRuleRemoved: report.temporaryRuleRemoved }));
+  console.log(JSON.stringify({ originalDenial: report.originalDenial, allUsersDenial: report.allUsersDenial, temporaryRuleCreated: report.temporaryRuleCreated,
+    temporaryRuleRemoved: report.temporaryRuleRemoved, comparisonBaseline: report.comparisonBaseline, comparisonOriginalDenial: report.comparisonOriginalDenial, moduleCategories: report.moduleCategories }));
   // Also bounds a timed-out setup RPC whose internal notification timer is still pending.
   process.exit(resultCode);
 }

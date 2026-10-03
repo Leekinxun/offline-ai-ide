@@ -24,8 +24,8 @@ test("desktop /changes uses real Rust versions and Web retains its filesystem co
     if (typeof directory === "string" && (directory === workspace || directory.startsWith(`${workspace}${path.sep}`))) scans++;
     return (originalReadDirectory as any)(directory, ...args);
   }) as typeof fs.readdirSync;
-  t.after(() => {
-    fs.readdirSync = originalReadDirectory; shutdownDesktopNativeIde();
+  t.after(async () => {
+    fs.readdirSync = originalReadDirectory; await shutdownDesktopNativeIde();
     if (originalDesktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = originalDesktop;
     if (originalCore === undefined) delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE; else process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = originalCore;
     fs.rmSync(workspace, { recursive: true, force: true });
@@ -63,7 +63,7 @@ test("desktop /changes uses real Rust versions and Web retains its filesystem co
   assert.equal((await query(cursor)).changed, false);
   assert.equal(scans, 0, "Desktop /changes must never recursively traverse the workspace in Node");
 
-  shutdownDesktopNativeIde();
+  await shutdownDesktopNativeIde();
   process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = path.join(workspace, "missing-core");
   assert.equal((await fetch(`${base}/changes?since=${cursor}`)).status, 503);
   assert.equal(scans, 0, "A disconnected native runtime must not silently fall back to Node scans");

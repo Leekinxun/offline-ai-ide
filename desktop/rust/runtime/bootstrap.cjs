@@ -36,7 +36,7 @@ input.once("close", () => {
   process.emit("disconnect");
   process.emit("message", { type: "shutdown" });
   // A crashed host must not leave the daemon running without its IPC parent.
-  setTimeout(() => process.exit(0), 3000).unref();
+  setTimeout(() => process.exit(1), 20000).unref();
 });
 
 const bootstrap = process.env.CROWNFORGE_BACKEND_BOOTSTRAP;

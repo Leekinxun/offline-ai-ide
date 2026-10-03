@@ -238,11 +238,17 @@ const shutdown = () => {
   shutdownTerminalSessions();
   shutdownPreviews();
   shutdownProcessSessions();
-  shutdownDesktopNativeIde();
+  const nativeStopped = shutdownDesktopNativeIde();
   wss.clients.forEach((client) => client.terminate());
-  server.close(() => process.exit(0));
+  const serverStopped = new Promise<void>((resolve) => {
+    const deadline = setTimeout(resolve, 2500);
+    server.close(() => { clearTimeout(deadline); resolve(); });
+  });
   connections.forEach((socket) => socket.destroy());
-  const deadline = setTimeout(() => process.exit(0), 2500); deadline.unref();
+  void Promise.all([serverStopped, nativeStopped]).then(() => process.exit(0), () => {
+    console.error("Desktop IDE owner cleanup did not complete");
+    process.exit(1);
+  });
 };
 process.once("SIGTERM", shutdown);
 process.once("SIGINT", shutdown);

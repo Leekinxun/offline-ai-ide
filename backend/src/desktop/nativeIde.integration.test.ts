@@ -19,8 +19,8 @@ test("desktop Rust services preserve file, search, Git, PTY and watcher contract
   process.env.CREWFORGE_DESKTOP = "1";
   process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = executable;
   const client = new NativeIdeClient(executable);
-  t.after(() => {
-    client.close(); shutdownDesktopNativeIde();
+  t.after(async () => {
+    await client.close(); await shutdownDesktopNativeIde();
     if (previousDesktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = previousDesktop;
     if (previousCore === undefined) delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE; else process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousCore;
     fs.rmSync(workspace, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true });

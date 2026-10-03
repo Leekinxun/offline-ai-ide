@@ -98,7 +98,7 @@ jobs:
           exit $LASTEXITCODE
       - name: Diagnose loopback denial with a disposable fixed-port all-user comparison
         if: failure() && steps.native_smoke.outcome == 'failure'
-        timeout-minutes: 7
+        timeout-minutes: 12
         run: |
           node scripts/app-rust-windows-network-diagnostic.mjs --allow-setup
           exit $LASTEXITCODE
