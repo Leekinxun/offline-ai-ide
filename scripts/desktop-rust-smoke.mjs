@@ -40,7 +40,11 @@ child.stderr.on("data", (data) => { diagnostics = (diagnostics + data.toString()
 const exited = once(child, "exit");
 const lines = readline.createInterface({ input: child.stdout });
 const checks = [];
+const frames = [];
 let socket;
+let stage = "desktop backend readiness";
+let cursorRequests = "";
+let cursorReplies = 0;
 
 async function bounded(promise, milliseconds = 15_000) {
   let timer;
@@ -57,6 +61,7 @@ try {
     child.once("error", reject); child.once("exit", () => reject(new Error("Desktop backend exited before ready")));
   }));
   assert.match(base, /^http:\/\/127\.0\.0\.1:\d+$/);
+  stage = "authenticated desktop HTTP contracts";
   const unauthorizedBootstrap = await fetch(`${base}/api/auth/me`, { signal: AbortSignal.timeout(5000) });
   assert.equal(unauthorizedBootstrap.status, 401);
   checks.push("unauthenticated loopback cannot bootstrap the Tauri desktop session");
@@ -81,8 +86,18 @@ try {
 
   socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/terminal?protocol=2&token=${encodeURIComponent(me.token)}`);
   const clientKey = crypto.randomUUID(); const documentId = crypto.randomUUID();
-  const frames = [];
-  socket.on("message", (data) => frames.push(JSON.parse(data.toString())));
+  socket.on("message", (data) => {
+    const frame = JSON.parse(data.toString()); frames.push(frame);
+    if (process.platform !== "win32" || frame.type !== "output") return;
+    // portable-pty starts ConPTY with INHERIT_CURSOR. A real xterm answers its
+    // DSR request; this raw WebSocket fixture must provide the same handshake.
+    cursorRequests += frame.data;
+    const request = /\x1b\[6n/g;
+    for (const _match of cursorRequests.matchAll(request)) {
+      socket.send(JSON.stringify({ type: "input", data: "\x1b[1;1R" })); cursorReplies++;
+    }
+    cursorRequests = cursorRequests.replace(request, "").slice(-8);
+  });
   await bounded(once(socket, "open"));
   socket.send(JSON.stringify({ type: "attach", clientKey, documentId }));
   const waitForFrame = async (predicate) => {
@@ -97,32 +112,45 @@ try {
       }));
     } finally { clearInterval(timer); socket.off("error", failed); socket.off("close", closed); }
   };
+  stage = "terminal attach readiness";
   const ready = await waitForFrame((frame) => frame.type === "ready");
   socket.send(JSON.stringify({ type: "ready_ack", ticket: ready.ticket }));
   socket.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
   // Split the marker in the command so an echoed input line cannot satisfy the output assertion.
   socket.send(JSON.stringify({ type: "input", data: process.platform === "win32" ? "Write-Output ('RUST_SMOKE_' + 'UTF8_中文')\r" : "printf 'RUST_SMOKE_%s\\n' 'UTF8_中文'\n" }));
+  stage = "terminal UTF-8 command output";
   await waitForFrame(() => frames.filter((frame) => frame.type === "output").map((frame) => frame.data).join("").includes("RUST_SMOKE_UTF8_中文"));
   checks.push("framed WebSocket to Rust PTY, resize and UTF-8 output");
   socket.send(JSON.stringify({ type: "stop" }));
+  stage = "terminal stop cleanup";
   await waitForFrame((frame) => frame.type === "exit");
   socket.close(); socket = undefined; checks.push("terminal stop and process cleanup");
   child.stdin.write(`${JSON.stringify({ type: "shutdown" })}\n`);
+  stage = "private sidecar shutdown";
   const [code] = await bounded(exited, 8000); assert.equal(code, 0); checks.push("sidecar shutdown through private host protocol");
-  const report = { status: "passed", platform: process.platform, architecture: process.arch, checks, windowsSandboxVerified: false };
+  const report = { status: "passed", platform: process.platform, architecture: process.arch, checks, cursorReplies, windowsSandboxVerified: false };
   const reportPath = path.join(project, ".artifacts/app-rust/smoke-report.json");
   fs.mkdirSync(path.dirname(reportPath), { recursive: true }); fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report));
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "Rust desktop smoke failed");
+  console.error(`${stage}: ${error instanceof Error ? error.message : "Rust desktop smoke failed"}`);
   // Paths and fixture-only diagnostics remain local, separate from the concise test report.
   const failurePath = path.join(project, ".artifacts/app-rust/smoke-failure.log");
-  fs.mkdirSync(path.dirname(failurePath), { recursive: true }); fs.writeFileSync(failurePath, diagnostics);
+  const terminalOutput = frames.filter(frame => frame.type === "output").map(frame => frame.data).join("").slice(-8192);
+  fs.mkdirSync(path.dirname(failurePath), { recursive: true }); fs.writeFileSync(failurePath, JSON.stringify({
+    stage, checks, cursorReplies, frameTypes: frames.map(frame => frame.type), terminalOutput, fixtureDiagnostics: diagnostics,
+  }, null, 2));
   process.exitCode = 1;
 } finally {
-  socket?.terminate(); lines.close(); child.stdin.end();
+  socket?.terminate(); lines.close();
+  if (!child.stdin.destroyed) child.stdin.end(`${JSON.stringify({ type: "shutdown" })}\n`);
   if (child.exitCode === null) {
-    try { await bounded(exited, 5000); } catch { child.kill(); }
+    try { await bounded(exited, 8000); } catch {
+      if (process.platform === "win32" && child.pid) {
+        try { execFileSync(path.join(process.env.SystemRoot || process.env.WINDIR || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 10_000, stdio: "ignore" }); } catch { /* The owned child may already have exited. */ }
+      } else child.kill();
+      await bounded(exited, 5000).catch(() => {});
+    }
   }
-  fs.rmSync(directory, { recursive: true, force: true });
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

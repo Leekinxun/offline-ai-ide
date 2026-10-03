@@ -9,6 +9,7 @@ on:
       - desktop/scripts/prepare-codex-runtime.mjs
       - scripts/fixtures/codex-native-runtime-lock.json
       - scripts/windows-native-sandbox-smoke.mjs
+      - scripts/app-rust-windows-network-diagnostic.mjs
   workflow_dispatch:
 
 permissions:
@@ -89,10 +90,17 @@ jobs:
           node desktop/scripts/prepare-codex-runtime.mjs x64
           exit $LASTEXITCODE
       - name: Verify real native PowerShell isolation and cleanup (explicit disposable setup)
+        id: native_smoke
         run: |
           git diff --exit-code -- scripts/windows-native-sandbox-smoke.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/windows-native-sandbox-smoke.mjs --allow-setup
+          exit $LASTEXITCODE
+      - name: Diagnose loopback denial with a disposable fixed-port all-user comparison
+        if: failure() && steps.native_smoke.outcome == 'failure'
+        timeout-minutes: 7
+        run: |
+          node scripts/app-rust-windows-network-diagnostic.mjs --allow-setup
           exit $LASTEXITCODE
       - name: Record effective Codex block rules without enabling the firewall
         if: always()
@@ -126,5 +134,6 @@ jobs:
             .artifacts/windows-native-sandbox-smoke/report.json
             .artifacts/app-rust-sandbox/firewall-before.json
             .artifacts/app-rust-sandbox/firewall-after.json
+            .artifacts/app-rust-sandbox/network-diagnostic-report.json
           if-no-files-found: warn
           retention-days: 14
