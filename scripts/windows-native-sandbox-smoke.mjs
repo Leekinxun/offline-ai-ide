@@ -4,6 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import { lookup } from "node:dns/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,6 +29,7 @@ const previousEnvironment = new Map();
 const originalSpawn = childProcess.spawn;
 const nativeLaunches = [];
 const nativeSnapshots = [];
+const networkDiagnostics = [];
 const diagnosticTimers = new Set();
 const diagnosticTasks = new Set();
 let spawnObserverInstalled = false;
@@ -64,7 +66,7 @@ async function nativeSnapshot(record, reason) {
   await new Promise((resolve) => {
     let stdout = ""; let stderr = ""; let finished = false;
     const finish = () => { if (finished) return; finished = true; clearTimeout(timer); try { snapshot.windows = JSON.parse(stdout); } catch { snapshot.stdout = boundedDiagnostic(stdout); } if (stderr) snapshot.stderr = boundedDiagnostic(stderr); resolve(); };
-    const diagnostic = originalSpawn(system32(path.join("WindowsPowerShell", "v1.0", "powershell.exe")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference = 'Stop'; ${source}`], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const diagnostic = originalSpawn(system32(path.join("WindowsPowerShell", "v1.0", "powershell.exe")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference = 'Stop'; ${source}`], { windowsHide: true, env: hostPowerShellEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
     const timer = setTimeout(() => { snapshot.timedOut = true; diagnostic.kill(); finish(); }, 5_000); timer.unref();
     diagnostic.stdout.on("data", (chunk) => { stdout = (stdout + chunk.toString()).slice(-32_768); });
     diagnostic.stderr.on("data", (chunk) => { stderr = (stderr + chunk.toString()).slice(-8_192); });
@@ -109,10 +111,36 @@ function system32(name) {
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   assert.ok(systemRoot, "SystemRoot/WINDIR is required"); return path.join(systemRoot, "System32", name);
 }
+function hostPowerShellEnvironment() {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) if (key.toUpperCase() === "PSMODULEPATH") delete environment[key];
+  environment.PSModulePath = system32(path.join("WindowsPowerShell", "v1.0", "Modules"));
+  return environment;
+}
 function trustedPowerShell(source) {
-  const result = spawnSync(system32(path.join("WindowsPowerShell", "v1.0", "powershell.exe")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference = 'Stop'; ${source}`], { encoding: "utf8", timeout: 30_000, maxBuffer: 64_000, windowsHide: true });
+  const result = spawnSync(system32(path.join("WindowsPowerShell", "v1.0", "powershell.exe")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference = 'Stop'; ${source}`], { encoding: "utf8", env: hostPowerShellEnvironment(), timeout: 30_000, maxBuffer: 128_000, windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`Fixture PowerShell failed: ${result.error?.message || result.stderr || result.status}`);
   return String(result.stdout || "").trim();
+}
+function firewallDiagnostics() {
+  const source = `$policy = New-Object -ComObject HNetCfg.FwPolicy2; $profiles = @(); foreach ($entry in @(@{ name = 'Domain'; mask = 1 }, @{ name = 'Private'; mask = 2 }, @{ name = 'Public'; mask = 4 })) { $enabled = $null; $profileError = $null; try { $enabled = [bool]$policy.GetType().InvokeMember('FirewallEnabled', [Reflection.BindingFlags]::GetProperty, $null, $policy, @([int]$entry.mask)) } catch { try { $enabled = [bool](Get-NetFirewallProfile -Name $entry.name -ErrorAction Stop).Enabled } catch { $profileError = $_.Exception.Message } }; $profiles += [pscustomobject]@{ name = $entry.name; mask = $entry.mask; enabled = $enabled; error = $profileError } }; $rules = @(); foreach ($rule in $policy.Rules) { if ([string]$rule.Name -notmatch '(?i)codex' -or $rules.Count -ge 100) { continue }; $users = $null; try { $users = [string]$rule.LocalUserAuthorizedList } catch {}; $rules += [pscustomobject]@{ name = [string]$rule.Name; enabled = [bool]$rule.Enabled; direction = [int]$rule.Direction; action = [int]$rule.Action; profiles = [int]$rule.Profiles; protocol = [int]$rule.Protocol; localUserAuthorizedList = $users; localPorts = [string]$rule.LocalPorts; remotePorts = [string]$rule.RemotePorts; localAddresses = [string]$rule.LocalAddresses; remoteAddresses = [string]$rule.RemoteAddresses } }; [pscustomobject]@{ currentProfileMask = [int]$policy.CurrentProfileTypes; profiles = $profiles; codexRules = $rules } | ConvertTo-Json -Depth 5 -Compress`;
+  try { return JSON.parse(trustedPowerShell(source)); }
+  catch (error) { return { error: boundedDiagnostic(error.message) }; }
+}
+async function externalTcpPositiveControl() {
+  const failures = [];
+  for (const host of ["github.com", "example.com"]) {
+    try {
+      const address = await lookup(host, { family: 4 });
+      await new Promise((resolve, reject) => {
+        const socket = net.connect(443, address.address);
+        socket.setTimeout(5_000, () => socket.destroy(new Error("External TCP positive control timed out")));
+        socket.once("connect", () => { socket.destroy(); resolve(); }); socket.once("error", reject);
+      });
+      return { host, ipv4: address.address, port: 443, connected: true };
+    } catch (error) { failures.push({ host, message: boundedDiagnostic(error.message, 1_000) }); }
+  }
+  throw new Error(`No ordinary external TCP positive control succeeded: ${JSON.stringify(failures)}`);
 }
 async function step(name, action) {
   currentCheck = name;
@@ -241,7 +269,7 @@ try {
   });
 
   await step("the approved Agent shell entry actually executes PowerShell", async () => {
-    const output = await shell.runWorkspaceCommand("Write-Output 'native-powershell-ok'", workspace, undefined, { compatibilityShellAuthorized: true, filesystem, resourceLimits: { wallTimeMs: 30_000 } });
+    const output = await shell.runWorkspaceCommand("Write-Output 'native-powershell-ok'", workspace, undefined, { compatibilityShellAuthorized: true, filesystem, resourceLimits: { wallTimeMs: 120_000 } });
     assert.doesNotMatch(output, /^Error:/); assert.match(output, /native-powershell-ok/);
     const version = await execute("Write-Output ('powershell-version:' + $PSVersionTable.PSVersion.ToString()); Set-Content -LiteralPath 'allowednested/generated.txt' -Value 'workspace-write-ok'");
     assert.doesNotMatch(version, /^Error:/); assert.match(version, /powershell-version:/);
@@ -283,17 +311,29 @@ try {
   });
 
   await step("default network denial survives workspace permission injection", async () => {
+    const diagnostics = { capturedAt: new Date().toISOString(), beforeSandbox: firewallDiagnostics() };
+    networkDiagnostics.push(diagnostics);
     let connections = 0;
     listener = net.createServer((socket) => { connections += 1; socket.end(); });
     await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
     const address = listener.address(); assert.ok(address && typeof address !== "string");
     await new Promise((resolve, reject) => { const socket = net.connect(address.port, "127.0.0.1", () => { socket.end(); resolve(); }); socket.on("error", reject); });
     await until(() => connections === 1, "network positive-control connection");
-    const output = await execute(`$client = [Net.Sockets.TcpClient]::new(); try { $task = $client.ConnectAsync('127.0.0.1', ${address.port}); if ($task.Wait(3000) -and $client.Connected) { Write-Output 'NETWORK-LEAK' } else { Write-Output 'NETWORK-DENIED' } } catch { Write-Output 'NETWORK-DENIED' } finally { $client.Dispose() }`);
-    assert.match(output, /NETWORK-DENIED/); assert.doesNotMatch(output, /NETWORK-LEAK/);
+    diagnostics.externalPositiveControl = await externalTcpPositiveControl();
+    const whoami = system32("whoami.exe");
+    const source = `& ${psLiteral(whoami)} /user; & ${psLiteral(whoami)} /groups; function Test-FixedNetwork([string]$ip, [int]$port, [string]$label) { $client = [Net.Sockets.TcpClient]::new(); try { $task = $client.ConnectAsync($ip, $port); if ($task.Wait(3000) -and $client.Connected) { Write-Output ($label + '-LEAK') } else { Write-Output ($label + '-DENIED') } } catch { Write-Output ($label + '-DENIED') } finally { $client.Dispose() } }; Test-FixedNetwork '127.0.0.1' ${address.port} 'NETWORK'; Test-FixedNetwork ${psLiteral(diagnostics.externalPositiveControl.ipv4)} 443 'EXTERNAL-NETWORK'`;
+    const output = await execute(source, ["."], 120_000);
+    // Capture evidence before any denial assertion so real leaks retain the
+    // sandbox identity and effective firewall rules in the failure report.
+    diagnostics.sandboxIdentityAndNetworkOutput = boundedDiagnostic(output, 24_000);
+    diagnostics.afterSandbox = firewallDiagnostics();
+    diagnostics.loopbackConnections = connections;
+    assert.doesNotMatch(output, /^Error:/);
+    assert.match(output, /^NETWORK-DENIED$/m); assert.doesNotMatch(output, /NETWORK-LEAK/);
+    assert.match(output, /^EXTERNAL-NETWORK-DENIED$/m); assert.doesNotMatch(output, /EXTERNAL-NETWORK-LEAK/);
     await new Promise((resolve) => setTimeout(resolve, 300)); assert.equal(connections, 1);
     listener.closeAllConnections?.(); await new Promise((resolve) => listener.close(resolve)); listener = undefined;
-    return { positiveControlConnections: 1, sandboxConnections: 0 };
+    return { positiveControlConnections: 1, sandboxConnections: 0, externalPositiveControl: diagnostics.externalPositiveControl, externalSandboxConnectionDenied: true };
   });
 
   await step("Agent session stdin and EOF reach PowerShell with a real final exit code", async () => {
@@ -425,7 +465,7 @@ try {
     catch (error) { report.status = "FAIL"; report.cleanupError = error.message; process.exitCode = 1; }
   }
   report.endedAt = new Date().toISOString();
-  report.nativeDiagnostics = { launches: nativeLaunches, snapshots: nativeSnapshots, sdkLogs: retainedSdkLogMetadata, sdkLogContentsCaptured: false };
+  report.nativeDiagnostics = { launches: nativeLaunches, snapshots: nativeSnapshots, network: networkDiagnostics, sdkLogs: retainedSdkLogMetadata, sdkLogContentsCaptured: false };
   writeJson(reportPath, report);
   console.log(`${report.status} windows-native-sandbox-smoke ${reportPath}`);
 }
