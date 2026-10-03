@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  assertAuthorizedContextContent, DEFAULT_CONTEXT_FILE_LIMIT, evaluateContextPath,
-  type AuthorizedWorkspaceFile,
+  assertAuthorizedContextContent, assertAuthorizedContextTextPolicy, DEFAULT_CONTEXT_FILE_LIMIT, evaluateContextPath,
+  isBinaryContextBuffer, type AuthorizedWorkspaceFile, type AuthorizedWorkspaceBytes,
 } from "./contextPolicy.js";
 
 // These remain private even when a caller intentionally grants a containing
@@ -75,7 +75,7 @@ function sameFile(left: fs.Stats, right: fs.Stats): boolean {
     left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && right.isFile() && right.nlink === 1;
 }
 
-function readStableFile(root: string, target: string, maxBytes: number): { content: string; size: number; mtimeMs: number } {
+function readStableFile(root: string, target: string, maxBytes: number): { buffer: Buffer; size: number; mtimeMs: number } {
   const identities = inspectPath(root, target);
   let descriptor: number | undefined;
   try {
@@ -102,8 +102,16 @@ function readStableFile(root: string, target: string, maxBytes: number): { conte
       identities.some((entry, index) => entry.dev !== current[index].dev || entry.ino !== current[index].ino)) {
       denied("changed_during_read");
     }
-    const content = assertAuthorizedContextContent(buffer.subarray(0, bytes));
-    return { content, size: bytes, mtimeMs: after.mtimeMs };
+    const result = buffer.subarray(0, bytes);
+    // Binary metadata must not disclose even a digest of secret/generated
+    // content. This view is only scanned, never returned as model context.
+    if (isBinaryContextBuffer(result)) {
+      const scan = result.toString("utf8");
+      // Keep original token boundaries and also detect secrets split by NUL.
+      assertAuthorizedContextTextPolicy(scan);
+      assertAuthorizedContextTextPolicy(scan.replace(/\0/g, ""));
+    } else assertAuthorizedContextContent(result);
+    return { buffer: result, size: bytes, mtimeMs: after.mtimeMs };
   } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
 }
 
@@ -112,12 +120,12 @@ function readStableFile(root: string, target: string, maxBytes: number): { conte
  * root. The roots must come from server policy, never model/tool JSON. This
  * function grants no writes and does not populate file-edit observation caches.
  */
-export function readAuthorizedAgentFile(
+export function readAuthorizedAgentBytes(
   workspaceDir: string,
   candidatePath: string,
   externalReadRoots: readonly string[],
   maxBytes = DEFAULT_CONTEXT_FILE_LIMIT
-): AuthorizedWorkspaceFile & { external: boolean } {
+): AuthorizedWorkspaceBytes & { external: boolean } {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("Invalid context file byte limit");
   const limit = Math.min(maxBytes, DEFAULT_CONTEXT_FILE_LIMIT);
   if (typeof candidatePath !== "string" || !candidatePath.trim() || candidatePath.includes("\0")) denied("invalid_path");
@@ -160,4 +168,17 @@ export function readAuthorizedAgentFile(
     // Never include host filenames or content in denial/error messages.
     throw new Error("Context file is unavailable");
   }
+}
+
+/** Strict text projection; bytes/metadata never authorize a text edit. */
+export function readAuthorizedAgentFile(
+  workspaceDir: string,
+  candidatePath: string,
+  externalReadRoots: readonly string[],
+  maxBytes = DEFAULT_CONTEXT_FILE_LIMIT
+): AuthorizedWorkspaceFile & { external: boolean } {
+  const file = readAuthorizedAgentBytes(workspaceDir, candidatePath, externalReadRoots, maxBytes);
+  const content = assertAuthorizedContextContent(file.buffer);
+  const { buffer: _buffer, ...metadata } = file;
+  return { ...metadata, content };
 }

@@ -1,4 +1,5 @@
 import path from "path";
+import crypto from "node:crypto";
 import { safePath } from "../utils/safePath.js";
 import {
   FileSelectionRange,
@@ -21,7 +22,8 @@ import { planReadOnlyShell } from "./readOnlyShell.js";
 import { networkGrantForTool } from "./networkAccess.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { requestAgentQuestion } from "../chat/agentQuestions.js";
-import { readAuthorizedAgentFile } from "./externalFileAccess.js";
+import { readAuthorizedAgentBytes } from "./externalFileAccess.js";
+import { assertAuthorizedContextContent, isBinaryContextBuffer, isExpectedTextPath, NUL_TEXT_RECOVERY } from "./contextPolicy.js";
 import { renameWorkspaceFile } from "./renameFile.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
 import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
@@ -191,13 +193,25 @@ export async function runReadFile(
       throw new Error("Use only one of offset, start_line, or character_offset");
     }
     const lineLimit = limit === undefined ? undefined : integer(limit, "limit", 1);
-    const file = readAuthorizedAgentFile(cwd, filePath, context?.getExternalReadRoots?.() ?? context?.externalReadRoots ?? []);
-    const content = file.content;
-    const lineStarts = [0];
-    for (let index = 0; index < content.length; index += 1) if (content[index] === "\n") lineStarts.push(index + 1);
     let firstLine = options.start_line !== undefined
       ? integer(options.start_line, "start_line", 1) - 1
       : options.offset !== undefined ? integer(options.offset, "offset", 0) : 0;
+    if (options.character_offset !== undefined) integer(options.character_offset, "character_offset", 0);
+    const file = readAuthorizedAgentBytes(cwd, filePath, context?.getExternalReadRoots?.() ?? context?.externalReadRoots ?? []);
+    if (!file.external && isBinaryContextBuffer(file.buffer)) {
+      if (isExpectedTextPath(file.path) && file.buffer.includes(0) && Buffer.from(file.buffer.toString("utf8"), "utf8").equals(file.buffer)) {
+        throw new Error(`Context file is not authorized: binary. ${NUL_TEXT_RECOVERY}`);
+      }
+      return JSON.stringify({
+        path: file.path, read_only: true, content_kind: "binary", size_bytes: file.size,
+        sha256: crypto.createHash("sha256").update(file.buffer).digest("hex"),
+        ...(file.buffer.subarray(0, 16).equals(Buffer.from("SQLite format 3\0")) ? { format: "sqlite" } : {}),
+        inspection_only: true, notice: "Binary content is excluded from text context. Metadata is not verification evidence; verify through a normally approved command tool.",
+      });
+    }
+    const content = assertAuthorizedContextContent(file.buffer);
+    const lineStarts = [0];
+    for (let index = 0; index < content.length; index += 1) if (content[index] === "\n") lineStarts.push(index + 1);
     if (firstLine >= lineStarts.length) throw new Error("Requested line is past the end of the file");
     const start = options.character_offset !== undefined
       ? integer(options.character_offset, "character_offset", 0)
@@ -833,7 +847,7 @@ export const CORE_TOOLS: OpenAIToolDef[] = [
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a versioned file page. Workspace files can later be edited; external ordinary files inside server-authorized roots are read-only and marked read_only. Returns JSON content, version and continuation offsets; never write metadata into files. Pages are bounded to 50,000 characters and file content policy still applies.",
+      description: "Read a versioned text file page. Workspace text can later be edited; external ordinary files inside server-authorized roots are read-only. Safe workspace binary files return read-only size/SHA256 metadata without content or an editable version; metadata is not verification evidence. NUL-contaminated text is rejected with regeneration guidance. Text pages are bounded to 50,000 characters and file content policy still applies. Never write metadata into files.",
       parameters: {
         type: "object",
         properties: {

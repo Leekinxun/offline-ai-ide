@@ -11,6 +11,53 @@ function read(toolCallId: string, overrides: Record<string, unknown> = {}): Exec
     output: JSON.stringify({ path: "logs/a.txt", version: "sha256:v1", character_offset: 0, total_characters: 6, complete: true, truncated: false, content: "abcdef", ...overrides }) };
 }
 
+function binaryMetadata(toolCallId: string, overrides: Record<string, unknown> = {}): ExecutionFactInput {
+  return { kind: "tool_result", requestId: "request", toolCallId, toolName: "read_file", isError: false,
+    output: JSON.stringify({ path: "delivery.sqlite", read_only: true, content_kind: "binary", inspection_only: true,
+      size_bytes: 8192, sha256: "1".repeat(64), format: "sqlite", ...overrides }) };
+}
+
+test("binary metadata remains a successful inspection without counting a text read or degrading replayed facts", () => {
+  const facts = createExecutionFacts();
+  const receipt = { ...binaryMetadata("metadata"), executionId: "metadata-1" };
+  recordExecutionFact(facts, receipt);
+  assert.equal(facts.toolCalls, 1);
+  assert.equal(facts.successfulToolCalls, 1);
+  assert.equal(facts.fileReads, 0);
+  assert.equal(facts.unclassifiedFileReads, 0);
+  assert.equal(facts.completeness, "complete");
+  assert.deepEqual(facts.readRanges, []);
+
+  const restored = normalizeExecutionFacts(JSON.parse(JSON.stringify(facts)));
+  assert.deepEqual(restored, facts);
+  recordExecutionFact(restored, receipt);
+  assert.deepEqual(restored, facts);
+  recordExecutionFact(restored, read("text"));
+  assert.equal(restored.toolCalls, 2);
+  assert.equal(restored.successfulToolCalls, 2);
+  assert.equal(restored.fileReads, 1);
+  assert.equal(restored.completeness, "complete");
+  assert.deepEqual(normalizeExecutionFacts(restored), restored);
+});
+
+test("malformed binary metadata cannot hide an unclassified successful file read", () => {
+  for (const overrides of [
+    { path: "" }, { read_only: false }, { inspection_only: false }, { content_kind: "text" },
+    { size_bytes: -1 }, { size_bytes: 1.5 }, { size_bytes: Number.MAX_SAFE_INTEGER + 1 },
+    { sha256: "not-a-sha256" }, { sha256: "1".repeat(63) }, { sha256: "A".repeat(64) },
+    { content: "unread bytes" }, { content: null }, { version: "editable-version" }, { version: null },
+  ]) {
+    const facts = createExecutionFacts();
+    recordExecutionFact(facts, binaryMetadata("metadata", overrides));
+    assert.equal(facts.toolCalls, 1, JSON.stringify(overrides));
+    assert.equal(facts.successfulToolCalls, 1, JSON.stringify(overrides));
+    assert.equal(facts.fileReads, 1, JSON.stringify(overrides));
+    assert.equal(facts.unclassifiedFileReads, 1, JSON.stringify(overrides));
+    assert.equal(facts.completeness, "unknown", JSON.stringify(overrides));
+    assert.deepEqual(normalizeExecutionFacts(facts), facts);
+  }
+});
+
 test("distinct dispatches with reused provider IDs are counted but replayed receipts stay idempotent", () => {
   const facts = createExecutionFacts();
   const first = { ...read("call_0"), executionId: "1" };

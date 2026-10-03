@@ -135,6 +135,7 @@ export function readEditableFile(workspaceDir: string, filePath: string): string
 
 /** Keep the old file intact until a complete replacement is ready. */
 export function atomicWriteFile(workspaceDir: string, filePath: string, content: string, preimage: string | undefined): fs.Stats {
+  if (content.includes("\0")) throw new Error("Text file writes cannot contain NUL bytes. Use escaped text (repr or hex) for binary headers, or an approved command tool to generate binary artifacts.");
   const initial = inspectTarget(workspaceDir, filePath);
   if (initial.content !== preimage) throw new Error(`File changed before writing: ${filePath}`);
   fs.mkdirSync(path.dirname(initial.target), { recursive: true });

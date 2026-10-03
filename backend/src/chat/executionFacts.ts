@@ -75,6 +75,18 @@ function integer(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+function isBinaryMetadata(output: string): boolean {
+  try {
+    const value: unknown = JSON.parse(output);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const metadata = value as Record<string, unknown>;
+    return typeof metadata.path === "string" && metadata.path.length > 0
+      && metadata.read_only === true && metadata.content_kind === "binary" && metadata.inspection_only === true
+      && integer(metadata.size_bytes) && typeof metadata.sha256 === "string" && /^[a-f0-9]{64}$/.test(metadata.sha256)
+      && !("content" in metadata) && !("version" in metadata);
+  } catch { return false; }
+}
+
 function readFact(input: Extract<ExecutionFactInput, { kind: "tool_result" }>): Omit<FileReadFact, "count" | "firstToolCallId" | "lastToolCallId"> | null {
   try {
     const value: unknown = JSON.parse(input.output);
@@ -117,6 +129,8 @@ export function recordExecutionFact(state: ExecutionFacts, input: ExecutionFactI
   else if (input.isError) state.failedToolCalls += 1;
   else state.successfulToolCalls += 1;
   if (input.toolName !== "read_file" || input.isError || input.denied) return;
+  // Metadata confirms only a successful inspection, not a text-content read.
+  if (isBinaryMetadata(input.output)) return;
   state.fileReads += 1;
   const read = readFact(input);
   if (!read) { state.unclassifiedFileReads += 1; state.completeness = "unknown"; return; }
