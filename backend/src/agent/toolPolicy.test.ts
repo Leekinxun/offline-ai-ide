@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
+test("PowerShell commands retain system, privilege, deletion and network approval boundaries", () => {
+  for (const command of ["Start-Process app -Verb RunAs", "Restart-Computer", "Format-Volume C:", "Set-Acl src", "Remove-Item src/main.ts", "rd -Recurse -Force src", "Invoke-WebRequest https://example.com"]) assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, false, command);
+  assert.equal(evaluateShellCommand("Get-ChildItem src; npm run build", { compatibilityShellAuthorized: true }).allowed, true);
+});
+
 test("workspace write policy allows source files and protects metadata and secrets", () => {
   assert.equal(evaluateWorkspaceWrite("src/app.ts").allowed, true);
   assert.equal(evaluateWorkspaceWrite("../outside.ts").allowed, false);

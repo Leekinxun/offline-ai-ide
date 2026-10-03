@@ -102,12 +102,37 @@ test("custom base keeps runtime mode and read-only constraints", () => {
 test("Windows Agent context describes WSL Bash and relative Linux command paths", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-wsl-prompt-"));
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "wsl";
   Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
-  t.after(() => { Object.defineProperty(process, "platform", descriptor); fs.rmSync(workspace, { recursive: true, force: true }); });
+  t.after(() => {
+    Object.defineProperty(process, "platform", descriptor);
+    if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+    else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
   const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
   assert.match(prompt, /Linux Bash through WSL 2/);
   assert.match(prompt, /Use relative POSIX paths/);
   assert.match(prompt, /If WSL dependencies or isolation are unavailable, report the tool error/);
+});
+
+test("Windows default Agent context describes native PowerShell and explicit sandbox setup", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-native-prompt-"));
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  t.after(() => {
+    Object.defineProperty(process, "platform", descriptor);
+    if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+    else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
+  assert.match(prompt, /native Windows PowerShell in the Codex Windows sandbox/);
+  assert.match(prompt, /compatibility tool named bash also runs PowerShell/);
+  assert.match(prompt, /Sandbox setup is a separate user action/);
 });
 
 test("system prompt bundle preserves section-level provenance without changing text", () => {

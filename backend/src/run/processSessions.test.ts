@@ -26,9 +26,18 @@ async function waitFor(owner: ProcessSessionOwner, id: string, predicate: (value
   throw new Error("Process session did not reach the expected state");
 }
 
-test("Windows process tree cleanup invokes taskkill for the owned supervisor pid only", () => {
-  assert.deepEqual(windowsProcessTreeKillInvocation(4321), { executable: "taskkill", args: ["/pid", "4321", "/T", "/F"] });
+test("Windows process tree cleanup invokes the absolute system taskkill for the owned supervisor pid only", (t) => {
+  const previous = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR };
+  t.after(() => { for (const key of ["SystemRoot", "WINDIR"] as const) if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; });
+  process.env.SystemRoot = "D:\\Windows";
+  assert.deepEqual(windowsProcessTreeKillInvocation(4321), { executable: "D:\\Windows\\System32\\taskkill.exe", args: ["/pid", "4321", "/T", "/F"] });
   for (const pid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) assert.throws(() => windowsProcessTreeKillInvocation(pid), /Invalid process tree pid/);
+  delete process.env.SystemRoot; delete process.env.WINDIR;
+  assert.equal(windowsProcessTreeKillInvocation(4321).executable, "C:\\Windows\\System32\\taskkill.exe");
+  for (const value of ["relative-Windows", "\\\\untrusted\\share"]) {
+    process.env.SystemRoot = value;
+    assert.throws(() => windowsProcessTreeKillInvocation(4321), /Invalid Windows system directory/);
+  }
 });
 
 test("sessions stream incremental output, accept stdin, and preserve exact invocation and exit", async (t) => {
@@ -171,6 +180,8 @@ test("Agent long sessions keep mandatory filesystem and network isolation", asyn
 test("Agent sessions fail closed on Windows when the WSL executor is unavailable", (t) => {
   const owner = fixture(t, {});
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const previousEnvironment = process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+  process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "wsl";
   setWslExecutionTestHooks({
     platform: "win32", env: { SystemRoot: "C:\\Windows" },
     spawnSync: (() => ({ pid: 0, output: [], stdout: "", stderr: "", status: null, signal: null, error: Object.assign(new Error("WSL unavailable in fixture"), { code: "ENOENT" }) })) as unknown as typeof spawnSync,
@@ -179,6 +190,8 @@ test("Agent sessions fail closed on Windows when the WSL executor is unavailable
   t.after(() => {
     Object.defineProperty(process, "platform", descriptor);
     setWslExecutionTestHooks(undefined);
+    if (previousEnvironment === undefined) delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT;
+    else process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = previousEnvironment;
   });
   assert.equal(probeFilesystemIsolation().available, false);
   assert.equal(probeFilesystemIsolation().reasonCode, "unsupported_platform");

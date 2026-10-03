@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { prepareCodexRuntime, verifyCodexRuntime } from "./prepare-codex-runtime.mjs";
 
 const require = createRequire(import.meta.url);
 const { build, Platform, Arch } = require("electron-builder");
@@ -21,6 +22,7 @@ const selected = targets[target];
 if (!selected) throw new Error(`Unknown target: ${target || "(missing)"}`);
 if (process.platform !== selected.host) throw new Error(`${target} must be built on ${selected.host} to prepare native modules`);
 const targetArch = target.endsWith("x64") ? "x64" : "arm64";
+const codexRuntime = target === "win-x64" ? prepareCodexRuntime(targetArch) : undefined;
 if (process.arch !== targetArch) throw new Error(`${target} must be built on a ${targetArch} host so ripgrep and node-pty match the package architecture`);
 
 function run(command, args, cwd) {
@@ -46,6 +48,7 @@ for (const [source, destination] of [
 for (const file of ["package.json", "package-lock.json", "bootstrap.cjs"]) {
   fs.copyFileSync(path.join(rootDir, "backend", file), path.join(stageDir, "backend", file));
 }
+if (codexRuntime) fs.cpSync(codexRuntime, path.join(stageDir, "backend/vendor/codex", `win-${targetArch}`), { recursive: true });
 npm(["ci", "--omit=dev"], path.join(stageDir, "backend"));
 if (target === "win7-x64") {
   // Current ripgrep binaries are built with a Rust toolchain whose default
@@ -92,7 +95,7 @@ const config = {
   directories: { output: path.join(rootDir, "desktop-dist", target) },
   files: ["main.cjs", "preload.cjs", "preferences.cjs", "bridge-policy.cjs", "package.json"],
   extraResources: [
-    { from: path.join(stageDir, "backend"), to: "backend", filter: ["dist/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
+    { from: path.join(stageDir, "backend"), to: "backend", filter: ["dist/**/*", "vendor/codex/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
     { from: path.join(stageDir, "backend", "node_modules"), to: "backend/node_modules", filter: ["**/*"] },
     { from: path.join(stageDir, "frontend"), to: "frontend" },
     { from: path.join(stageDir, "plugins"), to: "plugins" },
@@ -124,6 +127,7 @@ for (const relative of [
   const item = path.join(packageResources, relative);
   if (!fs.existsSync(item)) throw new Error(`Packaged resource is missing: ${item}`);
 }
+if (codexRuntime) verifyCodexRuntime(path.join(packageResources, "backend/vendor/codex", `win-${targetArch}`), targetArch);
 for (const name of fs.readdirSync(config.directories.output)) {
   if (![".dmg", ".zip", ".exe"].includes(path.extname(name))) continue;
   const digest = crypto.createHash("sha256").update(fs.readFileSync(path.join(config.directories.output, name))).digest("hex");

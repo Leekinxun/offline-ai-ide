@@ -5,7 +5,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { discoverRunTasks, resolveRunTaskExecution } from "./service.js";
 import { prepareWorkspaceProcess, type WorkspaceFilesystemGrant, type ProcessResourceLimits } from "../agent/processSandbox.js";
-import { DEFAULT_COMPATIBILITY_SHELL_LIMITS } from "../agent/shell.js";
+import { defaultAgentShellLimits } from "../agent/shell.js";
+import { usesNativeWindowsAgent } from "../agent/windowsShell.js";
 import { safePath } from "../utils/safePath.js";
 import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "../agent/networkAccess.js";
 import { nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
@@ -15,8 +16,12 @@ export interface ProcessSessionSummary { id: string; taskId: string; label: stri
 export interface ProcessOutputEvent { seq: number; stream: "stdout" | "stderr"; text: string; }
 export interface ProcessSessionOwner { workspaceDir: string; owner: string; sessionToken?: string; runId?: string; }
 interface StoredSession extends ProcessSessionSummary { ownerHash: string; workspaceDir: string; events: ProcessOutputEvent[]; }
-interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; stdinError?: Error; }
+interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; cancel?: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; stdinError?: Error; }
 const active = new Map<string, LiveSession>();
+/** Execution-environment changes apply only after managed Agent jobs finish. */
+export function hasRunningAgentProcessSessions(): boolean {
+  return [...active.values()].some((session) => session.record.taskId === "agent:command");
+}
 const MAX_LOG_CHARS = 128_000;
 const MAX_EVENTS = 1024;
 const MAX_SESSIONS = 40;
@@ -37,7 +42,7 @@ const writeDiagnostic=(name,value)=>{if(!diagnosticsEnabled)return;try{const dir
 const marker=(event,value={})=>writeDiagnostic(\`watchdog-\${event}-\${process.pid}.json\`,{event,watchdogPid:process.pid,parentPid,childPid:child.pid,platform:process.platform,cwd:process.cwd(),...value});
 marker("started",{executable,args:args.slice(0,8)});
 const diagnostic=(pid,result)=>writeDiagnostic(\`watchdog-taskkill-\${process.pid}-\${pid}.json\`,{watchdogPid:process.pid,parentPid,targetPid:pid,status:result.status,signal:result.signal,error:result.error?{code:result.error.code,message:result.error.message}:undefined,stdout:String(result.stdout||"").slice(-4096),stderr:String(result.stderr||"").slice(-4096)});
-const taskkill=(pid)=>{try{const systemRoot=process.env.SystemRoot||process.env.WINDIR;const command=systemRoot?path.join(systemRoot,"System32","taskkill.exe"):"taskkill.exe";const result=spawnSync(command,["/pid",String(pid),"/T","/F"],{stdio:["ignore","pipe","pipe"],encoding:"utf8",windowsHide:true,timeout:15000});diagnostic(pid,result)}catch{}finally{process.exit(1)}};
+const taskkill=(pid)=>{try{const systemRoot=process.env.SystemRoot||process.env.WINDIR||"C:\\\\Windows";if(!/^[A-Za-z]:[\\\\/]/.test(systemRoot)||systemRoot.includes("\\0"))throw new Error("Invalid Windows system directory");const command=path.win32.join(systemRoot,"System32","taskkill.exe");const result=spawnSync(command,["/pid",String(pid),"/T","/F"],{stdio:["ignore","pipe","pipe"],encoding:"utf8",windowsHide:true,timeout:15000});diagnostic(pid,result)}catch{}finally{process.exit(1)}};
 let cleaning=false;
 const kill=(reason)=>{if(cleaning)return;cleaning=true;try{if(process.platform==="win32"){writeDiagnostic(\`watchdog-parent-\${process.pid}.json\`,{watchdogPid:process.pid,parentPid,childPid:child.pid,reason});if(child.pid)taskkill(child.pid);else process.exit(1)}else process.kill(-process.pid,"SIGKILL")}catch{process.exit(1)}};
 process.on("exit",code=>marker("exit",{code}));
@@ -53,9 +58,11 @@ child.once("close",code=>{marker("child-close",{code});process.exit(code===null?
 `;
 const ownerHash = (owner: string) => crypto.createHash("sha256").update(owner).digest("hex");
 const summary = ({ ownerHash: _owner, workspaceDir: _workspace, events: _events, ...record }: StoredSession): ProcessSessionSummary => ({ ...record });
-export function windowsProcessTreeKillInvocation(pid: number): { executable: "taskkill"; args: string[] } {
+export function windowsProcessTreeKillInvocation(pid: number): { executable: string; args: string[] } {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid process tree pid");
-  return { executable: "taskkill", args: ["/pid", String(pid), "/T", "/F"] };
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  if (!/^[A-Za-z]:[\\/]/.test(systemRoot) || systemRoot.includes("\0")) throw new Error("Invalid Windows system directory");
+  return { executable: path.win32.join(systemRoot, "System32", "taskkill.exe"), args: ["/pid", String(pid), "/T", "/F"] };
 }
 function killWindowsProcessTree(pid: number | undefined): void {
   if (!pid) return;
@@ -132,7 +139,8 @@ function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   live.requestedStatus = status;
   // Also revoke the Linux lease; killing wsl.exe alone cannot prove that its
   // Linux process tree has stopped.
-  live.cleanup();
+  try { if (live.cancel) live.cancel(); else live.cleanup(); }
+  catch { /* A failed lease marker must not prevent process-tree termination. */ }
   signalGroup(live, "SIGTERM");
   live.force = setTimeout(() => signalGroup(live, "SIGKILL"), 1500); live.force.unref();
 }
@@ -182,21 +190,30 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
   if (input.nodeRuntime && input.executable !== process.execPath) throw new Error("Internal Node sessions must use the backend executable");
   const prepared = prepareWorkspaceProcess({
     executable: input.launchExecutable || input.executable, args: input.launchArgs || input.args, cwd: workspaceDir, signal: input.signal,
-    limits: { ...(input.agent ? DEFAULT_COMPATIBILITY_SHELL_LIMITS : {}), ...input.limits, wallTimeMs: timeoutMs },
+    limits: { ...(input.agent ? defaultAgentShellLimits() : {}), ...input.limits, wallTimeMs: timeoutMs },
     resourceLimitMode: "posix-shell", networkMode: input.agent && !input.networkAuthorized ? "deny" : "inherit",
     ...(input.agent ? { filesystem: input.filesystem || { workspaceDir, readPaths: ["."], writePaths: ["."] } } : {}),
-    env: { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1", NPM_CONFIG_USERCONFIG: process.platform === "win32" && !input.agent ? "NUL" : "/dev/null" },
+    env: { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1", NPM_CONFIG_USERCONFIG: process.platform === "win32" && (!input.agent || usesNativeWindowsAgent()) ? "NUL" : "/dev/null" },
   });
   const startedAt = Date.now();
   const record: StoredSession = { id: crypto.randomUUID(), taskId: input.taskId, label: input.label.slice(0, 200), status: "running", startedAt, timeoutMs, deadlineAt: startedAt + timeoutMs, exitCode: null, nextCursor: 0, workspaceDir, ownerHash: ownerHash(input.owner), events: [], ...(input.runId ? { runId: input.runId } : {}) };
   if (!input.privateInvocation) record.invocation = { executable: input.executable, args: [...input.args] };
   try { persist(record); } catch (error) { prepared.cleanup(); throw error; }
-  let child: ChildProcess;
+  let child: ChildProcess | undefined;
   // On Windows libuv kills non-detached direct children with the parent's Job
   // Object. The watchdog must outlive that parent to clean its whole subtree.
-  try { child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", String(process.pid), prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true }); }
-  catch (error) { prepared.cleanup(); record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error; }
-  const live: LiveSession = { record, child, cleanup: prepared.cleanup, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
+  try {
+    child = spawn(process.execPath, ["-e", PROCESS_WATCHDOG, input.nodeRuntime && process.versions.electron ? "node" : "task", String(process.pid), prepared.executable, ...prepared.args], { cwd: workspaceDir, env: watchdogEnvironment(prepared.env), shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true });
+    if (child.pid) prepared.onSpawn?.(child.pid);
+  } catch (error) {
+    if (child?.pid) {
+      try { prepared.cancel?.(); } catch { /* Preserve cleanup and termination when a lease write fails. */ }
+      child.once("close", prepared.cleanup);
+      try { if (process.platform === "win32") killWindowsProcessTree(child.pid); else process.kill(-child.pid, "SIGKILL"); } catch { /* Already closed. */ }
+    } else prepared.cleanup();
+    record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error;
+  }
+  const live: LiveSession = { record, child, cleanup: prepared.cleanup, cancel: prepared.cancel, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
   live.timer.unref(); active.set(record.id, live);
   const append = (stream: ProcessOutputEvent["stream"], text: string) => {
     if (!text) return;
@@ -241,7 +258,9 @@ export function startProjectTaskSession(owner: ProcessSessionOwner, taskId: stri
 export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: () => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
   let networkAuthorized = false;
   if (input.networkExecutionGrant) {
-    const shellCommand = ["/bin/sh", "/bin/bash"].includes(input.executable) && input.args.length === 2 && input.args[0] === "-c" ? input.args[1] : undefined;
+    const commandIndex = input.args.findIndex((arg) => arg.toLowerCase() === "-command");
+    const shellCommand = ["/bin/sh", "/bin/bash"].includes(input.executable) && input.args.length === 2 && input.args[0] === "-c" ? input.args[1]
+      : usesNativeWindowsAgent() && commandIndex === input.args.length - 2 ? input.args[commandIndex + 1] : undefined;
     if (!shellCommand) throw new Error("Network approval is bound to the approved compatibility-shell command");
     consumeNetworkExecutionGrant(input.networkExecutionGrant, input.workspaceDir, shellCommand, "process_start");
     networkAuthorized = true;

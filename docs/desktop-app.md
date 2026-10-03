@@ -140,53 +140,121 @@ configured interpreter. Project npm tasks and Vite previews require local Node.j
 npm, and the project's installed dependencies; the bundled Electron backend
 does not install these project tools or packages for you.
 
-On Windows 10/11, Agent shell commands use Bash inside WSL2. Install a WSL2
-Linux distribution with Bash, bubblewrap, and Node.js 18 or later at
-`/usr/bin/node`, and configure its default user as a regular, non-root user.
-The App uses the system's default WSL distribution unless the backend's
-`CROWNFORGE_WSL_DISTRO` environment variable selects another installed
-distribution. The Windows desktop and file tools keep using the same workspace;
-the execution adapter maps a supported NTFS workspace into WSL for command
-execution.
+On Windows 10/11, Agent commands default to **PowerShell in a Windows native
+sandbox**. WSL, Linux Node.js, bubblewrap, and NTFS case-sensitivity changes are
+not prerequisites for this default environment. Desktop builds from this source include a
+pinned, integrity-checked execution runtime derived from the upstream Codex
+Windows sandbox. It is used only for command execution and sandbox setup: no
+Codex account, Codex model, or model request is needed. Your projects still need
+their usual local tools, such as Git, Node.js/npm, Python, and installed project
+dependencies. Previously published preview packages need to be rebuilt and
+released before they contain this execution adapter.
 
-Agent commands require a **case-sensitive NTFS workspace** so differently cased
-filenames cannot bypass the Linux filesystem isolation rules. Prepare a new,
-empty NTFS project directory and enable case sensitivity from an administrator
-PowerShell before copying the project into it:
+Open **Settings → General → Desktop app**. The default execution environment is
+**Windows native · PowerShell**, with the recommended sandbox mode. Click
+**Set up Windows sandbox** and complete the Windows administrator prompt when
+shown. The App verifies completion before enabling commands. Checking readiness
+does not perform setup or request administrator access, and an unsuccessful or
+cancelled setup leaves execution blocked. Initialization and changes to the
+execution environment require a local, signed-in App administrator. Running
+Agent process sessions must stop before these settings can change.
+
+The recommended native sandbox follows Codex's Windows permission boundary:
+commands can read ordinary local files that the Windows account can access,
+write only to authorized workspace paths, and use no network by default. App
+credentials and settings, sandbox state, and protected workspace secrets such as
+`.env` and `.ssh` remain unreadable. Workspace control files are not writable,
+and a project's `.codex/config.toml` cannot expand App-granted permissions.
+This read boundary is broader than the isolated filesystem view used by WSL.
+Choose WSL when a task needs narrow filesystem read grants or explicitly
+required POSIX CPU, memory, or open-file hard limits. Native execution enforces
+wall-clock deadlines; it does not claim those POSIX limits.
+
+The native runtime also retains Codex's normal-exit behavior: a command that
+launches an independent background process can exit successfully while that
+descendant continues running. A zero exit code does not establish that these
+background processes were cleaned up. Keep App-managed long-running work in the
+foreground and use `process_start`; its explicit stop, timeout, and backend-loss
+paths supervise and terminate the still-active payload tree. Independently
+backgrounded work that outlives a normal root exit is outside that cleanup
+guarantee.
+
+The compatibility (unelevated) mode remains visible to describe the upstream
+choice, but it cannot enforce the App's current sensitive-file protection policy.
+It therefore reports **unavailable** rather than enabling unrestricted execution.
+Use the recommended native mode or WSL2. Execution settings are stored separately
+in the App's private `agent-execution.json`; they do not overwrite other App
+settings. A failed native probe never silently falls back to an unrestricted
+PowerShell process.
+
+### Optional WSL2 environment
+
+Select **WSL2 · Linux Bash** in the same desktop settings when a project needs
+Linux tools. This optional environment still requires a WSL2 Linux distribution
+with Bash, bubblewrap, Node.js 18 or later at `/usr/bin/node`, and a regular,
+non-root default user. The App uses the system's default WSL distribution unless
+the trusted backend environment sets `CROWNFORGE_WSL_DISTRO` to another installed
+distribution. Windows file tools retain the same workspace while command paths
+are mapped to Linux.
+
+Only the WSL adapter requires a **case-sensitive NTFS workspace**. Prepare a new,
+empty directory before copying a Linux project into it:
 
 ```powershell
 fsutil.exe file setCaseSensitiveInfo "C:\path\project" enable
 ```
 
 Follow [Microsoft's case-sensitivity guidance](https://learn.microsoft.com/en-us/windows/wsl/case-sensitivity)
-before migrating an existing, populated directory; do not simply change its
-flags in place. The App checks this requirement and never changes directory
-flags itself. Linux filesystem workspaces accessed through WSL UNC paths have
-not yet been validated for this adapter.
+before migrating an existing populated directory. The App checks these flags and
+does not change them. WSL UNC filesystem workspaces have not yet been validated
+for this adapter. A ready WSL service does not establish that the current
+workspace passes its separate path and case-sensitivity checks. No unrestricted
+fallback is provided when Linux isolation cannot be established.
 
-Installing WSL alone does not enable Agent commands. The App first checks the
-Linux execution environment and its filesystem and network isolation; commands
-remain unavailable if that check fails. Open Settings to see the WSL execution
-service status and check it again after changing the distribution. A ready
-service does not guarantee that the selected workspace meets the separate
-case-sensitivity and path checks. WSL does not provide
-an unrestricted fallback when bubblewrap cannot establish isolation. Windows 7
-does not support WSL and keeps Agent shell commands disabled. File read/write/edit
-tools, the manual terminal, and Web preview remain available on all Windows
-targets. The manual terminal continues to use its native Windows terminal path.
+Windows 7 cannot use WSL2 or the current native sandbox runtime, so Agent shell
+commands remain unavailable there. File tools, the manual terminal, and Web
+preview retain their existing Windows behavior. The manual terminal uses its
+native terminal path independently of the Agent execution environment.
 
-For native Windows acceptance, build the backend and run
-`node scripts/windows-wsl-smoke.mjs` from the repository root in an administrator
-terminal after preparing WSL2. This test only sets case sensitivity on its own
-disposable directories and uses isolated configuration. It verifies Bash,
-Node/npm, read-only queries, private-file and network isolation, interactive
-input, and cancellation through the actual Windows execution adapter. Results
-are saved in `.artifacts/windows-wsl-smoke/report.json`.
+### Windows execution acceptance
 
-`node scripts/wsl-helper-linux-smoke.mjs` tests the Linux helper in a disposable
-Docker fixture with Bash, Node, npm, and bubblewrap. Its report explicitly
-excludes native Windows, WSL transport, and DrvFS acceptance.
-Prepare the fixture image with:
+Build the backend and prepare the pinned Windows runtime:
+
+```powershell
+npm --prefix backend run build
+node desktop/scripts/prepare-codex-runtime.mjs x64
+node scripts/windows-native-sandbox-smoke.mjs --allow-setup
+```
+
+Use this smoke test on a disposable administrator Windows machine or runner.
+`--allow-setup` explicitly authorizes real sandbox initialization; without it,
+only an already-configured fixture can proceed, and missing readiness is a
+failure. The test does not approve human UAC dialogs automatically. It uses
+independent temporary users/App settings, plugins, team storage, workspace, and
+sandbox state, and makes no model requests. It validates a nonempty ordinary
+case-insensitive NTFS workspace, actual PowerShell output and both direct-shell
+and external-program exit codes,
+read-only queries, secret/case-alias protection, ordinary outside reads with
+outside writes denied, default network denial despite malicious workspace
+configuration, stdin/EOF, and child/grandchild cleanup after stop, timeout, and a
+real backend crash. It separately characterizes Codex's preservation of
+background descendants after a real zero root exit, reports
+`normalExitPreservesBackground=true`, and explicitly cleans only its verified
+fixture-owned PIDs. That characterization is not reported as automatic App
+cleanup. PID exit and stopped heartbeat evidence are required for the explicit
+stop, timeout, crash, and fixture cleanup checks;
+unstarted or skipped payloads cannot count as success. Its report is saved to
+`.artifacts/windows-native-sandbox-smoke/report.json`, including failures.
+The **Windows native sandbox acceptance** workflow runs this test on an
+administrator `windows-2022` runner and uploads its report on failure as well.
+This verifies native execution, not installer acceptance on every Windows build.
+
+For the optional WSL adapter, run `node scripts/windows-wsl-smoke.mjs` after
+preparing WSL2. That test only changes case sensitivity in its own disposable
+directories; its report is `.artifacts/windows-wsl-smoke/report.json`.
+`node scripts/wsl-helper-linux-smoke.mjs` separately tests the Linux helper in a
+disposable Docker fixture and does not establish native Windows, WSL transport,
+or DrvFS acceptance. Prepare that image with:
 
 ```sh
 docker build -f scripts/fixtures/wsl-helper-linux.Dockerfile -t crewforge-wsl-helper-test:local scripts/fixtures

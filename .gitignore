@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 backend/dist/
+backend/vendor/codex/
 frontend/dist/
 desktop/.stage/
 desktop/.stage-cross-*/

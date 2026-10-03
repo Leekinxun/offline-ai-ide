@@ -21,6 +21,11 @@ const plan: ExecutionPlan = {
   executionRunIds: [],
 };
 
+test("native PowerShell inspections require literal bounded workspace arguments", () => {
+  for (const command of ["Get-Location", "Get-ChildItem -LiteralPath src -Force", "Get-Content -LiteralPath src/main.ts -TotalCount 20"]) assert.equal(evaluateInspectionCommand(command).allowed, true, command);
+  for (const command of ["Get-Content $env:USERPROFILE", "Get-ChildItem HKCU:\\", "Get-Content ../outside.txt", "Get-Content .env", "Get-Content src/main.ts | Invoke-Expression", "Get-ChildItem -Filter *.env", "Get-Content -TotalCount 999999 main.ts"]) assert.equal(evaluateInspectionCommand(command).allowed, false, command);
+});
+
 test("Plan and Review allow inspection commands but reject composed shell actions", () => {
   assert.equal(evaluateInspectionCommand("rg -n plan src").allowed, true);
   assert.equal(evaluateInspectionCommand("git diff -- src").allowed, true);

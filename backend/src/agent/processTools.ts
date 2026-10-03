@@ -8,6 +8,8 @@ import type { ToolContext } from "./types.js";
 import { evaluateInspectionCommand } from "./modeCapabilities.js";
 import { TraceStore } from "../chat/traceStore.js";
 import { networkGrantForTool } from "./networkAccess.js";
+import { agentShellInvocation, usesNativeWindowsAgent } from "./windowsShell.js";
+import { probeWindowsNativeSandbox } from "./windowsNativeSandbox.js";
 
 export interface AgentProcessResult {
   session: ProcessSessionSummary;
@@ -106,12 +108,15 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
     if (!policy.allowed) throw new Error(`Command blocked by workspace policy: ${policy.reason}`);
     if (context.executionPlan && !context.executionPlan.verificationCommands.includes(command) && !evaluateInspectionCommand(command).allowed) throw new Error("Process command is outside the approved execution plan");
     if (pendingAgentProcesses(context, true).some((item) => item.session.status === "running")) throw new Error("Wait for the current workspace Agent process to finish before starting another");
+    if (usesNativeWindowsAgent()) {
+      const capability = await probeWindowsNativeSandbox();
+      if (!capability.available) throw new Error(capability.reason || "Set up the Windows sandbox in desktop settings");
+    }
     const checkpointId = context.stepCheckpointId || createCheckpoint(context.workspaceDir, { label: `Before Agent process · ${command.slice(0, 80)}`, runId: owner.runId, conversationId: context.conversationId, kind: "step", toolCallId: context.toolCallId }).id;
     const binding: Binding = { owner, command, checkpointId, toolCallId: context.toolCallId || `process-${Date.now()}`, requestId: context.requestId, actor: context.actorName, conflicts: new Set(), auditing: false, audited: false };
     let id = "";
     const session = startAgentProcessSession({
-      ...owner, executable: process.platform === "win32" ? "/bin/bash" : "/bin/sh",
-      args: ["-c", command],
+      ...owner, ...agentShellInvocation(command),
       timeoutMs: args.timeout_ms as number | undefined, signal: context.signal,
       networkExecutionGrant,
       filesystem: { workspaceDir: context.workspaceDir, readPaths: context.filesystemSandbox?.readPaths || ["."], writePaths: context.filesystemSandbox?.writePaths || ["."] },

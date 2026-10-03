@@ -7,12 +7,18 @@ import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { consumeNetworkExecutionGrant, type NetworkExecutionGrant } from "./networkAccess.js";
 import { planReadOnlyShell, resolveReadOnlyExecutable } from "./readOnlyShell.js";
+import { agentShellInvocation, usesNativeWindowsAgent, windowsInspectionInvocation } from "./windowsShell.js";
 
 export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
   cpuTimeMs: 60_000,
   memoryBytes: process.platform === "linux" || process.platform === "win32" ? 4 * 1024 * 1024 * 1024 : undefined,
   maxOpenFiles: 256,
 });
+
+/** Native Codex exposes wall-time supervision, rather than POSIX rlimits. */
+export function defaultAgentShellLimits(): Readonly<ProcessResourceLimits> {
+  return usesNativeWindowsAgent() ? {} : DEFAULT_COMPATIBILITY_SHELL_LIMITS;
+}
 
 export interface WorkspaceCommandOptions {
   /** Required before the legacy shell parser is allowed to accept shell syntax. */
@@ -52,13 +58,13 @@ export async function runInspectionCommand(
   if (executable === "git" && ["diff", "show", "log"].includes(args[0])) {
     args.splice(1, 0, "--no-ext-diff", "--no-textconv");
   }
+  const invocation = usesNativeWindowsAgent() ? windowsInspectionInvocation(executable, args, cwd) : { executable: trustedExecutable || executable, args };
   return runWorkspaceProcess({
-    executable: trustedExecutable || executable,
-    args,
+    ...invocation,
     cwd,
     signal,
-    env: { GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
-    limits: { wallTimeMs: 60_000, ...DEFAULT_COMPATIBILITY_SHELL_LIMITS },
+    env: { GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: usesNativeWindowsAgent() ? "" : "cat" },
+    limits: { wallTimeMs: 60_000, ...defaultAgentShellLimits() },
     resourceLimitMode: "posix-shell",
     networkMode: "deny",
     filesystem: { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] },
@@ -74,8 +80,9 @@ export async function runReadOnlyShellCommand(command: string, cwd: string, sign
   if (!executable) return `Error: A trusted system executable is unavailable for the read-only query: ${plan.executableName}`;
   const grants = { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] };
   if (plan.kind === "inspection") return runInspectionCommand(command, cwd, signal, grants, executable);
-  return runWorkspaceProcess({ executable, args: plan.args, cwd, signal,
-    limits: { wallTimeMs: 30_000, ...DEFAULT_COMPATIBILITY_SHELL_LIMITS }, resourceLimitMode: "posix-shell",
+  const invocation = usesNativeWindowsAgent() ? windowsInspectionInvocation(plan.executableName, plan.args, cwd) : { executable, args: plan.args };
+  return runWorkspaceProcess({ ...invocation, cwd, signal,
+    limits: { wallTimeMs: 30_000, ...defaultAgentShellLimits() }, resourceLimitMode: "posix-shell",
     networkMode: "deny", filesystem: grants });
 }
 
@@ -104,15 +111,14 @@ export async function runWorkspaceCommand(
 
   const limits: ProcessResourceLimits = {
     wallTimeMs: options.resourceLimits?.wallTimeMs,
-    cpuTimeMs: options.resourceLimits?.cpuTimeMs ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.cpuTimeMs,
-    memoryBytes: options.resourceLimits?.memoryBytes ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.memoryBytes,
-    maxOpenFiles: options.resourceLimits?.maxOpenFiles ?? DEFAULT_COMPATIBILITY_SHELL_LIMITS.maxOpenFiles,
+    cpuTimeMs: options.resourceLimits?.cpuTimeMs ?? defaultAgentShellLimits().cpuTimeMs,
+    memoryBytes: options.resourceLimits?.memoryBytes ?? defaultAgentShellLimits().memoryBytes,
+    maxOpenFiles: options.resourceLimits?.maxOpenFiles ?? defaultAgentShellLimits().maxOpenFiles,
   };
 
   if (process.platform === "win32") {
     return runWorkspaceProcess({
-      executable: "/bin/bash",
-      args: ["-c", command],
+      ...agentShellInvocation(command),
       cwd,
       signal,
       limits,
