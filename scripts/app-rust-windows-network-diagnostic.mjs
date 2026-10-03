@@ -203,18 +203,40 @@ try {
   // This unique all-user rule affects only this fixture's one remote loopback TCP port.
   ruleMayExist = true;
   report.temporaryRuleCreationAttempted = true; report.temporaryRuleCreated = null;
-  trustedPowerShell(`
-    $rule = New-Object -ComObject HNetCfg.FWRule
-    $rule.Name = ${psLiteral(ruleName)}; $rule.Description = 'Disposable APP_RUST fixed-port network comparison'
-    $rule.Direction = 2; $rule.Action = 0; $rule.Enabled = $true; $rule.Protocol = 6
-    $rule.RemoteAddresses = '127.0.0.1'; $rule.RemotePorts = '${port}'; $rule.Profiles = 2147483647
-    $policy = New-Object -ComObject HNetCfg.FwPolicy2; $policy.Rules.Add($rule)
-    $actual = $policy.Rules.Item(${psLiteral(ruleName)})
-    if (-not $actual.Enabled -or $actual.Direction -ne 2 -or $actual.Action -ne 0 -or $actual.Protocol -ne 6 -or $actual.Profiles -ne 2147483647 -or
-        $actual.RemoteAddresses -ne '127.0.0.1' -or $actual.RemotePorts -ne '${port}') { throw 'Unexpected fixture firewall rule scope' }
-    try { if ($actual.LocalUserAuthorizedList) { throw 'The fixture comparison requires all users' } } catch [System.Management.Automation.PropertyNotFoundException] {}
-  `, 20_000);
-  report.temporaryRuleCreated = true;
+  const ruleResult = JSON.parse(trustedPowerShell(`
+    $result = [ordered]@{ created = $false; validated = $false; errorKind = $null; hresult = $null; actual = $null }
+    $stage = 'create_rule'
+    try {
+      $rule = New-Object -ComObject HNetCfg.FWRule
+      $rule.Name = ${psLiteral(ruleName)}; $rule.Description = 'Disposable APP_RUST fixed-port network comparison'
+      $rule.Direction = 2; $rule.Action = 0; $rule.Enabled = $true; $rule.Protocol = 6
+      $rule.RemoteAddresses = '127.0.0.1'; $rule.RemotePorts = '${port}'; $rule.Profiles = 2147483647
+      $policy = New-Object -ComObject HNetCfg.FwPolicy2; $policy.Rules.Add($rule)
+      $result.created = $true; $stage = 'readback'
+      $actual = $policy.Rules.Item(${psLiteral(ruleName)})
+      $hasUserFilter = $null
+      try { $hasUserFilter = -not [string]::IsNullOrEmpty([string]$actual.LocalUserAuthorizedList) } catch {}
+      $result.actual = [ordered]@{ enabled = [bool]$actual.Enabled; direction = [int]$actual.Direction; action = [int]$actual.Action;
+        protocol = [int]$actual.Protocol; profiles = [int]$actual.Profiles; remoteAddresses = [string]$actual.RemoteAddresses;
+        remotePorts = [string]$actual.RemotePorts; hasUserFilter = $hasUserFilter }
+      $stage = 'scope_mismatch'
+      $addressMatches = @('127.0.0.1', '127.0.0.1/32', '127.0.0.1/255.255.255.255') -contains $result.actual.remoteAddresses
+      $result.validated = $result.actual.enabled -and $result.actual.direction -eq 2 -and $result.actual.action -eq 0 -and
+        $result.actual.protocol -eq 6 -and $result.actual.profiles -eq 2147483647 -and $addressMatches -and
+        $result.actual.remotePorts -eq '${port}' -and $hasUserFilter -ne $true
+      if (-not $result.validated) { $result.errorKind = 'scope_mismatch' }
+    } catch {
+      $result.errorKind = $stage
+      $exception = $_.Exception
+      for ($index = 0; $index -lt 4 -and $exception.InnerException; $index++) { $exception = $exception.InnerException }
+      $result.hresult = [int]$exception.HResult
+    }
+    $result | ConvertTo-Json -Depth 5 -Compress
+  `, 20_000));
+  report.temporaryRuleValidation = ruleResult;
+  report.temporaryRuleCreated = ruleResult.created === true;
+  console.log(JSON.stringify({ temporaryRuleValidation: ruleResult }));
+  assert.ok(ruleResult.created === true && ruleResult.validated === true, "The temporary COM rule's exact fixture scope could not be confirmed; A/B will not run");
   report.temporaryRule = { name: ruleName, direction: "outbound", action: "block", protocol: "TCP", remoteAddress: "127.0.0.1", remotePort: port, users: "all" };
   await new Promise((resolve) => setTimeout(resolve, 500));
   report.allUsersProbe = await probe("same offline TCP probe with the all-user fixture rule", baseline.command); report.allUsersDenial = report.allUsersProbe.denied;

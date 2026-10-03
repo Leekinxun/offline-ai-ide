@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 test("backend shutdown waits for its native owner's EOF cleanup before exiting", { timeout: 20_000 }, async (t) => {
@@ -37,7 +37,7 @@ test("backend shutdown waits for its native owner's EOF cleanup before exiting",
     syncBuiltinESMExports();
   `);
   const bootstrap = crypto.randomBytes(32).toString("hex");
-  const backend = spawn(process.execPath, ["--import", preloader, "--import", "tsx", "src/index.ts"], {
+  const backend = spawn(process.execPath, ["--import", pathToFileURL(preloader).href, "--import", "tsx", "src/index.ts"], {
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
     env: { ...process.env, CREWFORGE_DESKTOP: "1", CROWNFORGE_DESKTOP_RUNTIME: "tauri", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: bootstrap,
       CROWNFORGE_IDE_CORE_EXECUTABLE: fakeCore, HOST: "127.0.0.1", PORT: "0", WORKSPACE_DIR: workspace,

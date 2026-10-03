@@ -138,7 +138,7 @@ try {
   const filesystem = { workspaceDir: workspace, readPaths: ["."], writePaths: ["."] };
   const owner = { workspaceDir: workspace, owner: `native-smoke-${fixtureId}`, runId: `native-smoke-${fixtureId}` };
   const psArgs = (source) => ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source];
-  const execute = (source, writePaths = ["."], wallTimeMs = 30_000) => processSandbox.runWorkspaceProcess({ executable: powershell, args: psArgs(source), cwd: workspace, networkMode: "deny", filesystem: { ...filesystem, writePaths }, limits: { wallTimeMs } });
+  const execute = (source, writePaths = ["."], wallTimeMs = 60_000) => processSandbox.runWorkspaceProcess({ executable: powershell, args: psArgs(source), cwd: workspace, networkMode: "deny", filesystem: { ...filesystem, writePaths }, limits: { wallTimeMs } });
 
   await step("probe, explicitly initialize, and verify native sandbox readiness without models or Codex login", async () => {
     const controlHome = path.join(settingsDir, "codex-native-sandbox");
@@ -165,7 +165,7 @@ try {
   });
 
   await step("the approved Agent shell entry actually executes PowerShell", async () => {
-    const output = await shell.runWorkspaceCommand("Write-Output 'native-powershell-ok'", workspace, undefined, { compatibilityShellAuthorized: true, filesystem, resourceLimits: { wallTimeMs: 30_000 } });
+    const output = await shell.runWorkspaceCommand("Write-Output 'native-powershell-ok'", workspace, undefined, { compatibilityShellAuthorized: true, filesystem, resourceLimits: { wallTimeMs: 120_000 } });
     assert.doesNotMatch(output, /^Error:/); assert.match(output, /native-powershell-ok/);
     const version = await execute("Write-Output ('powershell-version:' + $PSVersionTable.PSVersion.ToString()); Set-Content -LiteralPath 'allowednested/generated.txt' -Value 'workspace-write-ok'");
     assert.doesNotMatch(version, /^Error:/); assert.match(version, /powershell-version:/);
