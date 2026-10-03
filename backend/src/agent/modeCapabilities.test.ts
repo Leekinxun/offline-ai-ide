@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
 import { evaluateInspectionCommand, evaluateModeCapability } from "./modeCapabilities.js";
@@ -20,6 +23,36 @@ const plan: ExecutionPlan = {
   updatedAt: 1,
   executionRunIds: [],
 };
+
+function nativeDesktopFixture(t: test.TestContext): void {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-mode-windows-"));
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const keys = ["CREWFORGE_DESKTOP", "APP_SETTINGS_CONFIG", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  process.env.CREWFORGE_DESKTOP = "1"; process.env.APP_SETTINGS_CONFIG = path.join(directory, "app-settings.json");
+  delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE;
+  t.after(() => {
+    Object.defineProperty(process, "platform", descriptor);
+    for (const key of keys) { const value = previous[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+}
+
+test("native PowerShell inspections require literal bounded workspace arguments", (t) => {
+  nativeDesktopFixture(t);
+  for (const command of ["Get-Location", "Get-ChildItem -LiteralPath src -Force", "Get-Content -LiteralPath src/main.ts -TotalCount 20"]) assert.equal(evaluateInspectionCommand(command).allowed, true, command);
+  for (const command of ["Get-Content $env:USERPROFILE", "Get-ChildItem HKCU:\\", "Get-Content ../outside.txt", "Get-Content .env", "Get-Content src/main.ts | Invoke-Expression", "Get-ChildItem -Filter *.env", "Get-Content -TotalCount 999999 main.ts"]) assert.equal(evaluateInspectionCommand(command).allowed, false, command);
+});
+
+test("Windows Web does not enable the new PowerShell inspection grammar", (t) => {
+  nativeDesktopFixture(t); process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+  for (const desktop of [undefined, "0"]) {
+    if (desktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = desktop;
+    for (const command of ["Get-Location", "Get-ChildItem src", "Get-Content src/main.ts"]) assert.equal(evaluateInspectionCommand(command).allowed, false);
+    assert.equal(evaluateInspectionCommand("git status").allowed, true);
+  }
+});
 
 test("Plan and Review allow inspection commands but reject composed shell actions", () => {
   assert.equal(evaluateInspectionCommand("rg -n plan src").allowed, true);

@@ -1,0 +1,5 @@
+/target/
+/.stage/
+/resources/*
+!/resources/.gitkeep
+/src-tauri/gen/

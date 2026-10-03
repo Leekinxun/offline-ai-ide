@@ -7,6 +7,8 @@ import { StringDecoder } from "node:string_decoder";
 import { isSamePath, sessionManager, type UserSession } from "../auth/sessionManager.js";
 import { TerminalSessions, TerminalSessionError, type TerminalProcess, type TerminalSocket, type TerminalAttach } from "../run/terminalSessions.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { launchDesktopPty } from "../desktop/nativeIdeServices.js";
 
 const INHERITED_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "HOME"] as const;
 const WINDOWS_ENV = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA"] as const;
@@ -111,10 +113,12 @@ function workspaceRoot(workspaceDir: string): string {
 
 // Try to load node-pty; it may fail on some platforms (e.g. macOS + Node 22)
 let pty: typeof import("node-pty") | null = null;
-try {
-  pty = await import("node-pty");
-} catch {
-  console.warn("node-pty unavailable, will use child_process fallback for terminal");
+if (!desktopNativeIdeEnabled()) {
+  try {
+    pty = await import("node-pty");
+  } catch {
+    console.warn("node-pty unavailable, will use child_process fallback for terminal");
+  }
 }
 const loadedPty = pty;
 /** Test seam for the optional native binding; no HTTP caller can replace it. */
@@ -266,6 +270,12 @@ function launchFallback(workspaceDir: string): TerminalProcess {
 }
 
 export function launchTerminalProcess(workspaceDir: string, forceFallback = false): TerminalProcess {
+  if (desktopNativeIdeEnabled() && !forceFallback) {
+    const command = process.platform === "win32"
+      ? { executable: path.join(process.env.SystemRoot || process.env.WINDIR || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ptyArgs: ["-NoLogo", "-NoProfile"] }
+      : terminalShell();
+    return launchDesktopPty(workspaceRoot(workspaceDir), { executable: command.executable, args: command.ptyArgs }, terminalEnvironment());
+  }
   if (!forceFallback) try { return launchPty(workspaceDir); } catch { /* optional native binding fallback */ }
   return launchFallback(workspaceDir);
 }

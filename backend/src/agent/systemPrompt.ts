@@ -8,6 +8,7 @@ import type { ExecutionPlan } from "../chat/executionPlans.js";
 import { codeModeInstruction, resolveCodeExecutionContract } from "./executionContract.js";
 import type { ContextSourceHint } from "./contextManifest.js";
 import { redactSecrets } from "./secretRedaction.js";
+import { getWindowsAgentSettings } from "../run/windowsAgentSettings.js";
 
 const DEFAULT_BASE_INSTRUCTIONS = `# Role and Purpose
 
@@ -198,7 +199,9 @@ function loadPersistentContext(workspaceDir: string): string {
 
 function buildWorkspaceContext(workspaceDir: string, readOnlyWorkspace: boolean): string {
   const execution = process.platform === "win32"
-    ? "\n- Agent commands use Linux Bash through WSL 2 in this same workspace. Use relative POSIX paths in commands; file tool paths stay relative to the workspace root. Windows executables and cmd.exe syntax are not the Agent execution environment. If WSL dependencies or isolation are unavailable, report the tool error instead of claiming a command ran."
+    ? getWindowsAgentSettings().environment === "native"
+      ? "\n- Agent commands use native Windows PowerShell in the Codex Windows sandbox. The compatibility tool named bash also runs PowerShell in this environment. Use PowerShell syntax and relative workspace paths; use Get-Location, Get-ChildItem and Get-Content for inspection. Use project-native Windows tools for builds and tests. Sandbox setup is a separate user action in desktop settings; do not attempt UAC, change sandbox configuration, or substitute an unrestricted process when execution is unavailable. Report the tool error instead of claiming a command ran."
+      : "\n- Agent commands use Linux Bash through WSL 2 in this same workspace. Use relative POSIX paths in commands; file tool paths stay relative to the workspace root. Windows executables and cmd.exe syntax are not the Agent execution environment. If WSL dependencies or isolation are unavailable, report the tool error instead of claiming a command ran."
     : "";
   return `# Workspace Context
 

@@ -1,0 +1,25 @@
+[package]
+name = "crownforge-desktop"
+version = "1.1.1"
+edition.workspace = true
+rust-version.workspace = true
+description = "CrownForge desktop host using system WebView and Rust IDE services"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.1", features = ["dynamic-acl"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+open = { version = "5", features = ["shellexecute-on-windows"] }
+getrandom = "0.4"

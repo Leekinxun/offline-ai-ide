@@ -24,6 +24,8 @@ import {
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
+import { desktopNativeIdeEnabled, NativeIdeError } from "../desktop/nativeIdeClient.js";
+import { readDesktopFile, readDesktopFileTree, readDesktopGitStatus } from "../desktop/nativeIdeServices.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
 import { MoveEntryError, moveWorkspaceEntry } from "../files/moveEntry.js";
 import {
@@ -382,11 +384,15 @@ function buildConflictSourcePayload(
 }
 
 // GET /tree
-filesRouter.get("/tree", (req, res) => {
+filesRouter.get("/tree", async (req, res) => {
   const workspaceDir = getWorkspace(req);
   try { fs.mkdirSync(workspaceDir, { recursive: true }); } catch { /* ignore */ }
   if (!fs.existsSync(workspaceDir)) {
     return res.json([]);
+  }
+  if (desktopNativeIdeEnabled()) {
+    try { return res.json(await readDesktopFileTree(workspaceDir)); }
+    catch { return res.status(503).json({ detail: "Desktop file service is unavailable" }); }
   }
   res.json(buildTree(workspaceDir));
 });
@@ -394,11 +400,14 @@ filesRouter.get("/tree", (req, res) => {
 // GET /git-status
 // Uses fixed git arguments so the UI can inspect repository state without
 // exposing a general-purpose command execution endpoint.
-filesRouter.get("/git-status", (req, res) => {
+filesRouter.get("/git-status", async (req, res) => {
   const workspaceDir = getWorkspace(req);
   try {
-    return res.json(readGitStatus(workspaceDir));
-  } catch {
+    return res.json(desktopNativeIdeEnabled() ? await readDesktopGitStatus(workspaceDir) : readGitStatus(workspaceDir));
+  } catch (error) {
+    if (desktopNativeIdeEnabled() && error instanceof NativeIdeError && error.code !== "NOT_REPO") {
+      return res.status(503).json({ detail: "Desktop Git service is unavailable" });
+    }
     return res.json({
       isRepo: false,
       branch: null,
@@ -594,7 +603,7 @@ filesRouter.get("/changes", (req, res) => {
 });
 
 // GET /read?path=xxx
-filesRouter.get("/read", (req, res) => {
+filesRouter.get("/read", async (req, res) => {
   const relPath = req.query.path as string;
   if (!relPath) return res.status(400).json({ detail: "path required" });
   try {
@@ -603,17 +612,19 @@ filesRouter.get("/read", (req, res) => {
       return res.status(404).json({ detail: "File not found" });
     }
     const stat = fs.statSync(full);
-    const content = fs.readFileSync(full, "utf-8");
+    const native = desktopNativeIdeEnabled() ? await readDesktopFile(getWorkspace(req), relPath) : undefined;
+    const content = native ? native.content : fs.readFileSync(full, "utf-8");
+    const updatedAt = native ? native.mtimeMs : stat.mtimeMs;
     const version = buildFileVersion(content);
     const sourceInfo = lookupKnownFileMutation(getWorkspace(req), relPath, {
       version,
-      mtimeMs: stat.mtimeMs,
+      mtimeMs: updatedAt,
     });
     res.json({
       path: relPath,
       content,
       version,
-      updatedAt: stat.mtimeMs,
+      updatedAt,
       ...(sourceInfo
         ? {
             source:
@@ -625,7 +636,7 @@ filesRouter.get("/read", (req, res) => {
         : {}),
     });
   } catch (e: any) {
-    res.status(e.message === "Path traversal denied" ? 403 : 500).json({ detail: e.message });
+    res.status(e.message === "Path traversal denied" || (desktopNativeIdeEnabled() && e instanceof NativeIdeError && e.code === "PATH_ESCAPE") ? 403 : 500).json({ detail: e.message });
   }
 });
 

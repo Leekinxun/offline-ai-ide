@@ -1,0 +1,67 @@
+name: Windows native sandbox acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-native-sandbox]
+
+permissions:
+  contents: read
+
+jobs:
+  native_sandbox:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Verify disposable runner administrator authority
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Native sandbox acceptance requires an administrator disposable runner. Human UAC approval is not automated.'
+          }
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+      - name: Build backend
+        run: npm run build
+        working-directory: backend
+      - name: Prepare isolated contract configuration
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'crewforge-native-contract-'));
+          const workspace = path.join(directory, 'workspace');
+          const plugins = path.join(directory, 'plugins');
+          fs.mkdirSync(workspace); fs.mkdirSync(plugins);
+          const users = path.join(directory, 'users.json');
+          const settings = path.join(directory, 'app-settings.json');
+          fs.writeFileSync(users, JSON.stringify({ allowedRoots: [directory], users: [] }));
+          fs.writeFileSync(settings, '{}');
+          const values = { USERS_CONFIG: users, APP_SETTINGS_CONFIG: settings, WORKSPACE_DIR: workspace, TEAM_STORE_ROOT: directory, PLUGINS_DIR: plugins };
+          fs.appendFileSync(process.env.GITHUB_ENV, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+          NODE
+      - name: Verify native defaults, explicit WSL selection, and read-only readiness
+        run: node --import tsx --test src/agent/windowsShell.test.ts src/agent/windowsNativeSandbox.test.ts src/agent/codexSandboxClient.test.ts src/run/windowsAgentSettings.test.ts
+        working-directory: backend
+      - name: Prepare verified pinned native sandbox runtime
+        run: node desktop/scripts/prepare-codex-runtime.mjs x64
+      - name: Verify real native PowerShell isolation and process cleanup
+        run: node scripts/windows-native-sandbox-smoke.mjs --allow-setup
+      - name: Upload acceptance report, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-sandbox-acceptance
+          path: .artifacts/windows-native-sandbox-smoke/report.json
+          if-no-files-found: warn
+          retention-days: 14

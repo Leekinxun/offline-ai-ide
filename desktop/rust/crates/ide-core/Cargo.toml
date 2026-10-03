@@ -1,0 +1,29 @@
+[package]
+name = "crownforge-ide-core"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop-only workspace, search, watcher and PTY service for CrownForge"
+
+[lib]
+name = "crownforge_ide_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crownforge-ide-core"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+ignore = "0.4"
+notify = "8"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

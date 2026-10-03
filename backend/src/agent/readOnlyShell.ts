@@ -16,7 +16,7 @@ export function planReadOnlyShell(command: unknown): ReadOnlyShellPlan | null {
   const tokens = tokenizeInspectionCommand(command.trim());
   const [name, ...args] = tokens;
   if (name !== "find" && /[*?\[\]]/.test(command)) return null;
-  if (["pwd", "ls", "cat", "head", "tail", "wc", "sed", "find"].includes(name) && evaluateInspectionCommand(command).allowed) {
+  if (["pwd", "ls", "cat", "head", "tail", "wc", "sed", "find", "get-location", "get-childitem", "get-content"].includes(name.toLowerCase()) && evaluateInspectionCommand(command).allowed) {
     return { kind: "inspection", command: command.trim(), executableName: name, args };
   }
   if (["python", "python3", "node", "git", "ruff"].includes(name)

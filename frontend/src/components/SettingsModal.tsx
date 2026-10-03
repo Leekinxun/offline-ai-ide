@@ -185,11 +185,25 @@ interface AppFormState {
 
 interface DesktopExecutionCapability {
   hostPlatform: string;
-  executor: "wsl" | "native";
+  executor: "wsl" | "native" | "windows-native";
   available: boolean;
+  settings?: DesktopAgentSettings;
+  status?: "ready" | "setup_pending" | "setup_required" | "unavailable";
+  weakerNetworkIsolation?: boolean;
   distro?: string;
   reason?: string;
   reasonCode?: string;
+}
+
+interface DesktopAgentSettings {
+  environment: "native" | "wsl";
+  sandboxMode: "elevated" | "unelevated";
+}
+
+function desktopAgentSettings(value: unknown): DesktopAgentSettings | undefined {
+  if (!value || typeof value !== "object" || !("environment" in value) || !("sandboxMode" in value)) return;
+  if ((value.environment !== "native" && value.environment !== "wsl") || (value.sandboxMode !== "elevated" && value.sandboxMode !== "unelevated")) return;
+  return { environment: value.environment, sandboxMode: value.sandboxMode };
 }
 
 const WSL_REASON_MESSAGES: Record<string, string> = {
@@ -208,6 +222,22 @@ const WSL_REASON_MESSAGES: Record<string, string> = {
   case_sensitive_required: "settings.desktopWslCaseSensitiveRequired",
   invalid_configuration: "settings.desktopWslConfigurationInvalid",
   probe_failed: "settings.desktopWslProbeFailed",
+};
+
+const NATIVE_REASON_MESSAGES: Record<string, string> = {
+  setup_required: "settings.desktopNativeSetupRequired",
+  setup_pending: "settings.desktopNativeSettingUp",
+  setup_failed: "settings.desktopNativeSetupFailed",
+  setup_cancelled: "settings.desktopNativeSetupCancelled",
+  helper_missing: "settings.desktopWslHelperMissing",
+  helper_not_built: "settings.desktopWslHelperMissing",
+  powershell_missing: "settings.desktopNativePowerShellMissing",
+  unsupported_platform: "settings.desktopNativeUnsupported",
+  unsupported_windows: "settings.desktopNativeUnsupported",
+  unsupported_permissions: "settings.desktopNativePermissionsUnsupported",
+  isolation_unavailable: "settings.desktopNativeIsolationUnavailable",
+  invalid_configuration: "settings.desktopNativeConfigurationInvalid",
+  probe_failed: "settings.desktopNativeProbeFailed",
 };
 
 interface McpFormState {
@@ -298,6 +328,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [loadingDesktopExecution, setLoadingDesktopExecution] = useState(false);
   const [desktopExecutionError, setDesktopExecutionError] = useState<"failed" | "timeout" | null>(null);
   const desktopExecutionRequest = useRef<AbortController | null>(null);
+  const [desktopSettings, setDesktopSettings] = useState<DesktopAgentSettings>({ environment: "native", sandboxMode: "elevated" });
+  const [desktopExecutionAction, setDesktopExecutionAction] = useState<"save" | "setup" | null>(null);
+  const [desktopActionError, setDesktopActionError] = useState<string | null>(null);
+  const desktopActionRequest = useRef<AbortController | null>(null);
+  const desktopSettingsChanged = Boolean(desktopExecution?.settings && (
+    desktopSettings.environment !== desktopExecution.settings.environment || desktopSettings.sandboxMode !== desktopExecution.settings.sandboxMode
+  ));
+  const desktopExecutionBusy = loadingDesktopExecution || desktopExecutionAction !== null || desktopExecution?.status === "setup_pending";
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
@@ -352,10 +390,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const response = await fetch("/api/runtime/execution", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
       if (!response.ok) throw new Error("Execution capability request failed");
       const capability: unknown = await response.json();
-      if (!capability || typeof capability !== "object" || !("available" in capability) || typeof capability.available !== "boolean" || !("hostPlatform" in capability) || capability.hostPlatform !== "win32" || !("executor" in capability) || capability.executor !== "wsl") throw new Error("Invalid execution capability");
+      if (!capability || typeof capability !== "object" || !("available" in capability) || typeof capability.available !== "boolean" || !("hostPlatform" in capability) || capability.hostPlatform !== "win32" || !("executor" in capability) || (capability.executor !== "wsl" && capability.executor !== "windows-native")) throw new Error("Invalid execution capability");
       if (desktopExecutionRequest.current !== controller || controller.signal.aborted) return;
+      const settings = "settings" in capability ? desktopAgentSettings(capability.settings) : undefined;
+      if (settings) setDesktopSettings(settings);
       setDesktopExecution({
-        hostPlatform: "win32", executor: "wsl", available: capability.available,
+        hostPlatform: "win32", executor: capability.executor, available: capability.available,
+        ...(settings ? { settings } : {}),
+        ...("status" in capability && ["ready", "setup_pending", "setup_required", "unavailable"].includes(String(capability.status)) ? { status: capability.status as DesktopExecutionCapability["status"] } : {}),
+        ...("weakerNetworkIsolation" in capability && typeof capability.weakerNetworkIsolation === "boolean" ? { weakerNetworkIsolation: capability.weakerNetworkIsolation } : {}),
         ...("distro" in capability && typeof capability.distro === "string" ? { distro: capability.distro } : {}),
         ...("reason" in capability && typeof capability.reason === "string" ? { reason: capability.reason } : {}),
         ...("reasonCode" in capability && typeof capability.reasonCode === "string" ? { reasonCode: capability.reasonCode } : {}),
@@ -371,13 +414,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [desktopPlatform, token, visible]);
 
+  const updateDesktopExecution = useCallback(async (action: "save" | "setup") => {
+    if (!visible || desktopPlatform !== "win32" || !isAdmin || desktopActionRequest.current) return;
+    const controller = new AbortController();
+    desktopActionRequest.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), action === "setup" ? 180_000 : 30_000);
+    setDesktopExecutionAction(action);
+    setDesktopActionError(null);
+    try {
+      const response = await fetch(action === "setup" ? "/api/runtime/sandbox/setup" : "/api/runtime/execution/settings", {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(action === "setup" ? {} : desktopSettings), signal: controller.signal,
+      });
+      if (desktopActionRequest.current !== controller || controller.signal.aborted) return;
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const reasonCode = result && typeof result === "object" && "reasonCode" in result ? result.reasonCode : undefined;
+        throw new Error(reasonCode === "execution_busy" ? "settings.desktopExecutionBusy" : action === "setup" ? "settings.desktopNativeSetupFailed" : "settings.desktopExecutionSaveFailed");
+      }
+      if (action === "save") {
+        const settings = result && typeof result === "object" && "settings" in result ? desktopAgentSettings(result.settings) : undefined;
+        if (!settings) throw new Error("settings.desktopExecutionSaveFailed");
+        setDesktopSettings(settings);
+        onShowToast(t("settings.desktopExecutionSaved"));
+      }
+      await refreshDesktopExecution();
+    } catch (error) {
+      if (desktopActionRequest.current === controller) setDesktopActionError(controller.signal.aborted ? "settings.desktopExecutionActionTimeout" : error instanceof Error && error.message.startsWith("settings.") ? error.message : action === "setup" ? "settings.desktopNativeSetupFailed" : "settings.desktopExecutionSaveFailed");
+    } finally {
+      window.clearTimeout(timeout);
+      if (desktopActionRequest.current === controller) { desktopActionRequest.current = null; setDesktopExecutionAction(null); }
+    }
+  }, [desktopPlatform, desktopSettings, isAdmin, onShowToast, refreshDesktopExecution, t, token, visible]);
+
   useEffect(() => {
     if (visible && desktopPlatform === "win32") void refreshDesktopExecution();
     return () => {
       desktopExecutionRequest.current?.abort();
       desktopExecutionRequest.current = null;
+      desktopActionRequest.current?.abort();
+      desktopActionRequest.current = null;
     };
   }, [desktopPlatform, refreshDesktopExecution, visible]);
+
+  useEffect(() => {
+    if (!visible) { setDesktopExecutionAction(null); setDesktopActionError(null); }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || desktopExecution?.status !== "setup_pending" || desktopExecutionAction) return;
+    const timer = window.setTimeout(() => { void refreshDesktopExecution(); }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [desktopExecution?.status, desktopExecutionAction, refreshDesktopExecution, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -1238,19 +1326,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>
                       {desktop.platform === "win32" && (
                         <>
+                          <div className="settings-form">
+                            <label className="settings-field settings-field-wide">
+                              <span>{t("settings.desktopExecutionEnvironment")}</span>
+                              <select className="settings-input" value={desktopSettings.environment} disabled={!isAdmin || desktopExecutionBusy || !desktopExecution?.settings}
+                                onChange={(event) => { setDesktopSettings((current) => ({ ...current, environment: event.target.value as DesktopAgentSettings["environment"] })); setDesktopActionError(null); }}>
+                                <option value="native">{t("settings.desktopExecutionNative")}</option>
+                                <option value="wsl">{t("settings.desktopExecutionWsl")}</option>
+                              </select>
+                            </label>
+                            {desktopSettings.environment === "native" && (
+                              <label className="settings-field settings-field-wide">
+                                <span>{t("settings.desktopSandboxMode")}</span>
+                                <select className="settings-input" value={desktopSettings.sandboxMode} disabled={!isAdmin || desktopExecutionBusy || !desktopExecution?.settings}
+                                  onChange={(event) => { setDesktopSettings((current) => ({ ...current, sandboxMode: event.target.value as DesktopAgentSettings["sandboxMode"] })); setDesktopActionError(null); }}>
+                                  <option value="elevated">{t("settings.desktopSandboxElevated")}</option>
+                                  <option value="unelevated">{t("settings.desktopSandboxUnelevated")}</option>
+                                </select>
+                              </label>
+                            )}
+                          </div>
+                          {!isAdmin && <p className="settings-help-text">{t("settings.desktopExecutionAdminRequired")}</p>}
+                          {desktopSettings.environment === "native" ? (
+                            <>
+                              <p className="settings-help-text">{t("settings.desktopNativeDescription")}</p>
+                              {desktopSettings.sandboxMode === "unelevated" && <p className="settings-help-text" role="note">{t("settings.desktopNativeWeakerNetwork")}</p>}
+                              <details className="settings-help-text"><summary>{t("settings.desktopSandboxDetails")}</summary><p>{t("settings.desktopNativeReadScope")}</p></details>
+                            </>
+                          ) : <p className="settings-help-text">{t("settings.desktopWslDescription")}</p>}
                           <p className="settings-help-text" role="status" aria-live="polite">
-                            {loadingDesktopExecution ? t("settings.desktopWslChecking")
-                              : desktopExecutionError ? t(desktopExecutionError === "timeout" ? "settings.desktopWslCheckTimeout" : "settings.desktopWslCheckFailed")
-                              : desktopExecution?.available ? t(desktopExecution.distro ? "settings.desktopWslReadyDistro" : "settings.desktopWslReady", { distro: desktopExecution.distro || "" })
-                              : t("settings.desktopWindowsAgent")}
+                            {desktopExecutionAction === "setup" || desktopExecution?.status === "setup_pending" ? t("settings.desktopNativeSettingUp")
+                              : desktopExecutionAction === "save" ? t("settings.desktopExecutionSaving")
+                              : loadingDesktopExecution ? t("settings.desktopExecutionChecking")
+                              : desktopExecutionError ? t(desktopExecutionError === "timeout" ? "settings.desktopExecutionCheckTimeout" : "settings.desktopExecutionCheckFailed")
+                              : desktopSettingsChanged ? t("settings.desktopExecutionUnsaved")
+                              : desktopExecution?.available ? desktopExecution.executor === "wsl" ? t(desktopExecution.distro ? "settings.desktopWslReadyDistro" : "settings.desktopWslReady", { distro: desktopExecution.distro || "" }) : t("settings.desktopNativeReady")
+                              : desktopExecution?.executor === "wsl" ? t("settings.desktopWindowsAgent")
+                              : desktopExecution?.reasonCode && NATIVE_REASON_MESSAGES[desktopExecution.reasonCode] ? t(NATIVE_REASON_MESSAGES[desktopExecution.reasonCode])
+                              : t(desktopExecution ? "settings.desktopNativeProbeFailed" : "settings.desktopNativeSetupRequired")}
                           </p>
-                          {!loadingDesktopExecution && !desktopExecutionError && desktopExecution?.available === false && (desktopExecution.reasonCode || desktopExecution.reason) && (
+                          {!loadingDesktopExecution && !desktopExecutionError && !desktopSettingsChanged && desktopExecution?.executor === "wsl" && desktopExecution.available === false && (desktopExecution.reasonCode || desktopExecution.reason) && (
                             <p className="settings-help-text" role="note">
-                              {desktopExecution.reasonCode && WSL_REASON_MESSAGES[desktopExecution.reasonCode] ? t(WSL_REASON_MESSAGES[desktopExecution.reasonCode]) : desktopExecution.reason || t("settings.desktopWslProbeFailed")}
+                              {desktopExecution.reasonCode && (desktopExecution.executor === "wsl" ? WSL_REASON_MESSAGES : NATIVE_REASON_MESSAGES)[desktopExecution.reasonCode]
+                                ? t((desktopExecution.executor === "wsl" ? WSL_REASON_MESSAGES : NATIVE_REASON_MESSAGES)[desktopExecution.reasonCode])
+                                : t(desktopExecution.executor === "wsl" ? "settings.desktopWslProbeFailed" : "settings.desktopNativeProbeFailed")}
                             </p>
                           )}
+                          {desktopActionError && <p className="settings-help-text" role="alert">{t(desktopActionError)}</p>}
                           <div className="settings-form-actions">
-                            <button className="dialog-btn" type="button" disabled={loadingDesktopExecution} onClick={() => void refreshDesktopExecution()}>
+                            {isAdmin && <button className="dialog-btn" type="button" disabled={desktopExecutionBusy || !desktopSettingsChanged} onClick={() => void updateDesktopExecution("save")}>
+                              <Save size={14} /> {t("settings.desktopExecutionSave")}
+                            </button>}
+                            {isAdmin && desktopSettings.environment === "native" && <button className="dialog-btn" type="button" disabled={desktopExecutionBusy || desktopSettingsChanged || !desktopExecution?.settings} onClick={() => void updateDesktopExecution("setup")}>
+                              <Shield size={14} /> {t("settings.desktopNativeSetup")}
+                            </button>}
+                            <button className="dialog-btn" type="button" disabled={desktopExecutionBusy || desktopSettingsChanged} onClick={() => void refreshDesktopExecution()}>
                               <RefreshCw size={14} /> {t("settings.desktopWslRecheck")}
                             </button>
                           </div>

@@ -1,0 +1,467 @@
+use crate::{policy, DesktopState};
+use serde_json::{json, Value};
+use std::{
+    env, fs,
+    io::{self, BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{
+        atomic::Ordering,
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
+};
+use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
+use url::Url;
+
+pub struct DesktopData {
+    pub directory: PathBuf,
+    pub workspace: PathBuf,
+    pub plugins: PathBuf,
+    pub users: PathBuf,
+    pub initial_password: Option<String>,
+}
+
+fn runtime_root(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .canonicalize()?)
+    } else {
+        Ok(app.path().resource_dir()?.join("runtime"))
+    }
+}
+
+fn project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .expect("Desktop project directory")
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            copy_directory(&entry.path(), &destination.join(entry.file_name()))?;
+        } else if entry.file_type()?.is_file() {
+            fs::copy(entry.path(), destination.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn create_initial_users(file: &Path, value: &Value) -> io::Result<bool> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = match options.open(file) {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    output.write_all(&serde_json::to_vec_pretty(value)?)?;
+    output.write_all(b"\n")?;
+    output.sync_all()?;
+    Ok(true)
+}
+
+impl DesktopData {
+    pub fn ensure(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
+        // Reuse the released Electron application's data, never a fresh Tauri
+        // bundle-identifier directory. The explicit override remains supported.
+        let directory = if let Some(value) = env::var_os("CREWFORGE_DESKTOP_DATA_DIR") {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                env::current_dir()?.join(path)
+            }
+        } else {
+            dirs::config_dir()
+                .ok_or("User configuration directory unavailable")?
+                .join("CrownForge")
+        };
+        let workspace = directory.join("workspace");
+        let plugins = directory.join("plugins");
+        let users = directory.join("users.json");
+        fs::create_dir_all(&workspace)?;
+        if !plugins.exists() {
+            let bundled = if cfg!(debug_assertions) {
+                project_root().join("plugins")
+            } else {
+                runtime_root(app)?.join("plugins")
+            };
+            if bundled.is_dir() {
+                copy_directory(&bundled, &plugins)?;
+            } else {
+                fs::create_dir_all(&plugins)?;
+            }
+        }
+        let mut initial_password = None;
+        if !users.exists() {
+            let password = uuid::Uuid::new_v4().simple().to_string();
+            let home = dirs::home_dir().ok_or("Home directory unavailable")?;
+            // Preserve exclusive creation even if a legacy host races the new
+            // host. Existing accounts must never be replaced at first startup.
+            let created = create_initial_users(
+                &users,
+                &json!({
+                    "allowedRoots": [home, workspace], "pendingRegistrations": [],
+                    "users": [{"username":"admin", "password":password, "defaultWorkspace":workspace, "isAdmin":true}]
+                }),
+            )?;
+            if created {
+                initial_password = Some(password);
+            }
+        }
+        Ok(Self {
+            directory,
+            workspace,
+            plugins,
+            users,
+            initial_password,
+        })
+    }
+}
+
+pub struct Backend {
+    process: Mutex<Child>,
+    input: Mutex<ChildStdin>,
+}
+
+pub struct BackendStartup {
+    pub backend: Backend,
+    pub messages: Receiver<Value>,
+    pub url: Url,
+    pub bootstrap_token: String,
+}
+
+fn create_bootstrap_token() -> io::Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|_| io::Error::other("Desktop authentication initialization failed"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn node_executable(root: &Path) -> Result<PathBuf, String> {
+    if let Some(value) = env::var_os("CROWNFORGE_NODE_EXECUTABLE") {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() || !path.is_file() {
+            return Err(
+                "CROWNFORGE_NODE_EXECUTABLE must name an existing absolute Node executable".into(),
+            );
+        }
+        return Ok(path);
+    }
+    let bundled = root
+        .join("node")
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    if bundled.is_file() {
+        return Ok(bundled);
+    }
+    if cfg!(debug_assertions) {
+        if let Some(path) = env::var_os("PATH").and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|directory| directory.join(if cfg!(windows) { "node.exe" } else { "node" }))
+                .find(|path| path.is_file())
+        }) {
+            return path.canonicalize().map_err(|error| error.to_string());
+        }
+    }
+    Err(
+        "Bundled Node runtime is missing. Prepare the Rust desktop resources before packaging."
+            .into(),
+    )
+}
+
+impl Backend {
+    pub fn start(
+        app: &tauri::AppHandle,
+        data: &DesktopData,
+    ) -> Result<BackendStartup, Box<dyn std::error::Error>> {
+        let root = runtime_root(app)?;
+        let project = if cfg!(debug_assertions) {
+            project_root()
+        } else {
+            root.clone()
+        };
+        let bootstrap = project.join("backend/bootstrap.cjs");
+        let bridge = root.join(if cfg!(debug_assertions) {
+            "runtime/bootstrap.cjs"
+        } else {
+            "bootstrap.cjs"
+        });
+        let frontend = project.join(if cfg!(debug_assertions) {
+            "frontend/dist"
+        } else {
+            "frontend"
+        });
+        let binary_name = if cfg!(windows) {
+            "crownforge-ide-core.exe"
+        } else {
+            "crownforge-ide-core"
+        };
+        let ide_core = env::var_os("CROWNFORGE_IDE_CORE_EXECUTABLE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                root.join(if cfg!(debug_assertions) {
+                    "target/debug"
+                } else {
+                    "binaries"
+                })
+                .join(binary_name)
+            });
+        for (path, description) in [
+            (&bootstrap, "Backend bootstrap"),
+            (&bridge, "Desktop IPC bootstrap"),
+            (&frontend.join("index.html"), "Frontend build"),
+            (&ide_core, "Rust IDE service"),
+        ] {
+            if !path.is_file() {
+                return Err(format!("{description} is missing: {}", path.display()).into());
+            }
+        }
+        let node = node_executable(&root)?;
+        let bootstrap_token = create_bootstrap_token()?;
+        let mut command = Command::new(node);
+        command
+            .arg(bridge)
+            .current_dir(&data.directory)
+            .env("CREWFORGE_DESKTOP", "1")
+            .env("CROWNFORGE_DESKTOP_RUNTIME", "tauri")
+            .env("CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN", &bootstrap_token)
+            .env("CROWNFORGE_BACKEND_BOOTSTRAP", bootstrap)
+            .env("CROWNFORGE_IDE_CORE_EXECUTABLE", ide_core)
+            .env("NODE_ENV", "production")
+            .env("HOST", "127.0.0.1")
+            .env("PORT", "0")
+            .env("WORKSPACE_DIR", &data.workspace)
+            .env("USERS_CONFIG", &data.users)
+            .env(
+                "APP_SETTINGS_CONFIG",
+                data.directory.join("app-settings.json"),
+            )
+            .env("TEAM_STORE_ROOT", &data.directory)
+            .env("PLUGINS_DIR", &data.plugins)
+            .env("STATIC_DIR", frontend)
+            .env(
+                "VLLM_API_URL",
+                env::var("VLLM_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000/v1".into()),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW for the daemon.
+        }
+        let mut child = command.spawn()?;
+        let input = child.stdin.take().ok_or("Backend stdin unavailable")?;
+        let output = child.stdout.take().ok_or("Backend stdout unavailable")?;
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(output);
+            loop {
+                let mut frame = String::new();
+                match reader.read_line(&mut frame) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if frame.len() <= 65536 => {
+                        if let Ok(value) = serde_json::from_str::<Value>(&frame) {
+                            if sender.send(value).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        eprintln!("Discarded oversized desktop IPC frame");
+                    }
+                }
+            }
+        });
+        let backend = Self {
+            process: Mutex::new(child),
+            input: Mutex::new(input),
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() >= deadline {
+                backend.stop();
+                return Err("Local desktop service startup timed out".into());
+            }
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(message) if message["type"] == "ready" => {
+                    if let Some(url) = message["url"].as_str().and_then(policy::ready_url) {
+                        return Ok(BackendStartup {
+                            backend,
+                            messages: receiver,
+                            url,
+                            bootstrap_token,
+                        });
+                    }
+                    backend.stop();
+                    return Err("Backend sent an invalid loopback URL".into());
+                }
+                Ok(message) if message["type"] == "error" => {
+                    backend.stop();
+                    return Err(format!(
+                        "Local service startup failed: {} ({})",
+                        message["code"], message["phase"]
+                    )
+                    .into());
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    backend.stop();
+                    return Err("Local service exited before startup completed".into());
+                }
+                _ => {}
+            }
+            if backend.exited() {
+                return Err("Local service exited before startup completed".into());
+            }
+        }
+    }
+
+    pub fn send(&self, value: &Value) -> io::Result<()> {
+        let mut input = self
+            .input
+            .lock()
+            .map_err(|_| io::Error::other("Backend IPC unavailable"))?;
+        input.write_all(&serde_json::to_vec(value)?)?;
+        input.write_all(b"\n")?;
+        input.flush()
+    }
+
+    fn exited(&self) -> bool {
+        self.process.lock().map_or(true, |mut child| {
+            child.try_wait().is_ok_and(|status| status.is_some())
+        })
+    }
+
+    pub fn stop(&self) {
+        let _ = self.send(&json!({"type":"shutdown"}));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if self.exited() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        if let Ok(mut child) = self.process.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        if !self.exited() {
+            self.stop();
+        }
+    }
+}
+
+fn folder_picker(app: &tauri::AppHandle, backend: Arc<Backend>, message: Value) {
+    let Some(request_id) = message["requestId"]
+        .as_str()
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let state = app.state::<DesktopState>();
+    let error = if app.get_webview_window("main").is_none() {
+        Some("MAIN_WINDOW_UNAVAILABLE")
+    } else if state.folder_picker_open.swap(true, Ordering::SeqCst) {
+        Some("FOLDER_PICKER_BUSY")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        let _ = backend.send(&json!({"type":"desktop-pick-folder-result", "requestId":request_id, "path":null, "error":error}));
+        return;
+    }
+    let mut dialog = app.dialog().file();
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    if let Some(path) = message["defaultPath"]
+        .as_str()
+        .filter(|path| !path.trim().is_empty())
+    {
+        dialog = dialog.set_directory(path);
+    }
+    let app = app.clone();
+    dialog.pick_folder(move |folder| {
+        let path = folder
+            .and_then(|folder| folder.into_path().ok())
+            .map(|path| path.to_string_lossy().into_owned());
+        let _ = backend.send(
+            &json!({"type":"desktop-pick-folder-result", "requestId":request_id, "path":path}),
+        );
+        app.state::<DesktopState>()
+            .folder_picker_open
+            .store(false, Ordering::SeqCst);
+    });
+}
+
+pub fn listen(app: tauri::AppHandle, backend: Arc<Backend>, messages: Receiver<Value>) {
+    thread::spawn(move || loop {
+        if app.state::<DesktopState>().quitting.load(Ordering::SeqCst) {
+            break;
+        }
+        match messages.recv_timeout(Duration::from_millis(250)) {
+            Ok(message) if message["type"] == "desktop-pick-folder" => {
+                folder_picker(&app, backend.clone(), message)
+            }
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) if !backend.exited() => continue,
+            Err(_) => {
+                if !app.state::<DesktopState>().quitting.load(Ordering::SeqCst) {
+                    crate::show_failure(&app, "本地服务已停止，请重新启动应用。".into());
+                }
+                break;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_tokens_are_private_random_256_bit_values() {
+        let first = create_bootstrap_token().unwrap();
+        let second = create_bootstrap_token().unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|character| character.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn initial_account_creation_never_overwrites_an_existing_configuration() {
+        let directory = env::temp_dir().join(format!("crownforge-users-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("users.json");
+        assert!(create_initial_users(&file, &json!({"users":[{"username":"original"}]})).unwrap());
+        assert!(
+            !create_initial_users(&file, &json!({"users":[{"username":"replacement"}]})).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(file).unwrap()).unwrap(),
+            json!({"users":[{"username":"original"}]})
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

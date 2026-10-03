@@ -5,6 +5,7 @@ import {
   resolveCodeExecutionContract,
 } from "./executionContract.js";
 import { evaluateContextPath } from "./contextPolicy.js";
+import { usesNativeWindowsAgent } from "./windowsShell.js";
 
 export interface ModeCapabilityDecision {
   allowed: boolean;
@@ -113,6 +114,29 @@ export function evaluateInspectionCommand(commandValue: unknown, validatePath?: 
   const tokens = tokenizeInspectionCommand(command);
   if (!tokens.length) return denied("Inspection command is empty");
   if (tokens.some((token) => token.includes("\0"))) return denied("Inspection command contains an invalid argument");
+
+  const powershellName = tokens[0].toLowerCase();
+  if (["get-location", "get-childitem", "get-content"].includes(powershellName) && usesNativeWindowsAgent()) {
+    if (/[$(){}]/.test(command)) return denied("PowerShell inspection requires literal arguments");
+    if (powershellName === "get-location") return tokens.length === 1 ? { allowed: true } : denied("Get-Location does not accept arguments in read-only modes");
+    const paths: string[] = [];
+    for (let i = 1; i < tokens.length; i++) {
+      const flag = tokens[i].toLowerCase();
+      if ((powershellName === "get-childitem" && ["-force", "-name"].includes(flag)) || (powershellName === "get-content" && flag === "-raw")) continue;
+      if (flag === "-literalpath") {
+        if (!tokens[i + 1]) return denied("LiteralPath requires a workspace path");
+        paths.push(tokens[++i]); continue;
+      }
+      if (powershellName === "get-content" && ["-totalcount", "-tail"].includes(flag)) {
+        if (!/^\d+$/.test(tokens[i + 1] || "") || Number(tokens[i + 1]) > 100_000) return denied("Content line count must be bounded");
+        i++; continue;
+      }
+      if (flag.startsWith("-")) return denied("Unsupported PowerShell inspection argument");
+      paths.push(tokens[i]);
+    }
+    if (powershellName === "get-content" && !paths.length) return denied("Get-Content requires a workspace file");
+    return requireSafePathArguments(paths.length ? paths : ["."], validatePath);
+  }
 
   switch (tokens[0]) {
     case "pwd":

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { prepareCodexRuntime, verifyCodexRuntime } from "./prepare-codex-runtime.mjs";
 
 // Cross-package Windows archives on macOS. Native node-pty cannot be built for
 // Windows here, so omit it: the backend already falls back to cmd.exe pipes.
@@ -25,6 +26,7 @@ if (!selected || process.platform !== "darwin") {
 const stageDir = path.join(desktopDir, `.stage-cross-${target}`);
 const backendStage = path.join(stageDir, "backend");
 const outputDir = path.join(rootDir, "desktop-dist", selected.output);
+const codexRuntime = target === "win-x64" ? prepareCodexRuntime("x64") : undefined;
 
 function run(command, args, cwd, stdio = "inherit") {
   const result = spawnSync(command, args, { cwd, stdio });
@@ -77,6 +79,7 @@ for (const [source, destination] of [
 for (const file of ["package.json", "package-lock.json", "bootstrap.cjs"]) {
   fs.copyFileSync(path.join(rootDir, "backend", file), path.join(backendStage, file));
 }
+if (codexRuntime) fs.cpSync(codexRuntime, path.join(backendStage, "vendor/codex/win-x64"), { recursive: true });
 
 // npm's os/cpu options select the Windows optional ripgrep package from the
 // checked-in lockfile. Ignore postinstall scripts so node-pty cannot build a
@@ -112,7 +115,7 @@ const config = {
   directories: { output: outputDir },
   files: ["main.cjs", "preload.cjs", "preferences.cjs", "bridge-policy.cjs", "package.json"],
   extraResources: [
-    { from: backendStage, to: "backend", filter: ["dist/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
+    { from: backendStage, to: "backend", filter: ["dist/**/*", "vendor/codex/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
     { from: path.join(backendStage, "node_modules"), to: "backend/node_modules", filter: ["**/*"] },
     { from: path.join(stageDir, "frontend"), to: "frontend" },
     { from: path.join(stageDir, "plugins"), to: "plugins" },
@@ -140,6 +143,7 @@ for (const relative of [
   if (!fs.existsSync(path.join(resources, relative))) throw new Error(`Packaged resource is missing: ${relative}`);
 }
 if (fs.existsSync(path.join(resources, "backend/node_modules/node-pty"))) throw new Error("Mac node-pty leaked into Windows package");
+if (codexRuntime) verifyCodexRuntime(path.join(resources, "backend/vendor/codex/win-x64"), "x64");
 verifyX64PE(path.join(outputDir, "win-unpacked", "CrownForge.exe"));
 verifyX64PE(path.join(resources, "backend/node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe"));
 

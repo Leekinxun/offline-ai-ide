@@ -1,0 +1,61 @@
+name: Rust desktop platform acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows_desktop:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            desktop/rust/package-lock.json
+      - name: Update the Rust compiler
+        shell: pwsh
+        run: rustup update stable --no-self-update
+      - name: Install retained service and UI dependencies
+        shell: pwsh
+        run: |
+          npm --prefix backend ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix frontend ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix desktop/rust ci --ignore-scripts
+          exit $LASTEXITCODE
+      - name: Build the retained services and native desktop
+        shell: pwsh
+        run: |
+          npm --prefix backend run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix frontend run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --manifest-path desktop/rust/Cargo.toml --workspace --locked
+          exit $LASTEXITCODE
+      - name: Run desktop protocol and service regressions
+        run: npm --prefix desktop/rust test
+      - name: Verify native PowerShell PTY and desktop HTTP contracts
+        run: npm --prefix desktop/rust run smoke
+      - name: Verify Agent defaults and read-only sandbox capability checks
+        working-directory: backend
+        run: node --import tsx --test src/agent/windowsShell.test.ts src/agent/windowsNativeSandbox.test.ts src/agent/codexSandboxClient.test.ts src/run/windowsAgentSettings.test.ts src/auth/desktopBootstrap.test.ts
+      - name: Upload desktop acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-desktop-acceptance
+          path: .artifacts/app-rust/smoke-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+# OS sandbox provisioning is deliberately a separate manually dispatched
+# windows-native-sandbox workflow. This job never sets up accounts or ACLs.

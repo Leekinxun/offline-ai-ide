@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CrownForge",
+  "version": "1.1.1",
+  "identifier": "com.crownforge.desktop",
+  "build": { "frontendDist": "../ui" },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": { "capabilities": [], "csp": "default-src 'none'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": { "../resources/": "runtime/" },
+    "icon": ["icons/icon.png", "../../assets/icon.icns", "../../assets/icon.ico"],
+    "macOS": { "minimumSystemVersion": "13.0" },
+    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true } }
+  }
+}

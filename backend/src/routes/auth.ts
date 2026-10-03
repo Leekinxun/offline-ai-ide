@@ -1,5 +1,6 @@
 import { Router, type Request } from "express";
 import path from "node:path";
+import { matchesDesktopBootstrapCredential } from "../auth/desktopBootstrapCredential.js";
 import { isSamePath, sessionManager } from "../auth/sessionManager.js";
 import { authMiddleware } from "../auth/middleware.js";
 import { loginLimiter } from "../auth/loginLimiter.js";
@@ -35,10 +36,25 @@ function isLoopbackAddress(value: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
+function isTauriBootstrapRequest(req: Request): boolean {
+  if (!matchesDesktopBootstrapCredential(req.headers["x-crownforge-desktop-bootstrap"])) return false;
+  // Same-origin GETs may omit Origin. A present Origin must identify this actual
+  // listener; possessing the private header never authorizes an external site.
+  if (req.headers.origin === undefined) return true;
+  if (typeof req.headers.origin !== "string") return false;
+  try {
+    const protocol = "encrypted" in req.socket && req.socket.encrypted ? "https:" : "http:";
+    const local = new URL(`${protocol}//${req.headers.host}`); const origin = new URL(req.headers.origin);
+    return !origin.username && !origin.password && origin.origin === local.origin &&
+      Number(local.port || (protocol === "https:" ? 443 : 80)) === req.socket.localPort;
+  } catch { return false; }
+}
+
 function isDesktopLocalRequest(req: Request): boolean {
   return process.env.CREWFORGE_DESKTOP === "1" &&
     isLoopbackHost(req.headers.host) &&
-    isLoopbackAddress(req.socket.remoteAddress);
+    isLoopbackAddress(req.socket.remoteAddress) &&
+    (process.env.CROWNFORGE_DESKTOP_RUNTIME !== "tauri" || isTauriBootstrapRequest(req));
 }
 
 // POST /api/auth/register

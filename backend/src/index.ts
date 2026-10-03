@@ -41,7 +41,11 @@ import { stopRunsForSession } from "./chat/runCoordinator.js";
 import { sessionManager, type UserSession } from "./auth/sessionManager.js";
 import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "./team/sessionBridge.js";
 import { reloadExternalPlugins } from "./plugins/registry.js";
+import { shutdownDesktopNativeIde } from "./desktop/nativeIdeClient.js";
+import { initializeDesktopBootstrapCredential } from "./auth/desktopBootstrapCredential.js";
 
+// Keep the Tauri bootstrap credential out of every subsequently launched project process.
+initializeDesktopBootstrapCredential();
 const app = express();
 app.disable("x-powered-by");
 reloadExternalPlugins();
@@ -234,6 +238,7 @@ const shutdown = () => {
   shutdownTerminalSessions();
   shutdownPreviews();
   shutdownProcessSessions();
+  shutdownDesktopNativeIde();
   wss.clients.forEach((client) => client.terminate());
   server.close(() => process.exit(0));
   connections.forEach((socket) => socket.destroy());

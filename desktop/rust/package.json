@@ -1,0 +1,15 @@
+{
+  "name": "crownforge-rust-desktop",
+  "version": "1.1.1",
+  "private": true,
+  "scripts": {
+    "prepare:runtime": "node ../scripts/prepare-rust-desktop.mjs prepare",
+    "dev": "node ../scripts/prepare-rust-desktop.mjs dev",
+    "build": "node ../scripts/prepare-rust-desktop.mjs build",
+    "package": "node ../scripts/prepare-rust-desktop.mjs package",
+    "test": "cargo test --workspace && node --test runtime/bootstrap.test.cjs runtime/desktop-bridge.test.cjs && node runtime/run-backend-tests.mjs",
+    "test:backend": "node runtime/run-backend-tests.mjs",
+    "smoke": "node ../../scripts/desktop-rust-smoke.mjs"
+  },
+  "devDependencies": { "@tauri-apps/cli": "2.12.1" }
+}

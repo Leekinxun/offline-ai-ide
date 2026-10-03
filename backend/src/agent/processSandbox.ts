@@ -5,6 +5,8 @@ import path from "node:path";
 import { redactSecrets } from "./secretRedaction.js";
 import { INTERNAL_NODE_RUNTIME, macosNodeRuntimeFrameworks, nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
 import { prepareWslWorkspaceProcess } from "./wslExecution.js";
+import { prepareWindowsNativeProcess, probeWindowsNativeSandbox } from "./windowsNativeSandbox.js";
+import { getWindowsAgentSettings } from "../run/windowsAgentSettings.js";
 
 export interface ProcessResourceLimits {
   /** A wall-clock limit, enforced by this supervisor. */
@@ -470,6 +472,10 @@ function sandboxWrappedCommand(
  */
 export interface PreparedWorkspaceProcess {
   executable: string; args: string[]; env: Record<string, string>; timeoutMs: number; maxOutputBytes: number; cleanup: () => void;
+  /** Revoke an active transport without releasing its final lifecycle lease. */
+  cancel?: () => void;
+  /** Bind a pending native lease to the actual owned supervisor. */
+  onSpawn?: (pid: number) => void;
 }
 
 export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): PreparedWorkspaceProcess {
@@ -499,7 +505,7 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
   // shell launch that drops the mandatory filesystem/network/resource policy.
   if (process.platform === "win32" && options.filesystem && !internalNode) {
     compileFilesystemPolicy(options.filesystem.workspaceDir || options.cwd, options.filesystem);
-    return prepareWslWorkspaceProcess(options);
+    return getWindowsAgentSettings().environment === "wsl" ? prepareWslWorkspaceProcess(options) : prepareWindowsNativeProcess(options);
   }
   if (internalNode) env = nodeRuntimeEnvironment(env);
   const frameworks = internalNode ? macosNodeRuntimeFrameworks() : undefined;
@@ -525,6 +531,10 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
 }
 
 export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Promise<string> {
+  if (process.platform === "win32" && options.filesystem && !options.internalNodeRuntime && getWindowsAgentSettings().environment === "native") {
+    const capability = await probeWindowsNativeSandbox();
+    if (!capability.available) return `Error: ${capability.reason || "Set up the Windows sandbox in desktop settings before running Agent commands"}`;
+  }
   let prepared: PreparedWorkspaceProcess;
   try { prepared = prepareWorkspaceProcess(options); }
   catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
@@ -541,8 +551,13 @@ export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Pro
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
+      if (child.pid) prepared.onSpawn?.(child.pid);
     } catch (error: unknown) {
-      cleanupSandboxTemp();
+      if (child?.pid) {
+        try { prepared.cancel?.(); } catch { /* A lease write failure must not prevent killing the owned process. */ }
+        child.once("close", cleanupSandboxTemp);
+        try { processGroupKill(child.pid, "SIGKILL"); } catch { /* Already closed. */ }
+      } else cleanupSandboxTemp();
       resolve(`Error: ${(error as Error).message}`);
       return;
     }
@@ -559,32 +574,34 @@ export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Pro
       output += kept.toString("utf8");
       outputBytes += kept.length;
     };
-    const finish = (result: string, preserveForceKill = false) => {
+    const finish = (result: string, preserveForceKill = false, deferCleanup = false) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
       if (forceKill && !preserveForceKill) clearTimeout(forceKill);
       options.signal?.removeEventListener("abort", abort);
-      cleanupSandboxTemp();
+      if (!deferCleanup) cleanupSandboxTemp();
       resolve(result.slice(0, maxOutputBytes));
     };
     const terminate = () => {
-      cleanupSandboxTemp();
+      try { if (prepared.cancel) prepared.cancel(); else cleanupSandboxTemp(); }
+      catch { /* Cancellation markers are best effort; still terminate the process. */ }
       try { processGroupKill(child.pid, "SIGTERM"); } catch { /* already unavailable */ }
       forceKill = setTimeout(() => {
         try { processGroupKill(child.pid, "SIGKILL"); } catch { /* already unavailable */ }
       }, 1_000);
       forceKill.unref?.();
     };
-    const abort = () => { terminate(); finish("Error: Stopped during process execution", true); };
+    const abort = () => { terminate(); finish("Error: Stopped during process execution", true, Boolean(prepared.cancel)); };
 
     child.stdout.on("data", append);
     child.stderr.on("data", append);
     options.signal?.addEventListener("abort", abort, { once: true });
-    timeout = setTimeout(() => { terminate(); finish(`Error: Timeout (${timeoutMs}ms)`, true); }, timeoutMs);
+    timeout = setTimeout(() => { terminate(); finish(`Error: Timeout (${timeoutMs}ms)`, true, Boolean(prepared.cancel)); }, timeoutMs);
     timeout.unref?.();
     child.on("error", (error) => finish(`Error: ${error.message}`));
     child.on("close", (code) => {
+      cleanupSandboxTemp();
       const trimmed = output.trim();
       if (code === 0) finish(trimmed || "(no output)");
       else finish(`Error: Process exited with code ${code ?? "unknown"}${trimmed ? `\n${trimmed}` : ""}`);

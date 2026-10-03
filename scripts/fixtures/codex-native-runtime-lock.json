@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "runtimeVersion": "0.160.0",
+  "sourceTag": "rust-v0.160.0",
+  "sourceRepository": "https://github.com/openai/codex",
+  "platform": "win32",
+  "requiredFiles": [
+    "bin/codex.exe",
+    "bin/codex-code-mode-host.exe",
+    "codex-resources/codex-command-runner.exe",
+    "codex-resources/codex-windows-sandbox-setup.exe",
+    "codex-path/rg.exe",
+    "codex-package.json"
+  ],
+  "assets": {
+    "x64": {
+      "name": "codex-package-x86_64-pc-windows-msvc.tar.gz",
+      "sha256": "7f7fbbc8d6fd4ea2f3b13855ef47ea59663ba7e61fb2e9821df37163b8030891"
+    },
+    "arm64": {
+      "name": "codex-package-aarch64-pc-windows-msvc.tar.gz",
+      "sha256": "0bb6ecbad9c2f5d352ad539bbe43d627b32453bad1d61e5315ec9868f78e1b3c"
+    }
+  }
+}

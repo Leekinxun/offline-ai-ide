@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { watchDesktopWorkspace } from "../desktop/nativeIdeServices.js";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -37,6 +39,8 @@ interface DiagnosticsSession {
   state: DiagnosticsSessionState;
   signature: string;
   timer: NodeJS.Timeout;
+  stopNativeWatch?: () => void;
+  nativeWatchFailed?: boolean;
 }
 const sessions = new Map<string, DiagnosticsSession>();
 const inFlight = new Map<string, Promise<DiagnosticsResult>>();
@@ -313,10 +317,10 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
   if (session) {
     session.state = {
       ...session.state,
-      status: "watching",
+      status: session.nativeWatchFailed ? "error" : "watching",
       generation: session.state.generation + 1,
       lastRunAt: Date.now(),
-      error: undefined,
+      error: session.nativeWatchFailed ? "Desktop file watcher disconnected; restart the app" : undefined,
     };
   }
   const afterVersion = getDiagnosticsWorkspaceVersion(workspaceDir);
@@ -381,7 +385,10 @@ export function getDiagnosticsWorkspaceVersion(workspaceDir: string): string | u
 
 export async function startDiagnosticsSession(workspaceDir: string): Promise<DiagnosticsResult> {
   const existing = sessions.get(workspaceDir);
-  if (existing) return getDiagnostics(workspaceDir);
+  if (existing) {
+    if (!desktopNativeIdeEnabled() || existing.state.status !== "error") return getDiagnostics(workspaceDir);
+    stopDiagnosticsSession(workspaceDir);
+  }
   const state: DiagnosticsSessionState = { status: "watching", generation: 0, startedAt: Date.now() };
   const session: DiagnosticsSession = {
     state,
@@ -389,6 +396,41 @@ export async function startDiagnosticsSession(workspaceDir: string): Promise<Dia
     timer: setInterval(() => undefined, 1_200),
   };
   clearInterval(session.timer);
+  if (desktopNativeIdeEnabled()) {
+    sessions.set(workspaceDir, session);
+    let dirty = false;
+    let debounce: NodeJS.Timeout | undefined;
+    const flush = async () => {
+      debounce = undefined;
+      if (sessions.get(workspaceDir) !== session || !dirty || session.state.status === "error") return;
+      const active = inFlight.get(workspaceDir);
+      if (active) { await active.catch(() => {}); if (dirty) schedule(); return; }
+      dirty = false;
+      try { await runDiagnostics(workspaceDir); }
+      finally { if (dirty) schedule(); }
+    };
+    const schedule = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => { void flush().catch(() => {}); }, 250);
+      debounce.unref?.();
+    };
+    const changed = () => { dirty = true; schedule(); };
+    try {
+      const stop = await watchDesktopWorkspace(workspaceDir, changed, () => {
+        if (debounce) clearTimeout(debounce);
+        session.nativeWatchFailed = true;
+        session.state = { ...session.state, status: "error", error: "Desktop file watcher disconnected; restart the app" };
+      });
+      session.stopNativeWatch = () => { if (debounce) clearTimeout(debounce); stop(); };
+      if (sessions.get(workspaceDir) !== session) { session.stopNativeWatch(); return getDiagnostics(workspaceDir); }
+      return runDiagnostics(workspaceDir);
+    } catch (error) {
+      if (debounce) clearTimeout(debounce);
+      session.nativeWatchFailed = true;
+      session.state = { ...session.state, status: "error", error: "Desktop file watcher is unavailable" };
+      throw error;
+    }
+  }
   session.timer = setInterval(() => {
     if (session.state.status === "running") return;
     const signature = workspaceSignature(workspaceDir);
@@ -404,6 +446,7 @@ export async function startDiagnosticsSession(workspaceDir: string): Promise<Dia
 export function stopDiagnosticsSession(workspaceDir: string): DiagnosticsResult {
   const session = sessions.get(workspaceDir);
   if (session) clearInterval(session.timer);
+  session?.stopNativeWatch?.();
   sessions.delete(workspaceDir);
   const cached = resultCache.get(workspaceDir);
   const next = cached ? { ...cached, session: stoppedState() } : getDiagnostics(workspaceDir);

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "desktop-bridge"
+description = "Validated desktop preferences and safe external URLs for registered workbench pages"
+commands.allow = ["get_preferences", "set_preferences", "open_external"]

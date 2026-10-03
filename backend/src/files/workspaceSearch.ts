@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { rgPath } from "@vscode/ripgrep";
 import { evaluateContextPath } from "../agent/contextPolicy.js";
+import { desktopNativeIdeEnabled, getDesktopNativeIde, NativeIdeError } from "../desktop/nativeIdeClient.js";
 
 export interface WorkspaceSearchResult {
   path: string;
@@ -118,6 +119,18 @@ function buildRipgrepArgs(options: WorkspaceSearchOptions): string[] {
 export function searchWorkspace(
   options: WorkspaceSearchOptions
 ): Promise<WorkspaceSearchResponse> {
+  if (desktopNativeIdeEnabled()) {
+    const { signal, ...params } = options;
+    return getDesktopNativeIde().request<WorkspaceSearchResponse>("search", params, { signal }).then((response) => ({
+      ...response,
+      results: response.results.flatMap((result) => {
+        const policy = evaluateContextPath(result.path);
+        return policy.allowed && policy.normalizedPath ? [{ ...result, path: policy.normalizedPath }] : [];
+      }).sort((left, right) => left.path.localeCompare(right.path) || left.line - right.line || left.column - right.column),
+    })).catch((error: unknown) => {
+      throw new WorkspaceSearchError(error instanceof Error ? error.message : "Search failed", error instanceof NativeIdeError && error.code === "ABORTED" ? "ABORTED" : "FAILED");
+    });
+  }
   const maxResults = Math.max(1, Math.min(options.maxResults ?? 1000, 5000));
   const results: WorkspaceSearchResult[] = [];
   let truncated = false;

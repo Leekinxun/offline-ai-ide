@@ -3,7 +3,7 @@ import test from "node:test";
 import { terminalEnvironment, terminalShell } from "./terminal.js";
 
 test("terminal launcher environment excludes ambient secrets and injection variables", () => {
-  const keys = ["CREWFORGE_TERMINAL_SECRET", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "BASH_ENV"];
+  const keys = ["CREWFORGE_TERMINAL_SECRET", "CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "BASH_ENV"];
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) process.env[key] = "must-not-leak";

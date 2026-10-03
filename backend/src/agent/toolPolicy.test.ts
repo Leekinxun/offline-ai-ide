@@ -5,6 +5,39 @@ import os from "node:os";
 import path from "node:path";
 import { evaluateShellCommand, evaluateWorkspaceWrite } from "./toolPolicy.js";
 
+function nativeDesktopFixture(t: test.TestContext): void {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-policy-windows-"));
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const keys = ["CREWFORGE_DESKTOP", "APP_SETTINGS_CONFIG", "CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT", "CROWNFORGE_WINDOWS_SANDBOX_MODE"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  process.env.CREWFORGE_DESKTOP = "1"; process.env.APP_SETTINGS_CONFIG = path.join(directory, "app-settings.json");
+  delete process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT; delete process.env.CROWNFORGE_WINDOWS_SANDBOX_MODE;
+  t.after(() => {
+    Object.defineProperty(process, "platform", descriptor);
+    for (const key of keys) { const value = previous[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+}
+
+test("PowerShell commands retain system, privilege, deletion and network approval boundaries", (t) => {
+  nativeDesktopFixture(t);
+  for (const command of ["Start-Process app -Verb RunAs", "Restart-Computer", "Format-Volume C:", "Set-Acl src", "Remove-Item src/main.ts", "rd -Recurse -Force src", "Invoke-WebRequest https://example.com"]) assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, false, command);
+  assert.equal(evaluateShellCommand("Get-ChildItem src; npm run build", { compatibilityShellAuthorized: true }).allowed, true);
+});
+
+test("Windows Web retains its existing command decisions without the new PowerShell risk rules", (t) => {
+  nativeDesktopFixture(t); process.env.CROWNFORGE_WINDOWS_AGENT_ENVIRONMENT = "native";
+  for (const desktop of [undefined, "0"]) {
+    if (desktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = desktop;
+    for (const command of ["Start-Process app -Verb RunAs", "Restart-Computer", "Format-Volume C:", "Set-Acl src", "Remove-Item src/main.ts", "rd -Recurse -Force src", "Invoke-WebRequest https://example.com"]) {
+      assert.equal(evaluateShellCommand(command, { compatibilityShellAuthorized: true }).allowed, true);
+    }
+    assert.equal(evaluateShellCommand("sudo command", { compatibilityShellAuthorized: true }).allowed, false);
+    assert.equal(evaluateShellCommand("rm src/main.ts", { compatibilityShellAuthorized: true }).allowed, false);
+  }
+});
+
 test("workspace write policy allows source files and protects metadata and secrets", () => {
   assert.equal(evaluateWorkspaceWrite("src/app.ts").allowed, true);
   assert.equal(evaluateWorkspaceWrite("../outside.ts").allowed, false);
