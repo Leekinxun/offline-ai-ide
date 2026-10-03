@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import childProcess, { spawn, spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -24,6 +25,79 @@ let shutdownProcessSessions;
 let listener;
 let report;
 const previousEnvironment = new Map();
+const originalSpawn = childProcess.spawn;
+const nativeLaunches = [];
+const nativeSnapshots = [];
+const diagnosticTimers = new Set();
+const diagnosticTasks = new Set();
+let spawnObserverInstalled = false;
+let currentCheck;
+
+function boundedDiagnostic(value, limit = 8_192) {
+  return String(value).replaceAll(`fixture-secret-${fixtureId}`, "[fixture-secret]")
+    .replace(/((?:api[_-]?key|password|access[_-]?token|authorization)\s*[=:]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)/gi, "$1[redacted]")
+    .slice(-limit);
+}
+function ownedScriptMetadata(file) {
+  if (!file || !root || !path.isAbsolute(file)) return;
+  const relative = path.relative(path.join(root, "workspace"), file);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || !file.toLowerCase().endsWith("command.ps1")) return;
+  try { const stat = fs.lstatSync(file); return { path: file, exists: true, size: stat.size, isFile: stat.isFile(), isSymlink: stat.isSymbolicLink() }; }
+  catch (error) { return { path: file, exists: false, errorCode: error.code }; }
+}
+function sdkLogMetadata() {
+  if (!root) return [];
+  const home = path.join(root, "settings", "codex-native-sandbox");
+  return ["log/codex-tui.log", "log/codex-app-server.log", ".sandbox/sandbox.log", ".sandbox/setup.log", ".sandbox/sandbox-setup.log"].flatMap((relative) => {
+    const file = path.join(home, ...relative.split("/"));
+    try { const stat = fs.lstatSync(file); return stat.isFile() && !stat.isSymbolicLink() ? [{ relative, size: stat.size, mtimeMs: stat.mtimeMs, contentsCaptured: false }] : []; }
+    catch { return []; }
+  });
+}
+async function nativeSnapshot(record, reason) {
+  if (!Number.isSafeInteger(record.pid) || record.pid <= 0 || nativeSnapshots.length >= 64) return;
+  const snapshot = { reason, capturedAt: new Date().toISOString(), launcherPid: record.pid, script: ownedScriptMetadata(record.script?.path), sdkLogs: sdkLogMetadata() };
+  nativeSnapshots.push(snapshot);
+  if (record.closedAt) { snapshot.launcherAlreadyClosed = true; return; }
+  const scriptPath = snapshot.script?.exists ? snapshot.script.path : undefined;
+  const source = `$rows = @(); $seen = @{}; $frontier = @(${record.pid}); for ($depth = 0; $depth -lt 6 -and $frontier.Count -gt 0 -and $rows.Count -lt 64; $depth++) { $filter = ($frontier | ForEach-Object { 'ProcessId = ' + $_ + ' OR ParentProcessId = ' + $_ }) -join ' OR '; $next = @(); foreach ($item in @(Get-CimInstance Win32_Process -Filter $filter)) { if (-not $seen.ContainsKey([string]$item.ProcessId)) { $seen[[string]$item.ProcessId] = $true; $rows += [pscustomobject]@{ pid = [int]$item.ProcessId; parentPid = [int]$item.ParentProcessId; name = [string]$item.Name }; $next += [int]$item.ProcessId } }; $frontier = $next }; $acl = $null; ${scriptPath ? `if (Test-Path -LiteralPath ${psLiteral(scriptPath)}) { $item = Get-Acl -LiteralPath ${psLiteral(scriptPath)}; $acl = [pscustomobject]@{ owner = [string]$item.Owner; sddl = [string]$item.Sddl } };` : ""} [pscustomobject]@{ processes = @($rows); scriptAcl = $acl } | ConvertTo-Json -Depth 5 -Compress`;
+  await new Promise((resolve) => {
+    let stdout = ""; let stderr = ""; let finished = false;
+    const finish = () => { if (finished) return; finished = true; clearTimeout(timer); try { snapshot.windows = JSON.parse(stdout); } catch { snapshot.stdout = boundedDiagnostic(stdout); } if (stderr) snapshot.stderr = boundedDiagnostic(stderr); resolve(); };
+    const diagnostic = originalSpawn(system32(path.join("WindowsPowerShell", "v1.0", "powershell.exe")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference = 'Stop'; ${source}`], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const timer = setTimeout(() => { snapshot.timedOut = true; diagnostic.kill(); finish(); }, 5_000); timer.unref();
+    diagnostic.stdout.on("data", (chunk) => { stdout = (stdout + chunk.toString()).slice(-32_768); });
+    diagnostic.stderr.on("data", (chunk) => { stderr = (stderr + chunk.toString()).slice(-8_192); });
+    diagnostic.once("error", (error) => { snapshot.errorCode = error.code; finish(); });
+    diagnostic.once("close", (code) => { snapshot.diagnosticExitCode = code; finish(); });
+  });
+}
+function queueNativeSnapshot(record, reason) {
+  const task = nativeSnapshot(record, reason).catch((error) => { nativeSnapshots.push({ reason, launcherPid: record.pid, error: boundedDiagnostic(error.message) }); });
+  diagnosticTasks.add(task); task.finally(() => diagnosticTasks.delete(task)); return task;
+}
+function installSpawnObserver() {
+  childProcess.spawn = function observedSpawn(...parameters) {
+    // Forward the exact real invocation. The observer changes no executable,
+    // arguments, environment, sandbox policy, or result.
+    const child = Reflect.apply(originalSpawn, this, parameters);
+    const [command, rawArgs] = parameters; const args = Array.isArray(rawArgs) ? rawArgs : [];
+    const runtime = path.join(repo, "backend", "vendor", "codex", `win-${process.arch}`, "bin", "codex.exe").toLowerCase();
+    const direct = String(command).toLowerCase() === runtime;
+    if ((!direct && !args.some((value) => String(value).toLowerCase() === runtime)) || !args.includes("sandbox") || nativeLaunches.length >= 64) return child;
+    const fileIndex = args.findIndex((value) => String(value).toLowerCase() === "-file");
+    const record = { launchedAt: new Date().toISOString(), check: currentCheck, pid: child.pid, kind: direct ? "sandbox-cli" : "sandbox-watchdog", executable: path.basename(String(command)), script: ownedScriptMetadata(fileIndex >= 0 ? args[fileIndex + 1] : undefined), stdout: "", stderr: "" };
+    nativeLaunches.push(record);
+    child.stdout?.on("data", (chunk) => { record.stdout = boundedDiagnostic(record.stdout + chunk.toString()); });
+    child.stderr?.on("data", (chunk) => { record.stderr = boundedDiagnostic(record.stderr + chunk.toString()); });
+    const timer = setTimeout(() => { diagnosticTimers.delete(timer); void queueNativeSnapshot(record, "20s-before-timeout"); }, 20_000); timer.unref(); diagnosticTimers.add(timer);
+    child.once("exit", (code, signal) => { record.exitedAt = new Date().toISOString(); record.exitCode = code; record.exitSignal = signal; });
+    child.once("close", (code, signal) => { record.closedAt = new Date().toISOString(); record.closeCode = code; record.closeSignal = signal; clearTimeout(timer); diagnosticTimers.delete(timer); });
+    child.once("error", (error) => { record.errorCode = error.code; record.error = boundedDiagnostic(error.message); });
+    return child;
+  };
+  syncBuiltinESMExports(); spawnObserverInstalled = true;
+}
 
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); }
 function setEnvironment(key, value) {
@@ -41,6 +115,7 @@ function trustedPowerShell(source) {
   return String(result.stdout || "").trim();
 }
 async function step(name, action) {
+  currentCheck = name;
   const start = Date.now();
   try { const detail = await action(); checks.push({ name, status: "PASS", elapsedMs: Date.now() - start, ...detail }); }
   catch (error) { checks.push({ name, status: "FAIL", elapsedMs: Date.now() - start, message: error instanceof Error ? error.stack || error.message : String(error) }); throw error; }
@@ -129,6 +204,7 @@ try {
   });
 
   // Configuration is isolated before any backend module is evaluated.
+  installSpawnObserver();
   const [native, shell, processSandbox, sessions] = await Promise.all([
     import("../backend/dist/agent/windowsNativeSandbox.js"), import("../backend/dist/agent/shell.js"),
     import("../backend/dist/agent/processSandbox.js"), import("../backend/dist/run/processSessions.js"),
@@ -314,9 +390,14 @@ try {
   report = { status: "PASS", startedAt, endedAt: new Date().toISOString(), runtime: "windows-native", shell: "powershell", fixtureId, normalExitPreservesBackground, checks,
     limitations: ["This validates real Windows native execution in disposable fixtures, not App installer acceptance on every Windows version.", "Native read access follows Codex's broader root-read boundary with App-sensitive data denied; WSL remains available for narrower filesystem reads.", "Normal Codex root exit preserves independently backgrounded descendants; this fixture explicitly terminates its verified owned PIDs. Stop/timeout/backend-crash cleanup checks apply to foreground App-managed sessions.", "Only execution, readiness, and sandbox setup APIs are called; no model or login request is made."] };
 } catch (error) {
+  if (spawnObserverInstalled) await Promise.all(nativeLaunches.filter((record) => !record.closedAt).map((record) => queueNativeSnapshot(record, "failure-before-cleanup")));
+  await Promise.all([...diagnosticTasks]);
   report = { status: "FAIL", startedAt, endedAt: new Date().toISOString(), fixtureId, checks, error: error instanceof Error ? error.stack || error.message : String(error) };
   console.error(error); process.exitCode = 1;
 } finally {
+  for (const timer of diagnosticTimers) clearTimeout(timer); diagnosticTimers.clear();
+  await Promise.all([...diagnosticTasks]);
+  const retainedSdkLogMetadata = sdkLogMetadata();
   try { shutdownProcessSessions?.(); } catch { /* Owned sessions only. */ }
   for (const backend of backendChildren) { try { backend.kill("SIGKILL"); } catch { /* Already exited. */ } }
   if (listener) { listener.closeAllConnections?.(); listener.close(); }
@@ -338,11 +419,13 @@ try {
     } catch (error) { report.status = "FAIL"; report.backgroundCleanupError = error.message; process.exitCode = 1; }
   }
   for (const [key, value] of previousEnvironment) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  if (spawnObserverInstalled) { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); }
   for (const fixture of [root, outsideFixture].filter(Boolean)) {
     try { fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 4, retryDelay: 500 }); }
     catch (error) { report.status = "FAIL"; report.cleanupError = error.message; process.exitCode = 1; }
   }
   report.endedAt = new Date().toISOString();
+  report.nativeDiagnostics = { launches: nativeLaunches, snapshots: nativeSnapshots, sdkLogs: retainedSdkLogMetadata, sdkLogContentsCaptured: false };
   writeJson(reportPath, report);
   console.log(`${report.status} windows-native-sandbox-smoke ${reportPath}`);
 }

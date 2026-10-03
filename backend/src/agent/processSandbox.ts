@@ -597,7 +597,7 @@ export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Pro
     child.stdout.on("data", append);
     child.stderr.on("data", append);
     options.signal?.addEventListener("abort", abort, { once: true });
-    timeout = setTimeout(() => { terminate(); finish(`Error: Timeout (${timeoutMs}ms)`, true, Boolean(prepared.cancel)); }, timeoutMs);
+    timeout = setTimeout(() => { terminate(); const trimmed = output.trim(); finish(`Error: Timeout (${timeoutMs}ms)${trimmed ? `\n${trimmed}` : ""}`, true, Boolean(prepared.cancel)); }, timeoutMs);
     timeout.unref?.();
     child.on("error", (error) => finish(`Error: ${error.message}`));
     child.on("close", (code) => {
