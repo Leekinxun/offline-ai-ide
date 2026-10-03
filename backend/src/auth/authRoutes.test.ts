@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import express from "express";
+import crypto from "node:crypto";
+import { initializeDesktopBootstrapCredential } from "./desktopBootstrapCredential.js";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -198,11 +200,18 @@ test("desktop workspace pick route handles cancellation and rejects isolated ses
   }
 });
 
-test("desktop /me bootstraps a local admin session only for loopback requests without a token", async (t) => {
+test("desktop /me requires the private host credential before bootstrapping a local admin session", async (t) => {
   const originalManager = sessionManager;
   const priorDesktop = process.env.CREWFORGE_DESKTOP;
   process.env.CREWFORGE_DESKTOP = "1";
+  const priorCredential = process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN;
+  const credential = crypto.randomBytes(32).toString("hex");
+  process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN = credential;
+  initializeDesktopBootstrapCredential();
+  assert.equal(process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN, undefined);
   t.after(() => {
+    initializeDesktopBootstrapCredential();
+    if (priorCredential === undefined) delete process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN; else process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN = priorCredential;
     setSessionManagerForTests(originalManager);
     if (priorDesktop === undefined) delete process.env.CREWFORGE_DESKTOP;
     else process.env.CREWFORGE_DESKTOP = priorDesktop;
@@ -211,7 +220,8 @@ test("desktop /me bootstraps a local admin session only for loopback requests wi
   const { manager } = await desktopManager(t);
   const server = await serve(manager);
   try {
-    const bootstrapped = await fetch(`${server.base}/me`);
+    assert.equal((await fetch(`${server.base}/me`)).status, 401);
+    const bootstrapped = await fetch(`${server.base}/me`, { headers: { "X-CrownForge-Desktop-Bootstrap": credential } });
     assert.equal(bootstrapped.status, 200);
     assert.equal(bootstrapped.headers.get("cache-control"), "no-store");
     const payload = await bootstrapped.json() as { username: string; isAdmin: boolean; desktop: boolean; token: string };

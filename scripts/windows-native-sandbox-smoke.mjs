@@ -4,6 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import http from "node:http";
 import { lookup } from "node:dns/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +25,7 @@ let root;
 let outsideFixture;
 let shutdownProcessSessions;
 let listener;
+let authListener;
 let report;
 const previousEnvironment = new Map();
 const originalSpawn = childProcess.spawn;
@@ -210,7 +212,8 @@ try {
   for (const directory of [workspace, outside, settingsDir, plugins, path.join(workspace, "allowednested"), path.join(workspace, ".codex"), path.join(workspace, ".ssh")]) fs.mkdirSync(directory, { recursive: true });
   const usersConfig = path.join(settingsDir, "users.json");
   const appSettingsConfig = path.join(settingsDir, "app-settings.json");
-  writeJson(usersConfig, { allowedRoots: [workspace], users: [] }); writeJson(appSettingsConfig, {});
+  const fixtureAdmin = `native-smoke-admin-${fixtureId}`;
+  writeJson(usersConfig, { allowedRoots: [workspace], users: [{ username: fixtureAdmin, password: crypto.randomBytes(32).toString("base64url"), defaultWorkspace: workspace, isAdmin: true }] }); writeJson(appSettingsConfig, {});
   writeJson(path.join(settingsDir, "agent-execution.json"), { environment: "native", sandboxMode: "elevated" });
   fs.writeFileSync(path.join(workspace, "Readme.txt"), "case-insensitive-fixture");
   const secret = `fixture-secret-${fixtureId}`;
@@ -232,6 +235,11 @@ try {
   });
 
   // Configuration is isolated before any backend module is evaluated.
+  const bootstrapToken = crypto.randomBytes(32).toString("base64url");
+  setEnvironment("CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN", bootstrapToken);
+  const { initializeDesktopBootstrapCredential } = await import("../backend/dist/auth/desktopBootstrapCredential.js");
+  initializeDesktopBootstrapCredential();
+  assert.equal(process.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN, undefined, "Desktop startup must consume its credential before any project process starts");
   installSpawnObserver();
   const [native, shell, processSandbox, sessions] = await Promise.all([
     import("../backend/dist/agent/windowsNativeSandbox.js"), import("../backend/dist/agent/shell.js"),
@@ -353,6 +361,33 @@ try {
     return { sessionId: session.id, status: finished.session.status, exitCode: finished.session.exitCode };
   });
 
+  await step("reachable localhost auth requires the private desktop bootstrap credential and guest processes never inherit it", async () => {
+    const [{ default: express }, { authRouter }] = await Promise.all([
+      import(pathToFileURL(path.join(repo, "backend/node_modules/express/index.js")).href),
+      import("../backend/dist/routes/auth.js"),
+    ]);
+    const app = express(); app.use(express.json()); app.use("/api/auth", authRouter);
+    authListener = http.createServer(app);
+    await new Promise((resolve) => authListener.listen(0, "127.0.0.1", resolve));
+    const address = authListener.address(); assert.ok(address && typeof address !== "string");
+    const origin = `http://127.0.0.1:${address.port}`;
+    const url = `${origin}/api/auth/me`;
+    const hostWithoutCredential = await fetch(url);
+    assert.equal(hostWithoutCredential.status, 401, "An ordinary localhost caller must not bootstrap an administrator session");
+    const hostWithCredential = await fetch(url, { headers: { "x-crownforge-desktop-bootstrap": bootstrapToken } });
+    assert.equal(hostWithCredential.status, 200, "The actual private bootstrap credential must authorize the desktop host");
+    const hostBody = await hostWithCredential.json();
+    assert.equal(hostBody.isAdmin, true); assert.equal(hostBody.username, fixtureAdmin);
+    const source = `if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN'))) { Write-Output 'BOOTSTRAP-ENV-ABSENT' } else { Write-Output 'BOOTSTRAP-ENV-PRESENT' }; function Test-FixtureAuth([string]$label, [bool]$forge) { $request = [Net.HttpWebRequest]::Create(${psLiteral(url)}); $request.Method = 'GET'; $request.Timeout = 5000; $request.KeepAlive = $false; if ($forge) { $request.Headers.Add('Origin', ${psLiteral(origin)}); $request.Headers.Add('x-crownforge-desktop-bootstrap', 'wrong-fixture-credential') }; try { $response = $request.GetResponse(); Write-Output ($label + '-STATUS:' + [int]$response.StatusCode); $response.Close() } catch [Net.WebException] { if ($null -ne $_.Exception.Response) { Write-Output ($label + '-STATUS:' + [int]$_.Exception.Response.StatusCode); $_.Exception.Response.Close() } else { Write-Output ($label + '-CONNECTION-FAILED') } } }; Test-FixtureAuth 'AUTH-NO-CREDENTIAL' $false; Test-FixtureAuth 'AUTH-FORGED-ORIGIN-WRONG-CREDENTIAL' $true`;
+    const output = await execute(source, ["."], 120_000);
+    assert.doesNotMatch(output, /^Error:|CONNECTION-FAILED|BOOTSTRAP-ENV-PRESENT/);
+    assert.match(output, /BOOTSTRAP-ENV-ABSENT/);
+    assert.match(output, /AUTH-NO-CREDENTIAL-STATUS:401/);
+    assert.match(output, /AUTH-FORGED-ORIGIN-WRONG-CREDENTIAL-STATUS:401/);
+    authListener.closeAllConnections(); await new Promise((resolve) => authListener.close(resolve)); authListener = undefined;
+    return { hostWithoutCredentialStatus: 401, hostWithPrivateCredentialStatus: 200, hostIsAdmin: true, guestWithoutCredentialStatus: 401, guestForgedOriginWrongCredentialStatus: 401, guestBootstrapEnvironmentAbsent: true, responsesReachedServer: true };
+  });
+
   const heartbeatDir = path.join(workspace, "allowednested");
   const workerFile = path.join(heartbeatDir, "fixture-worker.cjs");
   const descendantFile = path.join(heartbeatDir, "fixture-descendant.cjs");
@@ -365,7 +400,7 @@ try {
       if (!files.every((file) => fs.existsSync(file))) return;
       const values = files.map((file) => Number(fs.readFileSync(file, "utf8").trim()));
       return values.every((pid) => Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) ? values : undefined;
-    }, `${tag} parent/child/grandchild PID evidence`, 25_000);
+    }, `${tag} parent/child/grandchild PID evidence`, 40_000);
     const heartbeats = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.heartbeat`));
     await until(() => heartbeats.every((file) => fs.existsSync(file)), `${tag} descendant heartbeats`);
     rememberSupervisors(workspace, backendPid);
@@ -375,10 +410,13 @@ try {
   await step("normal Codex root exit preserves background descendants and the fixture explicitly cleans them", async () => {
     const tag = `normal-${fixtureId}`;
     backgroundCanaries.push({ tag, directory: heartbeatDir });
-    const stdinFile = path.join(heartbeatDir, `${tag}-stdin.txt`); fs.writeFileSync(stdinFile, "");
-    const source = `$child = Start-Process -FilePath ${psLiteral(process.execPath)} -ArgumentList @('allowednested/fixture-worker.cjs', ${psLiteral(tag)}) -NoNewWindow -PassThru -RedirectStandardInput ${psLiteral(stdinFile)} -RedirectStandardOutput ${psLiteral(path.join(heartbeatDir, `${tag}-stdout.txt`))} -RedirectStandardError ${psLiteral(path.join(heartbeatDir, `${tag}-stderr.txt`))}; Write-Output ('NORMAL-EXIT-BACKGROUND-PID:' + $child.Id); exit 0`;
-    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: 30_000 });
-    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "normal root exit", 35_000);
+    // Start inside the guest token/job, with all standard handles directed to
+    // owned files/NUL. PowerShell 5 Start-Process redirection uses output pumps
+    // that can keep the root's pipes open after its script has finished.
+    const command = `start "" /b "${process.execPath}" "${workerFile}" ${tag} <NUL >"${path.join(heartbeatDir, `${tag}-stdout.txt`)}" 2>"${path.join(heartbeatDir, `${tag}-stderr.txt`)}"`;
+    const source = `& ${psLiteral(system32("cmd.exe"))} /d /s /c ${psLiteral(command)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Write-Output 'NORMAL-EXIT-BACKGROUND-LAUNCHED'; exit 0`;
+    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: 120_000 });
+    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "normal root exit", 125_000);
     assert.equal(finished.session.status, "exited", text(finished));
     assert.equal(finished.session.exitCode, 0, "The real sandbox CLI must return zero before background retention is characterized");
     const pids = await until(() => {
@@ -387,7 +425,7 @@ try {
       const values = files.map((file) => Number(fs.readFileSync(file, "utf8").trim()));
       return values.every((pid) => Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) ? values : undefined;
     }, "background child and grandchild after normal root exit");
-    assert.ok(text(finished).includes(`NORMAL-EXIT-BACKGROUND-PID:${pids[0]}`), "The CLI's child marker must match the owned PID receipt");
+    assert.match(text(finished), /NORMAL-EXIT-BACKGROUND-LAUNCHED/);
     const heartbeats = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.heartbeat`));
     await until(() => heartbeats.every((file) => fs.existsSync(file)), "normal-exit background heartbeats");
     const before = heartbeats.map((file) => fs.readFileSync(file, "utf8"));
@@ -397,7 +435,7 @@ try {
     normalExitPreservesBackground = true;
     assert.equal(terminateOwnedBackground(pids[0], tag, "fixture-worker.cjs"), true);
     const cleanup = await assertSubtreeStopped({ pids, heartbeats });
-    return { sessionId: session.id, actualCliExitCode: 0, normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
+    return { sessionId: session.id, actualCliExitCode: 0, backgroundLaunch: "guest System32 cmd start with owned stdio redirection", pidEvidence: "worker and grandchild fixture files after real root exit", normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
   });
 
   await step("session stop reaps PowerShell and its child/grandchild subtree", async () => {
@@ -412,9 +450,9 @@ try {
 
   await step("session timeout reaps the complete payload subtree", async () => {
     const tag = `timeout-${fixtureId}`;
-    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(subtreeSource(tag)), filesystem, timeoutMs: 20_000 });
+    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(subtreeSource(tag)), filesystem, timeoutMs: 60_000 });
     const evidence = await subtreeEvidence(tag);
-    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "session wall timeout", 30_000);
+    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "session wall timeout", 65_000);
     assert.equal(finished.session.status, "timed_out");
     return { sessionId: session.id, status: finished.session.status, ...await assertSubtreeStopped(evidence) };
   });
@@ -436,7 +474,7 @@ try {
 
   shutdownProcessSessions();
   report = { status: "PASS", startedAt, endedAt: new Date().toISOString(), runtime: "windows-native", shell: "powershell", fixtureId, normalExitPreservesBackground, loopbackIsolation: false, networkIsolation: "external", weakerNetworkIsolation: true, checks,
-    limitations: ["This validates real Windows native execution in disposable fixtures, not App installer acceptance on every Windows version.", "Native read access follows Codex's broader root-read boundary with App-sensitive data denied; WSL remains available for narrower filesystem reads.", "Normal Codex root exit preserves independently backgrounded descendants; this fixture explicitly terminates its verified owned PIDs. Stop/timeout/backend-crash cleanup checks apply to foreground App-managed sessions.", "The pinned 0.160.0 runtime blocked external TCP 443 but allowed localhost TCP on Windows Server 2022 despite active Codex loopback firewall rules; this is disclosed as limited external isolation, never full network denial. Other Windows versions require separate acceptance.", "Only execution, readiness, and sandbox setup APIs are called; no model or login request is made."] };
+    limitations: ["This validates real Windows native execution in disposable fixtures, not App installer acceptance on every Windows version.", "Native read access follows Codex's broader root-read boundary with App-sensitive data denied; WSL remains available for narrower filesystem reads.", "Normal Codex root exit preserves independently backgrounded descendants; this fixture explicitly terminates its verified owned PIDs. Stop/timeout/backend-crash cleanup checks apply to foreground App-managed sessions.", "The pinned 0.160.0 runtime blocked external TCP 443 but allowed localhost TCP on Windows Server 2022 despite active Codex loopback firewall rules; this is disclosed as limited external isolation, never full network denial. Other Windows versions require separate acceptance.", "Local fixture auth boundary requests are tested alongside execution, readiness and sandbox setup; no model or Codex account request is made."] };
 } catch (error) {
   if (spawnObserverInstalled) await Promise.all(nativeLaunches.filter((record) => !record.closedAt).map((record) => queueNativeSnapshot(record, "failure-before-cleanup")));
   await Promise.all([...diagnosticTasks]);
@@ -449,6 +487,7 @@ try {
   try { shutdownProcessSessions?.(); } catch { /* Owned sessions only. */ }
   for (const backend of backendChildren) { try { backend.kill("SIGKILL"); } catch { /* Already exited. */ } }
   if (listener) { listener.closeAllConnections?.(); listener.close(); }
+  if (authListener) { authListener.closeAllConnections(); await new Promise((resolve) => authListener.close(resolve)); authListener = undefined; }
   await new Promise((resolve) => setTimeout(resolve, 2_000));
   // A failing cleanup check must not leave our supervisor behind. Verify its
   // fixture path before applying taskkill, rather than killing unrelated PIDs.

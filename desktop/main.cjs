@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell, webContents } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -19,6 +19,7 @@ if (process.env.CREWFORGE_DESKTOP_DATA_DIR) {
 const isPrimaryInstance = app.requestSingleInstanceLock();
 let backend;
 let backendUrl;
+let desktopBootstrapToken;
 let mainWindow;
 let quitting = false;
 let folderPickerOpen = false;
@@ -69,10 +70,13 @@ function startBackend(data) {
   return new Promise((resolve, reject) => {
     const bootstrapPath = bundledPath(path.join("backend", "bootstrap.cjs"));
     const staticDir = bundledPath(app.isPackaged ? "frontend" : path.join("frontend", "dist"));
+    desktopBootstrapToken = crypto.randomBytes(32).toString("base64url");
     const env = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
       CREWFORGE_DESKTOP: "1",
+      CROWNFORGE_DESKTOP_RUNTIME: "electron",
+      CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: desktopBootstrapToken,
       NODE_ENV: "production",
       HOST: "127.0.0.1",
       PORT: "0",
@@ -124,6 +128,27 @@ function startBackend(data) {
         void handleFolderPickerRequest(child, message);
       }
     });
+  });
+}
+
+/** Keep bootstrap authority in the host. Neither preload nor renderer gets a token getter. */
+function installBootstrapRequestHeaders() {
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
+    const headers = { ...details.requestHeaders };
+    // Remove any spoofed value, and strip authority on redirects/other destinations.
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === "x-crownforge-desktop-bootstrap") delete headers[key];
+    try {
+      const url = new URL(details.url);
+      const contents = details.webContents || (Number.isSafeInteger(details.webContentsId) ? webContents.fromId(details.webContentsId) : undefined);
+      const frame = details.frame;
+      const trusted = desktopBootstrapToken && details.method === "GET" && url.origin === backendUrl &&
+        url.pathname === "/api/auth/me" && !url.search && !url.hash && !url.username && !url.password &&
+        contents && registeredContents.has(contents) && !contents.isDestroyed() && frame && frame === contents.mainFrame &&
+        isTrustedUiUrl(frame.url, backendUrl) && isTrustedUiUrl(contents.getURL(), backendUrl) &&
+        (details.initiatorOrigin === undefined || details.initiatorOrigin === backendUrl);
+      if (trusted) headers["X-CrownForge-Desktop-Bootstrap"] = desktopBootstrapToken;
+    } catch { /* Malformed/untrusted requests never receive host authority. */ }
+    callback({ requestHeaders: headers });
   });
 }
 
@@ -300,6 +325,7 @@ if (isPrimaryInstance) {
     try {
       const data = ensureDesktopData();
       backendUrl = await startBackend(data);
+      installBootstrapRequestHeaders();
       registerDesktopBridge(createPreferencesStore(path.join(data.dataDir, "preferences.json")));
       installApplicationMenu();
       mainWindow = new BrowserWindow({

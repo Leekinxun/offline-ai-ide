@@ -42,6 +42,9 @@ import { sessionManager, type UserSession } from "./auth/sessionManager.js";
 import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "./team/sessionBridge.js";
 import { reloadExternalPlugins } from "./plugins/registry.js";
 
+import { initializeDesktopBootstrapCredential } from "./auth/desktopBootstrapCredential.js";
+
+initializeDesktopBootstrapCredential();
 const app = express();
 app.disable("x-powered-by");
 reloadExternalPlugins();

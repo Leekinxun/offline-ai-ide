@@ -11,6 +11,9 @@ const preview = `${origin}/preview/12345678-abcd-1234-abcd-123456789abc/${"a".re
 function fixture() {
   const handlers = new Map();
   const externalCalls = [];
+  const headerListeners = [];
+  const contentsById = new Map();
+  const backendSpawns = [];
   let menu;
   const app = new EventEmitter();
   app.requestSingleInstanceLock = () => false;
@@ -22,17 +25,22 @@ function fixture() {
     ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
     Menu: { buildFromTemplate: (value) => value, setApplicationMenu: (value) => { menu = value; } },
     shell: { openExternal: async (url) => { externalCalls.push(url); } },
+    session: { defaultSession: { webRequest: { onBeforeSendHeaders: (filter, listener) => headerListeners.push({ filter, listener }) } } },
+    webContents: { fromId: (id) => contentsById.get(id) },
   };
   const sandbox = {
-    require: (name) => name === "electron" ? electron : name.startsWith("./") ? require(path.join(__dirname, name)) : require(name),
+    require: (name) => name === "electron" ? electron : name === "node:child_process" ? { spawn: (executable, args, options) => {
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+      backendSpawns.push({ executable, args, options }); queueMicrotask(() => child.emit("message", { type: "ready", url: origin })); return child;
+    } } : name.startsWith("./") ? require(path.join(__dirname, name)) : require(name),
     module: { exports: {} },
     __dirname,
-    process: { platform: "linux", env: {} },
+    process: { platform: "linux", env: {}, execPath: "/fixture/electron", stdout: { write() {} }, stderr: { write() {} } },
     URL, setTimeout, clearTimeout,
   };
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  vm.runInNewContext(`${source}\nbackendUrl = ${JSON.stringify(origin)}; module.exports = { guardWindow, registerDesktopBridge, installApplicationMenu };`, sandbox);
-  return { ...sandbox.module.exports, handlers, externalCalls, getMenu: () => menu };
+  vm.runInNewContext(`${source}\nbackendUrl = ${JSON.stringify(origin)}; desktopBootstrapToken = "${"x".repeat(64)}"; module.exports = { guardWindow, registerDesktopBridge, installApplicationMenu, installBootstrapRequestHeaders, desktopWebPreferences, startBackend };`, sandbox);
+  return { ...sandbox.module.exports, handlers, externalCalls, headerListeners, contentsById, backendSpawns, getMenu: () => menu };
 }
 
 function windowAt(url) {
@@ -115,4 +123,40 @@ test("menu commands go only to a trusted focused IDE window", () => {
   window.webContents.mainFrame.url = preview;
   zoomIn.click({}, window);
   assert.equal(window.webContents.messages.length, 1);
+});
+
+test("private bootstrap headers reach only the registered IDE main-frame auth endpoint", () => {
+  const runtime = fixture(); const window = windowAt(`${origin}/`); runtime.guardWindow(window);
+  runtime.contentsById.set(7, window.webContents); runtime.installBootstrapRequestHeaders();
+  const listener = runtime.headerListeners[0].listener;
+  const details = { url: `${origin}/api/auth/me`, method: "GET", webContentsId: 7, frame: window.webContents.mainFrame, initiatorOrigin: origin,
+    requestHeaders: { "x-crownforge-desktop-bootstrap": "spoofed", "Content-Type": "application/json" } };
+  const request = (patch = {}) => { let response; listener({ ...details, ...patch }, (value) => { response = value; }); return response.requestHeaders; };
+  assert.equal(request()["X-CrownForge-Desktop-Bootstrap"], "x".repeat(64));
+  assert.equal(request()["x-crownforge-desktop-bootstrap"], undefined);
+  for (const patch of [
+    { method: "POST" }, { url: `${origin}/api/admin/settings` }, { url: `${origin}/api/auth/me?extra=1` },
+    { url: "https://outside.example/api/auth/me" }, { url: "http://127.0.0.1:1/api/auth/me" },
+    { url: `${origin}/preview/project/api/auth/me` }, { webContentsId: 99 }, { frame: null },
+    { frame: { url: `${origin}/` } }, { initiatorOrigin: "https://outside.example" }, { initiatorOrigin: "null" },
+  ]) assert.equal(Object.keys(request(patch)).some((key) => key.toLowerCase() === "x-crownforge-desktop-bootstrap"), false, JSON.stringify(patch));
+  window.webContents.mainFrame.url = preview;
+  assert.equal(Object.keys(request()).some((key) => key.toLowerCase() === "x-crownforge-desktop-bootstrap"), false);
+  window.webContents.mainFrame.url = `${origin}/`; window.webContents.emit("destroyed");
+  assert.equal(Object.keys(request()).some((key) => key.toLowerCase() === "x-crownforge-desktop-bootstrap"), false);
+  const argumentsList = runtime.desktopWebPreferences().additionalArguments.join(" ");
+  assert.equal(argumentsList.includes("x".repeat(64)), false, "Renderer process arguments must not contain host bootstrap authority");
+});
+
+test("Electron host gives each backend a fresh private bootstrap secret without exposing it to renderer arguments", async () => {
+  const runtime = fixture(); const data = { dataDir: "/fixture/data", workspaceDir: "/fixture/project", usersPath: "/fixture/data/users.json", pluginsDir: "/fixture/plugins" };
+  assert.equal(await runtime.startBackend(data), origin); assert.equal(await runtime.startBackend(data), origin);
+  const secrets = runtime.backendSpawns.map((entry) => entry.options.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN);
+  for (const secret of secrets) assert.match(secret, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(secrets[0], secrets[1]);
+  for (const entry of runtime.backendSpawns) {
+    assert.equal(entry.options.env.CREWFORGE_DESKTOP, "1"); assert.equal(entry.options.env.CROWNFORGE_DESKTOP_RUNTIME, "electron");
+    assert.equal(entry.args.join(" ").includes(entry.options.env.CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN), false);
+  }
+  for (const secret of secrets) assert.equal(runtime.desktopWebPreferences().additionalArguments.join(" ").includes(secret), false);
 });
