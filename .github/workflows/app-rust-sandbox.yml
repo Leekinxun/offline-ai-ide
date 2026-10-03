@@ -1,0 +1,130 @@
+name: APP_RUST Windows sandbox acceptance
+
+on:
+  push:
+    branches: [APP_RUST]
+    paths:
+      - .github/workflows/app-rust-sandbox.yml
+      - backend/**
+      - desktop/scripts/prepare-codex-runtime.mjs
+      - scripts/fixtures/codex-native-runtime-lock.json
+      - scripts/windows-native-sandbox-smoke.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-rust-sandbox-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native_sandbox:
+    if: github.ref == 'refs/heads/APP_RUST'
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          architecture: x64
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Verify disposable Windows administrator authority
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_OS -ne 'Windows') { throw 'Real Windows is required; another OS cannot count as acceptance.' }
+          $principal = [Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Sandbox acceptance requires the disposable runner to already be administrator. UAC approval is not automated.'
+          }
+      - name: Prepare isolated contract configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:RUNNER_TEMP ('app-rust-sandbox-' + [guid]::NewGuid().ToString('N'))
+          $workspace = Join-Path $directory 'workspace'
+          $plugins = Join-Path $directory 'plugins'
+          New-Item -ItemType Directory -Path $workspace, $plugins -Force | Out-Null
+          $users = Join-Path $directory 'users.json'
+          $settings = Join-Path $directory 'app-settings.json'
+          @{ allowedRoots = @($directory); users = @(@{ username = 'ci-fixture'; password = [guid]::NewGuid().ToString('N'); defaultWorkspace = $workspace; isAdmin = $true }) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $users -Encoding utf8
+          '{}' | Set-Content -LiteralPath $settings -Encoding utf8
+          $values = @{
+            USERS_CONFIG = $users; APP_SETTINGS_CONFIG = $settings; WORKSPACE_DIR = $workspace
+            TEAM_STORE_ROOT = (Join-Path $directory 'teams'); PLUGINS_DIR = $plugins
+            CREWFORGE_DESKTOP = '0'; VLLM_API_URL = 'http://127.0.0.1:9/v1'; VLLM_API_KEY = ''
+          }
+          foreach ($entry in $values.GetEnumerator()) { "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8 }
+      - name: Record firewall state without changing it
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = '.artifacts/app-rust-sandbox'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $services = @(Get-Service BFE, MpsSvc | Select-Object Name, @{ Name = 'Status'; Expression = { $_.Status.ToString() } }, @{ Name = 'StartType'; Expression = { $_.StartType.ToString() } })
+          $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name, @{ Name = 'Enabled'; Expression = { $_.Enabled.ToString() } })
+          @{ sourceCommit = $env:GITHUB_SHA; services = $services; profiles = $profiles } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $directory 'firewall-before.json') -Encoding utf8
+          $services | Format-Table | Out-String | Write-Host
+          $profiles | Format-Table | Out-String | Write-Host
+      - name: Install and build retained backend
+        run: |
+          npm --prefix backend ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix backend run build
+          exit $LASTEXITCODE
+      - name: Run mocked native contracts and desktop/Web selection regressions
+        working-directory: backend
+        run: node --import tsx --test src/agent/windowsShell.test.ts src/agent/windowsNativeSandbox.test.ts src/agent/codexSandboxClient.test.ts src/run/windowsAgentSettings.test.ts src/auth/desktopBootstrap.test.ts
+      - name: Prepare verified Codex 0.160.0 Windows x64 runtime
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; const lock=JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json','utf8')); if(lock.runtimeVersion!=='0.160.0'||lock.sourceTag!=='rust-v0.160.0') throw new Error('Acceptance requires the reviewed pinned Codex runtime');"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node desktop/scripts/prepare-codex-runtime.mjs x64
+          exit $LASTEXITCODE
+      - name: Verify real native PowerShell isolation and cleanup (explicit disposable setup)
+        run: |
+          git diff --exit-code -- scripts/windows-native-sandbox-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/windows-native-sandbox-smoke.mjs --allow-setup
+          exit $LASTEXITCODE
+      - name: Record effective Codex block rules without enabling the firewall
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = '.artifacts/app-rust-sandbox'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name 'codex_sandbox_offline_block_*' -ErrorAction SilentlyContinue |
+            Select-Object Name, DisplayName, Enabled, Profile, Direction, Action, PolicyStoreSourceType)
+          $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name, @{ Name = 'Enabled'; Expression = { $_.Enabled.ToString() } })
+          @{ sourceCommit = $env:GITHUB_SHA; rules = $rules; profiles = $profiles; firewallChangedByDiagnostics = $false } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $directory 'firewall-after.json') -Encoding utf8
+      - name: Describe the acceptance boundary
+        if: always()
+        run: |
+          @"
+          ## APP_RUST native Windows sandbox
+          - Commit: $env:GITHUB_SHA
+          - Real windows-2022 x64 administrator runner; pinned Codex 0.160.0.
+          - --allow-setup authorizes setup only inside this disposable CI VM.
+          - The committed smoke retains network-denial, private-read, write-scope, and process-cleanup assertions.
+          - Inspect report.json and firewall-before/after.json; mocked test passes are not OS isolation evidence.
+          - Diagnostics do not enable firewall profiles or change service state.
+          "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+      - name: Upload native acceptance report and firewall evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-rust-windows-sandbox-${{ github.run_id }}
+          path: |
+            .artifacts/windows-native-sandbox-smoke/report.json
+            .artifacts/app-rust-sandbox/firewall-before.json
+            .artifacts/app-rust-sandbox/firewall-after.json
+          if-no-files-found: warn
+          retention-days: 14

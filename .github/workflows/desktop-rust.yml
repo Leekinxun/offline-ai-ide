@@ -1,25 +1,63 @@
 name: Rust desktop platform acceptance
 
 on:
+  push:
+    branches: [APP_RUST]
+    paths:
+      - .github/workflows/desktop-rust.yml
+      - backend/**
+      - frontend/**
+      - desktop/rust/**
+      - desktop/scripts/prepare-rust-desktop.mjs
+      - scripts/desktop-rust-smoke.mjs
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: app-rust-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows_desktop:
+    if: github.ref == 'refs/heads/APP_RUST'
     runs-on: windows-2022
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          architecture: x64
           cache: npm
           cache-dependency-path: |
             backend/package-lock.json
             frontend/package-lock.json
             desktop/rust/package-lock.json
+      - name: Prepare isolated contract configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:RUNNER_TEMP ('app-rust-desktop-' + [guid]::NewGuid().ToString('N'))
+          $workspace = Join-Path $directory 'workspace'
+          $plugins = Join-Path $directory 'plugins'
+          New-Item -ItemType Directory -Path $workspace, $plugins -Force | Out-Null
+          $users = Join-Path $directory 'users.json'
+          $settings = Join-Path $directory 'app-settings.json'
+          @{ allowedRoots = @($directory); users = @(@{ username = 'ci-fixture'; password = [guid]::NewGuid().ToString('N'); defaultWorkspace = $workspace; isAdmin = $true }) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $users -Encoding utf8
+          '{}' | Set-Content -LiteralPath $settings -Encoding utf8
+          $values = @{
+            USERS_CONFIG = $users; APP_SETTINGS_CONFIG = $settings; WORKSPACE_DIR = $workspace
+            TEAM_STORE_ROOT = (Join-Path $directory 'teams'); PLUGINS_DIR = $plugins
+            CREWFORGE_DESKTOP = '0'; VLLM_API_URL = 'http://127.0.0.1:9/v1'; VLLM_API_KEY = ''
+          }
+          foreach ($entry in $values.GetEnumerator()) { "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8 }
       - name: Update the Rust compiler
         shell: pwsh
         run: rustup update stable --no-self-update
@@ -41,21 +79,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --manifest-path desktop/rust/Cargo.toml --workspace --locked
           exit $LASTEXITCODE
-      - name: Run desktop protocol and service regressions
+      - name: Run protocol regressions (not OS sandbox acceptance)
         run: npm --prefix desktop/rust test
       - name: Verify native PowerShell PTY and desktop HTTP contracts
         run: npm --prefix desktop/rust run smoke
       - name: Verify Agent defaults and read-only sandbox capability checks
         working-directory: backend
         run: node --import tsx --test src/agent/windowsShell.test.ts src/agent/windowsNativeSandbox.test.ts src/agent/codexSandboxClient.test.ts src/run/windowsAgentSettings.test.ts src/auth/desktopBootstrap.test.ts
-      - name: Upload desktop acceptance report
+      - name: Describe the acceptance boundary
+        if: always()
+        run: |
+          @"
+          ## APP_RUST Windows desktop contracts
+          - Commit: $env:GITHUB_SHA
+          - Host: windows-2022 x64, Node 22
+          - Build and real Windows HTTP/WebSocket/PowerShell PTY checks are in this job.
+          - Mock contract tests do not prove OS isolation.
+          - Native Agent sandbox setup/isolation is checked separately by app-rust-sandbox.yml.
+          - NSIS installation and interactive WebView UI acceptance remain separate checks.
+          "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+      - name: Upload desktop contract evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-rust-desktop-acceptance
-          path: .artifacts/app-rust/smoke-report.json
+          path: |
+            .artifacts/app-rust/smoke-report.json
+            .artifacts/app-rust/smoke-failure.log
           if-no-files-found: warn
           retention-days: 14
 
-# OS sandbox provisioning is deliberately a separate manually dispatched
-# windows-native-sandbox workflow. This job never sets up accounts or ACLs.
+# Native Agent OS isolation runs separately in app-rust-sandbox.yml. This job
+# does not set up sandbox accounts, ACLs, or firewall rules, or claim NSIS/UI acceptance.
