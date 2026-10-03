@@ -140,10 +140,57 @@ configured interpreter. Project npm tasks and Vite previews require local Node.j
 npm, and the project's installed dependencies; the bundled Electron backend
 does not install these project tools or packages for you.
 
-Agent shell commands remain blocked on Windows: the current hard filesystem and
-network isolation helpers use macOS Seatbelt or Linux bubblewrap, and Windows
-has no equivalent implementation in this project. File read/write/edit tools
-remain available. Do not remove that block merely to make shell commands run.
+On Windows 10/11, Agent shell commands use Bash inside WSL2. Install a WSL2
+Linux distribution with Bash, bubblewrap, and Node.js 18 or later at
+`/usr/bin/node`, and configure its default user as a regular, non-root user.
+The App uses the system's default WSL distribution unless the backend's
+`CROWNFORGE_WSL_DISTRO` environment variable selects another installed
+distribution. The Windows desktop and file tools keep using the same workspace;
+the execution adapter maps a supported NTFS workspace into WSL for command
+execution.
+
+Agent commands require a **case-sensitive NTFS workspace** so differently cased
+filenames cannot bypass the Linux filesystem isolation rules. Prepare a new,
+empty NTFS project directory and enable case sensitivity from an administrator
+PowerShell before copying the project into it:
+
+```powershell
+fsutil.exe file setCaseSensitiveInfo "C:\path\project" enable
+```
+
+Follow [Microsoft's case-sensitivity guidance](https://learn.microsoft.com/en-us/windows/wsl/case-sensitivity)
+before migrating an existing, populated directory; do not simply change its
+flags in place. The App checks this requirement and never changes directory
+flags itself. Linux filesystem workspaces accessed through WSL UNC paths have
+not yet been validated for this adapter.
+
+Installing WSL alone does not enable Agent commands. The App first checks the
+Linux execution environment and its filesystem and network isolation; commands
+remain unavailable if that check fails. Open Settings to see the WSL execution
+service status and check it again after changing the distribution. A ready
+service does not guarantee that the selected workspace meets the separate
+case-sensitivity and path checks. WSL does not provide
+an unrestricted fallback when bubblewrap cannot establish isolation. Windows 7
+does not support WSL and keeps Agent shell commands disabled. File read/write/edit
+tools, the manual terminal, and Web preview remain available on all Windows
+targets. The manual terminal continues to use its native Windows terminal path.
+
+For native Windows acceptance, build the backend and run
+`node scripts/windows-wsl-smoke.mjs` from the repository root in an administrator
+terminal after preparing WSL2. This test only sets case sensitivity on its own
+disposable directories and uses isolated configuration. It verifies Bash,
+Node/npm, read-only queries, private-file and network isolation, interactive
+input, and cancellation through the actual Windows execution adapter. Results
+are saved in `.artifacts/windows-wsl-smoke/report.json`.
+
+`node scripts/wsl-helper-linux-smoke.mjs` tests the Linux helper in a disposable
+Docker fixture with Bash, Node, npm, and bubblewrap. Its report explicitly
+excludes native Windows, WSL transport, and DrvFS acceptance.
+Prepare the fixture image with:
+
+```sh
+docker build -f scripts/fixtures/wsl-helper-linux.Dockerfile -t crewforge-wsl-helper-test:local scripts/fixtures
+```
 
 Before target-system acceptance, install the matching package and check
 first-run account creation, direct workbench entry, file open/save, Inline AI,

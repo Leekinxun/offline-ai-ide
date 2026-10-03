@@ -10,7 +10,7 @@ import { planReadOnlyShell, resolveReadOnlyExecutable } from "./readOnlyShell.js
 
 export const DEFAULT_COMPATIBILITY_SHELL_LIMITS: Readonly<ProcessResourceLimits> = Object.freeze({
   cpuTimeMs: 60_000,
-  memoryBytes: process.platform === "linux" ? 4 * 1024 * 1024 * 1024 : undefined,
+  memoryBytes: process.platform === "linux" || process.platform === "win32" ? 4 * 1024 * 1024 * 1024 : undefined,
   maxOpenFiles: 256,
 });
 
@@ -69,7 +69,8 @@ export async function runInspectionCommand(
 export async function runReadOnlyShellCommand(command: string, cwd: string, signal?: AbortSignal, filesystem?: WorkspaceFilesystemGrant): Promise<string> {
   const plan = planReadOnlyShell(command);
   if (!plan) return "Error: Command is not a supported read-only query";
-  const executable = resolveReadOnlyExecutable(plan, cwd);
+  // The WSL helper resolves these names against root-owned Linux system tools.
+  const executable = process.platform === "win32" ? plan.executableName : resolveReadOnlyExecutable(plan, cwd);
   if (!executable) return `Error: A trusted system executable is unavailable for the read-only query: ${plan.executableName}`;
   const grants = { workspaceDir: cwd, readPaths: filesystem?.readPaths || ["."], writePaths: [] };
   if (plan.kind === "inspection") return runInspectionCommand(command, cwd, signal, grants, executable);
@@ -110,8 +111,8 @@ export async function runWorkspaceCommand(
 
   if (process.platform === "win32") {
     return runWorkspaceProcess({
-      executable: process.env.ComSpec || "cmd.exe",
-      args: ["/d", "/s", "/c", command],
+      executable: "/bin/bash",
+      args: ["-c", command],
       cwd,
       signal,
       limits,

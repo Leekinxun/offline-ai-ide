@@ -183,6 +183,33 @@ interface AppFormState {
   uploadMaxFileSizeMb: string;
 }
 
+interface DesktopExecutionCapability {
+  hostPlatform: string;
+  executor: "wsl" | "native";
+  available: boolean;
+  distro?: string;
+  reason?: string;
+  reasonCode?: string;
+}
+
+const WSL_REASON_MESSAGES: Record<string, string> = {
+  wsl_missing: "settings.desktopWslMissing",
+  wsl_unavailable: "settings.desktopWslMissing",
+  distro_unavailable: "settings.desktopWslDistroUnavailable",
+  wsl2_required: "settings.desktopWsl2Required",
+  node_missing: "settings.desktopWslNodeMissing",
+  node_unsupported: "settings.desktopWslNodeMissing",
+  helper_missing: "settings.desktopWslBubblewrapMissing",
+  helper_not_built: "settings.desktopWslHelperMissing",
+  bubblewrap_missing: "settings.desktopWslBubblewrapMissing",
+  root_user: "settings.desktopWslRootUser",
+  isolation_unavailable: "settings.desktopWslIsolationUnavailable",
+  unsupported_workspace: "settings.desktopWslWorkspaceUnavailable",
+  case_sensitive_required: "settings.desktopWslCaseSensitiveRequired",
+  invalid_configuration: "settings.desktopWslConfigurationInvalid",
+  probe_failed: "settings.desktopWslProbeFailed",
+};
+
 interface McpFormState {
   baseUrls: string;
   lazyUrls: string;
@@ -245,6 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const { locale, locales, setLocale, t } = useI18n();
   const desktop = getDesktopBridge();
+  const desktopPlatform = desktop?.platform;
   const adminSettings = useAdminSettings(token);
   const [activeTab, setActiveTab] = useState<SettingsTabId>(() => initialTab || "general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -266,6 +294,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilities | null>(null);
   const [modelCapabilityError, setModelCapabilityError] = useState<string | null>(null);
   const [loadingModelCapabilities, setLoadingModelCapabilities] = useState(false);
+  const [desktopExecution, setDesktopExecution] = useState<DesktopExecutionCapability | null>(null);
+  const [loadingDesktopExecution, setLoadingDesktopExecution] = useState(false);
+  const [desktopExecutionError, setDesktopExecutionError] = useState<"failed" | "timeout" | null>(null);
+  const desktopExecutionRequest = useRef<AbortController | null>(null);
   const [creatingUser, setCreatingUser] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [deletingUsername, setDeletingUsername] = useState<string | null>(null);
@@ -305,6 +337,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     initialFocusRef: passwordInputRef,
   });
   const nestedModalOpen = Boolean(passwordTarget || confirmation);
+
+  const refreshDesktopExecution = useCallback(async () => {
+    if (!visible || desktopPlatform !== "win32") return;
+    desktopExecutionRequest.current?.abort();
+    const controller = new AbortController();
+    desktopExecutionRequest.current = controller;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 30_000);
+    setLoadingDesktopExecution(true);
+    setDesktopExecutionError(null);
+    setDesktopExecution(null);
+    try {
+      const response = await fetch("/api/runtime/execution", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+      if (!response.ok) throw new Error("Execution capability request failed");
+      const capability: unknown = await response.json();
+      if (!capability || typeof capability !== "object" || !("available" in capability) || typeof capability.available !== "boolean" || !("hostPlatform" in capability) || capability.hostPlatform !== "win32" || !("executor" in capability) || capability.executor !== "wsl") throw new Error("Invalid execution capability");
+      if (desktopExecutionRequest.current !== controller || controller.signal.aborted) return;
+      setDesktopExecution({
+        hostPlatform: "win32", executor: "wsl", available: capability.available,
+        ...("distro" in capability && typeof capability.distro === "string" ? { distro: capability.distro } : {}),
+        ...("reason" in capability && typeof capability.reason === "string" ? { reason: capability.reason } : {}),
+        ...("reasonCode" in capability && typeof capability.reasonCode === "string" ? { reasonCode: capability.reasonCode } : {}),
+      });
+    } catch {
+      if (desktopExecutionRequest.current === controller && (!controller.signal.aborted || timedOut)) setDesktopExecutionError(timedOut ? "timeout" : "failed");
+    } finally {
+      window.clearTimeout(timeout);
+      if (desktopExecutionRequest.current === controller) {
+        desktopExecutionRequest.current = null;
+        setLoadingDesktopExecution(false);
+      }
+    }
+  }, [desktopPlatform, token, visible]);
+
+  useEffect(() => {
+    if (visible && desktopPlatform === "win32") void refreshDesktopExecution();
+    return () => {
+      desktopExecutionRequest.current?.abort();
+      desktopExecutionRequest.current = null;
+    };
+  }, [desktopPlatform, refreshDesktopExecution, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -1163,7 +1236,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span className="settings-card-meta">CrownForge {desktop.version}</span>
                       </div>
                       <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>
-                      {desktop.platform === "win32" && <p className="settings-help-text" role="note">{t("settings.desktopWindowsAgent")}</p>}
+                      {desktop.platform === "win32" && (
+                        <>
+                          <p className="settings-help-text" role="status" aria-live="polite">
+                            {loadingDesktopExecution ? t("settings.desktopWslChecking")
+                              : desktopExecutionError ? t(desktopExecutionError === "timeout" ? "settings.desktopWslCheckTimeout" : "settings.desktopWslCheckFailed")
+                              : desktopExecution?.available ? t(desktopExecution.distro ? "settings.desktopWslReadyDistro" : "settings.desktopWslReady", { distro: desktopExecution.distro || "" })
+                              : t("settings.desktopWindowsAgent")}
+                          </p>
+                          {!loadingDesktopExecution && !desktopExecutionError && desktopExecution?.available === false && (desktopExecution.reasonCode || desktopExecution.reason) && (
+                            <p className="settings-help-text" role="note">
+                              {desktopExecution.reasonCode && WSL_REASON_MESSAGES[desktopExecution.reasonCode] ? t(WSL_REASON_MESSAGES[desktopExecution.reasonCode]) : desktopExecution.reason || t("settings.desktopWslProbeFailed")}
+                            </p>
+                          )}
+                          <div className="settings-form-actions">
+                            <button className="dialog-btn" type="button" disabled={loadingDesktopExecution} onClick={() => void refreshDesktopExecution()}>
+                              <RefreshCw size={14} /> {t("settings.desktopWslRecheck")}
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </section>
                   )}
 

@@ -197,11 +197,14 @@ function loadPersistentContext(workspaceDir: string): string {
 }
 
 function buildWorkspaceContext(workspaceDir: string, readOnlyWorkspace: boolean): string {
+  const execution = process.platform === "win32"
+    ? "\n- Agent commands use Linux Bash through WSL 2 in this same workspace. Use relative POSIX paths in commands; file tool paths stay relative to the workspace root. Windows executables and cmd.exe syntax are not the Agent execution environment. If WSL dependencies or isolation are unavailable, report the tool error instead of claiming a command ran."
+    : "";
   return `# Workspace Context
 
 - Root: ${workspaceDir}
 - Tool paths are relative to this root.
-- Capability: ${readOnlyWorkspace ? "read-only inspection" : "read, write, and command execution"}.`;
+- Capability: ${readOnlyWorkspace ? "read-only inspection" : "read, write, and command execution"}.${execution}`;
 }
 
 function buildTodoContext(todoState: string): string {

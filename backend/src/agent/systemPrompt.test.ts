@@ -99,6 +99,17 @@ test("custom base keeps runtime mode and read-only constraints", () => {
   }
 });
 
+test("Windows Agent context describes WSL Bash and relative Linux command paths", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-wsl-prompt-"));
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  t.after(() => { Object.defineProperty(process, "platform", descriptor); fs.rmSync(workspace, { recursive: true, force: true }); });
+  const prompt = buildSystemPrompt(workspace, "", { mode: "code" });
+  assert.match(prompt, /Linux Bash through WSL 2/);
+  assert.match(prompt, /Use relative POSIX paths/);
+  assert.match(prompt, /If WSL dependencies or isolation are unavailable, report the tool error/);
+});
+
 test("system prompt bundle preserves section-level provenance without changing text", () => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-prompt-bundle-"));
   fs.writeFileSync(path.join(workspaceDir, "AGENTS.md"), "Workspace instruction", "utf8");

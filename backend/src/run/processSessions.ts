@@ -130,6 +130,9 @@ function signalGroup(live: LiveSession, signal: NodeJS.Signals): void {
 function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   if (live.requestedStatus) return;
   live.requestedStatus = status;
+  // Also revoke the Linux lease; killing wsl.exe alone cannot prove that its
+  // Linux process tree has stopped.
+  live.cleanup();
   signalGroup(live, "SIGTERM");
   live.force = setTimeout(() => signalGroup(live, "SIGKILL"), 1500); live.force.unref();
 }
@@ -182,7 +185,7 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
     limits: { ...(input.agent ? DEFAULT_COMPATIBILITY_SHELL_LIMITS : {}), ...input.limits, wallTimeMs: timeoutMs },
     resourceLimitMode: "posix-shell", networkMode: input.agent && !input.networkAuthorized ? "deny" : "inherit",
     ...(input.agent ? { filesystem: input.filesystem || { workspaceDir, readPaths: ["."], writePaths: ["."] } } : {}),
-    env: { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1", NPM_CONFIG_USERCONFIG: process.platform === "win32" ? "NUL" : "/dev/null" },
+    env: { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1", NPM_CONFIG_USERCONFIG: process.platform === "win32" && !input.agent ? "NUL" : "/dev/null" },
   });
   const startedAt = Date.now();
   const record: StoredSession = { id: crypto.randomUUID(), taskId: input.taskId, label: input.label.slice(0, 200), status: "running", startedAt, timeoutMs, deadlineAt: startedAt + timeoutMs, exitCode: null, nextCursor: 0, workspaceDir, ownerHash: ownerHash(input.owner), events: [], ...(input.runId ? { runId: input.runId } : {}) };
@@ -238,7 +241,7 @@ export function startProjectTaskSession(owner: ProcessSessionOwner, taskId: stri
 export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: () => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
   let networkAuthorized = false;
   if (input.networkExecutionGrant) {
-    const shellCommand = input.executable === "/bin/sh" && input.args.length === 2 && input.args[0] === "-c" ? input.args[1] : undefined;
+    const shellCommand = ["/bin/sh", "/bin/bash"].includes(input.executable) && input.args.length === 2 && input.args[0] === "-c" ? input.args[1] : undefined;
     if (!shellCommand) throw new Error("Network approval is bound to the approved compatibility-shell command");
     consumeNetworkExecutionGrant(input.networkExecutionGrant, input.workspaceDir, shellCommand, "process_start");
     networkAuthorized = true;

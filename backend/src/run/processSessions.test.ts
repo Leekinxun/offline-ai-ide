@@ -6,8 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import http from "node:http";
 import { spawn } from "node:child_process";
+import type { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { probeFilesystemIsolation } from "../agent/processSandbox.js";
+import { setWslExecutionTestHooks } from "../agent/wslExecution.js";
 import { startAgentProcessSession, startProjectTaskSession, startPreviewProcessSession, listProcessSessions, pollProcessSession, inputProcessSession, stopProcessSession, windowsProcessTreeKillInvocation, type ProcessSessionOwner } from "./processSessions.js";
 
 function fixture(t: test.TestContext, scripts: Record<string, string>): ProcessSessionOwner {
@@ -154,7 +156,7 @@ test("Agent long sessions keep mandatory filesystem and network isolation", asyn
   const address = listener.address(); assert.ok(address && typeof address !== "string");
   const input = { ...owner, runId: "agent-run", executable: process.execPath, args: ["-e", `require('http').get('http://127.0.0.1:${address.port}',()=>{console.log('ESCAPED');process.exit(1)}).on('error',()=>console.log('network-blocked'))`], timeoutMs: 2000 };
   if (!probeFilesystemIsolation().available) {
-    const unsupported = process.platform === "win32" ? /POSIX hard resource limits are unavailable on win32|isolation|sandbox/i : /isolation|sandbox/i;
+    const unsupported = process.platform === "win32" ? /WSL|isolation|sandbox/i : /isolation|sandbox/i;
     assert.throws(() => startAgentProcessSession(input), unsupported);
     return;
   }
@@ -166,14 +168,21 @@ test("Agent long sessions keep mandatory filesystem and network isolation", asyn
   assert.equal(finished.session.status, "exited");
 });
 
-test("Agent sessions fail closed on Windows where mandatory process isolation is unavailable", (t) => {
+test("Agent sessions fail closed on Windows when the WSL executor is unavailable", (t) => {
   const owner = fixture(t, {});
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  setWslExecutionTestHooks({
+    platform: "win32", env: { SystemRoot: "C:\\Windows" },
+    spawnSync: (() => ({ pid: 0, output: [], stdout: "", stderr: "", status: null, signal: null, error: Object.assign(new Error("WSL unavailable in fixture"), { code: "ENOENT" }) })) as unknown as typeof spawnSync,
+  });
   Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
-  t.after(() => Object.defineProperty(process, "platform", descriptor));
+  t.after(() => {
+    Object.defineProperty(process, "platform", descriptor);
+    setWslExecutionTestHooks(undefined);
+  });
   assert.equal(probeFilesystemIsolation().available, false);
   assert.equal(probeFilesystemIsolation().reasonCode, "unsupported_platform");
-  assert.throws(() => startAgentProcessSession({ ...owner, executable: process.execPath, args: ["-e", "console.log('must-not-run')"] }), /POSIX hard resource limits are unavailable on win32|isolation|sandbox/i);
+  assert.throws(() => startAgentProcessSession({ ...owner, executable: "/bin/bash", args: ["-c", "echo must-not-run"] }), /WSL|isolation|sandbox/i);
 });
 
 test("the IPC watchdog stops ordinary descendants when the backend crashes", async (t) => {

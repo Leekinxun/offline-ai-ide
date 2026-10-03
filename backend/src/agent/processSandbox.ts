@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { redactSecrets } from "./secretRedaction.js";
 import { INTERNAL_NODE_RUNTIME, macosNodeRuntimeFrameworks, nodeRuntimeEnvironment } from "../utils/nodeRuntime.js";
+import { prepareWslWorkspaceProcess } from "./wslExecution.js";
 
 export interface ProcessResourceLimits {
   /** A wall-clock limit, enforced by this supervisor. */
@@ -489,15 +490,21 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
   if (limitError) throw new Error(limitError);
   let env = minimalEnvironment(options.env);
   if (!env) throw new Error("Process environment contains a blocked or invalid variable");
-  if (internalNode) env = nodeRuntimeEnvironment(env);
-  const frameworks = internalNode ? macosNodeRuntimeFrameworks() : undefined;
-  const runtimeReadPaths = frameworks ? [fs.realpathSync.native(executable), frameworks] : [];
-
   const timeoutMs = options.limits?.wallTimeMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw new Error("Invalid process limits");
   }
+  // Agent grants require real Linux isolation inside WSL, rather than a Windows
+  // shell launch that drops the mandatory filesystem/network/resource policy.
+  if (process.platform === "win32" && options.filesystem && !internalNode) {
+    compileFilesystemPolicy(options.filesystem.workspaceDir || options.cwd, options.filesystem);
+    return prepareWslWorkspaceProcess(options);
+  }
+  if (internalNode) env = nodeRuntimeEnvironment(env);
+  const frameworks = internalNode ? macosNodeRuntimeFrameworks() : undefined;
+  const runtimeReadPaths = frameworks ? [fs.realpathSync.native(executable), frameworks] : [];
+
   const wrapped = resourceWrappedCommand(executable, args, options.limits, options.resourceLimitMode ?? "none");
   if (typeof wrapped === "string") throw new Error(wrapped);
   let sandboxTempDir: string | undefined;
@@ -562,6 +569,7 @@ export async function runWorkspaceProcess(options: WorkspaceProcessOptions): Pro
       resolve(result.slice(0, maxOutputBytes));
     };
     const terminate = () => {
+      cleanupSandboxTemp();
       try { processGroupKill(child.pid, "SIGTERM"); } catch { /* already unavailable */ }
       forceKill = setTimeout(() => {
         try { processGroupKill(child.pid, "SIGKILL"); } catch { /* already unavailable */ }

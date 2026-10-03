@@ -110,8 +110,8 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
     const binding: Binding = { owner, command, checkpointId, toolCallId: context.toolCallId || `process-${Date.now()}`, requestId: context.requestId, actor: context.actorName, conflicts: new Set(), auditing: false, audited: false };
     let id = "";
     const session = startAgentProcessSession({
-      ...owner, executable: process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "/bin/sh",
-      args: process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command],
+      ...owner, executable: process.platform === "win32" ? "/bin/bash" : "/bin/sh",
+      args: ["-c", command],
       timeoutMs: args.timeout_ms as number | undefined, signal: context.signal,
       networkExecutionGrant,
       filesystem: { workspaceDir: context.workspaceDir, readPaths: context.filesystemSandbox?.readPaths || ["."], writePaths: context.filesystemSandbox?.writePaths || ["."] },
