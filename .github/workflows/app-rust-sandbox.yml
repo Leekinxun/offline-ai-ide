@@ -21,13 +21,13 @@ permissions:
 
 concurrency:
   group: app-rust-sandbox-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   native_sandbox:
     if: github.ref == 'refs/heads/APP_RUST'
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         shell: pwsh

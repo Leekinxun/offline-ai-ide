@@ -95,7 +95,7 @@ export function buildCrownForgeCodexRuntime({ project, lock, arch, baseline, des
   const cargoRoot = path.join(source, "codex-rs"), target = path.join(cache, "target");
   run("cargo", ["+1.95.0", "build", "--locked", "--release", "--target", TARGETS[arch], "-p", "codex-cli", "--bin", "codex", "-p", "codex-windows-sandbox", "--bin", "codex-command-runner", "--bin", "codex-windows-sandbox-setup"], cargoRoot, {
     CARGO_TARGET_DIR: target, CARGO_PROFILE_RELEASE_LTO: "false", CARGO_PROFILE_RELEASE_DEBUG: "0", CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
-  }, 75 * 60_000);
+  }, 120 * 60_000);
   if (process.env.CROWNFORGE_BUILD_WFP_TESTS === "1") {
     run("cargo", ["+1.95.0", "test", "--locked", "--release", "--target", TARGETS[arch], "-p", "codex-windows-sandbox", "--lib", "--no-run"], cargoRoot, {
       CARGO_TARGET_DIR: target, CARGO_PROFILE_RELEASE_LTO: "false", CARGO_PROFILE_RELEASE_DEBUG: "0", CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",

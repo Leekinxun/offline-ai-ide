@@ -1,7 +1,7 @@
 # APP_RUST migration status
 
-Validated implementation: `4d46c32185d287f91f0f7f82de48d3aa50026a20`.
-Evidence captured on 2026-10-03. This remains a prototype branch; no signed
+Desktop acceptance: `b4e327d34d2e6abe9043411b8d5e853e483e2799`.
+Evidence captured on 2026-10-04. This remains a prototype branch; no signed
 Windows installer or production release has been published.
 
 ## Completed increment
@@ -18,14 +18,14 @@ continues draining its output pipes, and uses a bounded owned-process-tree
 fallback on Windows. Cleanup failure is reported as failure. Wrapper and native
 host deadlines allow the backend to complete that cleanup.
 
-[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37133715350).
+[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37173503398).
 The job builds the Windows host and verifies real Rust file/search/Git services,
 the desktop HTTP contracts, PowerShell PTY input with Chinese text, resize, stop
 and private sidecar shutdown. This is not Agent sandbox or interactive installer
 acceptance.
 
-The updated macOS bundle is generated from isolated published source with
-official Node 22.23.3. Package-contained services passed private bootstrap,
+The macOS bundle from the previous increment was generated from isolated published
+source with official Node 22.23.3. Package-contained services passed private bootstrap,
 idle-change acknowledgment, same-mtime save detection and shutdown checks.
 Generated reports and fixtures are excluded from Git.
 
@@ -49,6 +49,19 @@ strict network assertion. The next investigation must establish an effective
 loopback isolation boundary, potentially at WFP/ALE, or verify an upstream
 runtime fix. Do not automatically expand system firewall rules or fall back to
 WSL. PowerShell remains the native default; WSL is explicitly optional.
+
+The downstream remediation now builds all three executables from the pinned
+Codex source plus the CrownForge-owned WFP/account patch. It preserves the local
+execution protocol and adds direct TCP/UDP denial, fail-closed policy readback
+and a separate coexistence matrix. It is a proposed boundary until Windows
+execution passes. The
+[first full source build](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37173503390)
+passed the mocked contracts and reached SDK compilation, then hit its 75-minute
+build timeout. There was no Rust compiler error or finished release-build record;
+strict smoke, network matrix and non-administrator readback were skipped.
+The cold-build budget is now 120 minutes inside a 180-minute job. Superseded
+pushes cancel obsolete runs so the current revision can reach acceptance.
+No network or process-cleanup assertion has been relaxed.
 
 Windows cold-start diagnostics also measured cmdlet output substantially slower
 than direct Console output. Positive-command fixture budgets accommodate that
