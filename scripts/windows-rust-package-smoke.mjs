@@ -14,7 +14,7 @@ import http from "node:http";
 import { fileSha256 } from "../desktop/scripts/build-crownforge-codex-runtime.mjs";
 import { verifyCodexRuntime } from "../desktop/scripts/prepare-codex-runtime.mjs";
 import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
-import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories } from "../desktop/scripts/windows-package-validation.mjs";
+import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
 
 assert.equal(process.platform, "win32", "Package acceptance must run on real Windows");
 assert.ok(process.argv.includes("--allow-disposable-install"), "Installation requires --allow-disposable-install");
@@ -72,7 +72,7 @@ async function command(executable, args, timeout = 60_000, options = {}) {
   return result.stdout;
 }
 async function ps(code, timeout) {
-  return command(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; ${code}`], timeout);
+  return command(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; ${code}`], timeout, { env: windowsPowerShellEnvironment(process.env) });
 }
 async function psJson(code) {
   const value = (await ps(`${code} | ConvertTo-Json -Depth 6 -Compress`)).replace(/^\uFEFF/, "").trim();

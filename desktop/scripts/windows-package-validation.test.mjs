@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories } from "./windows-package-validation.mjs";
+import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
 import crypto from "node:crypto";
 import { writeVerifiedArchive } from "./windows-package-sdk-artifact.mjs";
 
@@ -102,4 +102,15 @@ test("MinGit dependency resolution is scoped to its actual ucrt64 and usr loader
   assert.deepEqual(minGitDllDirectories(path.join(root, "ucrt64/libexec/git-core/git-remote-http.exe"), root), [path.join(root, "ucrt64/libexec/git-core"), path.join(root, "ucrt64/bin")]);
   assert.throws(() => minGitDllDirectories(path.resolve("outside.exe"), root));
   assert.throws(() => minGitDllDirectories(path.join(root, "another/bin/unknown.exe"), root));
+});
+
+test("WinPS5 helpers discard inherited pwsh7 module paths while preserving other environment values", () => {
+  const original = { SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", PATH: "unchanged-command-path", LANG: "fixture-locale",
+    PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules;C:\\Users\\fixture\\Documents\\PowerShell\\Modules", psmodulepath: "another-inherited-spelling" };
+  const prepared = windowsPowerShellEnvironment(original);
+  assert.equal(prepared.PSModulePath, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules;C:\\Program Files\\WindowsPowerShell\\Modules");
+  assert.deepEqual(Object.keys(prepared).filter((key) => key.toLowerCase() === "psmodulepath"), ["PSModulePath"]);
+  assert.equal(prepared.PATH, original.PATH); assert.equal(prepared.LANG, original.LANG);
+  assert.match(original.PSModulePath, /PowerShell\\7\\Modules/);
+  assert.throws(() => windowsPowerShellEnvironment({ ProgramFiles: original.ProgramFiles }));
 });

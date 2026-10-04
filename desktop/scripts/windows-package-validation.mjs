@@ -155,3 +155,18 @@ export async function runCleanupSteps(steps) {
   }
   return failures;
 }
+
+export function windowsPowerShellEnvironment(environment) {
+  const get = (name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+  const systemRoot = get("SystemRoot"), programFiles = get("ProgramFiles");
+  assert.ok(systemRoot && path.win32.isAbsolute(systemRoot), "WinPS5 system root is required");
+  assert.ok(programFiles && path.win32.isAbsolute(programFiles), "WinPS5 Program Files root is required");
+  const result = Object.fromEntries(Object.entries(environment).filter(([key]) => key.toLowerCase() !== "psmodulepath"));
+  // The parent job uses pwsh 7. Its module search path must not make the WinPS5
+  // helper load Core/.NET assemblies from the PowerShell 7 installation.
+  result.PSModulePath = [
+    path.win32.join(systemRoot, "System32/WindowsPowerShell/v1.0/Modules"),
+    path.win32.join(programFiles, "WindowsPowerShell/Modules"),
+  ].join(";");
+  return result;
+}
