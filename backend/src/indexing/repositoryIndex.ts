@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -101,9 +102,9 @@ function gitInfoExcludePath(workspaceDir: string): string | null {
   try {
     const options = { cwd: workspaceDir, encoding: "utf8" as const, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"] };
     const workspaceRoot = fs.realpathSync.native(workspaceDir);
-    const commonText = execFileSync("git", ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], options).trim();
-    const gitDirText = execFileSync("git", ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-dir"], options).trim();
-    const excludeText = execFileSync("git", ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], options).trim();
+    const commonText = execFileSync(gitExecutable(), ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], options).trim();
+    const gitDirText = execFileSync(gitExecutable(), ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-dir"], options).trim();
+    const excludeText = execFileSync(gitExecutable(), ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], options).trim();
     if (!commonText || !gitDirText || !excludeText) return null;
     const commonCandidate = path.isAbsolute(commonText) ? commonText : path.resolve(workspaceDir, commonText);
     const gitDirCandidate = path.isAbsolute(gitDirText) ? gitDirText : path.resolve(workspaceDir, gitDirText);
@@ -167,7 +168,7 @@ function filterGitIgnoredPaths(workspaceDir: string, paths: string[]): string[] 
   const input = Buffer.from(`${paths.join("\0")}\0`);
   let output = Buffer.alloc(0);
   try {
-    output = execFileSync("git", ["-C", workspaceDir, "check-ignore", "--no-index", "-z", "--stdin"], {
+    output = execFileSync(gitExecutable(), ["-C", workspaceDir, "check-ignore", "--no-index", "-z", "--stdin"], {
       input, encoding: "buffer", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "ignore"],
     });
   } catch (error) {
@@ -182,7 +183,7 @@ function filterGitIgnoredPaths(workspaceDir: string, paths: string[]): string[] 
 
 function git(workspaceDir: string, args: string[]): string | null {
   try {
-    return execFileSync("git", ["-C", workspaceDir, ...args], {
+    return execFileSync(gitExecutable(), ["-C", workspaceDir, ...args], {
       encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 8 * 1024 * 1024,
     }).trim();
   } catch { return null; }

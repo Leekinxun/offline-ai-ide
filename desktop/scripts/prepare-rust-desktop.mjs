@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { prepareCodexRuntime, verifyCodexRuntime } from "./prepare-codex-runtime.mjs";
+import { prepareGitRuntime, verifyGitRuntime } from "./prepare-git-runtime.mjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(desktop, "..");
@@ -109,6 +110,10 @@ const coreName = process.platform === "win32" ? "crownforge-ide-core.exe" : "cro
 fs.copyFileSync(path.join(rust, "target/release", coreName), path.join(resources, "binaries", coreName));
 if (process.platform !== "win32") fs.chmodSync(path.join(resources, "binaries", coreName), 0o755);
 
+const gitRuntime = await prepareGitRuntime();
+fs.cpSync(gitRuntime.directory, path.join(resources, "git"), { recursive: true, dereference: false, verbatimSymlinks: true });
+const bundledGit = verifyGitRuntime(path.join(resources, "git"));
+
 if (process.platform === "win32") prepareCodexRuntime(process.arch);
 const vendor = path.join(project, "backend/vendor");
 if (fs.existsSync(vendor)) fs.cpSync(vendor, path.join(resources, "backend/vendor"), {
@@ -132,11 +137,38 @@ fs.writeFileSync(path.join(resources, "runtime-manifest.json"), `${JSON.stringif
   schemaVersion: 1, platform: process.platform, arch: process.arch, nodeVersion: identity.version,
   nodeSha256: crypto.createHash("sha256").update(fs.readFileSync(runtimeDestination)).digest("hex"),
   ideCoreSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(resources, "binaries", coreName))).digest("hex"),
+  gitVersion: bundledGit.manifest.gitVersion, gitExecutable: `git/${bundledGit.executableRelative}`,
+  gitSha256: bundledGit.manifest.files[bundledGit.executableRelative],
 }, null, 2)}\n`);
 console.log(`Prepared Rust desktop resources: ${resources}`);
 
 if (mode === "package") {
   const cli = path.join(rust, "node_modules/@tauri-apps/cli/tauri.js");
   if (!fs.existsSync(cli)) throw new Error("Run npm --prefix desktop/rust ci before packaging");
-  run(process.execPath, [cli, "build", ...process.argv.slice(3)], rust);
+  const args = [cli, "build", ...process.argv.slice(3)];
+  if (process.platform === "darwin") {
+    // Generic resource copying expands Git's executable aliases. macOS custom
+    // files preserve their relative symlinks and run before signing/notarization.
+    const macOS = { files: { "Resources/runtime": resources } };
+    const customConfiguration = process.argv.slice(3).some((argument) => argument === "--config" || argument === "-c" || argument.startsWith("--config="));
+    if (!args.includes("--no-sign") && !customConfiguration && !process.env.APPLE_CERTIFICATE && !process.env.APPLE_SIGNING_IDENTITY) {
+      // Seal ordinary local bundles before DMG creation. Tauri signs the host
+      // and outer app; runtime binaries keep their verified source hashes.
+      // An explicit signing configuration always controls distribution builds.
+      macOS.signingIdentity = "-";
+    }
+    args.push("--config", JSON.stringify({ bundle: { resources: [], macOS } }));
+  }
+  run(process.execPath, args, rust);
+  if (process.platform === "darwin") {
+    const packaged = path.join(rust, "target/release/bundle/macos/CrownForge.app/Contents/Resources/runtime");
+    const info = verifyGitRuntime(path.join(packaged, "git"));
+    if (info.manifest.gitVersion !== bundledGit.manifest.gitVersion) throw new Error("Packaged Git runtime identity changed");
+    for (const [relative, expected] of [["node/node", "nodeSha256"], ["binaries/crownforge-ide-core", "ideCoreSha256"]]) {
+      const receipt = JSON.parse(fs.readFileSync(path.join(packaged, "runtime-manifest.json"), "utf8"));
+      const actual = crypto.createHash("sha256").update(fs.readFileSync(path.join(packaged, relative))).digest("hex");
+      if (actual !== receipt[expected]) throw new Error(`Packaged runtime identity changed: ${relative}`);
+    }
+    if (!args.includes("--no-sign")) run("/usr/bin/codesign", ["--verify", "--deep", "--strict", path.dirname(path.dirname(path.dirname(packaged)))]);
+  }
 }

@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -49,7 +50,7 @@ export interface EvidenceBundleVerification {
 }
 
 function repositoryRoot(dir: string): string {
-  return path.resolve(execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim());
+  return path.resolve(execFileSync(gitExecutable(), ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim());
 }
 function safeText(workspaceDir: string, value: unknown, max = 4_000): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
@@ -148,16 +149,16 @@ function decodeBase64(value: unknown): Buffer | null {
 }
 function parseJsonEntry(entries: Map<string, Buffer>, name: string): Record<string, unknown> | null { try { const parsed = JSON.parse(entries.get(name)?.toString("utf8") || "") as unknown; return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null; } catch { return null; } }
 function changedFilesFromPatch(repository: string, patchFile: string): string[] {
-  const output = execFileSync("git", ["-C", repository, "apply", "--numstat", "-z", patchFile], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const output = execFileSync(gitExecutable(), ["-C", repository, "apply", "--numstat", "-z", patchFile], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return [...new Set(output.split("\0").filter(Boolean).map((row) => row.slice(row.lastIndexOf("\t") + 1)))].sort();
 }
 function checkApplicability(repository: string, baseSha: string, patchFile: string): { baseAvailable: boolean; patchApplies: boolean } {
-  try { execFileSync("git", ["-C", repository, "cat-file", "-e", `${baseSha}^{commit}`], { stdio: "ignore" }); } catch { return { baseAvailable: false, patchApplies: false }; }
+  try { execFileSync(gitExecutable(), ["-C", repository, "cat-file", "-e", `${baseSha}^{commit}`], { stdio: "ignore" }); } catch { return { baseAvailable: false, patchApplies: false }; }
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-bundle-verify-")); const index = path.join(temporary, "index");
   try {
     const env = { PATH: process.env.PATH || "/usr/bin:/bin", GIT_INDEX_FILE: index, GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", HOME: temporary };
-    execFileSync("git", ["-C", repository, "read-tree", baseSha], { env, stdio: "ignore" });
-    execFileSync("git", ["-C", repository, "apply", "--check", "--cached", "--binary", patchFile], { env, stdio: "ignore" });
+    execFileSync(gitExecutable(), ["-C", repository, "read-tree", baseSha], { env, stdio: "ignore" });
+    execFileSync(gitExecutable(), ["-C", repository, "apply", "--check", "--cached", "--binary", patchFile], { env, stdio: "ignore" });
     return { baseAvailable: true, patchApplies: true };
   } catch { return { baseAvailable: true, patchApplies: false }; }
   finally { fs.rmSync(temporary, { recursive: true, force: true }); }

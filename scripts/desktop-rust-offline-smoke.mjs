@@ -11,6 +11,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const option = (name) => process.argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
@@ -115,9 +116,13 @@ console.log(JSON.stringify({nodeVersion:process.versions.node, declaredLocal:awa
     assert.equal(manifest.nodeVersion, "22.23.3");
     assert.equal(sha256(node), manifest.nodeSha256);
     assert.equal(sha256(core), manifest.ideCoreSha256);
+    const git = verifyGitRuntime(path.join(runtime, "git"));
+    assert.equal(manifest.gitVersion, git.manifest.gitVersion);
+    assert.equal(manifest.gitExecutable, `git/${git.executableRelative}`);
+    assert.equal(manifest.gitSha256, git.manifest.files[git.executableRelative]);
     assert.ok(fs.existsSync(path.join(runtime, "backend/dist/auth/desktopBootstrapCredential.js")));
     assert.ok(fs.existsSync(path.join(runtime, "frontend/index.html")));
-    report.packagedResources = { app, nodeSha256: manifest.nodeSha256, ideCoreSha256: manifest.ideCoreSha256, backendIndexSha256: sha256(path.join(runtime, "backend/dist/index.js")) };
+    report.packagedResources = { app, nodeSha256: manifest.nodeSha256, ideCoreSha256: manifest.ideCoreSha256, gitVersion: manifest.gitVersion, gitSha256: manifest.gitSha256, backendIndexSha256: sha256(path.join(runtime, "backend/dist/index.js")) };
     const require = createRequire(path.join(runtime, "backend/package.json"));
     const { WebSocket } = require("ws");
     const answer = `OFFLINE_LOCAL_MODEL_${crypto.randomUUID()}`;
@@ -164,14 +169,38 @@ console.log(JSON.stringify({nodeVersion:process.versions.node, declaredLocal:awa
     const workspace = path.join(directory, "workspace");
     fs.mkdirSync(workspace);
     fs.writeFileSync(path.join(workspace, "offline.txt"), "Own disposable package fixture\n");
+    const gitEnv = { PATH: git.binDirectories.join(path.delimiter), HOME: directory, GIT_CONFIG_NOSYSTEM: "1" };
+    execFileSync(git.executable, ["init", "--quiet"], { cwd: workspace, env: gitEnv });
+    execFileSync(git.executable, ["add", "offline.txt"], { cwd: workspace, env: gitEnv });
+    execFileSync(git.executable, ["-c", "user.name=Offline fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Own disposable fixture"], { cwd: workspace, env: gitEnv });
+    fs.appendFileSync(path.join(workspace, "offline.txt"), "Bundled Git modified fixture\n");
     const users = path.join(directory, "users.json");
     fs.writeFileSync(users, JSON.stringify({ allowedRoots: [directory], pendingRegistrations: [], users: [{ username: "offline-fixture", password: crypto.randomBytes(24).toString("hex"), defaultWorkspace: workspace, isAdmin: true }] }), { mode: 0o600 });
+    stage = "packaged Agent bundled Git query";
+    const queryProbe = `import {pathToFileURL} from 'node:url';
+      console.log = (...values) => console.error(...values);
+      const {runReadOnlyShellCommand} = await import(pathToFileURL(${JSON.stringify(path.join(runtime, "backend/dist/agent/shell.js"))}));
+      const output = await runReadOnlyShellCommand('git --version', ${JSON.stringify(workspace)});
+      process.stdout.write(JSON.stringify({output}));`;
+    // The Agent applies its own Seatbelt profile to the actual Git child.
+    // macOS cannot apply this capability probe inside the backend's existing
+    // network profile, so run this separate owned launcher outside that profile.
+    const query = await execute(node, ["--input-type=module", "-e", queryProbe], {
+      PATH: gitEnv.PATH, HOME: directory, TMPDIR: directory, CREWFORGE_DESKTOP: "1", CROWNFORGE_IDE_CORE_EXECUTABLE: core,
+      CROWNFORGE_GIT_EXECUTABLE: git.executable, CROWNFORGE_GIT_RUNTIME_ROOT: git.directory, CROWNFORGE_BUNDLED_TOOLS_REQUIRED: "1",
+      USERS_CONFIG: users, WORKSPACE_DIR: workspace, APP_SETTINGS_CONFIG: path.join(directory, "settings.json"),
+      TEAM_STORE_ROOT: directory, PLUGINS_DIR: path.join(directory, "plugins"), VLLM_API_URL: "http://127.0.0.1:9/v1", VLLM_API_KEY: "",
+    });
+    assert.equal(query.output.trim(), `git version ${manifest.gitVersion}`);
+    report.agentGitQueryBoundary = "Separate packaged Agent launcher; Git child runs with the Agent's filesystem and network-deny Seatbelt profile";
+    report.checks.push("Packaged Agent read-only query executes the approved bundled Git under filesystem and network isolation with no model service");
     stage = "packaged backend cold start";
     child = spawn("/usr/bin/sandbox-exec", ["-f", profile, node, path.join(runtime, "bootstrap.cjs")], {
       cwd: directory,
-      env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, LANG: "en_US.UTF-8",
+      env: { PATH: gitEnv.PATH, HOME: directory, TMPDIR: directory, LANG: "en_US.UTF-8",
         CREWFORGE_DESKTOP: "1", CROWNFORGE_DESKTOP_RUNTIME: "tauri", CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: bootstrapToken,
         CROWNFORGE_IDE_CORE_EXECUTABLE: core, CROWNFORGE_BACKEND_BOOTSTRAP: path.join(runtime, "backend/bootstrap.cjs"),
+        CROWNFORGE_GIT_EXECUTABLE: git.executable, CROWNFORGE_GIT_RUNTIME_ROOT: git.directory, CROWNFORGE_BUNDLED_TOOLS_REQUIRED: "1",
         HOST: "127.0.0.1", PORT: "0", USERS_CONFIG: users, WORKSPACE_DIR: workspace,
         APP_SETTINGS_CONFIG: path.join(directory, "settings.json"), TEAM_STORE_ROOT: directory,
         PLUGINS_DIR: path.join(directory, "plugins"), STATIC_DIR: path.join(runtime, "frontend"),
@@ -200,6 +229,15 @@ console.log(JSON.stringify({nodeVersion:process.versions.node, declaredLocal:awa
     const tree = await fetch(`${base}/api/files/tree`, { headers, signal: AbortSignal.timeout(5000) });
     assert.equal(tree.status, 200);
     assert.ok((await tree.json()).some((entry) => entry.name === "offline.txt"));
+    const search = await fetch(`${base}/api/files/search?query=Bundled&useIgnoreFiles=false`, { headers, signal: AbortSignal.timeout(5000) });
+    assert.equal(search.status, 200);
+    assert.ok((await search.json()).results.some((entry) => entry.path === "offline.txt"));
+    const gitStatus = await fetch(`${base}/api/files/git-status`, { headers, signal: AbortSignal.timeout(5000) });
+    assert.equal(gitStatus.status, 200);
+    const repositoryStatus = await gitStatus.json();
+    assert.equal(repositoryStatus.isRepo, true);
+    assert.ok(JSON.stringify(repositoryStatus).includes("offline.txt"));
+    report.checks.push("Packaged Git initializes and commits with no system Git on PATH; Rust search and Git status find the modified fixture");
     const nativeChildren = () => execFileSync("/bin/ps", ["-ww", "-axo", "pid=,ppid=,comm="], { encoding: "utf8" })
       .split("\n").flatMap((line) => {
         const entry = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);

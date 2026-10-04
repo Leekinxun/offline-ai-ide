@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -49,7 +50,7 @@ export class WorktreeMetadataCorruptionError extends Error {
 
 function git(workspaceDir: string, args: string[]): string {
   try {
-    return execFileSync("git", ["-C", workspaceDir, ...args], {
+    return execFileSync(gitExecutable(), ["-C", workspaceDir, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();

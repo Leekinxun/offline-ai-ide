@@ -4,7 +4,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     io::Read,
+    path::PathBuf,
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -13,6 +15,22 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+fn resolve_git(executable: Option<OsString>, required: bool) -> Result<PathBuf> {
+    match executable {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() || !std::fs::symlink_metadata(&path)?.file_type().is_file() {
+                return Err(CoreError::failed(
+                    "Bundled Git executable must be an absolute regular file",
+                ));
+            }
+            Ok(path.canonicalize()?)
+        }
+        None if required => Err(CoreError::failed("Bundled Git runtime is missing")),
+        None => Ok(PathBuf::from("git")),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,7 +139,11 @@ pub fn execute(params: GitParams, cancelled: Arc<AtomicBool>) -> Result<GitOutpu
     if cancelled.load(Ordering::Relaxed) {
         return Err(CoreError::aborted());
     }
-    let mut command = Command::new("git");
+    let executable = resolve_git(
+        std::env::var_os("CROWNFORGE_GIT_EXECUTABLE"),
+        std::env::var("CROWNFORGE_BUNDLED_TOOLS_REQUIRED").as_deref() == Ok("1"),
+    )?;
+    let mut command = Command::new(executable);
     command
         .current_dir(workspace.root())
         .stdin(Stdio::null())
@@ -244,6 +266,21 @@ fn terminate_git_tree(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_git_never_falls_back_to_path() {
+        assert!(resolve_git(None, true).is_err());
+        assert_eq!(resolve_git(None, false).unwrap(), PathBuf::from("git"));
+        assert!(resolve_git(Some(OsString::from("git")), true).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        assert!(resolve_git(Some(directory.path().as_os_str().to_owned()), true).is_err());
+        let executable = directory.path().join("git-fixture");
+        std::fs::write(&executable, "owned path fixture").unwrap();
+        assert_eq!(
+            resolve_git(Some(executable.into_os_string()), true).unwrap(),
+            directory.path().join("git-fixture").canonicalize().unwrap()
+        );
+    }
 
     #[test]
     fn refuses_writes_external_programs_and_scope_overrides() {

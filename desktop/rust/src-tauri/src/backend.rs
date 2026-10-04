@@ -183,6 +183,52 @@ fn node_executable(root: &Path) -> Result<PathBuf, String> {
     )
 }
 
+fn bundled_git(
+    root: &Path,
+) -> Result<Option<(PathBuf, PathBuf, Vec<PathBuf>)>, Box<dyn std::error::Error>> {
+    let directory = root.join(if cfg!(debug_assertions) {
+        "resources/git"
+    } else {
+        "git"
+    });
+    let receipt = directory.join("crownforge-git-runtime.json");
+    if cfg!(debug_assertions) && !receipt.is_file() {
+        return Ok(None);
+    }
+    let manifest: Value = serde_json::from_slice(&fs::read(receipt)?)?;
+    let platform = if cfg!(windows) { "win32" } else { "darwin" };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    if manifest["schemaVersion"] != 1
+        || manifest["platform"] != platform
+        || manifest["arch"] != arch
+    {
+        return Err("Bundled Git runtime identity is invalid".into());
+    }
+    let expected = if cfg!(windows) {
+        "cmd/git.exe"
+    } else {
+        "bin/git"
+    };
+    let bin = if cfg!(windows) { "cmd" } else { "bin" };
+    if manifest["executable"] != expected || manifest["binDirectories"] != json!([bin]) {
+        return Err("Bundled Git paths are invalid".into());
+    }
+    let directory = directory.canonicalize()?;
+    let executable = directory.join(expected);
+    if !fs::symlink_metadata(&executable)?.file_type().is_file() {
+        return Err("Bundled Git executable is missing".into());
+    }
+    Ok(Some((
+        directory.clone(),
+        executable.canonicalize()?,
+        vec![directory.join(bin)],
+    )))
+}
+
 impl Backend {
     pub fn start(
         app: &tauri::AppHandle,
@@ -231,6 +277,7 @@ impl Backend {
             }
         }
         let node = node_executable(&root)?;
+        let git = bundled_git(&root)?;
         let bootstrap_token = create_bootstrap_token()?;
         let mut command = Command::new(node);
         command
@@ -260,6 +307,20 @@ impl Backend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        if let Some((directory, executable, bins)) = git {
+            let paths = bins.into_iter().chain(
+                env::var_os("PATH")
+                    .into_iter()
+                    .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>()),
+            );
+            command
+                .env("CROWNFORGE_GIT_EXECUTABLE", executable)
+                .env("CROWNFORGE_GIT_RUNTIME_ROOT", directory)
+                .env("PATH", env::join_paths(paths)?);
+        }
+        if !cfg!(debug_assertions) {
+            command.env("CROWNFORGE_BUNDLED_TOOLS_REQUIRED", "1");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

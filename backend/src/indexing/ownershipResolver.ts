@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +14,7 @@ export interface RepositoryOwnershipViewer { username: string; isAdmin: boolean;
 
 function mainRepositoryRoot(workspaceDir: string): string {
   try {
-    const common = execFileSync("git", ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const common = execFileSync(gitExecutable(), ["-C", workspaceDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     return path.dirname(fs.realpathSync.native(common));
   } catch { return fs.realpathSync.native(path.resolve(workspaceDir)); }
 }

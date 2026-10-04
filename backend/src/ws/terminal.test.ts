@@ -56,3 +56,21 @@ test("Windows terminal selects cmd.exe and retains only required host environmen
     }
   }
 });
+
+test("Rust desktop preserves the user's zsh configuration directory without changing Web inheritance", () => {
+  const keys = ["CREWFORGE_DESKTOP", "CROWNFORGE_IDE_CORE_EXECUTABLE", "ZDOTDIR"];
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.ZDOTDIR = "/fixture/custom-zsh-config";
+    process.env.CREWFORGE_DESKTOP = "1";
+    process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = "/fixture/core";
+    assert.equal(terminalEnvironment("darwin").ZDOTDIR, process.env.ZDOTDIR);
+    assert.equal(terminalEnvironment("win32").ZDOTDIR, undefined);
+    process.env.CREWFORGE_DESKTOP = "0";
+    assert.equal(terminalEnvironment("darwin").ZDOTDIR, undefined);
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});

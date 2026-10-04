@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { evaluateInspectionCommand, tokenizeInspectionCommand } from "./modeCapabilities.js";
 import { linuxTrustedRuntimeReadPaths } from "./processSandbox.js";
+import { bundledGitReadPaths, gitExecutable } from "../utils/gitRuntime.js";
 
 export interface ReadOnlyShellPlan {
   kind: "inspection" | "version";
@@ -32,11 +33,12 @@ export function planReadOnlyShell(command: unknown): ReadOnlyShellPlan | null {
 
 function inside(candidate: string, root: string): boolean { return candidate === root || candidate.startsWith(root + path.sep); }
 
-function trustedOwnership(executable: string): boolean {
+function trustedOwnership(executable: string, runtimeRoot?: string): boolean {
   const allowedOwners = process.platform === "darwin" ? [0, process.getuid?.()] : [0];
   for (let current = executable; ; current = path.dirname(current)) {
     const stat = fs.statSync(current);
     if (!allowedOwners.includes(stat.uid) || (stat.mode & 0o022) !== 0) return false;
+    if (current === runtimeRoot) return true;
     if (current === path.dirname(current)) return true;
   }
 }
@@ -45,6 +47,14 @@ function trustedOwnership(executable: string): boolean {
 export function resolveReadOnlyExecutable(plan: ReadOnlyShellPlan, workspaceDir: string, searchPath = process.env.PATH || ""): string | null {
   if (process.platform === "win32") return null;
   const workspace = fs.realpathSync.native(workspaceDir);
+  if (plan.executableName === "git") {
+    const roots = bundledGitReadPaths(workspace);
+    if (roots.length) {
+      const executable = gitExecutable();
+      const stat = fs.statSync(executable);
+      return stat.isFile() && (stat.mode & 0o111) !== 0 && trustedOwnership(executable, roots[0]) ? executable : null;
+    }
+  }
   const runtimeRoots = process.platform === "linux"
     ? ["/usr", "/bin", "/sbin", ...linuxTrustedRuntimeReadPaths()]
     : ["/usr", "/bin", "/sbin", "/System", "/Library"];

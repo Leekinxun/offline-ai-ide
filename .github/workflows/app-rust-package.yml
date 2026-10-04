@@ -1,0 +1,137 @@
+name: APP_RUST Windows NSIS package acceptance
+
+on:
+  push:
+    branches: [APP_RUST]
+    paths:
+      - .github/workflows/app-rust-package.yml
+      - scripts/windows-rust-package-smoke.mjs
+      - desktop/scripts/windows-package-*.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: app-rust-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows_nsis:
+    if: github.ref == 'refs/heads/APP_RUST'
+    runs-on: windows-2022
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.3"
+          architecture: x64
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            desktop/rust/package-lock.json
+      - name: Bind the exact accepted SDK producer and source lock
+        id: sdk
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const { SDK_PRODUCER, validateSdkProducer } = await import(pathToFileURL(path.join(process.cwd(), 'desktop/scripts/windows-package-validation.mjs')).href);
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (repository !== SDK_PRODUCER.repository) throw new Error('This package lane only accepts its own repository artifacts.');
+            const { data: run } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: SDK_PRODUCER.runId });
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, { ...context.repo, run_id: SDK_PRODUCER.runId, per_page: 100 });
+            const matches = artifacts.filter(item => item.name === `crownforge-codex-runtime-${SDK_PRODUCER.runId}`);
+            if (matches.length !== 1) throw new Error('The exact accepted SDK artifact must exist; there is no source-build fallback.');
+            const { data: source } = await github.rest.repos.getContent({ ...context.repo, path: 'scripts/fixtures/codex-native-runtime-lock.json', ref: SDK_PRODUCER.sourceCommit });
+            if (Array.isArray(source) || source.type !== 'file' || source.encoding !== 'base64') throw new Error('SDK source lock is unavailable.');
+            const producerLock = JSON.parse(Buffer.from(source.content, 'base64').toString('utf8'));
+            const checkoutLock = JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json', 'utf8'));
+            const proof = validateSdkProducer(run, matches[0], checkoutLock, producerLock);
+            proof.packageCommit = context.sha;
+            fs.mkdirSync('.artifacts/app-rust-package', { recursive: true });
+            fs.writeFileSync('.artifacts/app-rust-package/sdk-provenance.json', JSON.stringify(proof, null, 2) + '\n');
+            core.setOutput('artifact_id', String(matches[0].id));
+            core.setOutput('run_id', String(SDK_PRODUCER.runId));
+      - name: Restore the exact digest-verified SDK archive without compiling sources
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node desktop/scripts/windows-package-sdk-artifact.mjs
+      - name: Strictly validate the restored SDK and offline installer configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --input-type=module -e "import fs from 'node:fs'; import {verifyCodexRuntime} from './desktop/scripts/prepare-codex-runtime.mjs'; verifyCodexRuntime('backend/vendor/codex/win-x64','x64'); const config=JSON.parse(fs.readFileSync('desktop/rust/src-tauri/tauri.conf.json','utf8')); if(config.bundle.windows.webviewInstallMode.type!=='offlineInstaller') throw new Error('Offline standalone WebView2 installer is required'); if(config.bundle.createUpdaterArtifacts) throw new Error('This lane only builds an ordinary offline NSIS package'); if(fs.existsSync('.artifacts/cf-src')) throw new Error('SDK source builds are not permitted in this package lane');"
+          exit $LASTEXITCODE
+      - name: Test package verification guards
+        run: node --test desktop/scripts/windows-package-validation.test.mjs
+      - name: Prepare isolated package build configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:RUNNER_TEMP ('app-rust-package-build-' + [guid]::NewGuid().ToString('N'))
+          $workspace = Join-Path $directory 'workspace'
+          $plugins = Join-Path $directory 'plugins'
+          New-Item -ItemType Directory -Path $workspace, $plugins -Force | Out-Null
+          $users = Join-Path $directory 'users.json'
+          $settings = Join-Path $directory 'app-settings.json'
+          @{ allowedRoots = @($directory); users = @(@{ username = 'package-build-fixture'; password = [guid]::NewGuid().ToString('N'); defaultWorkspace = $workspace; isAdmin = $true }) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $users -Encoding utf8
+          '{}' | Set-Content -LiteralPath $settings -Encoding utf8
+          $values = @{
+            USERS_CONFIG = $users; APP_SETTINGS_CONFIG = $settings; WORKSPACE_DIR = $workspace
+            TEAM_STORE_ROOT = $directory; PLUGINS_DIR = $plugins; CREWFORGE_DESKTOP = '0'
+            VLLM_API_URL = 'http://127.0.0.1:9/v1'; VLLM_API_KEY = ''
+          }
+          foreach ($entry in $values.GetEnumerator()) { "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8 }
+      - name: Prepare the desktop compiler and retained dependencies
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix backend ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix frontend ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix desktop/rust ci --ignore-scripts
+          exit $LASTEXITCODE
+      - name: Build an ordinary NSIS package with the accepted SDK and standalone Node
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CROWNFORGE_NODE_EXECUTABLE = (Get-Command node).Source
+          npm --prefix desktop/rust run package -- --bundles nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import fs from 'node:fs'; import {verifyCodexRuntime} from './desktop/scripts/prepare-codex-runtime.mjs'; verifyCodexRuntime('desktop/rust/resources/backend/vendor/codex/win-x64','x64'); if(fs.existsSync('.artifacts/cf-src')) throw new Error('SDK source build occurred instead of artifact reuse');"
+          exit $LASTEXITCODE
+      - name: Install and exercise the actual package on the disposable VM
+        timeout-minutes: 20
+        run: node scripts/windows-rust-package-smoke.mjs --allow-disposable-install
+      - name: Describe the package acceptance boundary
+        if: always()
+        run: |
+          @"
+          ## APP_RUST Windows NSIS package
+          - Package checkout: $env:GITHUB_SHA; SDK producer: run 37188790813, source 74a2452bcb72b63a0d92f16b87ebace7f7e21c7f.
+          - This job requires the complete successful accepted SDK artifact and never rebuilds SDK sources.
+          - Ordinary NSIS embeds a complete Microsoft-signed offline WebView2 installer.
+          - Checks use the installed release Host/Core/Node/backend in an owned RUNNER_TEMP fixture; no model service or model weights are required or called.
+          - Host platform is windows-2022 x64. Any preinstalled WebView2 is recorded; this VM is not proof of disconnected installation with WebView2 absent.
+          - No system WebView2 removal, firewall/network changes, release publishing or signing is performed.
+          "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+      - name: Preserve reviewable package and acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-rust-windows-nsis-${{ github.run_id }}
+          path: |
+            desktop/rust/target/release/bundle/nsis/*-setup.exe
+            .artifacts/app-rust-package/**
+          if-no-files-found: warn
+          retention-days: 14

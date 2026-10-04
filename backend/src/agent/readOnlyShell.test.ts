@@ -35,6 +35,31 @@ test("auto-approved query never selects an executable supplied by a workspace or
   assert.equal(resolveReadOnlyExecutable(planReadOnlyShell("pwd")!, root, "."), null);
 });
 
+test("desktop Git ownership is bounded by its approved runtime while writable runtime files remain untrusted", (t) => {
+  if (process.platform !== "darwin") { t.skip("macOS bundled runtime ownership policy"); return; }
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-desktop-query-"));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  fs.chmodSync(parent, 0o775); // Like a standard /Applications ancestor.
+  const root = path.join(parent, "runtime"), workspace = path.join(parent, "workspace");
+  fs.mkdirSync(root, { mode: 0o755 }); fs.mkdirSync(workspace);
+  const executable = path.join(root, "git"); fs.writeFileSync(executable, "owned fixture", { mode: 0o755 });
+  const keys = ["CREWFORGE_DESKTOP", "CROWNFORGE_IDE_CORE_EXECUTABLE", "CROWNFORGE_GIT_EXECUTABLE", "CROWNFORGE_GIT_RUNTIME_ROOT"];
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, { CREWFORGE_DESKTOP: "1", CROWNFORGE_IDE_CORE_EXECUTABLE: "/fixture/core", CROWNFORGE_GIT_EXECUTABLE: executable, CROWNFORGE_GIT_RUNTIME_ROOT: root });
+    const plan = planReadOnlyShell("git --version")!;
+    assert.equal(resolveReadOnlyExecutable(plan, workspace, ""), fs.realpathSync.native(executable));
+    fs.chmodSync(executable, 0o775);
+    assert.equal(resolveReadOnlyExecutable(plan, workspace, ""), null);
+    fs.chmodSync(executable, 0o755); fs.chmodSync(root, 0o775);
+    assert.equal(resolveReadOnlyExecutable(plan, workspace, ""), null);
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test("read-only runner executes argv safely and refuses to fall back to a writable shell", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-readonly-query-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -108,7 +109,7 @@ function addGitState(root: string, scopes: string[], add: (value: string) => voi
 }
 
 function runGit(root: string, args: string[]): { status: number | null; stdout: string } {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: MAX_GIT_OUTPUT, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] });
+  const result = spawnSync(gitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: MAX_GIT_OUTPUT, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] });
   if (result.error || result.stdout.length > MAX_GIT_OUTPUT) throw new Error("Plan freshness cannot run Git safely");
   return { status: result.status, stdout: result.stdout };
 }

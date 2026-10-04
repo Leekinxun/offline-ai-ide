@@ -1,3 +1,4 @@
+import { gitExecutable } from "../../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -66,7 +67,7 @@ function git(directory: string, args: string[], options: { input?: string; timeo
     ...args,
   ];
   try {
-    return execFileSync("git", safeArgs, {
+    return execFileSync(gitExecutable(), safeArgs, {
       encoding: "utf8",
       input: options.input,
       timeout: options.timeout || 30_000,

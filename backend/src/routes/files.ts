@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import { Router, Request } from "express";
 import fs from "fs";
 import multer from "multer";
@@ -74,7 +75,7 @@ function readWorkspaceDiffSource(fullPath: string): DiffSource {
 function readHeadDiffSource(workspaceDir: string, relPath: string): DiffSource {
   try {
     const repositoryPath = toRepositoryRelativePath(workspaceDir, relPath);
-    const sizeText = execFileSync("git", ["cat-file", "-s", `HEAD:${repositoryPath}`], {
+    const sizeText = execFileSync(gitExecutable(), ["cat-file", "-s", `HEAD:${repositoryPath}`], {
       cwd: workspaceDir,
       encoding: "utf-8",
       timeout: 10_000,
@@ -83,7 +84,7 @@ function readHeadDiffSource(workspaceDir: string, relPath: string): DiffSource {
     if (Number(sizeText) > MAX_DIFF_SOURCE_BYTES) {
       return { content: "", binary: false, tooLarge: true };
     }
-    const content = execFileSync("git", ["show", `HEAD:${repositoryPath}`], {
+    const content = execFileSync(gitExecutable(), ["show", `HEAD:${repositoryPath}`], {
       cwd: workspaceDir,
       encoding: "buffer",
       timeout: 10_000,
@@ -508,7 +509,7 @@ filesRouter.get("/git-diff", (req, res) => {
     const fullPath = safePathUtil(relPath, workspaceDir);
     const runDiff = (args: string[]): string => {
       try {
-        return execFileSync("git", args, {
+        return execFileSync(gitExecutable(), args, {
           cwd: workspaceDir,
           encoding: "utf-8",
           timeout: 10_000,

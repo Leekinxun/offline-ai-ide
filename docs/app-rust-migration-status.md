@@ -1,131 +1,99 @@
 # APP_RUST migration status
 
-Desktop acceptance: `741c9ab0e5bcf4782b0c13432a0e8b8afeea8624`.
-Evidence captured on 2026-10-04. This remains a prototype branch; no signed
-Windows installer or production release has been published.
+Evidence captured on 2026-10-04. This remains a preview branch; no signed
+production release has been published. Installation and user configuration are
+described in [the Tauri installation guide](desktop-rust-installation.md).
 
-## Completed increment
+## Desktop runtime
 
-The native desktop `/api/files/changes` endpoint uses Rust `notify` change
-cursors instead of synchronous Node tree traversal. It preserves the HTTP
-response shape, multiple-viewer behavior and explicit refresh after restart,
-clock rollback, watcher overflow or recovery. Tauri preserves the returned
-cursor through tree refresh. Web and legacy Electron retain their timestamp
-behavior. Index rebuild/AST parsing and mutation journals remain in Node.
+Tauri owns the desktop window and a private local Node service. The Rust IDE
+service handles file trees/reads, embedded text search, read-only Git requests,
+PTY sessions and `notify` change cursors. Change cursors preserve multiple-viewer
+behavior and explicit refresh after restart, watcher overflow or recovery. The
+owner waits for native cleanup and uses a bounded owned-process fallback on
+Windows. Web and legacy Electron retain their existing services.
 
-The desktop owner now waits for the Rust child to finish cleanup before exiting,
-continues draining its output pipes, and uses a bounded owned-process-tree
-fallback on Windows. Cleanup failure is reported as failure. Wrapper and native
-host deadlines allow the backend to complete that cleanup.
+Desktop packages now contain a complete, checksum-pinned Git runtime. Production
+services use the host-approved absolute executable; missing Git does not fall
+back to an unrelated PATH executable. macOS packaging preserves internal Git
+symlinks. Node services, Rust Git requests, and the Agent's approved Git version
+query share the packaged runtime. Interactive shell integration restores the
+bundled Git prefix after the user's startup profiles.
 
-[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37181686100).
-The job builds the Windows host and verifies real Rust file/search/Git services,
-the desktop HTTP contracts, PowerShell PTY input with Chinese text, resize, stop
-and private sidecar shutdown. This is not Agent sandbox or interactive installer
-acceptance.
+Node and the execution adapter remain packaged components. AI models and Agent
+settings are user configuration: basic IDE startup does not require a model,
+Codex login, or WSL. Windows defaults to native PowerShell; WSL is optional.
+Project toolchains and dependencies remain separately configurable.
 
-The Windows desktop job also ran real Cargo against an empty dependency cache
-and a reachable disposable registry. Desktop diagnostics made zero registry
-requests and returned a clear offline dependency error. `RUSTUP_AUTO_INSTALL=0`
-prevents implicit toolchain installation; Web retains its prior command.
-Both built Rust executables passed PE import inspection with no `VCRUNTIME`,
-`MSVCP` or `CONCRT` dependency. The host retains Windows system UCRT imports;
-the supported OS floor remains Windows 10, and this is not installer acceptance.
+[Windows desktop acceptance at `741c9ab`](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37181686100)
+passed actual file/search/Git HTTP contracts, PowerShell PTY Chinese input,
+resize/stop and private shutdown. Both release Rust executables had no
+`VCRUNTIME`, `MSVCP` or `CONCRT` imports. The host retains Windows OS UCRT imports.
+Real Cargo with an empty cache and a reachable fixture registry made zero
+registry requests: desktop diagnostics use `--offline` and
+`RUSTUP_AUTO_INSTALL=0`; Web retains its previous command.
 
-An independent 177.39 MiB macOS bundle from published source `9b0d2b6` uses
-official Node 22.23.3. The packaged backend passed cold start, private bootstrap,
-Rust tree access, a complete local model-protocol fixture chat and owned-process
-shutdown under a Seatbelt policy that denies networking except declared
-host-local fixture ports. An undeclared reachable receiver returned `EPERM` and
-received zero requests under that same policy. The generated
-`.artifacts/app-rust/offline-report.json` preserves the policy digest and resource
-hashes; fixtures and reports are excluded from Git. This did not run the GUI,
-workers or bundled plugins, verify real model weights, directly test a public
-endpoint, or accept a Windows installer. It is not complete offline App acceptance.
+macOS package acceptance uses official standalone Node 22.23.3 and the packaged
+Git. A relocated Git runtime works with system Git absent from PATH. The packaged
+backend, Rust search/Git status, private bootstrap, local protocol-fixture chat
+and shutdown passed under a Seatbelt policy allowing only declared local fixture
+ports. A separate packaged Agent launcher verified its Git child under the
+Agent's own filesystem and network-deny policy; nested Seatbelt application is
+not used. These are transport/runtime tests, not model-weight acceptance.
 
-## Windows Agent acceptance blocker
+## Windows native Agent acceptance
 
-[Strict native sandbox acceptance failed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37133715334).
-Pinned Codex 0.160.0 passed actual PowerShell execution, exit-status propagation,
-read-only Get-ChildItem, private/case-alias/App-config read denial, approved writes
-and outside/control write denial. The smoke stopped at `NETWORK-LEAK`; later
-Agent stdin, stop, timeout and backend-crash checks did not run.
+[Full acceptance at `74a2452b`](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37188790813)
+passed with the pinned, source-built Codex 0.160.0 execution adapter and
+CrownForge-owned accounts/WFP patch. There were zero model requests. The verified
+SDK build cache was reused; all runtime bytes and the non-administrator readback
+helper were checked against their source receipt.
 
-The independent diagnostic recorded receiver-confirmed loopback TCP connections
-for the original command, a Console-output control and the same Console command
-after adding a temporary all-user outbound TCP block on exactly the fixture's
-one loopback port. The rule was created, its scope validated and then removed.
-Firewall services were running and all profiles enabled. This does not support
-attributing the gap solely to the SID condition or disabled profiles.
+The strict smoke passed PowerShell execution/exit propagation, private and secret
+read denial, approved writes, outside-write denial, default network denial and
+stdin EOF. Normal root exit preserved an independently backgrounded fixture as
+intended. Explicit stop, a real wall timeout and an actual backend crash each
+stopped all observed parent/child/grandchild payloads. For the timeout, all three
+live PIDs were observed after 17.985 seconds; expiry occurred at 60.057 seconds,
+with every PID gone and both heartbeat files stable.
 
-The diagnostic completing does not count as sandbox acceptance. Preserve the
-strict network assertion. The next investigation must establish an effective
-loopback isolation boundary, potentially at WFP/ALE, or verify an upstream
-runtime fix. Do not automatically expand system firewall rules or fall back to
-WSL. PowerShell remains the native default; WSL is explicitly optional.
+The matrix passed four IPv4/IPv6 TCP/UDP Offline probes with zero receiver nonces
+or connections, and four explicitly inherited-network probes with actual
+receiver delivery while private-read/write boundaries held. Official SDK
+before/after controls executed under the same nonempty Online SID and each
+delivered its own nonce. Original account and twelve-filter snapshots were
+unchanged; CrownForge and official identities remained distinct. The
+non-administrator parent and child both passed fresh policy readback.
 
-The downstream remediation now builds all three executables from the pinned
-Codex source plus the CrownForge-owned WFP/account patch. It preserves the local
-execution protocol and adds direct TCP/UDP denial, fail-closed policy readback
-and a separate coexistence matrix. It is a proposed boundary until Windows
-execution passes. The
-[first full source build](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37173503390)
-passed the mocked contracts and reached SDK compilation, then hit its 75-minute
-build timeout. There was no Rust compiler error or finished release-build record;
-strict smoke, network matrix and non-administrator readback were skipped.
-The cold-build budget is now 120 minutes inside a 180-minute job. Superseded
-pushes cancel obsolete runs so the current revision can reach acceptance.
-No network or process-cleanup assertion has been relaxed.
+Routine readiness still performs no privileged setup, firewall repair or UAC.
+The user explicitly initializes the native sandbox in Settings. Failed readiness
+does not switch to unrestricted execution or WSL.
 
-The [next full source build and native run](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37177448271)
-completed the production-profile build. Actual default network denial and four
-IPv4/IPv6 TCP/UDP Offline probes passed with zero receiver connections/nonces;
-four explicitly inherited-network probes connected while private-read and
-read-only write protections held. The same-owner non-administrator parent and
-child both passed fresh WFP readback. Original account SIDs and twelve-filter
-snapshots remained unchanged.
+## Installer acceptance
 
-Full acceptance still failed: the normal-background-root check timed out, so
-later stop/timeout/crash checks did not run. SDK source preserves background
-descendants but waits for capture-pipe EOF; the old Start-Process fixture could
-inherit extra capture handles even with redirected standard streams. The
-replacement fixture uses an explicit NUL-only handle list while keeping the
-original sandbox token and Job, with the same exit/heartbeat/cleanup assertions.
-The official coexistence controls also exited 1 without payload receipts.
-They now run the same probe through a BOM PS1 file, retain controlled diagnostics
-and reject missing identities. These fixture repairs need another Windows run.
-Source SDK logic and strict cleanup assertions remain unchanged. Verified SDK
-builds are cached and archived before fixtures to make further reruns practical;
-all reused runtime files and the readback executable are checked against their
-source identity and checksums.
+The Windows NSIS lane is bound to the complete successful SDK producer above
+and its exact source lock. It verifies the archive SHA-256 before extraction;
+there is no implicit SDK source-build fallback. The installer embeds the
+Microsoft-signed complete WebView2 offline payload, standalone Node, Rust IDE
+service, complete MinGit runtime and execution adapter.
 
-Windows cold-start diagnostics also measured cmdlet output substantially slower
-than direct Console output. Positive-command fixture budgets accommodate that
-observed delay; network denial and explicit stop/timeout assertions remain intact.
-The cause of the cmdlet delay has not been established.
+Actual NSIS installation, installed-service/PTY execution, Host window creation,
+shutdown and uninstall still need the package lane's Windows result. A runner
+with preinstalled WebView2 is not evidence of disconnected installation on a
+clean Windows machine with WebView2 absent. Neither a protocol model fixture nor
+an empty model configuration proves a user's real inference service is ready.
 
-## Remaining sequence
+## Remaining Rust migration
 
-The destination App must install and operate in a completely offline environment.
-Codex is an execution/sandbox implementation reference, not a cloud-model or
-login dependency. The Windows bundle now selects the embedded WebView2 offline
-installer. Build-time source downloads do not establish offline runtime
-acceptance; the packaged App still needs disconnected installation and local-model
-execution checks. Web behavior remains outside this desktop migration.
+Repository enumeration/hashing for the context index and coordinated file
+publication are not yet migrated. TypeScript AST parsing, mutation journals and
+ChangeSet transactions remain in Node. These do not create an external Node
+installation requirement because the service runtime is bundled.
 
-1. Resolve the native network boundary and rerun the complete Agent acceptance,
-   including stdin and process cleanup. Then verify Windows packaging and actual
-   WebView/installer behavior.
-2. Move repository enumeration/hashing to Rust with preserved ignore and context
-   authorization. Keep TypeScript AST parsing/storage in an independent Node
-   child initially; the existing index lock recovers by owner PID, so a worker
-   thread cannot simply replace that process contract.
-3. Unify desktop writes behind a workspace admission fence and Node coordinator
-   before adding Rust file publication. Preserve hunk review/undo, version
-   conflict checks, authorization, durable recovery and shell change capture.
-   User secret-file saves must retain their current metadata-only handling;
-   ordinary watcher events are not authoritative mutation evidence.
-
-The last two items are audited implementation boundaries, not completed Rust
-indexing or write migration. An asynchronous file RPC must not bypass existing
-writers, journal recovery, ChangeSet transactions or approval contracts.
+The next IDE increment should move repository enumeration/hashing into Rust
+while preserving ignore rules and context authorization. Keep TypeScript parsing
+in an independent Node process initially: the index lock recovers by owner PID.
+Then place desktop writes behind a workspace admission fence and coordinator,
+preserving hunk review/undo, version conflicts, durable recovery, shell change
+capture and metadata-only secret-file saves. Watcher events alone are not
+authoritative mutation evidence.

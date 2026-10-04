@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -14,7 +15,7 @@ function readAgentContent(workspace: string, changeSetId: string, relative: stri
   try { const stat = fs.lstatSync(target); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Conflict preview target must be a bounded regular file"); return fs.readFileSync(target, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return ""; throw error; }
 }
-function readBaseContent(workspace: string, revision: string, relative: string): string { try { return execFileSync("git", ["-C", workspace, "show", `${revision}:${relative}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch { return ""; } }
+function readBaseContent(workspace: string, revision: string, relative: string): string { try { return execFileSync(gitExecutable(), ["-C", workspace, "show", `${revision}:${relative}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch { return ""; } }
 
 export function createChangeSetMergePreview(workspace: string, input: { changeSetId: string; path: string; actorId: string }): CollaborationMergePreview {
   const changeSet = getChangeSet(workspace, input.changeSetId);

@@ -1,5 +1,10 @@
 # CrownForge desktop app · v1.1.1 preview
 
+For the Tauri package on `APP_RUST`, use
+[the Rust desktop installation guide](desktop-rust-installation.md). The
+Electron build commands and external Git requirement below describe the legacy
+desktop package.
+
 The desktop edition packages the existing frontend and Node backend together. On
 each computer, Electron starts the backend on a random `127.0.0.1` port and opens
 the local UI. The backend, workspace, settings, users, and installed plugins are

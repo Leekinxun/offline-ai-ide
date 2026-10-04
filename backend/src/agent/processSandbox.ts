@@ -7,6 +7,7 @@ import { INTERNAL_NODE_RUNTIME, macosNodeRuntimeFrameworks, nodeRuntimeEnvironme
 import { prepareWslWorkspaceProcess } from "./wslExecution.js";
 import { prepareWindowsNativeProcess, probeWindowsNativeSandbox } from "./windowsNativeSandbox.js";
 import { getWindowsAgentSettings } from "../run/windowsAgentSettings.js";
+import { bundledGitReadPaths } from "../utils/gitRuntime.js";
 
 export interface ProcessResourceLimits {
   /** A wall-clock limit, enforced by this supervisor. */
@@ -509,7 +510,10 @@ export function prepareWorkspaceProcess(options: WorkspaceProcessOptions): Prepa
   }
   if (internalNode) env = nodeRuntimeEnvironment(env);
   const frameworks = internalNode ? macosNodeRuntimeFrameworks() : undefined;
-  const runtimeReadPaths = frameworks ? [fs.realpathSync.native(executable), frameworks] : [];
+  const runtimeReadPaths = [
+    ...(frameworks ? [fs.realpathSync.native(executable), frameworks] : []),
+    ...(process.platform === "darwin" ? bundledGitReadPaths(options.filesystem?.workspaceDir || options.cwd) : []),
+  ];
 
   const wrapped = resourceWrappedCommand(executable, args, options.limits, options.resourceLimitMode ?? "none");
   if (typeof wrapped === "string") throw new Error(wrapped);

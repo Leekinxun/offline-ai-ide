@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -155,7 +156,7 @@ export function resolveGitWorkspaceContext(workspaceDir: string): {
   workspacePrefix: string;
 } {
   const resolvedWorkspace = fs.realpathSync.native(path.resolve(workspaceDir));
-  const repoRoot = fs.realpathSync.native(path.resolve(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+  const repoRoot = fs.realpathSync.native(path.resolve(execFileSync(gitExecutable(), ["rev-parse", "--show-toplevel"], {
     cwd: resolvedWorkspace,
     encoding: "utf-8",
     timeout: 10_000,
@@ -203,7 +204,7 @@ export function readGitStatus(workspaceDir: string): GitStatusSnapshot {
   const { repoRoot, workspacePrefix } = resolveGitWorkspaceContext(workspaceDir);
   const args = ["-c", "core.quotepath=false", "status", "--porcelain=v2", "--branch", "-z", "-uall"];
   if (workspacePrefix) args.push("--", workspacePrefix);
-  const output = execFileSync("git", args, {
+  const output = execFileSync(gitExecutable(), args, {
     cwd: repoRoot,
     encoding: "utf-8",
     timeout: 10_000,

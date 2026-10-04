@@ -1,3 +1,4 @@
+import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -147,7 +148,7 @@ class GitCommandError extends Error {
 function gitOutputStrict(dir: string, args: string[]): string {
   try {
     gitCommandHookForTests?.(dir, args);
-    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return execFileSync(gitExecutable(), ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     const failure = error as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     const stderr = failure.stderr?.toString().trim();

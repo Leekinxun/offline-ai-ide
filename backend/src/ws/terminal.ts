@@ -25,6 +25,7 @@ export function terminalEnvironment(platform: NodeJS.Platform = process.platform
     const value = process.env[key];
     if (value) env[key] = value;
   }
+  if (platform !== "win32" && desktopNativeIdeEnabled() && process.env.ZDOTDIR) env.ZDOTDIR = process.env.ZDOTDIR;
   if (platform === "win32") {
     const systemRoot = env.SystemRoot || env.WINDIR || "C:\\Windows";
     env.PATH ||= process.env.Path || `${systemRoot}\\System32;${systemRoot}`;

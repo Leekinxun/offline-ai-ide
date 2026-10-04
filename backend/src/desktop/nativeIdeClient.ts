@@ -36,7 +36,7 @@ interface Pending {
 
 function nativeEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const key of ["PATH", "Path", "HOME", "USERPROFILE", "SystemRoot", "WINDIR", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP"]) {
+  for (const key of ["PATH", "Path", "HOME", "USERPROFILE", "SystemRoot", "WINDIR", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "CROWNFORGE_GIT_EXECUTABLE", "CROWNFORGE_BUNDLED_TOOLS_REQUIRED"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
   return env;
