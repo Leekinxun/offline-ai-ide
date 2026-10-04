@@ -93,6 +93,10 @@ interface UploadProgressBase {
 
 type UploadProgressState = "uploading" | "processing" | "awaiting-confirmation" | "failed" | "cancelled" | "complete";
 
+function isMutationJournalEvidenceError(error: UploadEntriesError): boolean {
+  return error.code === "mutation_journal_evidence_invalid";
+}
+
 function isPathEqualOrDescendant(candidate: string, target: string): boolean {
   return candidate === target || candidate.startsWith(`${target}/`);
 }
@@ -560,6 +564,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           setNotice({ tone: "error", message: t("sidebar.uploadWorkspaceChanged", { completed }) });
         } else if (uploadError.code === "UPLOAD_CONFLICT") {
           requestUploadOverwrite(remaining, action.targetPath, action.expectedWorkspaceDir, completed, completedBytes, action.totalFiles, action.totalBytes, uploadError.conflicts || []);
+        } else if (isMutationJournalEvidenceError(uploadError)) {
+          uploadPendingRef.current = false;
+          setConfirmAction(null);
+          setConfirmIntent(null);
+          setNotice({ tone: "error", message: t("sidebar.uploadPartialFailure", {
+            reason: error instanceof Error ? error.message : fallback,
+            completed,
+            remaining: remaining.length,
+          }) });
         } else if (uploadError.batchMayHaveUploaded) {
           requestUploadRetry(remaining, action.targetPath, action.expectedWorkspaceDir, completed, completedBytes, action.totalFiles, action.totalBytes,
             error instanceof Error ? error.message : fallback, true);
@@ -782,6 +795,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         if (uploadError.code === "UPLOAD_WORKSPACE_CHANGED") {
           setNotice({ tone: "error", message: t("sidebar.uploadWorkspaceChanged", {
             completed,
+          }) });
+        } else if (isMutationJournalEvidenceError(uploadError)) {
+          setNotice({ tone: "error", message: t("sidebar.uploadPartialFailure", {
+            reason: e instanceof Error ? e.message : t("sidebar.uploadFailed"),
+            completed,
+            remaining: remainingFiles ? remainingFiles.length : totalFiles - completed,
           }) });
         } else if (Array.isArray(uploadError.remainingFiles) && uploadError.batchMayHaveUploaded) {
           setNotice(null);

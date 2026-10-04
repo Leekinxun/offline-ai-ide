@@ -5,7 +5,47 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createCheckpoint, restoreCheckpoint } from "../chat/checkpoints.js";
-import { captureCheckpointMutationsDetailed, fileMutationRevision, keepFileMutations, keepRunMutationBatch, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, readMutationBytes, readMutationImage, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
+import { assertMutationJournalReadable, buildFileHash, captureCheckpointMutationsDetailed, fileMutationRevision, keepFileMutations, keepRunMutationBatch, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, readMutationBytes, readMutationImage, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "./mutationRegistry.js";
+
+function mutationJournalPath(workspace: string): string {
+  return path.join(workspace, ".checkpoints", "mutations.json");
+}
+
+function writeMutationJournal(workspace: string, journal: unknown): void {
+  fs.mkdirSync(path.join(workspace, ".checkpoints"), { recursive: true });
+  fs.writeFileSync(mutationJournalPath(workspace), JSON.stringify(journal, null, 2));
+}
+
+function legacyMutationRecord(workspace: string, filePath: string): Record<string, unknown> {
+  const emptyHash = buildFileHash("");
+  return {
+    workspaceDir: path.resolve(workspace),
+    path: filePath,
+    source: "assistant_tool",
+    id: `legacy-${crypto.randomBytes(4).toString("hex")}`,
+    recordedAt: 1,
+    mtimeMs: 1,
+    version: "legacy",
+    runId: "legacy-run",
+    toolCallId: "legacy-tool",
+    operation: "create",
+    preimageHash: emptyHash,
+    postimageHash: emptyHash,
+    rollbackScope: "whole-file",
+  };
+}
+
+function legacySkippedGap(workspace: string, filePath: string): Record<string, unknown> {
+  return {
+    workspaceDir: path.resolve(workspace),
+    path: filePath,
+    runId: "legacy-run",
+    requestId: "turn-one",
+    toolCallId: "legacy-tool",
+    reason: "binary",
+    recordedAt: 1,
+  };
+}
 
 test("older snapshots containing binary caches remain restorable without creating validation gaps", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-old-cache-snapshot-"));
@@ -57,6 +97,91 @@ test("mutation journal reloads safely, rejects invalid paths, and supports exact
   fs.writeFileSync(journal, "{broken");
   assert.throws(() => listFileMutations(workspace), MutationJournalEvidenceError);
   assert.equal(fs.readFileSync(journal, "utf8"), "{broken");
+});
+
+test("legacy generated-cache mutation evidence remains readable and preserved", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-legacy-cache-journal-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const cacheRecord = legacyMutationRecord(workspace, "pkg/__pycache__/app.cpython-314.pyc");
+  const ruffGap = legacySkippedGap(workspace, ".ruff_cache/cache.bin");
+  writeMutationJournal(workspace, { schemaVersion: 1, records: [cacheRecord], skipped: [ruffGap] });
+
+  assertMutationJournalReadable(workspace);
+  assert.deepEqual(listFileMutations(workspace, { runId: "legacy-run" }).map((record) => record.path), ["pkg/__pycache__/app.cpython-314.pyc"]);
+  assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "legacy-run" }).map(({ path, reason }) => ({ path, reason })), [{ path: ".ruff_cache/cache.bin", reason: "binary" }]);
+
+  recordFileMutation({ workspaceDir: workspace, path: "ordinary.txt", source: "assistant_tool", runId: "run", toolCallId: "tool", postimageContent: "ordinary" });
+  const persisted = JSON.parse(fs.readFileSync(mutationJournalPath(workspace), "utf8"));
+  assert(persisted.records.some((record: { path?: string }) => record.path === "pkg/__pycache__/app.cpython-314.pyc"));
+  assert(persisted.records.some((record: { path?: string }) => record.path === "ordinary.txt"));
+  assert(persisted.skipped.some((gap: { path?: string }) => gap.path === ".ruff_cache/cache.bin"));
+  assert.throws(() => recordFileMutation({ workspaceDir: workspace, path: "__pycache__/new.cpython-314.pyc", source: "assistant_tool", postimageContent: "new" }));
+});
+
+test("legacy generated-cache journal compatibility still fails closed for corrupt evidence", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-invalid-cache-journal-"));
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-foreign-cache-journal-"));
+  t.after(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(foreign, { recursive: true, force: true });
+  });
+
+  const cases: Array<{ name: string; journal: unknown; message: RegExp }> = [
+    {
+      name: "nul cache record",
+      journal: { schemaVersion: 1, records: [legacyMutationRecord(workspace, "pkg/__pycache__/bad\u0000.pyc")] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "cache record under protected parent",
+      journal: { schemaVersion: 1, records: [legacyMutationRecord(workspace, "node_modules/pkg/__pycache__/bad.pyc")] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "foreign workspace record",
+      journal: { schemaVersion: 1, records: [legacyMutationRecord(foreign, "__pycache__/bad.pyc")] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "object workspace record",
+      journal: { schemaVersion: 1, records: [{ ...legacyMutationRecord(workspace, "__pycache__/bad.pyc"), workspaceDir: {} }] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "nonarray hunk record",
+      journal: { schemaVersion: 1, records: [{ ...legacyMutationRecord(workspace, "ordinary.py"), hunks: {}, keptHunkIds: ["hunk"] }] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "missing record fields",
+      journal: { schemaVersion: 1, records: [{ path: "__pycache__/bad.pyc" }] },
+      message: /invalid mutation records/,
+    },
+    {
+      name: "number cache gap path",
+      journal: { schemaVersion: 1, records: [], skipped: [{ ...legacySkippedGap(workspace, ".pytest_cache/bad.bin"), path: 123 }] },
+      message: /invalid skipped evidence records/,
+    },
+    {
+      name: "object workspace gap",
+      journal: { schemaVersion: 1, records: [], skipped: [{ ...legacySkippedGap(workspace, ".pytest_cache/bad.bin"), workspaceDir: {} }] },
+      message: /invalid skipped evidence records/,
+    },
+    {
+      name: "nul cache gap",
+      journal: { schemaVersion: 1, records: [], skipped: [legacySkippedGap(workspace, ".pytest_cache/bad\u0000.bin")] },
+      message: /invalid skipped evidence records/,
+    },
+  ];
+
+  for (const item of cases) {
+    writeMutationJournal(workspace, item.journal);
+    assert.throws(
+      () => assertMutationJournalReadable(workspace),
+      (error: unknown) => error instanceof MutationJournalEvidenceError && item.message.test(error.message),
+      item.name,
+    );
+  }
 });
 
 test("whole-file create and delete roll back at file boundaries", (t) => {
@@ -318,6 +443,28 @@ test("capture bounds oversized and unreadable files and reports skipped mutation
   assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run", toolCallId: "tool" }).map(({ path, reason }) => ({ path, reason })), result.skipped);
   reloadMutationJournal(workspace);
   assert.deepEqual(listMutationEvidenceGaps(workspace, { runId: "run" }).map(({ path, reason }) => ({ path, reason })), result.skipped);
+});
+
+test("checkpoint capture validates correlation ids before persisting evidence", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-capture-id-validation-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const baseline = createCheckpoint(workspace);
+  fs.writeFileSync(path.join(workspace, "huge.txt"), Buffer.alloc(2 * 1024 * 1024 + 1, 65));
+
+  assert.throws(
+    () => captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: " ", toolCallId: "tool" }),
+    /Invalid mutation run id/,
+  );
+  assert.throws(
+    () => captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", requestId: "bad id with spaces", toolCallId: "tool" }),
+    /Invalid mutation request id/,
+  );
+  assert.throws(
+    () => captureCheckpointMutationsDetailed(workspace, { checkpointId: baseline.id, runId: "run", toolCallId: "" }),
+    /Invalid mutation tool call id/,
+  );
+  assert.equal(fs.existsSync(mutationJournalPath(workspace)), false);
+  assertMutationJournalReadable(workspace);
 });
 
 test("unreadable checkpoint evidence is persisted as a skipped mutation", (t) => {

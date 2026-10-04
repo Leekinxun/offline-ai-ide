@@ -109,3 +109,19 @@ test("legacy upload rejects if the session workspace changes while multer parses
   assert.equal(fs.existsSync(path.join(first, "uploads", "folder", "file.txt")), false);
   assert.equal(fs.existsSync(path.join(second, "uploads", "folder", "file.txt")), false);
 });
+
+test("upload preflights the mutation journal before writing files", async (t) => {
+  const { first } = workspacePair(t);
+  fs.mkdirSync(path.join(first, ".checkpoints"), { recursive: true });
+  fs.writeFileSync(path.join(first, ".checkpoints", "mutations.json"), "{broken");
+  const server = await serveUploadRoute(sessionFor(first));
+  t.after(server.close);
+
+  const response = await upload(server.base);
+  const body = await response.json() as { code?: string; detail?: string };
+
+  assert.equal(response.status, 422);
+  assert.equal(body.code, "mutation_journal_evidence_invalid");
+  assert.match(body.detail || "", /Mutation journal evidence is invalid or unreadable/);
+  assert.equal(fs.existsSync(path.join(first, "uploads", "folder", "file.txt")), false);
+});

@@ -39,7 +39,7 @@ const GENERATED_CACHE_NAMES = new Set(["__pycache__", ".pytest_cache", ".ruff_ca
 export function isGeneratedCachePath(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const normalized = value.replace(/\\/g, "/"); const parts = normalized.split("/");
-  if (!normalized || path.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized) || parts.some((part) => !part || part === "." || part === ".." || (CHECKPOINT_EXCLUDED_NAMES.has(part) && !GENERATED_CACHE_NAMES.has(part)))) return false;
+  if (!normalized || normalized.includes("\0") || path.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized) || parts.some((part) => !part || part === "." || part === ".." || (CHECKPOINT_EXCLUDED_NAMES.has(part) && !GENERATED_CACHE_NAMES.has(part)))) return false;
   return parts.some((part) => GENERATED_CACHE_NAMES.has(part)) || /\.(?:pyc|pyo)$/.test(parts.at(-1) || "");
 }
 // Existing snapshots may contain caches captured before they were excluded.

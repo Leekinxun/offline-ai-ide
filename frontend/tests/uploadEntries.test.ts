@@ -108,6 +108,41 @@ test("uploads folders sequentially in bounded batches while preserving paths and
   });
 });
 
+test("uploads 9043 tiny folder files as 181 sequential batches without filtering paths", async () => {
+  const files = Array.from({ length: 9043 }, (_, i) => {
+    if (i === 0) return entry("auto_cc/.git/config", 0);
+    if (i === 1) return entry("auto_cc/node_modules/pkg/index.js", 0);
+    if (i === 2) return entry("auto_cc/__pycache__/cache.pyc", 0);
+    return entry(`auto_cc/src/${i}.txt`, 0);
+  });
+  const progress: UploadProgress[] = [];
+
+  await withXhr(async (body) => success(body), async (bodies) => {
+    assert.deepEqual(await uploadEntriesInBatches(files, {
+      targetPath: "q6-static",
+      expectedWorkspaceDir: "/workspace/interview/v2/q6-static",
+      onProgress: (item) => progress.push(item),
+    }, {}), {
+      uploaded: 9043,
+      overwritten: 0,
+    });
+
+    assert.equal(bodies.length, 181);
+    assert.deepEqual(bodies.map((body) => body.getAll("files").length).slice(0, 3), [50, 50, 50]);
+    assert.equal(bodies.at(-1)?.getAll("files").length, 43);
+    assert.deepEqual(bodies.flatMap((body) => body.getAll("paths")), files.map((file) => file.path));
+    assert.ok(bodies.every((body) => body.get("targetPath") === "q6-static"));
+    assert.ok(bodies.every((body) => body.get("expectedWorkspaceDir") === "/workspace/interview/v2/q6-static"));
+    assert.deepEqual(progress.filter((item) => item.phase === "complete"), [{
+      uploadedBytes: 0,
+      totalBytes: 0,
+      completedFiles: 9043,
+      totalFiles: 9043,
+      phase: "complete",
+    }]);
+  });
+});
+
 test("respects 8 MiB batch size and sends a larger single file alone", async () => {
   const MiB = 1024 * 1024;
   const files = [
@@ -232,6 +267,66 @@ test("uses server error field when detail is absent", async () => {
   await withXhr(async () => Response.json({ error: "File too large" }, { status: 400 }), async () => {
     await assert.rejects(uploadEntriesInBatches([entry("folder/large.bin")], undefined, {}),
       (cause: UploadEntriesError) => cause.message === "File too large" && cause.batchMayHaveUploaded === false);
+  });
+});
+
+test("journal preflight failure keeps its code and is safe to retry only after repair", async () => {
+  await withXhr(async () => Response.json({
+    code: "mutation_journal_evidence_invalid",
+    detail: "Mutation journal evidence is invalid or unreadable: invalid skipped evidence records",
+  }, { status: 422 }), async () => {
+    await assert.rejects(uploadEntriesInBatches([entry("folder/a.txt")], undefined, {}),
+      (cause: UploadEntriesError) => {
+        assert.equal(cause.code, "mutation_journal_evidence_invalid");
+        assert.equal(cause.message, "Mutation journal evidence is invalid or unreadable: invalid skipped evidence records");
+        assert.equal(cause.batchMayHaveUploaded, false);
+        assert.deepEqual(cause.remainingFiles.map((file) => file.path), ["folder/a.txt"]);
+        return true;
+      });
+  });
+});
+
+test("journal failure after a generic server status remains uncertain", async () => {
+  await withXhr(async () => Response.json({
+    code: "mutation_journal_evidence_invalid",
+    detail: "Mutation journal evidence is invalid or unreadable: invalid skipped evidence records",
+  }, { status: 500 }), async () => {
+    await assert.rejects(uploadEntriesInBatches([entry("folder/a.txt")], undefined, {}),
+      (cause: UploadEntriesError) => {
+        assert.equal(cause.code, "mutation_journal_evidence_invalid");
+        assert.equal(cause.batchMayHaveUploaded, true);
+        return true;
+      });
+  });
+});
+
+test("generic server failure remains uncertain for the interrupted batch", async () => {
+  for (const code of [undefined, "UPLOAD_INVALID_PATH", "UPLOAD_PARTIAL_FAILURE"]) {
+    await withXhr(async () => Response.json({ detail: "Internal server error", code }, { status: 500 }), async () => {
+      await assert.rejects(uploadEntriesInBatches([entry("folder/a.txt")], undefined, {}),
+        (cause: UploadEntriesError) => {
+          assert.equal(cause.message, "Internal server error");
+          assert.equal(cause.batchMayHaveUploaded, true);
+          return true;
+        });
+    });
+  }
+});
+
+test("protected upload path validation fails before any confirmed upload", async () => {
+  await withXhr(async () => Response.json({
+    code: "UPLOAD_INVALID_PATH",
+    detail: "Protected paths cannot be uploaded",
+  }, { status: 400 }), async () => {
+    await assert.rejects(uploadEntriesInBatches([entry(".checkpoints/mutations.json")], undefined, {}),
+      (cause: UploadEntriesError) => {
+        assert.equal(cause.code, "UPLOAD_INVALID_PATH");
+        assert.equal(cause.message, "Protected paths cannot be uploaded");
+        assert.equal(cause.completedUploaded, 0);
+        assert.equal(cause.batchMayHaveUploaded, false);
+        assert.deepEqual(cause.remainingFiles.map((file) => file.path), [".checkpoints/mutations.json"]);
+        return true;
+      });
   });
 });
 
