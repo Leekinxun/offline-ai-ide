@@ -1,0 +1,2086 @@
+diff --git a/codex-rs/windows-sandbox-rs/src/bin/command_runner/win.rs b/codex-rs/windows-sandbox-rs/src/bin/command_runner/win.rs
+index 8a00f8c..5db346e 100644
+--- a/codex-rs/windows-sandbox-rs/src/bin/command_runner/win.rs
++++ b/codex-rs/windows-sandbox-rs/src/bin/command_runner/win.rs
+@@ -77,7 +77,7 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+ use windows_sys::Win32::System::Threading::TerminateProcess;
+ use windows_sys::Win32::System::Threading::WaitForSingleObject;
+ 
+-const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
++const READ_ACL_MUTEX_NAME: &str = "Local\\CrownForgeSandboxReadAcl";
+ const TERMINATION_WAIT_MS: u32 = 5_000;
+ const WAIT_TIMEOUT: u32 = 0x0000_0102;
+ 
+diff --git a/codex-rs/windows-sandbox-rs/src/desktop.rs b/codex-rs/windows-sandbox-rs/src/desktop.rs
+index cfd50fa..aa19121 100644
+--- a/codex-rs/windows-sandbox-rs/src/desktop.rs
++++ b/codex-rs/windows-sandbox-rs/src/desktop.rs
+@@ -63,7 +63,7 @@ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_OWNER;
+ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITEOBJECTS;
+ use windows_sys::Win32::System::StationsAndDesktops::OpenDesktopW;
+ 
+-const PRIVATE_DESKTOP_PREFIX: &str = "CodexSandboxDesktop-";
++const PRIVATE_DESKTOP_PREFIX: &str = "CrownForgeSandboxDesktop-";
+ 
+ const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
+     | DESKTOP_CREATEWINDOW
+@@ -355,7 +355,7 @@ struct PrivateDesktop {
+ impl PrivateDesktop {
+     fn create(logs_base_dir: Option<&Path>) -> Result<Self> {
+         let mut rng = SmallRng::from_entropy();
+-        let name = format!("CodexSandboxDesktop-{:x}", rng.r#gen::<u128>());
++        let name = format!("CrownForgeSandboxDesktop-{:x}", rng.r#gen::<u128>());
+         let name_wide = to_wide(&name);
+         let handle = unsafe {
+             CreateDesktopW(
+diff --git a/codex-rs/windows-sandbox-rs/src/desktop_tests.rs b/codex-rs/windows-sandbox-rs/src/desktop_tests.rs
+index abe6f80..ee63de4 100644
+--- a/codex-rs/windows-sandbox-rs/src/desktop_tests.rs
++++ b/codex-rs/windows-sandbox-rs/src/desktop_tests.rs
+@@ -30,10 +30,10 @@ fn private_desktop_rejects_interactive_and_injected_names() {
+     for name in [
+         "Default",
+         r"Winsta0\Default",
+-        "CodexSandboxDesktop-",
+-        r"CodexSandboxDesktop-abcd\Default",
+-        "CodexSandboxDesktop-abcd\0Default",
+-        "CodexSandboxDesktop-0123456789abcdef0123456789abcdef0",
++        "CrownForgeSandboxDesktop-",
++        r"CrownForgeSandboxDesktop-abcd\Default",
++        "CrownForgeSandboxDesktop-abcd\0Default",
++        "CrownForgeSandboxDesktop-0123456789abcdef0123456789abcdef0",
+     ] {
+         assert!(LaunchDesktop::open_private(name).is_err(), "{name:?}");
+     }
+diff --git a/codex-rs/windows-sandbox-rs/src/elevated/ipc_framed.rs b/codex-rs/windows-sandbox-rs/src/elevated/ipc_framed.rs
+index 169c9e7..a907b93 100644
+--- a/codex-rs/windows-sandbox-rs/src/elevated/ipc_framed.rs
++++ b/codex-rs/windows-sandbox-rs/src/elevated/ipc_framed.rs
+@@ -204,7 +204,7 @@ mod tests {
+                     timeout_ms: Some(1000),
+                     tty: false,
+                     stdin_open: false,
+-                    private_desktop_name: Some("CodexSandboxDesktop-1234".to_string()),
++                    private_desktop_name: Some("CrownForgeSandboxDesktop-1234".to_string()),
+                 }),
+             },
+         };
+@@ -223,7 +223,7 @@ mod tests {
+         assert_eq!(PermissionProfile::read_only(), payload.permission_profile);
+         assert_eq!(workspace_roots, payload.workspace_roots);
+         assert_eq!(
+-            Some("CodexSandboxDesktop-1234"),
++            Some("CrownForgeSandboxDesktop-1234"),
+             payload.private_desktop_name.as_deref()
+         );
+         assert_eq!(
+diff --git a/codex-rs/windows-sandbox-rs/src/helper_materialization.rs b/codex-rs/windows-sandbox-rs/src/helper_materialization.rs
+index 1d21942..0b2a53e 100644
+--- a/codex-rs/windows-sandbox-rs/src/helper_materialization.rs
++++ b/codex-rs/windows-sandbox-rs/src/helper_materialization.rs
+@@ -13,14 +13,12 @@ use std::ffi::OsStr;
+ use std::fs;
+ use std::path::Path;
+ use std::path::PathBuf;
+-use std::time::UNIX_EPOCH;
+ 
+ use crate::app_package::registered_core_requested;
+ use crate::logging::log_note;
+ use crate::sandbox_bin_dir;
+ use crate::setup::SetupRuntime;
+ 
+-const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
+ const COMMAND_RUNNER_EXE: &str = "codex-command-runner.exe";
+ pub(crate) const BIN_DIRNAME: &str = "bin";
+ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
+@@ -193,35 +191,51 @@ fn materialized_file_name(suffix: &str) -> String {
+ }
+ 
+ fn helper_version_suffix(source: &Path) -> Result<String> {
+-    let version = env!("CARGO_PKG_VERSION");
+-    if version == DEV_BUILD_VERSION_SENTINEL {
+-        dev_build_suffix(source)
+-    } else {
+-        Ok(version.to_string())
+-    }
++    Ok(format!(
++        "{}-crownforge-wfp-v1-{}",
++        env!("CARGO_PKG_VERSION"),
++        helper_content_hash(source)?
++    ))
+ }
+ 
+-fn dev_build_suffix(source: &Path) -> Result<String> {
+-    let metadata = fs::metadata(source)
+-        .with_context(|| format!("read helper source metadata {}", source.display()))?;
+-    let modified = metadata
+-        .modified()
+-        .with_context(|| format!("read helper source mtime {}", source.display()))?;
+-    let duration = modified
+-        .duration_since(UNIX_EPOCH)
+-        .with_context(|| format!("convert helper source mtime {}", source.display()))?;
+-    Ok(format!("{}-{:x}", metadata.len(), duration.as_secs(),))
++// SHA-256 is supplied by Windows itself; no new Rust dependency is needed.
++fn helper_content_hash(source: &Path) -> Result<String> {
++    use windows_sys::Win32::Security::Cryptography::{
++        BCryptCloseAlgorithmProvider, BCryptHash, BCryptOpenAlgorithmProvider,
++    };
++    let bytes =
++        fs::read(source).with_context(|| format!("read helper bytes {}", source.display()))?;
++    let length =
++        u32::try_from(bytes.len()).context("helper content exceeds the Windows hash size limit")?;
++    let mut algorithm = std::ptr::null_mut();
++    let name = crate::to_wide("SHA256");
++    let opened =
++        unsafe { BCryptOpenAlgorithmProvider(&mut algorithm, name.as_ptr(), std::ptr::null(), 0) };
++    anyhow::ensure!(opened >= 0, "BCryptOpenAlgorithmProvider failed: {opened}");
++    let mut digest = [0u8; 32];
++    let hashed = unsafe {
++        BCryptHash(
++            algorithm,
++            std::ptr::null(),
++            0,
++            bytes.as_ptr(),
++            length,
++            digest.as_mut_ptr(),
++            digest.len() as u32,
++        )
++    };
++    unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
++    anyhow::ensure!(hashed >= 0, "BCryptHash failed: {hashed}");
++    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::BIN_DIRNAME;
+     use super::CopyOutcome;
+-    use super::DEV_BUILD_VERSION_SENTINEL;
+     use super::RESOURCES_DIRNAME;
+     use super::bundled_executable_path_for_exe;
+     use super::copy_from_source_if_needed;
+-    use super::dev_build_suffix;
+     use super::helper_bin_dir;
+     use super::helper_version_suffix;
+     use super::materialized_file_name;
+@@ -238,7 +252,7 @@ mod tests {
+         let codex_home = Path::new(r"C:\Users\example\.codex");
+ 
+         assert_eq!(
+-            PathBuf::from(r"C:\Users\example\.codex\.sandbox-bin"),
++            PathBuf::from(r"C:\Users\example\.codex\.crownforge-sandbox-bin"),
+             helper_bin_dir(codex_home)
+         );
+     }
+@@ -416,11 +430,12 @@ mod tests {
+         fs::write(&source, b"runner-v1").expect("write source");
+         let suffix = helper_version_suffix(&source).expect("suffix");
+ 
+-        if env!("CARGO_PKG_VERSION") == DEV_BUILD_VERSION_SENTINEL {
+-            assert_eq!(suffix, dev_build_suffix(&source).expect("dev build suffix"));
+-        } else {
+-            assert_eq!(suffix, env!("CARGO_PKG_VERSION"));
+-        }
++        assert!(suffix.starts_with(&format!("{}-crownforge-wfp-v1-", env!("CARGO_PKG_VERSION"))));
++        fs::write(&source, b"runner-v2").expect("write same-size changed runner");
++        assert_ne!(
++            suffix,
++            helper_version_suffix(&source).expect("changed content suffix")
++        );
+     }
+ 
+     #[test]
+diff --git a/codex-rs/windows-sandbox-rs/src/helper_materialization/copy.rs b/codex-rs/windows-sandbox-rs/src/helper_materialization/copy.rs
+index 2658bd3..453a7c4 100644
+--- a/codex-rs/windows-sandbox-rs/src/helper_materialization/copy.rs
++++ b/codex-rs/windows-sandbox-rs/src/helper_materialization/copy.rs
+@@ -50,7 +50,7 @@ pub(super) fn copy_from_source_if_needed(source: &Path, destination: &Path) -> R
+         .open(&temp_path_buf)
+         .with_context(|| format!("open temporary helper file {}", temp_path_buf.display()))?;
+ 
+-    // Write into a temp file created inside `.sandbox-bin` so the copied helper keeps the
++    // Write into a temp file created inside `.crownforge-sandbox-bin` so the copied helper keeps the
+     // destination directory's inherited ACLs instead of reusing the source file's descriptor.
+     std::io::copy(&mut source_file, &mut temp_file).with_context(|| {
+         format!(
+@@ -105,14 +105,7 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
+         return Ok(false);
+     }
+ 
+-    let source_modified = source_meta
+-        .modified()
+-        .with_context(|| format!("read helper source mtime {}", source.display()))?;
+-    let destination_modified = destination_meta
+-        .modified()
+-        .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
+-
+-    Ok(destination_modified >= source_modified)
++    Ok(super::helper_content_hash(source)? == super::helper_content_hash(destination)?)
+ }
+ 
+ #[cfg(test)]
+diff --git a/codex-rs/windows-sandbox-rs/src/helper_materialization/copy_tests.rs b/codex-rs/windows-sandbox-rs/src/helper_materialization/copy_tests.rs
+index 8a71d39..94745e4 100644
+--- a/codex-rs/windows-sandbox-rs/src/helper_materialization/copy_tests.rs
++++ b/codex-rs/windows-sandbox-rs/src/helper_materialization/copy_tests.rs
+@@ -25,7 +25,7 @@ fn copy_from_source_if_needed_copies_missing_destination() {
+ }
+ 
+ #[test]
+-fn destination_is_fresh_uses_size_and_mtime() {
++fn destination_is_fresh_uses_content_not_just_size_and_mtime() {
+     let tmp = TempDir::new().expect("tempdir");
+     let source = tmp.path().join("source.exe");
+     let destination = tmp.path().join("destination.exe");
+@@ -33,7 +33,10 @@ fn destination_is_fresh_uses_size_and_mtime() {
+     fs::write(&destination, b"same-size").expect("write destination");
+     std::thread::sleep(std::time::Duration::from_secs(1));
+     fs::write(&source, b"same-size").expect("write source");
+-    assert!(!destination_is_fresh(&source, &destination).expect("stale metadata"));
++    assert!(
++        destination_is_fresh(&source, &destination)
++            .expect("matching content despite older timestamp")
++    );
+ 
+     fs::write(&destination, b"same-size").expect("rewrite destination");
+     assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
+@@ -56,3 +59,18 @@ fn copy_from_source_if_needed_reuses_fresh_destination() {
+         fs::read(&destination).expect("read destination")
+     );
+ }
++
++#[test]
++fn same_size_altered_helper_is_not_reused() {
++    let tmp = TempDir::new().expect("tempdir");
++    let source = tmp.path().join("source.exe");
++    let destination = tmp.path().join("destination.exe");
++    fs::write(&source, b"trusted-v1").expect("write trusted helper");
++    fs::write(&destination, b"foreign-v2").expect("write same-size foreign helper");
++    assert!(!destination_is_fresh(&source, &destination).expect("compare content"));
++    assert_eq!(
++        copy_from_source_if_needed(&source, &destination).expect("replace mismatched helper"),
++        CopyOutcome::ReCopied
++    );
++    assert_eq!(fs::read(&source).unwrap(), fs::read(&destination).unwrap());
++}
+diff --git a/codex-rs/windows-sandbox-rs/src/identity.rs b/codex-rs/windows-sandbox-rs/src/identity.rs
+index 1472249..e35b386 100644
+--- a/codex-rs/windows-sandbox-rs/src/identity.rs
++++ b/codex-rs/windows-sandbox-rs/src/identity.rs
+@@ -87,6 +87,12 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
+         return false;
+     }
+     matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
++        && [OFFLINE_USERNAME, ONLINE_USERNAME].into_iter().all(|name| {
++            local_user_flags(name).is_ok_and(|flags| {
++                flags.is_some_and(|flags| flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0)
++            })
++        })
++        && crate::wfp::verify_wfp_filters_for_account(OFFLINE_USERNAME).is_ok()
+ }
+ 
+ /// Returns true when setup artifacts and provisioned network settings match.
+@@ -105,6 +111,7 @@ pub fn sandbox_setup_is_complete_with_settings(
+         && marker.proxy_ports == proxy_ports
+         && marker.allow_local_binding == settings.allow_local_binding
+         && matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
++        && crate::wfp::verify_wfp_filters_for_account(OFFLINE_USERNAME).is_ok()
+ }
+ 
+ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
+@@ -157,6 +164,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
+     }
+ }
+ 
++#[cfg(test)]
+ fn remove_sandbox_users_file(codex_home: &Path, reason: &str) -> Result<()> {
+     let path = sandbox_users_path(codex_home);
+     debug_log(
+@@ -326,7 +334,7 @@ pub(crate) fn require_sandbox_account(
+ fn require_sandbox_account_with_setup(
+     request: &SandboxSetupRequest<'_>,
+     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+-    run_full_setup: impl FnOnce(SandboxSetupRequest<'_>, &OfflineProxySettings) -> Result<()>,
++    _run_full_setup: impl FnOnce(SandboxSetupRequest<'_>, &OfflineProxySettings) -> Result<()>,
+     read_local_user_flags: impl Fn(&str) -> Result<Option<u32>>,
+ ) -> Result<(SandboxCreds, OfflineProxySettings)> {
+     let &SandboxSetupRequest {
+@@ -336,7 +344,11 @@ fn require_sandbox_account_with_setup(
+         codex_home,
+         proxy_enforced,
+     } = request;
+-    let sandbox_dir = crate::setup::sandbox_dir(codex_home);
++    // Read only: launch never upgrades old/shared identities or silently reinstalls missing policy.
++    anyhow::ensure!(
++        sandbox_setup_is_complete(codex_home),
++        "CrownForge sandbox policy is missing or obsolete; run explicit sandbox setup before executing commands"
++    );
+     let network_identity = SandboxNetworkIdentity::from_permissions(permissions, proxy_enforced);
+     let marker = load_marker(codex_home)?;
+     let desired_offline_proxy_settings = desired_offline_proxy_settings(
+@@ -345,86 +357,25 @@ fn require_sandbox_account_with_setup(
+         env_map,
+         network_identity,
+     );
+-    let mut setup_reason: Option<String> = None;
+-
+-    let mut identity = match marker {
+-        Some(marker) if marker.version_matches() => {
+-            if let Some(reason) =
+-                marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
+-            {
+-                setup_reason = Some(reason);
+-                None
+-            } else {
+-                let selected = select_identity(network_identity, codex_home)?;
+-                if selected.is_none() {
+-                    setup_reason = Some(
+-                        "sandbox users missing or incompatible with marker version".to_string(),
+-                    );
+-                }
+-                selected
+-            }
+-        }
+-        _ => {
+-            setup_reason = Some("sandbox setup marker missing or incompatible".to_string());
+-            None
+-        }
+-    };
+-
+-    if identity.is_some() {
+-        // Cleanup may also have removed the group, so repair missing or disabled accounts before ACL
+-        // refresh can fail. Expired passwords also require full setup, since an ACL refresh
+-        // cannot rotate the account passwords and update the stored DPAPI credentials.
+-        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
+-            let needs_repair = match read_local_user_flags(username) {
+-                Ok(Some(flags)) => flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) != 0,
+-                Ok(None) => true,
+-                Err(_) => false,
+-            };
+-            if needs_repair {
+-                let reason = "sandbox account is missing, disabled, or password expired";
+-                // Older services trust these credentials as proof of completed setup.
+-                remove_sandbox_users_file(codex_home, reason)?;
+-                setup_reason = Some(reason.to_string());
+-                identity = None;
+-                break;
+-            }
+-        }
+-    }
+-
+-    if identity.is_none() {
+-        if let Some(reason) = &setup_reason {
+-            crate::logging::log_note(
+-                &format!("sandbox setup required: {reason}"),
+-                Some(&sandbox_dir),
+-            );
+-        } else {
+-            crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
+-        }
+-        run_full_setup(
+-            crate::setup::SandboxSetupRequest {
+-                permissions,
+-                command_cwd,
+-                env_map,
+-                codex_home,
+-                proxy_enforced,
+-            },
+-            &desired_offline_proxy_settings,
+-        )?;
+-        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
+-            if let Ok(Some(flags)) = read_local_user_flags(username) {
+-                anyhow::ensure!(
+-                    flags & UF_PASSWORD_EXPIRED == 0,
+-                    "Windows sandbox account password is still expired after setup"
+-                );
+-            }
+-        }
+-        identity = select_identity(network_identity, codex_home)?;
++    let marker = marker.filter(SetupMarker::version_matches).ok_or_else(|| {
++        anyhow!("CrownForge sandbox marker is missing or obsolete; run explicit sandbox setup")
++    })?;
++    if let Some(reason) =
++        marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
++    {
++        anyhow::bail!(
++            "CrownForge sandbox configuration changed ({reason}); run explicit sandbox setup"
++        );
+     }
+-    let identity = identity.ok_or_else(|| {
++    let identity = select_identity(network_identity, codex_home)?.ok_or_else(|| {
+         anyhow!(
+-            "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
++            "CrownForge sandbox credentials are missing or obsolete; run explicit sandbox setup"
+         )
+     })?;
++    // A race after the readiness check is still an execution error, never implicit provisioning.
++    // Do not delete credentials or request UAC from an ordinary command launch.
++    require_healthy_sandbox_accounts(read_local_user_flags)?;
++
+     Ok((
+         SandboxCreds {
+             username: identity.username,
+@@ -463,6 +414,21 @@ fn run_automatic_setup(
+     }
+ }
+ 
++fn require_healthy_sandbox_accounts(
++    read_flags: impl Fn(&str) -> Result<Option<u32>>,
++) -> Result<()> {
++    for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
++        let flags = read_flags(name)?.ok_or_else(|| {
++            anyhow!("CrownForge sandbox account {name} is missing; run explicit sandbox setup")
++        })?;
++        anyhow::ensure!(
++            flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0,
++            "CrownForge sandbox account {name} is disabled or expired; run explicit sandbox setup"
++        );
++    }
++    Ok(())
++}
++
+ fn desired_offline_proxy_settings(
+     marker: Option<&SetupMarker>,
+     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+@@ -481,31 +447,20 @@ fn desired_offline_proxy_settings(
+ 
+ #[allow(clippy::too_many_arguments)]
+ pub(crate) fn refresh_logon_sandbox_creds(
+-    permissions: &ResolvedWindowsSandboxPermissions,
+-    command_cwd: &Path,
+-    env_map: &HashMap<String, String>,
+-    codex_home: &Path,
+-    read_roots_override: Option<&[PathBuf]>,
+-    read_roots_include_platform_defaults: bool,
+-    write_roots_override: Option<&[PathBuf]>,
+-    deny_read_paths_override: &[PathBuf],
+-    deny_write_paths_override: &[PathBuf],
+-    proxy_enforced: bool,
+-    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
++    _permissions: &ResolvedWindowsSandboxPermissions,
++    _command_cwd: &Path,
++    _env_map: &HashMap<String, String>,
++    _codex_home: &Path,
++    _read_roots_override: Option<&[PathBuf]>,
++    _read_roots_include_platform_defaults: bool,
++    _write_roots_override: Option<&[PathBuf]>,
++    _deny_read_paths_override: &[PathBuf],
++    _deny_write_paths_override: &[PathBuf],
++    _proxy_enforced: bool,
++    _proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+ ) -> Result<SandboxCreds> {
+-    remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
+-    require_logon_sandbox_creds(
+-        permissions,
+-        command_cwd,
+-        env_map,
+-        codex_home,
+-        read_roots_override,
+-        read_roots_include_platform_defaults,
+-        write_roots_override,
+-        deny_read_paths_override,
+-        deny_write_paths_override,
+-        proxy_enforced,
+-        proxy_settings_mode,
++    anyhow::bail!(
++        "CrownForge sandbox login failed; run explicit sandbox setup to repair credentials"
+     )
+ }
+ 
+diff --git a/codex-rs/windows-sandbox-rs/src/identity_integration_tests.rs b/codex-rs/windows-sandbox-rs/src/identity_integration_tests.rs
+index 9e9bfe4..684e233 100644
+--- a/codex-rs/windows-sandbox-rs/src/identity_integration_tests.rs
++++ b/codex-rs/windows-sandbox-rs/src/identity_integration_tests.rs
+@@ -7,9 +7,7 @@ use super::SandboxAccountCredentialMismatch;
+ use super::account_logon_error;
+ use super::logon_existing_sandbox_account;
+ use super::require_sandbox_account_with_setup;
+-use super::sandbox_setup_is_complete_with_settings;
+ use crate::SandboxRuntimeAccount;
+-use crate::WindowsSandboxProvisioningSettings;
+ use crate::WindowsSandboxProxySettingsMode;
+ use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+ use crate::setup::OFFLINE_USERNAME;
+@@ -65,16 +63,14 @@ fn only_native_bad_or_expired_passwords_trigger_credential_repair() -> Result<()
+ }
+ 
+ #[test]
+-fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> Result<()> {
++fn crownforge_ordinary_execution_never_repairs_or_deletes_credentials() -> Result<()> {
+     let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+         &PermissionProfile::read_only(),
+     )?;
+-    for (expired_username, repair_succeeds) in [
+-        (None, true),
+-        (Some(OFFLINE_USERNAME), true),
+-        (Some(ONLINE_USERNAME), true),
+-        (Some(OFFLINE_USERNAME), false),
+-        (Some(ONLINE_USERNAME), false),
++    for flags in [
++        Some(UF_NORMAL_ACCOUNT | UF_PASSWORD_EXPIRED),
++        Some(UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE),
++        None,
+     ] {
+         let home = tempfile::tempdir()?;
+         let marker = SetupMarker {
+@@ -85,25 +81,27 @@ fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> R
+             proxy_ports: vec![],
+             allow_local_binding: false,
+         };
+-        let mut users = SandboxUsersFile {
++        let users = SandboxUsersFile {
+             version: SETUP_VERSION,
+             offline: SandboxUserRecord {
+                 username: OFFLINE_USERNAME.into(),
+-                password: BASE64.encode(crate::dpapi::protect(b"old-test-password")?),
++                password: BASE64.encode(crate::dpapi::protect(b"preserved-private-password")?),
+             },
+             online: SandboxUserRecord {
+                 username: ONLINE_USERNAME.into(),
+-                password: BASE64.encode(crate::dpapi::protect(b"old-test-password")?),
++                password: BASE64.encode(crate::dpapi::protect(b"preserved-private-password")?),
+             },
+         };
+-        for (path, bytes) in [
+-            (setup_marker_path(home.path()), serde_json::to_vec(&marker)?),
+-            (sandbox_users_path(home.path()), serde_json::to_vec(&users)?),
++        let marker_bytes = serde_json::to_vec(&marker)?;
++        let user_bytes = serde_json::to_vec(&users)?;
++        for (file, bytes) in [
++            (setup_marker_path(home.path()), &marker_bytes),
++            (sandbox_users_path(home.path()), &user_bytes),
+         ] {
+-            fs::create_dir_all(path.parent().unwrap())?;
+-            fs::write(path, bytes)?;
++            fs::create_dir_all(file.parent().unwrap())?;
++            fs::write(file, bytes)?;
+         }
+-        let setups = Cell::new(/*value*/ 0);
++        let setups = Cell::new(0);
+         let env = HashMap::new();
+         let result = require_sandbox_account_with_setup(
+             &SandboxSetupRequest {
+@@ -115,148 +113,47 @@ fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> R
+             },
+             WindowsSandboxProxySettingsMode::Preserve,
+             |_, _| {
+-                // Older services must not accept stale credentials instead of repairing expiry.
+-                assert!(!sandbox_users_path(home.path()).exists());
+                 setups.set(setups.get() + 1);
+-                users.offline.password =
+-                    BASE64.encode(crate::dpapi::protect(b"new-test-password")?);
+-                users.online.password = users.offline.password.clone();
+-                fs::write(sandbox_users_path(home.path()), serde_json::to_vec(&users)?)?;
+                 Ok(())
+             },
+-            |username| {
+-                Ok(Some(
+-                    if expired_username == Some(username) && (setups.get() == 0 || !repair_succeeds)
+-                    {
+-                        UF_NORMAL_ACCOUNT | UF_PASSWORD_EXPIRED
+-                    } else {
+-                        UF_NORMAL_ACCOUNT
+-                    },
+-                ))
+-            },
+-        );
+-        assert_eq!(setups.get(), usize::from(expired_username.is_some()));
+-        assert_eq!(
+-            result
+-                .map(|(creds, _)| (creds.username, creds.password))
+-                .map_err(|err| err.to_string()),
+-            if !repair_succeeds {
+-                Err("Windows sandbox account password is still expired after setup".into())
+-            } else {
+-                Ok((
+-                    OFFLINE_USERNAME.into(),
+-                    if expired_username.is_some() {
+-                        "new-test-password"
+-                    } else {
+-                        "old-test-password"
+-                    }
+-                    .into(),
+-                ))
+-            }
++            |_| Ok(flags),
+         );
++        assert!(result.is_err());
++        assert_eq!(setups.get(), 0);
++        assert_eq!(fs::read(sandbox_users_path(home.path()))?, user_bytes);
++        assert_eq!(fs::read(setup_marker_path(home.path()))?, marker_bytes);
+     }
+     Ok(())
+ }
+ 
+ #[test]
+-fn credential_setup_reconciles_policy_and_repairs_accounts() -> Result<()> {
++fn crownforge_login_failure_requires_explicit_setup_and_preserves_control_files() -> Result<()> {
+     let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+         &PermissionProfile::read_only(),
+     )?;
+-    let enabled = Some(UF_NORMAL_ACCOUNT);
+-    let disabled = Some(UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE);
+-    for (stored_binding, desired_binding, ports, account_flags, expected_full_setups) in [
+-        (true, true, "8080", enabled, 0),
+-        (true, true, "", enabled, 0),
+-        (true, true, "8080,3129", enabled, 0),
+-        (false, false, "8080", enabled, 1),
+-        (false, false, "", enabled, 1),
+-        (false, true, "3128", enabled, 1),
+-        (true, false, "3128", enabled, 1),
+-        (true, true, "3128", None, 1),
+-        (true, true, "3128", disabled, 1),
+-    ] {
+-        let full_setups = Cell::new(/*value*/ 0);
+-        let home = tempfile::tempdir()?;
+-        let marker = SetupMarker {
+-            version: SETUP_VERSION,
+-            offline_username: "offline".into(),
+-            online_username: "online".into(),
+-            created_at: None,
+-            proxy_ports: vec![3128],
+-            allow_local_binding: stored_binding,
+-        };
+-        let user = SandboxUserRecord {
+-            username: marker.offline_username.clone(),
+-            password: BASE64.encode(crate::dpapi::protect(b"test-password")?),
+-        };
+-        let users = SandboxUsersFile {
+-            version: SETUP_VERSION,
+-            offline: user.clone(),
+-            online: SandboxUserRecord {
+-                username: marker.online_username.clone(),
+-                ..user
+-            },
+-        };
+-        let marker_bytes = serde_json::to_vec(&marker)?;
+-        for (path, bytes) in [
+-            (setup_marker_path(home.path()), marker_bytes.clone()),
+-            (sandbox_users_path(home.path()), serde_json::to_vec(&users)?),
+-        ] {
+-            fs::create_dir_all(path.parent().unwrap())?;
+-            fs::write(path, bytes)?;
+-        }
+-        let env = HashMap::from([
+-            ("CODEX_WINDOWS_SANDBOX_PROXY_PORTS".into(), ports.into()),
+-            (
+-                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".into(),
+-                u8::from(desired_binding).to_string(),
+-            ),
+-        ]);
+-        let account_flags = Cell::new(account_flags);
+-        let prepare = || {
+-            require_sandbox_account_with_setup(
+-                &SandboxSetupRequest {
+-                    permissions: &permissions,
+-                    command_cwd: home.path(),
+-                    env_map: &env,
+-                    codex_home: home.path(),
+-                    proxy_enforced: true,
+-                },
+-                WindowsSandboxProxySettingsMode::Reconcile,
+-                |request, desired| {
+-                    // Matching artifacts must not let setup skip account repair.
+-                    assert!(!sandbox_setup_is_complete_with_settings(
+-                        request.codex_home,
+-                        &WindowsSandboxProvisioningSettings {
+-                            proxy_ports: desired.proxy_ports.clone(),
+-                            allow_local_binding: desired.allow_local_binding,
+-                        }
+-                    ));
+-                    full_setups.set(full_setups.get() + 1);
+-                    let mut reconciled = marker.clone();
+-                    reconciled.proxy_ports = desired.proxy_ports.clone();
+-                    reconciled.allow_local_binding = desired.allow_local_binding;
+-                    fs::write(
+-                        setup_marker_path(home.path()),
+-                        serde_json::to_vec(&reconciled)?,
+-                    )?;
+-                    fs::write(sandbox_users_path(home.path()), serde_json::to_vec(&users)?)?;
+-                    account_flags.set(enabled);
+-                    Ok(())
+-                },
+-                |_| Ok(account_flags.get()),
+-            )
+-        };
+-        for _ in 0..2 {
+-            let (creds, _) = prepare()?;
+-            assert_eq!(
+-                (creds.username, creds.password),
+-                ("offline".into(), "test-password".into())
+-            );
+-        }
+-        // The second command reuses reconciled settings, including when filtering removed the proxy.
+-        assert_eq!(full_setups.get(), expected_full_setups);
+-    }
++    let home = tempfile::tempdir()?;
++    let users = sandbox_users_path(home.path());
++    fs::create_dir_all(users.parent().unwrap())?;
++    fs::write(&users, b"private-control-evidence")?;
++    let result = super::refresh_logon_sandbox_creds(
++        &permissions,
++        home.path(),
++        &HashMap::new(),
++        home.path(),
++        None,
++        false,
++        None,
++        &[],
++        &[],
++        false,
++        WindowsSandboxProxySettingsMode::Preserve,
++    );
++    assert!(
++        result
++            .unwrap_err()
++            .to_string()
++            .contains("explicit sandbox setup")
++    );
++    assert_eq!(fs::read(users)?, b"private-control-evidence");
+     Ok(())
+ }
+diff --git a/codex-rs/windows-sandbox-rs/src/installation_record.rs b/codex-rs/windows-sandbox-rs/src/installation_record.rs
+index 3fc2f23..0518926 100644
+--- a/codex-rs/windows-sandbox-rs/src/installation_record.rs
++++ b/codex-rs/windows-sandbox-rs/src/installation_record.rs
+@@ -18,7 +18,7 @@ use crate::runtime_ownership::RuntimeRegistration;
+ use crate::winutil::to_wide;
+ 
+ // Package updates can replace the service key, so keep this record outside it.
+-pub const INSTALLATION_KEY: &str = r"SOFTWARE\OpenAI\Codex\WindowsSandboxService";
++pub const INSTALLATION_KEY: &str = r"SOFTWARE\CrownForge\WindowsSandboxService";
+ pub const INSTALLATION_VALUE: &str = "ProvisionedInstallation";
+ const MAX_VALUE_UNITS: usize = 4096;
+ 
+diff --git a/codex-rs/windows-sandbox-rs/src/no_reparse_dir_tests.rs b/codex-rs/windows-sandbox-rs/src/no_reparse_dir_tests.rs
+index 1ff5454..9a507ea 100644
+--- a/codex-rs/windows-sandbox-rs/src/no_reparse_dir_tests.rs
++++ b/codex-rs/windows-sandbox-rs/src/no_reparse_dir_tests.rs
+@@ -48,7 +48,7 @@ fn create_directory_junction(target: &Path, alias: &Path) -> Result<()> {
+ #[test]
+ fn creates_and_opens_plain_directory_leaf() -> Result<()> {
+     let temporary = tempfile::tempdir()?;
+-    let directory = temporary.path().join(".sandbox-bin");
++    let directory = temporary.path().join(".crownforge-sandbox-bin");
+ 
+     drop(open_for_acl(
+         &directory,
+@@ -132,7 +132,7 @@ fn disk_volume_mapping_excludes_other_devices_and_subpaths() {
+ fn rejects_final_directory_junction() -> Result<()> {
+     let temporary = tempfile::tempdir()?;
+     let target = temporary.path().join("target");
+-    let alias = temporary.path().join(".sandbox-bin");
++    let alias = temporary.path().join(".crownforge-sandbox-bin");
+     fs::create_dir(&target)?;
+     create_directory_junction(&target, &alias)?;
+ 
+@@ -148,11 +148,11 @@ fn rejects_ancestor_directory_junction() -> Result<()> {
+     let target_home = temporary.path().join("target-home");
+     let alias_home = temporary.path().join("linked-home");
+     fs::create_dir(&target_home)?;
+-    fs::create_dir(target_home.join(".sandbox-bin"))?;
++    fs::create_dir(target_home.join(".crownforge-sandbox-bin"))?;
+     create_directory_junction(&target_home, &alias_home)?;
+ 
+     let _ = open_for_acl(
+-        &alias_home.join(".sandbox-bin"),
++        &alias_home.join(".crownforge-sandbox-bin"),
+         DirectoryOpenDisposition::OpenOrCreate,
+     )
+     .expect_err("ancestor directory junction must be rejected");
+diff --git a/codex-rs/windows-sandbox-rs/src/provisioning_protocol.rs b/codex-rs/windows-sandbox-rs/src/provisioning_protocol.rs
+index 6a8c978..bcea104 100644
+--- a/codex-rs/windows-sandbox-rs/src/provisioning_protocol.rs
++++ b/codex-rs/windows-sandbox-rs/src/provisioning_protocol.rs
+@@ -11,7 +11,7 @@ use std::io::Write;
+ pub const PROVISIONING_PROTOCOL_VERSION: u8 = 1;
+ 
+ /// Named pipe used by the machine-wide Windows sandbox provisioning service.
+-pub const SANDBOX_PROVISIONING_PIPE_NAME: &str = r"\\.\pipe\OpenAI.CodexSandbox";
++pub const SANDBOX_PROVISIONING_PIPE_NAME: &str = r"\\.\pipe\CrownForge.Sandbox";
+ 
+ /// Pre-dispatch refusal: the caller may reconnect once to the refreshed pipe.
+ pub const SANDBOX_GROUP_CHANGED: &str = "sandbox group changed before authentication";
+diff --git a/codex-rs/windows-sandbox-rs/src/runtime_ownership.rs b/codex-rs/windows-sandbox-rs/src/runtime_ownership.rs
+index ace6baa..1355ebd 100644
+--- a/codex-rs/windows-sandbox-rs/src/runtime_ownership.rs
++++ b/codex-rs/windows-sandbox-rs/src/runtime_ownership.rs
+@@ -59,7 +59,7 @@ use crate::winutil::to_wide;
+ // Old services overwrite the parent value and delete its key on uninstall.
+ // A child key preserves Core state and makes that old whole-key delete fail.
+ pub const CORE_INSTALLATION_KEY: &str =
+-    r"SOFTWARE\OpenAI\Codex\WindowsSandboxService\RegisteredCore";
++    r"SOFTWARE\CrownForge\WindowsSandboxService\RegisteredCore";
+ 
+ /// Written before registration so a service restart cannot lose cleanup ownership.
+ #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+diff --git a/codex-rs/windows-sandbox-rs/src/service_identity.rs b/codex-rs/windows-sandbox-rs/src/service_identity.rs
+index ce60848..1d3972b 100644
+--- a/codex-rs/windows-sandbox-rs/src/service_identity.rs
++++ b/codex-rs/windows-sandbox-rs/src/service_identity.rs
+@@ -12,10 +12,10 @@ use crate::package_identity::process_package_family;
+ /// the legacy service lookup and may use ordinary elevated setup when it is absent.
+ pub fn windows_sandbox_service_name() -> Result<String> {
+     let Some(family) = service_package_family()? else {
+-        return Ok("CodexSandboxService".into());
++        return Ok("CrownForgeSandboxService".into());
+     };
+     let (name, _) = family.rsplit_once('_').context("invalid package family")?;
+-    Ok(format!("CodexSandboxService.{name}"))
++    Ok(format!("CrownForgeSandboxService.{name}"))
+ }
+ 
+ /// The full family, including publisher identity, qualifies the authenticated pipe.
+diff --git a/codex-rs/windows-sandbox-rs/src/setup.rs b/codex-rs/windows-sandbox-rs/src/setup.rs
+index 484f286..9fcb203 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup.rs
+@@ -49,9 +49,9 @@ use windows_sys::Win32::Security::CheckTokenMembership;
+ use windows_sys::Win32::Security::FreeSid;
+ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
+ 
+-pub const SETUP_VERSION: u32 = 5;
+-pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
+-pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
++pub const SETUP_VERSION: u32 = 6;
++pub const OFFLINE_USERNAME: &str = "CrownForgeSbxOff";
++pub const ONLINE_USERNAME: &str = "CrownForgeSbxOn";
+ const ERROR_CANCELLED: u32 = 1223;
+ const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
+ const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+@@ -189,7 +189,7 @@ pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
+ }
+ 
+ pub fn sandbox_bin_dir(codex_home: &Path) -> PathBuf {
+-    codex_home.join(".sandbox-bin")
++    codex_home.join(".crownforge-sandbox-bin")
+ }
+ 
+ pub fn sandbox_secrets_dir(codex_home: &Path) -> PathBuf {
+@@ -447,6 +447,8 @@ pub struct SetupMarker {
+ impl SetupMarker {
+     pub fn version_matches(&self) -> bool {
+         self.version == SETUP_VERSION
++            && self.offline_username.eq_ignore_ascii_case(OFFLINE_USERNAME)
++            && self.online_username.eq_ignore_ascii_case(ONLINE_USERNAME)
+     }
+ 
+     pub(crate) fn offline_proxy_settings(&self) -> OfflineProxySettings {
+@@ -498,6 +500,8 @@ pub struct SandboxUsersFile {
+ impl SandboxUsersFile {
+     pub fn version_matches(&self) -> bool {
+         self.version == SETUP_VERSION
++            && self.offline.username.eq_ignore_ascii_case(OFFLINE_USERNAME)
++            && self.online.username.eq_ignore_ascii_case(ONLINE_USERNAME)
+     }
+ }
+ 
+@@ -1440,7 +1444,7 @@ fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
+ 
+ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+     // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
+-    // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
++    // CODEX_HOME/.crownforge-sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
+     // control/state and helper binaries and must remain tamper-resistant.
+     let codex_home_key = canonical_path_key(codex_home);
+     let sbx_dir_key = canonical_path_key(&sandbox_dir(codex_home));
+@@ -2742,3 +2746,41 @@ mod tests {
+         );
+     }
+ }
++
++#[cfg(test)]
++mod crownforge_namespace_tests {
++    use super::*;
++
++    #[test]
++    fn namespaced_accounts_fit_sam_and_shared_records_are_rejected() {
++        assert!(OFFLINE_USERNAME.len() <= 20 && ONLINE_USERNAME.len() <= 20);
++        let mut marker = SetupMarker {
++            version: SETUP_VERSION,
++            offline_username: OFFLINE_USERNAME.to_owned(),
++            online_username: ONLINE_USERNAME.to_owned(),
++            created_at: None,
++            proxy_ports: Vec::new(),
++            allow_local_binding: false,
++        };
++        assert!(marker.version_matches());
++        marker.version = 5;
++        assert!(!marker.version_matches());
++        marker.version = SETUP_VERSION;
++        marker.offline_username = "CodexSandboxOffline".to_owned();
++        assert!(!marker.version_matches());
++        let mut users = SandboxUsersFile {
++            version: SETUP_VERSION,
++            offline: SandboxUserRecord {
++                username: OFFLINE_USERNAME.to_owned(),
++                password: String::new(),
++            },
++            online: SandboxUserRecord {
++                username: ONLINE_USERNAME.to_owned(),
++                password: String::new(),
++            },
++        };
++        assert!(users.version_matches());
++        users.offline.username = "CodexSandboxOffline".to_owned();
++        assert!(!users.version_matches());
++    }
++}
+diff --git a/codex-rs/windows-sandbox-rs/src/setup_mutex.rs b/codex-rs/windows-sandbox-rs/src/setup_mutex.rs
+index dcb8f6f..1b688e0 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup_mutex.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup_mutex.rs
+@@ -60,7 +60,7 @@ pub fn acquire_sandbox_setup_lock(timeout_ms: u32) -> Result<SandboxSetupLock> {
+         lpSecurityDescriptor: descriptor,
+         bInheritHandle: 0,
+     };
+-    let name = to_wide(r"Global\CodexSandboxSetup");
++    let name = to_wide(r"Global\CrownForgeSandboxSetup");
+     let handle = unsafe {
+         CreateMutexW(&attributes, /*binitialowner*/ 0, name.as_ptr())
+     };
+diff --git a/codex-rs/windows-sandbox-rs/src/setup_provisioning.rs b/codex-rs/windows-sandbox-rs/src/setup_provisioning.rs
+index f60b1d9..58341fe 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup_provisioning.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup_provisioning.rs
+@@ -547,6 +547,19 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
+             ),
+         )));
+     }
++    anyhow::ensure!(
++        payload
++            .offline_username
++            .eq_ignore_ascii_case(crate::setup::OFFLINE_USERNAME)
++            && payload
++                .online_username
++                .eq_ignore_ascii_case(crate::setup::ONLINE_USERNAME),
++        "CrownForge setup refuses a shared or foreign sandbox account"
++    );
++    anyhow::ensure!(
++        !payload.allow_local_binding && payload.proxy_ports.is_empty(),
++        "CrownForge Offline is fully disconnected; managed proxy or local-binding exceptions are unsupported"
++    );
+     // Only this entry parses command-line JSON. Keep admission locked through
+     // the entire account-provisioning operation, including initial Full setup.
+     // The in-process adapter enters separately after authenticated service admission.
+@@ -764,15 +777,15 @@ fn provision_sandbox(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
+     let wfp_result = install_wfp_filters(
+         &payload.codex_home,
+         &payload.offline_username,
++        &payload.real_user,
+         payload.otel.as_ref(),
+         |message| {
+             let _ = log_line(log, message);
+         },
+     );
++    // CrownForge never commits a setup marker or enables execution without its full WFP policy.
++    wfp_result?;
+     if repairing_disabled_accounts {
+-        // Ordinary setup keeps its best-effort WFP behavior. Recovery must not reopen logons
+-        // after cleanup removed protections unless restoring those protections succeeded.
+-        wfp_result?;
+         for username in [&payload.offline_username, &payload.online_username] {
+             let flags = local_user_flags(username)?.ok_or_else(|| {
+                 anyhow::anyhow!("sandbox user {username} disappeared during repair")
+@@ -1205,8 +1218,8 @@ mod tests {
+     pub(super) fn payload_json() -> serde_json::Value {
+         json!({
+             "version": SETUP_VERSION,
+-            "offline_username": "CodexSandboxOffline",
+-            "online_username": "CodexSandboxOnline",
++            "offline_username": "CrownForgeSbxOff",
++            "online_username": "CrownForgeSbxOn",
+             "codex_home": "C:\\codex-home",
+             "command_cwd": "C:\\workspace",
+             "read_roots": [],
+diff --git a/codex-rs/windows-sandbox-rs/src/setup_provisioning/acl_tests.rs b/codex-rs/windows-sandbox-rs/src/setup_provisioning/acl_tests.rs
+index 3e2120e..79e55c6 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup_provisioning/acl_tests.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup_provisioning/acl_tests.rs
+@@ -24,7 +24,7 @@ use windows_sys::Win32::Foundation::LocalFree;
+ #[test]
+ fn provision_only_locks_plain_directory_via_handle() {
+     let temp = tempfile::tempdir().expect("tempdir");
+-    let sandbox_bin = temp.path().join(".sandbox-bin");
++    let sandbox_bin = temp.path().join(".crownforge-sandbox-bin");
+     let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
+     let real_sid = resolve_sid(&real_user).expect("resolve real user SID");
+ 
+@@ -48,7 +48,7 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
+     for setup_mode in [SetupMode::Full, SetupMode::ProvisionOnly] {
+         let temp = tempfile::tempdir().expect("tempdir");
+         let workspace = temp.path().join("workspace");
+-        let sandbox_bin = workspace.join(".sandbox-bin");
++        let sandbox_bin = workspace.join(".crownforge-sandbox-bin");
+         fs::create_dir(&workspace).expect("create workspace");
+ 
+         let workspace_sid = workspace_write_cap_sid_for_root(temp.path(), temp.path(), temp.path())
+diff --git a/codex-rs/windows-sandbox-rs/src/setup_provisioning/firewall.rs b/codex-rs/windows-sandbox-rs/src/setup_provisioning/firewall.rs
+index 81f4fa5..b61b6ed 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup_provisioning/firewall.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup_provisioning/firewall.rs
+@@ -32,10 +32,10 @@ use crate::SetupFailure;
+ 
+ // This is the stable identifier we use to find/update the rule idempotently.
+ // It intentionally does not change between installs.
+-const OFFLINE_BLOCK_RULE_NAME: &str = "codex_sandbox_offline_block_outbound";
+-const OFFLINE_BLOCK_INBOUND_RULE_NAME: &str = "codex_sandbox_offline_block_inbound";
+-const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "codex_sandbox_offline_block_loopback_tcp";
+-const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "codex_sandbox_offline_block_loopback_udp";
++const OFFLINE_BLOCK_RULE_NAME: &str = "crownforge_sandbox_offline_block_outbound";
++const OFFLINE_BLOCK_INBOUND_RULE_NAME: &str = "crownforge_sandbox_offline_block_inbound";
++const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "crownforge_sandbox_offline_block_loopback_tcp";
++const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "crownforge_sandbox_offline_block_loopback_udp";
+ 
+ // Friendly text shown in the firewall UI.
+ const OFFLINE_BLOCK_RULE_FRIENDLY: &str = "Codex Sandbox Offline - Block Non-Loopback Outbound";
+@@ -44,7 +44,7 @@ const OFFLINE_BLOCK_INBOUND_RULE_FRIENDLY: &str =
+ const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
+     "Codex Sandbox Offline - Block Loopback TCP (Except Proxy)";
+ const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "Codex Sandbox Offline - Block Loopback UDP";
+-const OFFLINE_PROXY_ALLOW_RULE_NAME: &str = "codex_sandbox_offline_allow_loopback_proxy";
++const OFFLINE_PROXY_ALLOW_RULE_NAME: &str = "crownforge_sandbox_offline_allow_loopback_proxy";
+ const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::/127";
+ const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+ 
+diff --git a/codex-rs/windows-sandbox-rs/src/setup_provisioning/read_acl_mutex.rs b/codex-rs/windows-sandbox-rs/src/setup_provisioning/read_acl_mutex.rs
+index 7954826..ed3f71e 100644
+--- a/codex-rs/windows-sandbox-rs/src/setup_provisioning/read_acl_mutex.rs
++++ b/codex-rs/windows-sandbox-rs/src/setup_provisioning/read_acl_mutex.rs
+@@ -11,7 +11,7 @@ use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
+ use windows_sys::Win32::System::Threading::OpenMutexW;
+ use windows_sys::Win32::System::Threading::ReleaseMutex;
+ 
+-const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
++const READ_ACL_MUTEX_NAME: &str = "Local\\CrownForgeSandboxReadAcl";
+ 
+ pub(super) struct ReadAclMutexGuard {
+     handle: HANDLE,
+diff --git a/codex-rs/windows-sandbox-rs/src/uninstall_windows.rs b/codex-rs/windows-sandbox-rs/src/uninstall_windows.rs
+index e08b623..ba5b233 100644
+--- a/codex-rs/windows-sandbox-rs/src/uninstall_windows.rs
++++ b/codex-rs/windows-sandbox-rs/src/uninstall_windows.rs
+@@ -108,7 +108,7 @@ impl PreparedWindowsSandboxCleanup {
+                     ".sandbox-secrets",
+                     crate::setup::sandbox_secrets_dir(codex_home),
+                 ),
+-                (".sandbox-bin", crate::setup::sandbox_bin_dir(codex_home)),
++                (".crownforge-sandbox-bin", crate::setup::sandbox_bin_dir(codex_home)),
+             ] {
+                 match std::fs::remove_dir_all(path) {
+                     Ok(()) => report(&format!("removed {directory}")),
+@@ -158,7 +158,7 @@ impl PreparedWindowsSandboxCleanup {
+                 .sids()
+                 .any(|sid| self._retained_logons.contains_sid(sid))
+         {
+-            match principals::remove_sandbox_principal("CodexSandboxUsers") {
++            match principals::remove_sandbox_principal("CrownForgeSandboxUsers") {
+                 Ok(()) => report("remove sandbox group: completed"),
+                 Err(error) => {
+                     report(&format!("remove sandbox group: failed, {error:#}"));
+diff --git a/codex-rs/windows-sandbox-rs/src/uninstall_windows/firewall.rs b/codex-rs/windows-sandbox-rs/src/uninstall_windows/firewall.rs
+index 0e5c98d..d2df1d4 100644
+--- a/codex-rs/windows-sandbox-rs/src/uninstall_windows/firewall.rs
++++ b/codex-rs/windows-sandbox-rs/src/uninstall_windows/firewall.rs
+@@ -17,11 +17,11 @@ pub(super) fn cleanup_firewall_rules() -> Result<()> {
+     let rules = unsafe { policy.Rules() }.context("access sandbox firewall rules")?;
+     let mut errors = Vec::new();
+     for name in [
+-        "codex_sandbox_offline_block_outbound",
+-        "codex_sandbox_offline_block_inbound",
+-        "codex_sandbox_offline_block_loopback_tcp",
+-        "codex_sandbox_offline_block_loopback_udp",
+-        "codex_sandbox_offline_allow_loopback_proxy",
++        "crownforge_sandbox_offline_block_outbound",
++        "crownforge_sandbox_offline_block_inbound",
++        "crownforge_sandbox_offline_block_loopback_tcp",
++        "crownforge_sandbox_offline_block_loopback_udp",
++        "crownforge_sandbox_offline_allow_loopback_proxy",
+     ] {
+         if let Err(error) = unsafe { rules.Remove(&BSTR::from(name)) } {
+             errors.push(format!("remove sandbox firewall rule {name}: {error}"));
+diff --git a/codex-rs/windows-sandbox-rs/src/uninstall_windows/principals.rs b/codex-rs/windows-sandbox-rs/src/uninstall_windows/principals.rs
+index ef79a21..f59d49c 100644
+--- a/codex-rs/windows-sandbox-rs/src/uninstall_windows/principals.rs
++++ b/codex-rs/windows-sandbox-rs/src/uninstall_windows/principals.rs
+@@ -169,7 +169,7 @@ impl DisabledSandboxUsers {
+ 
+ pub(super) fn remove_sandbox_principal(name: &str) -> Result<()> {
+     let name_wide = to_wide(name);
+-    let status = if name == "CodexSandboxUsers" {
++    let status = if name == "CrownForgeSandboxUsers" {
+         unsafe { network::NetLocalGroupDel(null(), name_wide.as_ptr()) }
+     } else {
+         unsafe { network::NetUserDel(null(), name_wide.as_ptr()) }
+diff --git a/codex-rs/windows-sandbox-rs/src/wfp.rs b/codex-rs/windows-sandbox-rs/src/wfp.rs
+index d992bcd..5e835af 100644
+--- a/codex-rs/windows-sandbox-rs/src/wfp.rs
++++ b/codex-rs/windows-sandbox-rs/src/wfp.rs
+@@ -32,6 +32,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDIT
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_PORT;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_DISPLAY_DATA0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_CONDITION0;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_FLAG_DISABLED;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_FLAG_PERSISTENT;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0_0;
+@@ -44,17 +45,24 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmEngineC
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmEngineOpen0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmFilterAdd0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmFilterDeleteByKey0;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmFilterGetByKey0;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmFreeMemory0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmProviderAdd0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmProviderDeleteByKey0;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmProviderSetSecurityInfoByKey0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmSubLayerAdd0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmSubLayerDeleteByKey0;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmSubLayerSetSecurityInfoByKey0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmTransactionAbort0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmTransactionBegin0;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmTransactionCommit0;
+ use windows_sys::Win32::Security::Authorization::BuildExplicitAccessWithNameW;
+ use windows_sys::Win32::Security::Authorization::BuildSecurityDescriptorW;
++use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+ use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
+ use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
++use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
++use windows_sys::Win32::Security::GetSecurityDescriptorDacl;
+ use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+ use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
+ use windows_sys::Win32::System::Threading::INFINITE;
+@@ -64,34 +72,47 @@ use filter_specs::ConditionSpec;
+ use filter_specs::FILTER_SPECS;
+ use filter_specs::FilterSpec;
+ 
+-const SESSION_NAME: &str = "Codex Windows Sandbox WFP";
+-const PROVIDER_NAME: &str = "Codex Windows Sandbox WFP";
+-const PROVIDER_DESCRIPTION: &str = "Persistent WFP provider for Codex Windows sandbox filters";
+-const SUBLAYER_NAME: &str = "Codex Windows Sandbox WFP";
+-const SUBLAYER_DESCRIPTION: &str = "Persistent WFP sublayer for Codex Windows sandbox filters";
++const SESSION_NAME: &str = "CrownForge Windows Sandbox WFP";
++const PROVIDER_NAME: &str = "CrownForge Windows Sandbox WFP";
++const PROVIDER_DESCRIPTION: &str = "Persistent WFP provider for CrownForge Windows sandbox filters";
++const SUBLAYER_NAME: &str = "CrownForge Windows Sandbox WFP";
++const SUBLAYER_DESCRIPTION: &str = "Persistent WFP sublayer for CrownForge Windows sandbox filters";
+ 
+ // WFP identifies persistent providers, sublayers, and filters by stable GUIDs.
+ // These values are Codex-owned identities; do not regenerate them unless we
+ // intentionally want to orphan old objects and create a new WFP namespace.
+-const PROVIDER_KEY: GUID = GUID::from_u128(0x2e31d31c_3948_4753_9117_e5d1a6496f41);
+-const SUBLAYER_KEY: GUID = GUID::from_u128(0xe65054fd_4d32_4c7c_95ef_621f0cf6431a);
++const PROVIDER_KEY: GUID = GUID::from_u128(0xdb5fb4d1_bed0_5dfa_a922_a892b4028efc);
++const SUBLAYER_KEY: GUID = GUID::from_u128(0x6ea903e4_1f40_54fe_beca_d10b46433a1c);
+ 
+ /// Installs the persistent Codex WFP filters for `account`.
+ ///
+ /// This is intended to run from the already-elevated setup helper. Callers
+ /// may continue ordinary setup after an error, but must restore these filters
+ /// before re-enabling accounts left disabled by interrupted cleanup.
+-pub fn install_wfp_filters_for_account(account: &str) -> Result<usize> {
++pub fn install_wfp_filters_for_account(account: &str, owner_account: &str) -> Result<usize> {
++    anyhow::ensure!(
++        account.eq_ignore_ascii_case(crate::setup::OFFLINE_USERNAME),
++        "CrownForge policy can only target its private Offline account"
++    );
+     let engine = Engine::open(INFINITE)?;
++    let object_security = OwnedPolicySecurity::for_owner(owner_account)?;
++    // Windows forbids SetSecurityInfo inside an explicit WFP transaction.
++    // Refresh existing owned-object READ ACLs first; Add0 supplies them for new objects.
++    refresh_owned_metadata_acl(engine.handle, object_security.descriptor)?;
+     let mut transaction = engine.begin_transaction()?;
+-    ensure_provider(engine.handle)?;
+-    ensure_sublayer(engine.handle)?;
++    ensure_provider(engine.handle, object_security.descriptor)?;
++    ensure_sublayer(engine.handle, object_security.descriptor)?;
+ 
+     let user_condition = UserMatchCondition::for_account(account)?;
+     let mut installed_filter_count = 0;
+     for spec in FILTER_SPECS {
+         delete_filter_if_present(engine.handle, &spec.key)?;
+-        add_filter(engine.handle, spec, &user_condition)?;
++        add_filter(
++            engine.handle,
++            spec,
++            &user_condition,
++            object_security.descriptor,
++        )?;
+         installed_filter_count += 1;
+     }
+ 
+@@ -99,6 +120,147 @@ pub fn install_wfp_filters_for_account(account: &str) -> Result<usize> {
+     Ok(installed_filter_count)
+ }
+ 
++/// Reads every owned filter without provisioning, refreshing ACLs or changing policy.
++/// Missing, disabled, altered, or inaccessible policy is never treated as ready.
++pub fn verify_wfp_filters_for_account(account: &str) -> Result<()> {
++    anyhow::ensure!(
++        account.eq_ignore_ascii_case(crate::setup::OFFLINE_USERNAME),
++        "CrownForge policy principal mismatch"
++    );
++    let engine = Engine::open(1_000)?;
++    let user = UserMatchCondition::for_account(account)?;
++    for spec in FILTER_SPECS {
++        let mut filter = null_mut();
++        let result = unsafe { FwpmFilterGetByKey0(engine.handle, &spec.key, &mut filter) };
++        ensure_success(result, &format!("read CrownForge WFP filter {}", spec.name))?;
++        anyhow::ensure!(!filter.is_null(), "WFP returned an empty filter");
++        let matches = unsafe { filter_matches(&*filter, spec, &user) };
++        let mut memory = filter.cast();
++        unsafe { FwpmFreeMemory0(&mut memory) };
++        anyhow::ensure!(
++            matches,
++            "CrownForge WFP filter {} is disabled or differs from the installed policy",
++            spec.name
++        );
++    }
++    Ok(())
++}
++
++unsafe fn filter_matches(
++    filter: &FWPM_FILTER0,
++    spec: &FilterSpec,
++    user: &UserMatchCondition,
++) -> bool {
++    if filter.flags & FWPM_FILTER_FLAG_PERSISTENT == 0
++        || filter.flags & FWPM_FILTER_FLAG_DISABLED != 0
++        || filter.action.r#type != FWP_ACTION_BLOCK
++        || !same_guid(&filter.layerKey, &spec.layer_key)
++        || !same_guid(&filter.subLayerKey, &SUBLAYER_KEY)
++        || filter.providerKey.is_null()
++        || !same_guid(&*filter.providerKey, &PROVIDER_KEY)
++        || filter.numFilterConditions as usize != spec.conditions.len()
++        || filter.filterCondition.is_null()
++    {
++        return false;
++    }
++    let conditions =
++        std::slice::from_raw_parts(filter.filterCondition, filter.numFilterConditions as usize);
++    spec.conditions.iter().all(|spec| {
++        conditions.iter().any(|condition| {
++            if condition.matchType != FWP_MATCH_EQUAL {
++                return false;
++            }
++            match spec {
++                ConditionSpec::User => {
++                    if !same_guid(&condition.fieldKey, &FWPM_CONDITION_ALE_USER_ID)
++                        || condition.conditionValue.r#type != FWP_SECURITY_DESCRIPTOR_TYPE
++                    {
++                        return false;
++                    }
++                    let pointer = condition.conditionValue.Anonymous.sd;
++                    if pointer.is_null() {
++                        return false;
++                    }
++                    let actual = &*pointer;
++                    !actual.data.is_null()
++                        && actual.size == user.blob.size
++                        && std::slice::from_raw_parts(actual.data, actual.size as usize)
++                            == std::slice::from_raw_parts(user.blob.data, user.blob.size as usize)
++                }
++                ConditionSpec::Protocol(protocol) => {
++                    same_guid(&condition.fieldKey, &FWPM_CONDITION_IP_PROTOCOL)
++                        && condition.conditionValue.r#type == FWP_UINT8
++                        && condition.conditionValue.Anonymous.uint8 == *protocol
++                }
++                ConditionSpec::RemotePort(port) => {
++                    same_guid(&condition.fieldKey, &FWPM_CONDITION_IP_REMOTE_PORT)
++                        && condition.conditionValue.r#type == FWP_UINT16
++                        && condition.conditionValue.Anonymous.uint16 == *port
++                }
++            }
++        })
++    })
++}
++
++fn same_guid(left: &GUID, right: &GUID) -> bool {
++    left.data1 == right.data1
++        && left.data2 == right.data2
++        && left.data3 == right.data3
++        && left.data4 == right.data4
++}
++
++/// Only the host identity captured before elevation can read owned policy metadata.
++/// SYSTEM and Administrators retain management rights; no global WFP ACL is modified.
++struct OwnedPolicySecurity {
++    descriptor: PSECURITY_DESCRIPTOR,
++}
++
++impl OwnedPolicySecurity {
++    fn for_owner(owner_account: &str) -> Result<Self> {
++        let bytes = crate::winutil::resolve_sid(owner_account)?;
++        let sid = crate::winutil::string_from_sid_bytes(&bytes).map_err(anyhow::Error::msg)?;
++        let sddl = to_wide(OsStr::new(&format!(
++            "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x80;;;{sid})"
++        )));
++        let mut descriptor = null_mut();
++        let result = unsafe {
++            ConvertStringSecurityDescriptorToSecurityDescriptorW(
++                sddl.as_ptr(),
++                1,
++                &mut descriptor,
++                null_mut(),
++            )
++        };
++        anyhow::ensure!(
++            result != 0,
++            "create CrownForge WFP object read ACL: {}",
++            std::io::Error::last_os_error()
++        );
++        Ok(Self { descriptor })
++    }
++}
++
++fn policy_dacl(security: PSECURITY_DESCRIPTOR) -> Result<*mut windows_sys::Win32::Security::ACL> {
++    let mut present = 0;
++    let mut defaulted = 0;
++    let mut dacl = null_mut();
++    let result =
++        unsafe { GetSecurityDescriptorDacl(security, &mut present, &mut dacl, &mut defaulted) };
++    anyhow::ensure!(
++        result != 0 && present != 0 && !dacl.is_null(),
++        "CrownForge WFP policy requires an explicit metadata ACL"
++    );
++    Ok(dacl)
++}
++
++impl Drop for OwnedPolicySecurity {
++    fn drop(&mut self) {
++        if !self.descriptor.is_null() {
++            unsafe { LocalFree(self.descriptor as HLOCAL) };
++        }
++    }
++}
++
+ pub(crate) fn remove_wfp_filters() -> Result<()> {
+     // Leave time for other cleanup if a WFP policy writer holds the transaction lock.
+     let engine = Engine::open(/*transaction_wait_timeout_ms*/ 1_000)?;
+@@ -153,7 +315,11 @@ impl Engine {
+     }
+ 
+     fn begin_transaction(&self) -> Result<Transaction<'_>> {
+-        let result = unsafe { FwpmTransactionBegin0(self.handle, 0) };
++        self.begin_transaction_with_flags(0)
++    }
++
++    fn begin_transaction_with_flags(&self, flags: u32) -> Result<Transaction<'_>> {
++        let result = unsafe { FwpmTransactionBegin0(self.handle, flags) };
+         ensure_success(result, "FwpmTransactionBegin0")?;
+         Ok(Transaction {
+             engine: self,
+@@ -252,8 +418,45 @@ impl Drop for UserMatchCondition {
+     }
+ }
+ 
++// Only owned GUIDs are touched, before the transactional object/filter installation.
++fn refresh_owned_metadata_acl(engine: HANDLE, security: PSECURITY_DESCRIPTOR) -> Result<()> {
++    let dacl = policy_dacl(security)?;
++    let result = unsafe {
++        FwpmProviderSetSecurityInfoByKey0(
++            engine,
++            &PROVIDER_KEY,
++            DACL_SECURITY_INFORMATION,
++            null(),
++            null(),
++            dacl,
++            null(),
++        )
++    };
++    ensure_success_or(
++        result,
++        "refresh CrownForge provider metadata read ACL",
++        &[FWP_E_PROVIDER_NOT_FOUND as u32, FWP_E_NOT_FOUND as u32],
++    )?;
++    let result = unsafe {
++        FwpmSubLayerSetSecurityInfoByKey0(
++            engine,
++            &SUBLAYER_KEY,
++            DACL_SECURITY_INFORMATION,
++            null(),
++            null(),
++            dacl,
++            null(),
++        )
++    };
++    ensure_success_or(
++        result,
++        "refresh CrownForge sublayer metadata read ACL",
++        &[FWP_E_SUBLAYER_NOT_FOUND as u32, FWP_E_NOT_FOUND as u32],
++    )
++}
++
+ /// Ensures the persistent Codex WFP provider exists.
+-fn ensure_provider(engine: HANDLE) -> Result<()> {
++fn ensure_provider(engine: HANDLE, security: PSECURITY_DESCRIPTOR) -> Result<()> {
+     let provider_name = to_wide(OsStr::new(PROVIDER_NAME));
+     let provider_description = to_wide(OsStr::new(PROVIDER_DESCRIPTION));
+     let provider = FWPM_PROVIDER0 {
+@@ -267,12 +470,12 @@ fn ensure_provider(engine: HANDLE) -> Result<()> {
+         serviceName: null_mut(),
+     };
+ 
+-    let result = unsafe { FwpmProviderAdd0(engine, &provider, null_mut()) };
++    let result = unsafe { FwpmProviderAdd0(engine, &provider, security) };
+     ensure_success_or(result, "FwpmProviderAdd0", &[FWP_E_ALREADY_EXISTS as u32])
+ }
+ 
+ /// Ensures the persistent Codex sublayer exists under the Codex provider.
+-fn ensure_sublayer(engine: HANDLE) -> Result<()> {
++fn ensure_sublayer(engine: HANDLE, security: PSECURITY_DESCRIPTOR) -> Result<()> {
+     let sublayer_name = to_wide(OsStr::new(SUBLAYER_NAME));
+     let sublayer_description = to_wide(OsStr::new(SUBLAYER_DESCRIPTION));
+     let provider_key = PROVIDER_KEY;
+@@ -288,7 +491,7 @@ fn ensure_sublayer(engine: HANDLE) -> Result<()> {
+         weight: 0x8000,
+     };
+ 
+-    let result = unsafe { FwpmSubLayerAdd0(engine, &sublayer, null_mut()) };
++    let result = unsafe { FwpmSubLayerAdd0(engine, &sublayer, security) };
+     ensure_success_or(result, "FwpmSubLayerAdd0", &[FWP_E_ALREADY_EXISTS as u32])
+ }
+ 
+@@ -297,6 +500,7 @@ fn add_filter(
+     engine: HANDLE,
+     spec: &FilterSpec,
+     user_condition: &UserMatchCondition,
++    security: PSECURITY_DESCRIPTOR,
+ ) -> Result<()> {
+     let filter_name = to_wide(OsStr::new(spec.name));
+     let filter_description = to_wide(OsStr::new(spec.description));
+@@ -329,7 +533,7 @@ fn add_filter(
+     };
+ 
+     let mut filter_id = 0_u64;
+-    let result = unsafe { FwpmFilterAdd0(engine, &filter, null_mut(), &mut filter_id) };
++    let result = unsafe { FwpmFilterAdd0(engine, &filter, security, &mut filter_id) };
+     ensure_success(result, &format!("FwpmFilterAdd0({})", spec.name))
+ }
+ 
+@@ -440,6 +644,61 @@ mod tests {
+         assert_eq!(keys.len(), FILTER_SPECS.len());
+     }
+ 
++    #[test]
++    fn crownforge_has_eight_sid_scoped_transport_filters() {
++        use super::ConditionSpec;
++        use windows_sys::Win32::Networking::WinSock::{IPPROTO_TCP, IPPROTO_UDP};
++        let transports = FILTER_SPECS
++            .iter()
++            .filter(|spec| spec.name.starts_with("crownforge_wfp_all_"))
++            .collect::<Vec<_>>();
++        assert_eq!(transports.len(), 8);
++        let mut tcp = 0;
++        let mut udp = 0;
++        for spec in transports {
++            assert_eq!(spec.conditions.len(), 2);
++            assert!(matches!(spec.conditions[0], ConditionSpec::User));
++            match spec.conditions[1] {
++                ConditionSpec::Protocol(protocol) if protocol == IPPROTO_TCP as u8 => tcp += 1,
++                ConditionSpec::Protocol(protocol) if protocol == IPPROTO_UDP as u8 => udp += 1,
++                _ => panic!("transport filter must have a fixed TCP or UDP condition"),
++            }
++        }
++        assert_eq!((tcp, udp), (4, 4));
++        assert_eq!(FILTER_SPECS.len(), 20);
++        assert!(
++            FILTER_SPECS
++                .iter()
++                .all(|spec| spec.name.starts_with("crownforge_wfp_"))
++        );
++    }
++
++    #[test]
++    fn readback_rejects_disabled_widened_and_wrong_namespace_policy() {
++        use super::*;
++        let user = UserMatchCondition::for_account("SYSTEM").expect("existing system principal");
++        let spec = &FILTER_SPECS[0];
++        let mut conditions = build_conditions(spec.conditions, &user);
++        let provider = PROVIDER_KEY;
++        let mut filter: FWPM_FILTER0 = unsafe { std::mem::zeroed() };
++        filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
++        filter.providerKey = &provider as *const _ as *mut _;
++        filter.layerKey = spec.layer_key;
++        filter.subLayerKey = SUBLAYER_KEY;
++        filter.action.r#type = FWP_ACTION_BLOCK;
++        filter.numFilterConditions = conditions.len() as u32;
++        filter.filterCondition = conditions.as_mut_ptr();
++        assert!(unsafe { filter_matches(&filter, spec, &user) });
++        filter.flags |= FWPM_FILTER_FLAG_DISABLED;
++        assert!(!unsafe { filter_matches(&filter, spec, &user) });
++        filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
++        filter.numFilterConditions -= 1;
++        assert!(!unsafe { filter_matches(&filter, spec, &user) });
++        filter.numFilterConditions += 1;
++        filter.subLayerKey = GUID::from_u128(0);
++        assert!(!unsafe { filter_matches(&filter, spec, &user) });
++    }
++
+     #[test]
+     fn filter_names_are_unique() {
+         let names = FILTER_SPECS
+@@ -448,4 +707,313 @@ mod tests {
+             .collect::<BTreeSet<_>>();
+         assert_eq!(names.len(), FILTER_SPECS.len());
+     }
++    const READBACK_CHILD_TEST: &str = "wfp::tests::crownforge_wfp_nonadmin_owner_readback_child";
++    const READBACK_CHILD_ENV: &str = "CROWNFORGE_WFP_READBACK_CHILD";
++    const READBACK_OWNER_ENV: &str = "CROWNFORGE_WFP_READBACK_OWNER_SID";
++
++    struct ReadbackHandle(windows_sys::Win32::Foundation::HANDLE);
++    impl Drop for ReadbackHandle {
++        fn drop(&mut self) {
++            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
++        }
++    }
++
++    fn readback_no_thread_impersonation() {
++        use windows_sys::Win32::{
++            Foundation::{ERROR_NO_TOKEN, GetLastError},
++            Security::TOKEN_QUERY,
++            System::Threading::{GetCurrentThread, OpenThreadToken},
++        };
++        let mut token = windows_sys::Win32::Foundation::HANDLE::default();
++        let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
++        if opened != 0 {
++            drop(ReadbackHandle(token));
++            panic!("readback must use its process token, not impersonation");
++        }
++        assert_eq!(unsafe { GetLastError() }, ERROR_NO_TOKEN);
++    }
++
++    fn readback_process_token(access: u32) -> ReadbackHandle {
++        let mut token = windows_sys::Win32::Foundation::HANDLE::default();
++        assert_ne!(
++            unsafe {
++                windows_sys::Win32::System::Threading::OpenProcessToken(
++                    windows_sys::Win32::System::Threading::GetCurrentProcess(),
++                    access,
++                    &mut token,
++                )
++            },
++            0,
++            "open process token: {}",
++            std::io::Error::last_os_error()
++        );
++        ReadbackHandle(token)
++    }
++
++    fn readback_user_sid(token: windows_sys::Win32::Foundation::HANDLE) -> String {
++        let bytes =
++            unsafe { crate::token::get_user_sid_bytes(token) }.expect("read process TokenUser SID");
++        crate::winutil::string_from_sid_bytes(&bytes).expect("format process SID")
++    }
++
++    fn readback_is_admin() -> bool {
++        let sid = crate::token::LocalSid::from_string("S-1-5-32-544").expect("Administrators SID");
++        let mut member = 0;
++        assert_ne!(
++            unsafe {
++                windows_sys::Win32::Security::CheckTokenMembership(
++                    windows_sys::Win32::Foundation::HANDLE::default(),
++                    sid.as_ptr(),
++                    &mut member,
++                )
++            },
++            0,
++            "check effective Administrators membership: {}",
++            std::io::Error::last_os_error()
++        );
++        member != 0
++    }
++
++    fn readback_token_information(
++        token: windows_sys::Win32::Foundation::HANDLE,
++        class: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
++    ) -> Vec<usize> {
++        let mut needed = 0;
++        unsafe {
++            windows_sys::Win32::Security::GetTokenInformation(
++                token,
++                class,
++                std::ptr::null_mut(),
++                0,
++                &mut needed,
++            )
++        };
++        assert!(needed > 0);
++        let count = (needed as usize)
++            .div_ceil(std::mem::size_of::<usize>())
++            .max(4);
++        let mut buffer = vec![0usize; count];
++        assert_ne!(
++            unsafe {
++                windows_sys::Win32::Security::GetTokenInformation(
++                    token,
++                    class,
++                    buffer.as_mut_ptr().cast(),
++                    (buffer.len() * std::mem::size_of::<usize>()) as u32,
++                    &mut needed,
++                )
++            },
++            0,
++            "read token information: {}",
++            std::io::Error::last_os_error()
++        );
++        buffer
++    }
++
++    #[test]
++    #[ignore = "requires explicit owned WFP setup and an elevated non-SYSTEM owner; spawns a restricted child"]
++    fn crownforge_wfp_nonadmin_owner_readback_parent() {
++        use windows_sys::Win32::{
++            Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
++            Security::{
++                CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, LUA_TOKEN, TOKEN_ASSIGN_PRIMARY,
++                TOKEN_DUPLICATE, TOKEN_QUERY,
++            },
++            System::Threading::{
++                CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetExitCodeProcess,
++                PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
++            },
++        };
++        readback_no_thread_impersonation();
++        assert!(
++            readback_is_admin(),
++            "parent must be the elevated App setup owner"
++        );
++        assert_ne!(std::env::var(READBACK_CHILD_ENV).ok().as_deref(), Some("1"));
++        let parent = readback_process_token(TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY);
++        let owner = readback_user_sid(parent.0);
++        assert_ne!(
++            owner, "S-1-5-18",
++            "SYSTEM cannot stand in for the real setup owner"
++        );
++        let mut restricted = HANDLE::default();
++        assert_ne!(
++            unsafe {
++                CreateRestrictedToken(
++                    parent.0,
++                    DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
++                    0,
++                    std::ptr::null(),
++                    0,
++                    std::ptr::null(),
++                    0,
++                    std::ptr::null(),
++                    &mut restricted,
++                )
++            },
++            0,
++            "create limited primary token: {}",
++            std::io::Error::last_os_error()
++        );
++        let restricted = ReadbackHandle(restricted);
++        assert_eq!(readback_user_sid(restricted.0), owner);
++        let executable = std::env::current_exe().expect("current test executable");
++        let application = crate::to_wide(executable.as_os_str());
++        let mut command = vec![b'"' as u16];
++        command.extend(application.iter().copied().take(application.len() - 1));
++        command.extend(crate::to_wide(format!(
++            "\" --ignored --exact {READBACK_CHILD_TEST} --nocapture"
++        )));
++        let allowed = [
++            "SYSTEMROOT",
++            "WINDIR",
++            "PATH",
++            "TEMP",
++            "TMP",
++            "USERPROFILE",
++            "APPDATA",
++            "LOCALAPPDATA",
++        ];
++        let mut environment = std::env::vars_os()
++            .filter_map(|(key, value)| {
++                let key = key.to_string_lossy().to_ascii_uppercase();
++                allowed.contains(&key.as_str()).then_some((key, value))
++            })
++            .collect::<std::collections::BTreeMap<_, _>>();
++        environment.insert(READBACK_CHILD_ENV.into(), "1".into());
++        environment.insert(READBACK_OWNER_ENV.into(), owner.into());
++        let mut block = Vec::<u16>::new();
++        for (key, value) in environment {
++            block.extend(crate::to_wide(format!("{key}={}", value.to_string_lossy())));
++        }
++        block.push(0);
++        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
++        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
++        let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
++        assert_ne!(
++            unsafe {
++                CreateProcessAsUserW(
++                    restricted.0,
++                    application.as_ptr(),
++                    command.as_mut_ptr(),
++                    std::ptr::null(),
++                    std::ptr::null(),
++                    0,
++                    CREATE_UNICODE_ENVIRONMENT,
++                    block.as_ptr().cast(),
++                    std::ptr::null(),
++                    &startup,
++                    &mut process,
++                )
++            },
++            0,
++            "restricted child launch failed; no administrator fallback: {}",
++            std::io::Error::last_os_error()
++        );
++        let process_handle = ReadbackHandle(process.hProcess);
++        let _thread_handle = ReadbackHandle(process.hThread);
++        let waited = unsafe { WaitForSingleObject(process_handle.0, 60_000) };
++        if waited != WAIT_OBJECT_0 {
++            assert_ne!(
++                unsafe { TerminateProcess(process_handle.0, 1) },
++                0,
++                "terminate timed-out owned child"
++            );
++            assert_eq!(
++                unsafe { WaitForSingleObject(process_handle.0, 5_000) },
++                WAIT_OBJECT_0,
++                "owned child must exit after termination"
++            );
++            assert_ne!(
++                waited, WAIT_TIMEOUT,
++                "non-admin WFP readback timed out; owned child terminated"
++            );
++            panic!(
++                "non-admin readback wait failed: {}",
++                std::io::Error::last_os_error()
++            );
++        }
++        let mut exit_code = 1;
++        assert_ne!(
++            unsafe { GetExitCodeProcess(process_handle.0, &mut exit_code) },
++            0
++        );
++        assert_eq!(exit_code, 0, "the genuine non-admin child readback failed");
++    }
++
++    #[test]
++    #[ignore = "only the owned restricted-token parent may invoke this exact child test"]
++    fn crownforge_wfp_nonadmin_owner_readback_child() {
++        use windows_sys::Win32::Security::{
++            EqualSid, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, TOKEN_GROUPS, TOKEN_PRIVILEGES,
++            TOKEN_QUERY, TokenGroups, TokenPrivileges, TokenRestrictedSids,
++        };
++        use windows_sys::Win32::System::SystemServices::SE_GROUP_USE_FOR_DENY_ONLY;
++        assert_eq!(
++            std::env::var(READBACK_CHILD_ENV).ok().as_deref(),
++            Some("1"),
++            "child is not a standalone admin acceptance test"
++        );
++        readback_no_thread_impersonation();
++        let token = readback_process_token(TOKEN_QUERY);
++        assert_eq!(
++            readback_user_sid(token.0),
++            std::env::var(READBACK_OWNER_ENV).expect("parent owner SID")
++        );
++        assert!(
++            !readback_is_admin(),
++            "an administrator child cannot prove owner READ access"
++        );
++        let groups = readback_token_information(token.0, TokenGroups);
++        let groups = unsafe { &*groups.as_ptr().cast::<TOKEN_GROUPS>() };
++        let entries = unsafe {
++            std::slice::from_raw_parts(groups.Groups.as_ptr(), groups.GroupCount as usize)
++        };
++        let admin =
++            crate::token::LocalSid::from_string("S-1-5-32-544").expect("Administrators SID");
++        assert!(
++            entries
++                .iter()
++                .any(|entry| unsafe { EqualSid(entry.Sid, admin.as_ptr()) } != 0
++                    && entry.Attributes & SE_GROUP_USE_FOR_DENY_ONLY as u32 != 0),
++            "Administrators must be deny-only"
++        );
++        let restricted = readback_token_information(token.0, TokenRestrictedSids);
++        assert_eq!(
++            unsafe { (*restricted.as_ptr().cast::<TOKEN_GROUPS>()).GroupCount },
++            0,
++            "filesystem restricting SIDs must not confound the metadata READ test"
++        );
++        let privileges = readback_token_information(token.0, TokenPrivileges);
++        let privileges = unsafe { &*privileges.as_ptr().cast::<TOKEN_PRIVILEGES>() };
++        let entries = unsafe {
++            std::slice::from_raw_parts(
++                privileges.Privileges.as_ptr(),
++                privileges.PrivilegeCount as usize,
++            )
++        };
++        let mut change_notify = unsafe { std::mem::zeroed() };
++        assert_ne!(
++            unsafe {
++                LookupPrivilegeValueW(
++                    std::ptr::null(),
++                    crate::to_wide("SeChangeNotifyPrivilege").as_ptr(),
++                    &mut change_notify,
++                )
++            },
++            0
++        );
++        for entry in entries
++            .iter()
++            .filter(|entry| entry.Attributes & SE_PRIVILEGE_ENABLED != 0)
++        {
++            assert!(
++                entry.Luid.LowPart == change_notify.LowPart
++                    && entry.Luid.HighPart == change_notify.HighPart,
++                "a privilege other than SeChangeNotify is enabled in the child"
++            );
++        }
++        super::verify_wfp_filters_for_account(crate::setup::OFFLINE_USERNAME)
++            .expect("production policy probe from fresh engine in a non-impersonated non-admin owner process");
++    }
+ }
+diff --git a/codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs b/codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs
+index d86df4a..02f87a8 100644
+--- a/codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs
++++ b/codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs
+@@ -1,9 +1,12 @@
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_CONNECT_V6;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4;
++use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4;
+ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6;
+ use windows_sys::Win32::Networking::WinSock::IPPROTO_ICMP;
+ use windows_sys::Win32::Networking::WinSock::IPPROTO_ICMPV6;
++use windows_sys::Win32::Networking::WinSock::{IPPROTO_TCP, IPPROTO_UDP};
+ use windows_sys::core::GUID;
+ 
+ #[derive(Clone, Copy)]
+@@ -23,9 +26,90 @@ pub(super) struct FilterSpec {
+ }
+ 
+ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
++    // CrownForge Offline has no managed proxy exceptions. Online remains unaffected.
+     FilterSpec {
+-        key: GUID::from_u128(0x9f5f3812_79f0_4fe9_9615_4c2c92d2f0ff),
+-        name: "codex_wfp_icmp_connect_v4",
++        key: GUID::from_u128(0x3e4961b4_77e4_51ee_b512_61a2765d2bf2),
++        name: "crownforge_wfp_all_tcp_connect_v4",
++        description: "Block CrownForge Offline TCP connect v4, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_TCP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x0c028cd9_7edf_5a00_bf03_eb193622a65a),
++        name: "crownforge_wfp_all_udp_connect_v4",
++        description: "Block CrownForge Offline UDP connect v4, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_UDP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x59606ee0_d55e_50cb_9f4c_7562493da84a),
++        name: "crownforge_wfp_all_tcp_connect_v6",
++        description: "Block CrownForge Offline TCP connect v6, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_TCP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x147d4e2e_2d58_5878_b354_79d3a1f0f0a3),
++        name: "crownforge_wfp_all_udp_connect_v6",
++        description: "Block CrownForge Offline UDP connect v6, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_UDP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x1ac0cbab_c147_5094_a694_6cb267981a28),
++        name: "crownforge_wfp_all_tcp_recv_accept_v4",
++        description: "Block CrownForge Offline TCP recv_accept v4, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_TCP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x823541d2_fea4_5b9c_a20c_d9aea6b7a59d),
++        name: "crownforge_wfp_all_udp_recv_accept_v4",
++        description: "Block CrownForge Offline UDP recv_accept v4, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_UDP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0xb40d1649_8f9e_59a7_8cd3_a91820120063),
++        name: "crownforge_wfp_all_tcp_recv_accept_v6",
++        description: "Block CrownForge Offline TCP recv_accept v6, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_TCP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x05a4c3ab_f759_51da_bbf6_a13782fece7a),
++        name: "crownforge_wfp_all_udp_recv_accept_v6",
++        description: "Block CrownForge Offline UDP recv_accept v6, including loopback",
++        layer_key: FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
++        conditions: &[
++            ConditionSpec::User,
++            ConditionSpec::Protocol(IPPROTO_UDP as u8),
++        ],
++    },
++    FilterSpec {
++        key: GUID::from_u128(0x3128f440_d63a_57f6_b04a_6ac4efdbe846),
++        name: "crownforge_wfp_icmp_connect_v4",
+         description: "Block sandbox-account ICMP connect v4",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+         conditions: &[
+@@ -34,8 +118,8 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
+         ],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0x87498484_45ab_4510_845e_ece8b791b3bc),
+-        name: "codex_wfp_icmp_connect_v6",
++        key: GUID::from_u128(0x283b89cb_63f4_5cbd_9a6c_47c57a9122c6),
++        name: "crownforge_wfp_icmp_connect_v6",
+         description: "Block sandbox-account ICMP connect v6",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+         conditions: &[
+@@ -44,8 +128,8 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
+         ],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xaf4751de_f874_4a7b_a34d_f0d0f22d1d9b),
+-        name: "codex_wfp_icmp_assign_v4",
++        key: GUID::from_u128(0x9063f75b_ff42_5427_abd3_296a8c797825),
++        name: "crownforge_wfp_icmp_assign_v4",
+         description: "Block sandbox-account ICMP resource assignment v4",
+         layer_key: FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
+         conditions: &[
+@@ -54,8 +138,8 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
+         ],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xea10db66_a928_4b2e_a82e_a376a54f93ba),
+-        name: "codex_wfp_icmp_assign_v6",
++        key: GUID::from_u128(0xe5f1578b_37a7_5cdb_8c90_9eb160d56657),
++        name: "crownforge_wfp_icmp_assign_v6",
+         description: "Block sandbox-account ICMP resource assignment v6",
+         layer_key: FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+         conditions: &[
+@@ -66,57 +150,57 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
+     // NAME_RESOLUTION_CACHE filters are intentionally omitted because ordinary
+     // static filter shapes returned FWP_E_OUT_OF_BOUNDS during validation.
+     FilterSpec {
+-        key: GUID::from_u128(0x83172805_f6be_4ae1_9dc6_6847aef04e7f),
+-        name: "codex_wfp_dns_53_v4",
++        key: GUID::from_u128(0xfe5e9be1_99f8_588d_a03f_57cdcd57909e),
++        name: "crownforge_wfp_dns_53_v4",
+         description: "Block sandbox-account DNS TCP or UDP port 53 v4",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(53)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xd23b2efb_1efb_46b2_96f3_b0ccda5690c8),
+-        name: "codex_wfp_dns_53_v6",
++        key: GUID::from_u128(0x9181a4fa_2bc1_5c12_91d4_8b4902b9ec8b),
++        name: "crownforge_wfp_dns_53_v6",
+         description: "Block sandbox-account DNS TCP or UDP port 53 v6",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(53)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0x420b026f_9dc9_4aea_88f4_0f2b9feab39a),
+-        name: "codex_wfp_dns_853_v4",
++        key: GUID::from_u128(0x8b59c2f3_1a6c_5413_b2c6_4ea1a5eba3e2),
++        name: "crownforge_wfp_dns_853_v4",
+         description: "Block sandbox-account DNS-over-TLS port 853 v4",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(853)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0x8d917c81_99cc_45e7_84d6_824df860cfb8),
+-        name: "codex_wfp_dns_853_v6",
++        key: GUID::from_u128(0x123874af_74ea_56f9_9bfa_5a71f8121535),
++        name: "crownforge_wfp_dns_853_v6",
+         description: "Block sandbox-account DNS-over-TLS port 853 v6",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(853)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xe1d6e0af_ce5f_471b_b2d3_15ca00e966f3),
+-        name: "codex_wfp_smb_445_v4",
++        key: GUID::from_u128(0xd47dc8f1_5223_562a_9a09_9f44201764df),
++        name: "crownforge_wfp_smb_445_v4",
+         description: "Block sandbox-account SMB port 445 v4",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(445)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xc2bceca4_66ef_4a0f_ba80_f4f761b8c6f0),
+-        name: "codex_wfp_smb_445_v6",
++        key: GUID::from_u128(0xd4bdcfaa_7d1d_5c44_80bb_7597d16e2af2),
++        name: "crownforge_wfp_smb_445_v6",
+         description: "Block sandbox-account SMB port 445 v6",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(445)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xba10c618_84e7_4b83_8f74_36e22b2fa1ff),
+-        name: "codex_wfp_smb_139_v4",
++        key: GUID::from_u128(0x503903f3_786e_5e3f_8775_dd824bf1677f),
++        name: "crownforge_wfp_smb_139_v4",
+         description: "Block sandbox-account SMB port 139 v4",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(139)],
+     },
+     FilterSpec {
+-        key: GUID::from_u128(0xfe7f22b8_5cf5_4adb_b2aa_71fc0a8f5d44),
+-        name: "codex_wfp_smb_139_v6",
++        key: GUID::from_u128(0x5dd270de_ac68_531f_916a_8840f09d762d),
++        name: "crownforge_wfp_smb_139_v6",
+         description: "Block sandbox-account SMB port 139 v6",
+         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(139)],
+diff --git a/codex-rs/windows-sandbox-rs/src/wfp_setup.rs b/codex-rs/windows-sandbox-rs/src/wfp_setup.rs
+index 45e8dc2..ea64c6a 100644
+--- a/codex-rs/windows-sandbox-rs/src/wfp_setup.rs
++++ b/codex-rs/windows-sandbox-rs/src/wfp_setup.rs
+@@ -129,6 +129,7 @@ fn emit_wfp_setup_metric_safely<F>(
+ pub fn install_wfp_filters<F>(
+     codex_home: &Path,
+     offline_username: &str,
++    owner_username: &str,
+     otel: Option<&StatsigMetricsSettings>,
+     mut log: F,
+ ) -> Result<()>
+@@ -136,7 +137,7 @@ where
+     F: FnMut(&str),
+ {
+     let metric = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+-        install_wfp_filters_for_account(offline_username)
++        install_wfp_filters_for_account(offline_username, owner_username)
+     })) {
+         Ok(Ok(installed_filter_count)) => {
+             log(&format!(
+diff --git a/codex-rs/windows-sandbox-rs/src/winutil.rs b/codex-rs/windows-sandbox-rs/src/winutil.rs
+index 0899362..d4b260d 100644
+--- a/codex-rs/windows-sandbox-rs/src/winutil.rs
++++ b/codex-rs/windows-sandbox-rs/src/winutil.rs
+@@ -26,7 +26,7 @@ use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_FROM_SYSTEM;
+ use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_IGNORE_INSERTS;
+ use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
+ 
+-pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
++pub const SANDBOX_USERS_GROUP: &str = "CrownForgeSandboxUsers";
+ const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+ 
+ pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {

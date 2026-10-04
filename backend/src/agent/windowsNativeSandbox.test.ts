@@ -11,6 +11,7 @@ import { syncBuiltinESMExports } from "node:module";
 import type { CodexSandboxRpcClient, CodexSandboxClientOptions } from "./codexSandboxClient.js";
 import { __windowsNativeSandboxForTests, prepareWindowsNativeProcess, probeWindowsNativeSandbox, setWindowsNativeSandboxTestHooks, setupWindowsNativeSandbox } from "./windowsNativeSandbox.js";
 import type { WorkspaceProcessOptions } from "./processSandbox.js";
+import { WINDOWS_NATIVE_UPSTREAM_VERSION, WINDOWS_NATIVE_UPSTREAM_COMMIT, WINDOWS_NATIVE_RUNTIME_VARIANT, WINDOWS_NATIVE_PATCH_SHA256, WINDOWS_NATIVE_BASE_ARCHIVE_SHA256, WINDOWS_NATIVE_BUILD_ID } from "./windowsNativeRuntimePolicy.js";
 
 function fixture(t: test.TestContext) {
   const preparedCleanups: Array<() => void> = [];
@@ -27,7 +28,10 @@ function fixture(t: test.TestContext) {
     fs.writeFileSync(file, `fixture:${relative}`); files[relative] = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   }
   const manifestFile = path.join(runtimeRoot, __windowsNativeSandboxForTests.MANIFEST_NAME);
-  fs.writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 1, runtimeVersion: "0.160.0", platform: "win32", arch: "x64", files }));
+  fs.writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 2, runtimeVersion: WINDOWS_NATIVE_UPSTREAM_VERSION,
+    upstreamVersion: WINDOWS_NATIVE_UPSTREAM_VERSION, upstreamCommit: WINDOWS_NATIVE_UPSTREAM_COMMIT, runtimeVariant: WINDOWS_NATIVE_RUNTIME_VARIANT,
+    patchSha256: WINDOWS_NATIVE_PATCH_SHA256, baseArchiveSha256: WINDOWS_NATIVE_BASE_ARCHIVE_SHA256.x64, buildId: WINDOWS_NATIVE_BUILD_ID,
+    platform: "win32", arch: "x64", patchedFiles: Object.fromEntries(["bin/codex.exe", "codex-resources/codex-command-runner.exe", "codex-resources/codex-windows-sandbox-setup.exe"].map(name => [name, files[name]])), files }));
   // Configured fixtures model a prior explicit setup; readiness cannot create it.
   fs.mkdirSync(stateHome, { recursive: true });
   fs.writeFileSync(path.join(stateHome, "config.toml"), __windowsNativeSandboxForTests.baseConfig("elevated"));
@@ -65,6 +69,7 @@ test("native readiness uses only the pinned sidecar and no auth or inherited sec
   const configFile = path.join(f.stateHome, "config.toml"); const before = fs.statSync(configFile);
   const result = await probeWindowsNativeSandbox();
   assert.equal(result.available, true); assert.equal(result.shell, "powershell"); assert.equal(result.runtimeVersion, "0.160.0");
+  assert.equal(result.runtimeVariant, "crownforge-network-v1");
   assert.deepEqual(calls.map((call) => call.method), ["initialize", "windowsSandbox/readiness"]);
   assert.equal(clients[0].executable, path.join(f.runtimeRoot, "bin", "codex.exe"));
   for (const key of ["OPENAI_API_KEY", "MODEL_TOKEN", "NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "CODEX_WINDOWS_REGISTERED_CORE", "CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN"]) assert.equal(clients[0].env[key], undefined);
@@ -184,6 +189,43 @@ test("runtime changes, incomplete manifests and wrong versions fail closed", asy
   assert.equal((await probeWindowsNativeSandbox()).available, false);
   data.runtimeVersion = "0.160.0"; delete data.files["codex-resources/codex-windows-sandbox-setup.exe"]; fs.writeFileSync(f.manifestFile, JSON.stringify(data));
   assert.match((await probeWindowsNativeSandbox()).reason!, /incomplete/);
+});
+
+test("official schema-one and mismatched downstream identities cannot authorize a runtime", async (t) => {
+  const f = fixture(t);
+  const original = JSON.parse(fs.readFileSync(f.manifestFile, "utf8"));
+  const mismatches = [
+    { schemaVersion: 1 }, { upstreamVersion: "0.154.0" }, { upstreamCommit: "b".repeat(40) },
+    { runtimeVariant: "official" }, { runtimeVariant: "crownforge-network-v0" }, { patchSha256: "a".repeat(64) },
+    { baseArchiveSha256: WINDOWS_NATIVE_BASE_ARCHIVE_SHA256.arm64 }, { buildId: `${WINDOWS_NATIVE_RUNTIME_VARIANT}:mixed:build` },
+    { arch: "arm64" }, { platform: "linux" }, { runtimeVersion: "0.154.0" },
+    { sourceTag: "rust-v0.154.0" }, { archiveSha256: "b".repeat(64) },
+    { patchedFiles: null }, { patchedFiles: { ...original.patchedFiles, "bin/codex.exe": "a".repeat(64) } },
+    { patchedFiles: { ...original.patchedFiles, extra: "b".repeat(64) } },
+  ];
+  for (const mismatch of mismatches) {
+    fs.writeFileSync(f.manifestFile, JSON.stringify({ ...original, ...mismatch }));
+    const { calls, clients } = install(f);
+    const capability = await probeWindowsNativeSandbox();
+    assert.equal(capability.available, false, JSON.stringify(mismatch));
+    assert.equal(capability.status, "missingRuntime");
+    assert.deepEqual(calls, []); assert.deepEqual(clients, []);
+    assert.throws(() => prepareWindowsNativeProcess(command(f)), /Set up or recheck/);
+  }
+  fs.writeFileSync(f.manifestFile, JSON.stringify({ schemaVersion: 1, runtimeVersion: "0.160.0", platform: "win32", arch: "x64", files: original.files }));
+  install(f);
+  assert.equal((await probeWindowsNativeSandbox()).available, false, "A stock official package is not the downstream patch build");
+});
+
+test("validated downstream receipt still requires explicit ready status", async (t) => {
+  for (const status of ["notConfigured", "updateRequired", "probablyReady"]) {
+    const f = fixture(t); const { calls } = install(f, { status });
+    const result = await probeWindowsNativeSandbox();
+    assert.equal(result.available, false);
+    assert.equal(result.runtimeVariant, WINDOWS_NATIVE_RUNTIME_VARIANT);
+    assert.deepEqual(calls.map(call => call.method), ["initialize", "windowsSandbox/readiness"]);
+    assert.throws(() => prepareWindowsNativeProcess(command(f)), /Set up or recheck/);
+  }
 });
 test("unknown readiness protocols never enable Agent commands", async (t) => {
   const f = fixture(t); install(f, { status: "probablyReady" });

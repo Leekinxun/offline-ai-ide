@@ -3,6 +3,11 @@
   "runtimeVersion": "0.160.0",
   "sourceTag": "rust-v0.160.0",
   "sourceRepository": "https://github.com/openai/codex",
+  "runtimeVariant": "crownforge-network-v1",
+  "upstreamCommit": "a956835d020762cb2b570053af06f643a11c0ecc",
+  "patchFile": "desktop/rust/windows-sandbox-patches/crownforge-network-v1.patch",
+  "patchSha256": "9a12990d3e753927962151daea9f31b0d5be7cebfa9353c30ae695fd9c404956",
+  "buildProfile": "release",
   "platform": "win32",
   "requiredFiles": [
     "bin/codex.exe",

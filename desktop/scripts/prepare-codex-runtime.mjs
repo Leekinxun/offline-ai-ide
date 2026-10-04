@@ -1,12 +1,12 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { buildCrownForgeCodexRuntime, fileSha256, runtimeBuildId, validateSourceLock, PATCHED_BINARIES } from "./build-crownforge-codex-runtime.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const lock = JSON.parse(fs.readFileSync(path.join(root, "scripts/fixtures/codex-native-runtime-lock.json"), "utf8"));
-const digest = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const digest = fileSha256;
 
 function run(executable, args, options = {}) {
   const result = spawnSync(executable, args, { encoding: "utf8", timeout: 15 * 60_000, maxBuffer: 4 * 1024 * 1024, ...options });
@@ -35,25 +35,50 @@ function verifyPE(file, arch) {
   } finally { fs.closeSync(descriptor); }
 }
 
-export function verifyCodexRuntime(directory, arch = "x64") {
-  const receipt = JSON.parse(fs.readFileSync(path.join(directory, "crownforge-codex-runtime.json"), "utf8"));
-  if (receipt.schemaVersion !== 1 || receipt.runtimeVersion !== lock.runtimeVersion || receipt.platform !== "win32" || receipt.arch !== arch || receipt.archiveSha256 !== lock.assets[arch].sha256) throw new Error("Codex runtime receipt does not match the pinned release");
+function verifyRuntimeFiles(directory, receipt, arch) {
+  if (!receipt.files || typeof receipt.files !== "object" || Array.isArray(receipt.files) || Object.keys(receipt.files).length > 10_000) throw new Error("Invalid Codex runtime inventory");
+  const actualNames = filesUnder(directory).filter(name => name !== "crownforge-codex-runtime.json").sort();
+  const expectedNames = Object.keys(receipt.files).sort();
+  if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index])) throw new Error("Codex runtime contains unverified extra or missing files");
   for (const relative of lock.requiredFiles) if (!receipt.files[relative]) throw new Error(`Missing Codex runtime file: ${relative}`);
   for (const [relative, expected] of Object.entries(receipt.files)) {
-    if (relative.split("/").some((part) => !part || part === "." || part === "..") || relative.includes("\\") || path.isAbsolute(relative)) throw new Error("Invalid Codex runtime receipt path");
-    const file = path.join(directory, ...relative.split("/"));
-    if (fs.lstatSync(file).isSymbolicLink() || digest(file) !== expected) throw new Error(`Codex runtime checksum mismatch: ${relative}`);
+    if (!relative || relative.split("/").some((part) => !part || part === "." || part === "..") || relative.includes("\\") || relative.includes(":") || relative.includes("\0") || path.isAbsolute(relative) || !/^[a-f0-9]{64}$/.test(expected)) throw new Error("Invalid Codex runtime receipt path or hash");
+    let file = directory;
+    for (const component of relative.split("/")) {
+      file = path.join(file, component);
+      if (fs.lstatSync(file).isSymbolicLink()) throw new Error("Codex runtime inventory traverses a link");
+    }
+    if (!fs.statSync(file).isFile() || digest(file) !== expected) throw new Error(`Codex runtime checksum mismatch: ${relative}`);
     if (relative.endsWith(".exe")) verifyPE(file, arch);
+  }
+}
+
+export function verifyCodexRuntime(directory, arch = "x64") {
+  const receipt = JSON.parse(fs.readFileSync(path.join(directory, "crownforge-codex-runtime.json"), "utf8"));
+  validateSourceLock(root, lock);
+  if (receipt.schemaVersion !== 2 || receipt.runtimeVersion !== lock.runtimeVersion || receipt.upstreamVersion !== lock.runtimeVersion ||
+      receipt.runtimeVariant !== lock.runtimeVariant || receipt.upstreamCommit !== lock.upstreamCommit || receipt.patchSha256 !== lock.patchSha256 ||
+      receipt.buildId !== runtimeBuildId(lock) || receipt.baseArchiveSha256 !== lock.assets[arch]?.sha256 || receipt.platform !== "win32" || receipt.arch !== arch) throw new Error("CrownForge runtime receipt does not match the reviewed downstream build");
+  verifyRuntimeFiles(directory, receipt, arch);
+  for (const relative of Object.keys(PATCHED_BINARIES)) {
+    if (receipt.patchedFiles?.[relative] !== receipt.files[relative]) throw new Error("CrownForge runtime has a missing or mixed patched binary");
   }
   return directory;
 }
 
-export function prepareCodexRuntime(arch = "x64") {
+export function verifyOfficialCodexBaseline(directory, arch = "x64") {
+  const receipt = JSON.parse(fs.readFileSync(path.join(directory, "crownforge-codex-runtime.json"), "utf8"));
+  if (receipt.schemaVersion !== 1 || receipt.runtimeVersion !== lock.runtimeVersion || receipt.platform !== "win32" || receipt.arch !== arch || receipt.archiveSha256 !== lock.assets[arch].sha256) throw new Error("Official baseline receipt does not match the pinned archive");
+  verifyRuntimeFiles(directory, receipt, arch);
+  return directory;
+}
+
+function prepareOfficialBaseline(arch = "x64") {
   const asset = lock.assets[arch];
   if (!asset) throw new Error(`Unsupported Codex Windows architecture: ${arch}`);
-  const directory = path.join(root, "backend/vendor/codex", `win-${arch}`);
-  if (fs.existsSync(path.join(directory, "crownforge-codex-runtime.json"))) return verifyCodexRuntime(directory, arch);
-  const cache = path.join(root, ".artifacts/codex-runtime-cache"); fs.mkdirSync(cache, { recursive: true });
+  const cache = path.join(root, ".artifacts/codex-runtime-cache", lock.runtimeVersion, arch); fs.mkdirSync(cache, { recursive: true });
+  const directory = path.join(cache, "baseline");
+  if (fs.existsSync(path.join(directory, "crownforge-codex-runtime.json"))) return verifyOfficialCodexBaseline(directory, arch);
   const archive = path.join(cache, asset.name);
   const systemDirectory = process.env.SystemRoot && path.join(process.env.SystemRoot, "System32");
   const curl = process.platform === "win32" ? path.join(systemDirectory || "C:\\Windows\\System32", "curl.exe") : "curl";
@@ -81,14 +106,24 @@ export function prepareCodexRuntime(arch = "x64") {
     }
     const files = Object.fromEntries(filesUnder(extracted).map((relative) => [relative, digest(path.join(extracted, ...relative.split("/")))]));
     fs.writeFileSync(path.join(extracted, "crownforge-codex-runtime.json"), JSON.stringify({ schemaVersion: 1, runtimeVersion: lock.runtimeVersion, platform: "win32", arch, sourceTag: lock.sourceTag, archiveSha256: asset.sha256, files }, null, 2));
-    verifyCodexRuntime(extracted, arch);
+    verifyOfficialCodexBaseline(extracted, arch);
     fs.mkdirSync(path.dirname(directory), { recursive: true });
     fs.rmSync(directory, { recursive: true, force: true });
     fs.cpSync(extracted, directory, { recursive: true });
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+  return verifyOfficialCodexBaseline(directory, arch);
+}
+
+export function prepareCodexRuntime(arch = "x64") {
+  if (!lock.assets[arch]) throw new Error(`Unsupported Codex Windows architecture: ${arch}`);
+  validateSourceLock(root, lock);
+  const directory = path.join(root, "backend/vendor/codex", `win-${arch}`);
+  if (fs.existsSync(path.join(directory, "crownforge-codex-runtime.json"))) return verifyCodexRuntime(directory, arch);
+  const baseline = prepareOfficialBaseline(arch);
+  buildCrownForgeCodexRuntime({ project: root, lock, arch, baseline, destination: directory, inventory: filesUnder, verifyPE });
   return verifyCodexRuntime(directory, arch);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(`Prepared Codex ${lock.runtimeVersion}: ${prepareCodexRuntime(process.argv[2] || "x64")}`);
+  console.log(`Prepared CrownForge ${lock.runtimeVariant} (upstream Codex ${lock.runtimeVersion}): ${prepareCodexRuntime(process.argv[2] || "x64")}`);
 }

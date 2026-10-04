@@ -5,8 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexSandboxClient, type CodexSandboxRpcClient } from "./codexSandboxClient.js";
 import type { PreparedWorkspaceProcess, WorkspaceProcessOptions } from "./processSandbox.js";
+import { validateWindowsNativeRuntimeReceipt, WINDOWS_NATIVE_UPSTREAM_VERSION, WINDOWS_NATIVE_RUNTIME_VARIANT } from "./windowsNativeRuntimePolicy.js";
 
-export const WINDOWS_NATIVE_RUNTIME_VERSION = "0.160.0" as const;
+export const WINDOWS_NATIVE_RUNTIME_VERSION = WINDOWS_NATIVE_UPSTREAM_VERSION;
 const MANIFEST_NAME = "crownforge-codex-runtime.json";
 const REQUIRED_FILES = ["bin/codex.exe", "bin/codex-code-mode-host.exe", "codex-resources/codex-command-runner.exe", "codex-resources/codex-windows-sandbox-setup.exe", "codex-path/rg.exe", "codex-package.json"];
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -26,6 +27,7 @@ export interface WindowsNativeSandboxCapability {
   reason?: string;
   sandboxMode: SandboxMode;
   runtimeVersion: typeof WINDOWS_NATIVE_RUNTIME_VERSION;
+  runtimeVariant: typeof WINDOWS_NATIVE_RUNTIME_VARIANT;
   weakerNetworkIsolation: boolean;
 }
 
@@ -83,7 +85,8 @@ function capability(status: WindowsNativeSandboxCapability["status"], reasonCode
   let mode: SandboxMode = "elevated";
   try { mode = sandboxMode(); } catch { /* invalid configuration is reported by the caller */ }
   return { available: status === "ready", executor: "windows-native", shell: "powershell", status, sandboxMode: mode,
-    runtimeVersion: WINDOWS_NATIVE_RUNTIME_VERSION, weakerNetworkIsolation: mode === "unelevated", ...(reasonCode ? { reasonCode } : {}), ...(reason ? { reason } : {}) };
+    runtimeVersion: WINDOWS_NATIVE_RUNTIME_VERSION, runtimeVariant: WINDOWS_NATIVE_RUNTIME_VARIANT,
+    weakerNetworkIsolation: mode === "unelevated", ...(reasonCode ? { reasonCode } : {}), ...(reason ? { reason } : {}) };
 }
 function comparePath(value: string): string { return path.resolve(value).replaceAll("\\", "/").replace(/\/$/, "").toLowerCase(); }
 function inside(candidate: string, root: string): boolean { const c = comparePath(candidate); const r = comparePath(root); return c === r || c.startsWith(`${r}/`); }
@@ -201,12 +204,8 @@ function requireRuntime(local: NativeLocations): VerifiedRuntime {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_048_576) throw new Error("Invalid Windows sandbox runtime manifest");
   const manifest: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Invalid Windows sandbox runtime manifest");
-  const data = manifest as Record<string, unknown>;
   const arch = hooks.arch ?? process.arch;
-  if (data.schemaVersion !== 1 || data.runtimeVersion !== WINDOWS_NATIVE_RUNTIME_VERSION || data.platform !== "win32" || data.arch !== arch || !data.files || typeof data.files !== "object" || Array.isArray(data.files)) {
-    throw new Error("The Windows sandbox runtime must be the pinned Codex 0.160.0 package for this architecture");
-  }
+  const data = validateWindowsNativeRuntimeReceipt(manifest, arch);
   const files = data.files as Record<string, unknown>;
   if (REQUIRED_FILES.some((required) => typeof files[required] !== "string")) throw new Error("The Windows sandbox runtime package is incomplete");
   const names = Object.keys(files).sort();

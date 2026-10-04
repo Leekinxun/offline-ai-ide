@@ -1,6 +1,7 @@
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
+import { WINDOWS_NATIVE_RUNTIME_VARIANT } from "./windowsNativeRuntimePolicy.js";
 
 export interface CodexSandboxClientOptions {
   executable: string;
@@ -46,7 +47,7 @@ export class CodexSandboxClient implements CodexSandboxRpcClient {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     const result = await this.request("initialize", {
-      clientInfo: { name: "crownforge-native-sandbox", version: "1" },
+      clientInfo: { name: "crownforge-native-sandbox", title: `CrownForge downstream runtime (${WINDOWS_NATIVE_RUNTIME_VARIANT})`, version: "1" },
       capabilities: { experimentalApi: true },
     }, 10_000);
     if (!result || typeof result !== "object" || typeof (result as { userAgent?: unknown }).userAgent !== "string" ||

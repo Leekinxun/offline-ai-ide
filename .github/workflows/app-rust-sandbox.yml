@@ -7,9 +7,12 @@ on:
       - .github/workflows/app-rust-sandbox.yml
       - backend/**
       - desktop/scripts/prepare-codex-runtime.mjs
+      - desktop/scripts/build-crownforge-codex-runtime.mjs
+      - desktop/rust/windows-sandbox-patches/**
       - scripts/fixtures/codex-native-runtime-lock.json
       - scripts/windows-native-sandbox-smoke.mjs
       - scripts/app-rust-windows-network-diagnostic.mjs
+      - scripts/app-rust-network-matrix.mjs
   workflow_dispatch:
 
 permissions:
@@ -23,7 +26,7 @@ jobs:
   native_sandbox:
     if: github.ref == 'refs/heads/APP_RUST'
     runs-on: windows-2022
-    timeout-minutes: 40
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
@@ -83,9 +86,16 @@ jobs:
       - name: Run mocked native contracts and desktop/Web selection regressions
         working-directory: backend
         run: node --import tsx --test src/agent/windowsShell.test.ts src/agent/windowsNativeSandbox.test.ts src/agent/codexSandboxClient.test.ts src/run/windowsAgentSettings.test.ts src/auth/desktopBootstrap.test.ts
-      - name: Prepare verified Codex 0.160.0 Windows x64 runtime
+      - name: Install the pinned sandbox source compiler
         run: |
-          node --input-type=module -e "import fs from 'node:fs'; const lock=JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json','utf8')); if(lock.runtimeVersion!=='0.160.0'||lock.sourceTag!=='rust-v0.160.0') throw new Error('Acceptance requires the reviewed pinned Codex runtime');"
+          rustup toolchain install 1.95.0 --profile minimal
+          exit $LASTEXITCODE
+      - name: Prepare verified CrownForge downstream sandbox runtime
+        id: prepare_runtime
+        env:
+          CROWNFORGE_BUILD_WFP_TESTS: "1"
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; const lock=JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json','utf8')); if(lock.runtimeVersion!=='0.160.0'||lock.sourceTag!=='rust-v0.160.0'||lock.runtimeVariant!=='crownforge-network-v1'||lock.upstreamCommit!=='a956835d020762cb2b570053af06f643a11c0ecc') throw new Error('Acceptance requires the reviewed CrownForge source patch build');"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node desktop/scripts/prepare-codex-runtime.mjs x64
           exit $LASTEXITCODE
@@ -95,6 +105,19 @@ jobs:
           git diff --exit-code -- scripts/windows-native-sandbox-smoke.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/windows-native-sandbox-smoke.mjs --allow-setup
+          exit $LASTEXITCODE
+      - name: Verify receiver-confirmed TCP/UDP and original Codex coexistence
+        if: always() && steps.prepare_runtime.outcome == 'success'
+        timeout-minutes: 25
+        run: |
+          node scripts/app-rust-network-matrix.mjs --allow-setup
+          exit $LASTEXITCODE
+      - name: Verify policy readback in a non-administrator owner process
+        if: always() && steps.prepare_runtime.outcome == 'success'
+        timeout-minutes: 3
+        run: |
+          $proof = Get-Content -LiteralPath '.artifacts/app-rust-sandbox/owner-readback-executable.json' -Raw | ConvertFrom-Json
+          & $proof.executable --exact 'wfp::tests::crownforge_wfp_nonadmin_owner_readback_parent' --ignored --test-threads=1 --nocapture
           exit $LASTEXITCODE
       - name: Diagnose loopback denial with a disposable fixed-port all-user comparison
         if: failure() && steps.native_smoke.outcome == 'failure'
@@ -119,7 +142,7 @@ jobs:
           @"
           ## APP_RUST native Windows sandbox
           - Commit: $env:GITHUB_SHA
-          - Real windows-2022 x64 administrator runner; pinned Codex 0.160.0.
+          - Real windows-2022 x64 runner; CrownForge downstream build from pinned Codex 0.160.0 source.
           - --allow-setup authorizes setup only inside this disposable CI VM.
           - The committed smoke retains network-denial, private-read, write-scope, and process-cleanup assertions.
           - Inspect report.json and firewall-before/after.json; mocked test passes are not OS isolation evidence.
@@ -135,5 +158,7 @@ jobs:
             .artifacts/app-rust-sandbox/firewall-before.json
             .artifacts/app-rust-sandbox/firewall-after.json
             .artifacts/app-rust-sandbox/network-diagnostic-report.json
+            .artifacts/app-rust-sandbox/network-matrix-report.json
+            backend/vendor/codex/win-x64/crownforge-codex-runtime.json
           if-no-files-found: warn
           retention-days: 14
