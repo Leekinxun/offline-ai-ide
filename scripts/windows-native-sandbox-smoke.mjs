@@ -251,12 +251,22 @@ try {
   await step("normal Codex root exit preserves background descendants and the fixture explicitly cleans them", async () => {
     const tag = `normal-${fixtureId}`;
     backgroundCanaries.push({ tag, directory: heartbeatDir });
-    const stdinFile = path.join(heartbeatDir, `${tag}-stdin.txt`); fs.writeFileSync(stdinFile, "");
-    const source = `$child = Start-Process -FilePath ${psLiteral(process.execPath)} -ArgumentList @('allowednested/fixture-worker.cjs', ${psLiteral(tag)}) -NoNewWindow -PassThru -RedirectStandardInput ${psLiteral(stdinFile)} -RedirectStandardOutput ${psLiteral(path.join(heartbeatDir, `${tag}-stdout.txt`))} -RedirectStandardError ${psLiteral(path.join(heartbeatDir, `${tag}-stderr.txt`))}; Write-Output ('NORMAL-EXIT-BACKGROUND-PID:' + $child.Id); exit 0`;
+    const canarySource = path.join(repo, "scripts/fixtures/windows-detached-canary.cs");
+    const assembly = path.join(heartbeatDir, `${tag}-launcher.dll`);
+    // Compile only this owned fixture outside the payload. The PowerShell root
+    // loads the library inside its existing sandbox and creates the worker there.
+    const compilation = trustedPowerShell(`Add-Type -TypeDefinition ([IO.File]::ReadAllText(${psLiteral(canarySource)})) -Language CSharp -OutputAssembly ${psLiteral(assembly)}; Write-Output 'OWNED-CANARY-COMPILED'`);
+    assert.equal(compilation, "OWNED-CANARY-COMPILED");
+    assert.ok(fs.statSync(assembly).isFile(), "The owned canary library must exist before sandbox loading");
+    const rootPidFile = path.join(heartbeatDir, `${tag}-root.pid`);
+    const source = `[IO.File]::WriteAllText(${psLiteral(rootPidFile)}, [string]$PID); $null = [Reflection.Assembly]::LoadFile(${psLiteral(assembly)}); $childPid = [CrownForgeDetachedCanary]::Start(${psLiteral(process.execPath)}, ${psLiteral(`allowednested/fixture-worker.cjs ${tag}`)}, [string](Get-Location)); [Console]::WriteLine('NORMAL-EXIT-BACKGROUND-PID:' + $childPid); exit 0`;
     const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: 30_000 });
     const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "normal root exit", 35_000);
     assert.equal(finished.session.status, "exited", text(finished));
     assert.equal(finished.session.exitCode, 0, "The real sandbox CLI must return zero before background retention is characterized");
+    const rootPid = Number(fs.readFileSync(rootPidFile, "utf8"));
+    assert.ok(Number.isSafeInteger(rootPid) && rootPid > 0);
+    assert.equal(pidAlive(rootPid), false, "The actual PowerShell root must have exited");
     const pids = await until(() => {
       const files = ["child", "grandchild"].map((role) => path.join(heartbeatDir, `${tag}-${role}.pid`));
       if (!files.every((file) => fs.existsSync(file))) return;
@@ -273,7 +283,7 @@ try {
     normalExitPreservesBackground = true;
     assert.equal(terminateOwnedBackground(pids[0], tag, "fixture-worker.cjs"), true);
     const cleanup = await assertSubtreeStopped({ pids, heartbeats });
-    return { sessionId: session.id, actualCliExitCode: 0, normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
+    return { sessionId: session.id, rootPid, rootExited: true, inheritedHandles: "NUL-only explicit handle list", actualCliExitCode: 0, normalExitPreservesBackground: true, appAutomaticallyCleanedBackground: false, cleanup: "explicit fixture-owned taskkill", ...cleanup };
   });
 
   await step("session stop reaps PowerShell and its child/grandchild subtree", async () => {

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { classifyNetworkProbe, fixtureReceiver, hostProbe, parseProbeOutput, probeSource } from "./app-rust-network-matrix.mjs";
+import {
+  classifyNetworkProbe, fixtureReceiver, hostProbe, matchingOfficialIdentities, officialDiagnostic,
+  officialProbeArguments, parseProbeOutput, probeSource, writeOfficialProbeScript,
+} from "./app-rust-network-matrix.mjs";
 
 const record = (changes = {}) => ({
   completed: true, pid: 2345, sid: "S-1-5-21-123-456-789-1001", sent: false, ack: false,
@@ -36,6 +42,66 @@ test("inherit requires successful payload execution, receiver delivery and an ac
   assert.equal(classifyNetworkProbe({ ...connected, errorKind: "timeout" }, 1, "inherit"), "EXECUTION_ERROR");
 });
 
+test("a missing receiver and two missing identity receipts never pass a control", () => {
+  assert.equal(classifyNetworkProbe(parseProbeOutput(output(record())), 0, "deny", 0, false), "INVALID_RECEIVER");
+  for (const sidHash of [null, undefined, ""]) assert.equal(matchingOfficialIdentities({ sidHash }, { sidHash }), false);
+  assert.equal(matchingOfficialIdentities({ sidHash: "a".repeat(64) }, { sidHash: null }), false);
+  assert.equal(matchingOfficialIdentities({ sidHash: "a".repeat(64) }, { sidHash: "b".repeat(64) }), false);
+  assert.equal(matchingOfficialIdentities({ sidHash: "a".repeat(64) }, { sidHash: "a".repeat(64) }), true);
+});
+
+test("official PowerShell receives the identical BOM script, not literal JSON in a command argument", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-official-script-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const source = probeSource({ protocol: "tcp", host: "127.0.0.1", port: 12345 }, "a".repeat(64)) +
+    "\n# quoted UTF-8 fixture: '中文' \"double quotes\"\n";
+  const first = writeOfficialProbeScript(workspace, source);
+  const second = writeOfficialProbeScript(workspace, source);
+  assert.notEqual(first, second, "Before and after probes need independently owned files");
+  for (const script of [first, second]) {
+    assert.equal(path.dirname(script), workspace, "The original sandbox's read grant must cover the script");
+    const bytes = fs.readFileSync(script);
+    assert.deepEqual(bytes.subarray(0, 3), Buffer.from([0xef, 0xbb, 0xbf]));
+    assert.equal(bytes.subarray(3).toString("utf8"), source, "Probe source must not be escaped or rewritten");
+    const args = officialProbeArguments(workspace, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", script);
+    assert.deepEqual(args.slice(-2), ["-File", script]);
+    assert.equal(args[args.indexOf("sandbox") + 1], "-P", "The CLI chooses the Windows implementation itself");
+    assert.equal(args[args.indexOf("-P") + 1], "matrix");
+    assert.equal(args.includes("-Command"), false);
+    assert.equal(args.includes(source), false);
+  }
+});
+
+test("official diagnostics keep controlled error categories without fixture paths, source or credentials", () => {
+  const root = "C:\\Users\\fixture-owner\\Temp\\matrix";
+  const secret = "private-fixture-credential";
+  const diagnostic = officialDiagnostic([
+    "ParserError: unexpected syntax",
+    "At " + root.toUpperCase() + "\\workspace\\probe.ps1:24 char:12",
+    "+ [Console]::WriteLine('CROWNFORGE_NETWORK_MATRIX:' + $bytes)",
+    "+ CategoryInfo : ParserError: (:) [], ParseException",
+    "+ FullyQualifiedErrorId : UnexpectedToken",
+    "Error: TOKEN=" + secret,
+    "Error: PASSWORD=" + secret,
+    "Error: Authorization: Bearer " + secret,
+    "Error: argv=['-Command', 'private source']",
+  ].join("\n"), root, true);
+  assert.equal(diagnostic.category, "powershell_parse");
+  assert.equal(diagnostic.truncated, true);
+  assert.match(diagnostic.snippet, /ParserError/);
+  assert.match(diagnostic.snippet, /<fixture>/);
+  assert.match(diagnostic.snippet, /UnexpectedToken/);
+  assert.doesNotMatch(diagnostic.snippet, /fixture-owner|C:\\Users|private-fixture-credential|Console|argv|-Command/);
+  const large = officialDiagnostic(("Error: " + "x".repeat(500) + "\n").repeat(100), root);
+  assert.ok(large.snippet.length <= 1680);
+  for (const [input, category] of [
+    ["Error: unknown permission profile", "configuration"],
+    ["Error: LogonUser failed", "sandbox_identity"],
+    ["Error: access is denied", "access"],
+    ["Error: CreateProcess failed", "launch"],
+  ]) assert.equal(officialDiagnostic(input, root).category, category);
+});
+
 test("PowerShell probes use fixed .NET socket operations and Console, with bounded socket timeouts", () => {
   for (const host of ["127.0.0.1", "::1"]) for (const protocol of ["tcp", "udp"]) {
     const source = probeSource({ protocol, host, port: 12345 }, "a".repeat(64), "C:\\fixture\\.env", "C:\\fixture\\must-not-exist");
@@ -56,6 +122,7 @@ for (const host of ["127.0.0.1", "::1"]) for (const protocol of ["tcp", "udp"]) 
     const receiver = await fixtureReceiver(protocol, host);
     try {
       const first = crypto.randomBytes(32).toString("hex");
+      assert.equal(receiver.isActive(), true);
       assert.equal(await hostProbe(receiver, first), true);
       assert.equal(receiver.count(first), 1);
       const unseen = crypto.randomBytes(32).toString("hex"); receiver.expect(unseen);
@@ -65,5 +132,6 @@ for (const host of ["127.0.0.1", "::1"]) for (const protocol of ["tcp", "udp"]) 
       assert.equal(receiver.count(first), 1);
       assert.equal(receiver.count(second), 1);
     } finally { await receiver.close(); }
+    assert.equal(receiver.isActive(), false);
   });
 }

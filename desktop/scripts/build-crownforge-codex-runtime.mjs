@@ -105,7 +105,8 @@ export function buildCrownForgeCodexRuntime({ project, lock, arch, baseline, des
     if (tests.length !== 1) throw new Error("The WFP readback test executable is ambiguous or missing");
     const proof = path.join(project, ".artifacts/app-rust-sandbox/owner-readback-executable.json");
     fs.mkdirSync(path.dirname(proof), { recursive: true });
-    fs.writeFileSync(proof, JSON.stringify({ buildId: runtimeBuildId(lock), executable: path.join(deps, tests[0]) }));
+    const executable = path.join(deps, tests[0]);
+    fs.writeFileSync(proof, JSON.stringify({ buildId: runtimeBuildId(lock), executable, sha256: fileSha256(executable) }));
   }
   const binaries = path.join(target, TARGETS[arch], "release");
   const staging = fs.mkdtempSync(path.join(cache, "runtime-"));

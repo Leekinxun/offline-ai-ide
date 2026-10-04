@@ -1,6 +1,6 @@
 # APP_RUST migration status
 
-Desktop acceptance: `9b0d2b651208405a220d411f26bec7458abe4db0`.
+Desktop acceptance: `741c9ab0e5bcf4782b0c13432a0e8b8afeea8624`.
 Evidence captured on 2026-10-04. This remains a prototype branch; no signed
 Windows installer or production release has been published.
 
@@ -18,7 +18,7 @@ continues draining its output pipes, and uses a bounded owned-process-tree
 fallback on Windows. Cleanup failure is reported as failure. Wrapper and native
 host deadlines allow the backend to complete that cleanup.
 
-[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37177448303).
+[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37181686100).
 The job builds the Windows host and verifies real Rust file/search/Git services,
 the desktop HTTP contracts, PowerShell PTY input with Chinese text, resize, stop
 and private sidecar shutdown. This is not Agent sandbox or interactive installer
@@ -28,8 +28,11 @@ The Windows desktop job also ran real Cargo against an empty dependency cache
 and a reachable disposable registry. Desktop diagnostics made zero registry
 requests and returned a clear offline dependency error. `RUSTUP_AUTO_INSTALL=0`
 prevents implicit toolchain installation; Web retains its prior command.
+Both built Rust executables passed PE import inspection with no `VCRUNTIME`,
+`MSVCP` or `CONCRT` dependency. The host retains Windows system UCRT imports;
+the supported OS floor remains Windows 10, and this is not installer acceptance.
 
-An independent 177.39 MiB macOS bundle from the same published source uses
+An independent 177.39 MiB macOS bundle from published source `9b0d2b6` uses
 official Node 22.23.3. The packaged backend passed cold start, private bootstrap,
 Rust tree access, a complete local model-protocol fixture chat and owned-process
 shutdown under a Seatbelt policy that denies networking except declared
@@ -73,6 +76,28 @@ strict smoke, network matrix and non-administrator readback were skipped.
 The cold-build budget is now 120 minutes inside a 180-minute job. Superseded
 pushes cancel obsolete runs so the current revision can reach acceptance.
 No network or process-cleanup assertion has been relaxed.
+
+The [next full source build and native run](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37177448271)
+completed the production-profile build. Actual default network denial and four
+IPv4/IPv6 TCP/UDP Offline probes passed with zero receiver connections/nonces;
+four explicitly inherited-network probes connected while private-read and
+read-only write protections held. The same-owner non-administrator parent and
+child both passed fresh WFP readback. Original account SIDs and twelve-filter
+snapshots remained unchanged.
+
+Full acceptance still failed: the normal-background-root check timed out, so
+later stop/timeout/crash checks did not run. SDK source preserves background
+descendants but waits for capture-pipe EOF; the old Start-Process fixture could
+inherit extra capture handles even with redirected standard streams. The
+replacement fixture uses an explicit NUL-only handle list while keeping the
+original sandbox token and Job, with the same exit/heartbeat/cleanup assertions.
+The official coexistence controls also exited 1 without payload receipts.
+They now run the same probe through a BOM PS1 file, retain controlled diagnostics
+and reject missing identities. These fixture repairs need another Windows run.
+Source SDK logic and strict cleanup assertions remain unchanged. Verified SDK
+builds are cached and archived before fixtures to make further reruns practical;
+all reused runtime files and the readback executable are checked against their
+source identity and checksums.
 
 Windows cold-start diagnostics also measured cmdlet output substantially slower
 than direct Console output. Positive-command fixture budgets accommodate that

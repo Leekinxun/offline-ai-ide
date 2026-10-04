@@ -44,9 +44,9 @@ export function parseProbeOutput(output) {
   } catch { return { errorKind: "protocol" }; }
 }
 
-export function classifyNetworkProbe(execution, received, expected, acceptedConnections = 0) {
+export function classifyNetworkProbe(execution, received, expected, acceptedConnections = 0, receiverAvailable = true) {
   if (execution.errorKind) return "EXECUTION_ERROR";
-  if (!Number.isSafeInteger(received) || received < 0) return "INVALID_RECEIVER";
+  if (!receiverAvailable || !Number.isSafeInteger(received) || received < 0) return "INVALID_RECEIVER";
   if (expected === "deny") {
     if (received > 0 || execution.ack || acceptedConnections > 0) return "NETWORK_LEAK";
     // A completed socket probe must report a factual socket rejection/timeout.
@@ -54,6 +54,55 @@ export function classifyNetworkProbe(execution, received, expected, acceptedConn
     return execution.socketError !== null ? "DENIED" : "UNCONFIRMED";
   }
   return execution.ack && execution.sent && received === 1 && execution.socketError === null ? "CONNECTED" : "CONNECT_FAILED";
+}
+
+export function matchingOfficialIdentities(before, after) {
+  return typeof before.sidHash === "string" && before.sidHash.length > 0 &&
+    typeof after.sidHash === "string" && after.sidHash.length > 0 && before.sidHash === after.sidHash;
+}
+
+export function writeOfficialProbeScript(workspace, source) {
+  const file = path.join(workspace, "official-network-" + crypto.randomUUID() + ".ps1");
+  // Windows PowerShell 5.1 must receive the exact source, including JSON quotes.
+  // The host creates this owned file; the original sandbox only gets read access.
+  fs.writeFileSync(file, Buffer.from("\ufeff" + source, "utf8"), { flag: "wx", mode: 0o600 });
+  return file;
+}
+
+export function officialProbeArguments(workspace, powershell, script) {
+  // -P selects permissions from config.toml. -p is only needed for a separate
+  // <name>.config.toml overlay; Windows is selected automatically by the CLI.
+  return ["-c", 'windows.sandbox="elevated"', "-c", "features.prefer_mxc=false",
+    "sandbox", "-P", "matrix", "-C", workspace, "--", powershell,
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-File", script];
+}
+
+export function officialDiagnostic(stderr, fixtureRoot, truncated = false) {
+  const raw = String(stderr).replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+  let category = "unknown";
+  for (const [name, pattern] of [
+    ["powershell_parse", /ParserError|ParseException|UnexpectedToken|MissingEndCurlyBrace/i],
+    ["configuration", /permission.*profile|default_permissions|invalid.*config|failed.*load.*config|unknown.*(?:config|profile)/i],
+    ["sandbox_identity", /LogonUser|log on|logon|sandbox.*account|credential/i],
+    ["access", /ACCESS_DENIED|access is denied|permission denied|UnauthorizedAccess/i],
+    ["launch", /CreateProcess|spawn|cannot.*executable|not.*recognized.*command|No such file/i],
+    ["runtime_timeout", /Timeout|timed out/i],
+  ]) if (pattern.test(raw)) { category = name; break; }
+  const escape = (value) => [...value].map((char) => "\\^$.*+?()[]{}|".includes(char) ? "\\" + char : char).join("");
+  let safe = raw;
+  if (fixtureRoot) for (const candidate of new Set([fixtureRoot, fixtureRoot.replaceAll("\\", "/"), fixtureRoot.replaceAll("/", "\\")])) {
+    safe = safe.replace(new RegExp(escape(candidate), "gi"), "<fixture>");
+  }
+  const lines = safe.split(/\r?\n/).map((line) => line.trim()).filter((line) =>
+    /^(?:Error(?:\[[^\]]+\])?:|fatal:|ParserError:|At .+:\d+|(?:\+\s*)?(?:CategoryInfo|FullyQualifiedErrorId)\s*:|[\w.]+Exception:)/i.test(line) &&
+    !/\b(?:password|secrets?|token|authorization|credentials?|bearer)\b|api.?key|bootstrap|argv|arguments|command.?line|-Command|-File|CROWNFORGE_NETWORK_MATRIX|Console\]|\$/i.test(line));
+  const snippet = lines.slice(0, 6).map((line) => line
+    .replace(/\bS-1-\d+(?:-\d+)+\b/g, "<sid>")
+    .replace(/\b[a-f0-9]{64}\b/gi, "<digest>")
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]+/g, "<path>")
+    .replace(/https?:\/\/[^\s"'<>]+/g, "<url>")
+    .slice(0, 280)).join("\n").slice(0, 1680);
+  return { category, snippet, truncated };
 }
 
 export function probeSource(endpoint, nonce, privateFile, writeFile) {
@@ -115,6 +164,7 @@ export async function fixtureReceiver(protocol, host) {
   const counts = new Map();
   const sockets = new Set();
   let connections = 0;
+  let active = false;
   const record = (bytes) => {
     const nonce = bytes.toString("ascii");
     if (!counts.has(nonce)) return false;
@@ -136,11 +186,12 @@ export async function fixtureReceiver(protocol, host) {
   if (protocol === "udp") server.on("message", (bytes, remote) => {
     if (record(bytes)) server.send(Buffer.from("A"), remote.port, remote.address, () => {});
   });
-  server.on("error", () => {});
+  server.on("error", () => { active = false; });
+  server.on("close", () => { active = false; });
   try {
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("Receiver startup deadline")), 5000);
-      const finish = (error) => { clearTimeout(timeout); server.removeListener("error", failed); error ? reject(error) : resolve(); };
+      const finish = (error) => { clearTimeout(timeout); server.removeListener("error", failed); active = !error; error ? reject(error) : resolve(); };
       const failed = (error) => finish(error); server.once("error", failed);
       if (protocol === "tcp") server.listen({ port: 0, host, ipv6Only: host === "::1" }, () => finish());
       else server.bind({ port: 0, address: host, ipv6Only: host === "::1" }, () => finish());
@@ -151,6 +202,7 @@ export async function fixtureReceiver(protocol, host) {
     expect(nonce) { counts.set(nonce, 0); },
     count(nonce) { return counts.get(nonce) ?? 0; },
     connections() { return connections; },
+    isActive() { return active && (protocol !== "tcp" || server.listening); },
     async close() { for (const socket of sockets) socket.destroy(); await new Promise((resolve) => server.close(resolve)); },
   };
 }
@@ -214,16 +266,26 @@ export async function main() {
   const rawOfficial = async (executable, args, home, cwd) => {
     const child = launch(executable, args, { cwd, env: controlledEnv(home), windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] });
     let output = ""; let overflow = false; let timedOut = false; let spawnError = false;
+    const stderr = []; let stderrBytes = 0; let stderrTruncated = false;
     child.stdout.on("data", (bytes) => { if (Buffer.byteLength(output) + bytes.length > 16384) { overflow = true; child.kill(); } else output += bytes.toString("utf8"); });
-    child.stderr.on("data", () => {}); child.on("error", () => { spawnError = true; });
+    child.stderr.on("data", (bytes) => {
+      const available = Math.max(0, 8192 - stderrBytes);
+      if (available) { const part = bytes.subarray(0, available); stderr.push(part); stderrBytes += part.length; }
+      if (bytes.length > available) stderrTruncated = true;
+    });
+    child.on("error", () => { spawnError = true; });
     const timeout = setTimeout(() => { timedOut = true; child.kill(); }, PROBE_MS);
     const forced = setTimeout(() => { if (child.pid) spawnSync(path.join(process.env.SystemRoot, "System32/taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 10_000, stdio: "ignore" }); }, PROBE_MS + 1000);
     try {
       const code = await deadline(() => new Promise((resolve) => child.once("close", resolve)), PROBE_MS + 15_000);
-      if (timedOut) return { errorKind: "timeout" };
-      if (spawnError || overflow) return { errorKind: "launcher" };
-      if (code !== 0) return { errorKind: "exit", exitCode: code };
-      return parseProbeOutput(output);
+      const diagnostic = officialDiagnostic(Buffer.concat(stderr).toString("utf8"), root, stderrTruncated);
+      if (timedOut) return { errorKind: "timeout", diagnostic };
+      if (spawnError || overflow) return { errorKind: "launcher", diagnostic };
+      if (code !== 0) return { errorKind: "exit", exitCode: code, diagnostic };
+      return { ...parseProbeOutput(output), diagnostic };
+    } catch (error) {
+      return { errorKind: error?.code === "MATRIX_TIMEOUT" ? "timeout" : "launcher",
+        diagnostic: officialDiagnostic(Buffer.concat(stderr).toString("utf8"), root, stderrTruncated) };
     } finally { clearTimeout(timeout); clearTimeout(forced); }
   };
   const snapshot = (label) => {
@@ -309,19 +371,22 @@ export async function main() {
       let execution; try { execution = await execute(nonce); } catch (error) { execution = { errorKind: error?.code === "MATRIX_TIMEOUT" ? "timeout" : "launcher" }; }
       await pause(250);
       const received = receiver.count(nonce); const acceptedConnections = receiver.connections() - connectionsBefore;
-      const verdict = classifyNetworkProbe(execution, received, expected, acceptedConnections);
+      const receiverAvailable = receiver.isActive();
+      const verdict = classifyNetworkProbe(execution, received, expected, acceptedConnections, receiverAvailable);
       const metadata = { name, expected, verdict, elapsedMs: Date.now() - started, timeoutMs: PROBE_MS,
         errorKind: execution.errorKind, exitCode: execution.exitCode ?? null, payloadPid: execution.pid ?? null,
         sidHash: execution.sid ? sha(execution.sid) : null, nonceReceipts: received, receiverConnections: receiver.connections(), acceptedConnections,
-        socketError: execution.socketError ?? null, privateReadable: execution.privateReadable ?? null, writeAllowed: execution.writeAllowed ?? null };
+        socketError: execution.socketError ?? null, privateReadable: execution.privateReadable ?? null, writeAllowed: execution.writeAllowed ?? null,
+        receiverAvailable, ...(execution.diagnostic ? { diagnostic: execution.diagnostic } : {}) };
       report.probes.push(metadata); check(name, verdict === (expected === "deny" ? "DENIED" : "CONNECTED"));
       console.log(JSON.stringify({ probe: name, verdict, elapsedMs: metadata.elapsedMs, errorKind: metadata.errorKind, payloadPid: metadata.payloadPid, nonceReceipts: received, acceptedConnections }));
       return metadata;
     };
-    const officialTCP = (name) => probe(name, v4tcp, "inherit", (nonce) => rawOfficial(officialExe,
-      ["-c", 'windows.sandbox="elevated"', "-c", "features.prefer_mxc=false", "sandbox", "-P", "matrix", "-C", workspace,
-        "--", powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", probeSource(v4tcp.endpoint, nonce)],
-      officialHome, workspace));
+    const officialTCP = (name) => probe(name, v4tcp, "inherit", async (nonce) => {
+      const script = writeOfficialProbeScript(workspace, probeSource(v4tcp.endpoint, nonce));
+      try { return await rawOfficial(officialExe, officialProbeArguments(workspace, powershell, script), officialHome, workspace); }
+      finally { fs.rmSync(script, { force: true }); }
+    });
     const beforeControl = await officialTCP("official Online TCP before patched setup");
     check("official before control uses official Online SID", beforeControl.sidHash === report.officialBefore.accounts.find((entry) => entry.role === "CodexSandboxOnline").sidHash);
     phase = "patched explicit setup"; await deadline(() => native.setupWindowsNativeSandbox(workspace, "elevated"), 180_000);
@@ -354,7 +419,7 @@ export async function main() {
     const afterControl = await officialTCP("official Online TCP after patched execution");
     phase = "official after snapshot"; report.officialAfter = snapshot("after");
     check("official account SIDs and filter keys remain unchanged", JSON.stringify(report.officialBefore) === JSON.stringify(report.officialAfter));
-    check("official Online control identity unchanged", afterControl.sidHash === beforeControl.sidHash);
+    check("official Online control identity unchanged", matchingOfficialIdentities(beforeControl, afterControl));
     const offline = report.probes.filter((entry) => entry.name.startsWith("patched deny "));
     const online = report.probes.filter((entry) => entry.name.startsWith("patched inherit "));
     check("four Offline and four inherit combinations executed", offline.length === 4 && online.length === 4);

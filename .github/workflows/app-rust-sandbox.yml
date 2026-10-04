@@ -12,6 +12,7 @@ on:
       - desktop/rust/windows-sandbox-patches/**
       - scripts/fixtures/codex-native-runtime-lock.json
       - scripts/windows-native-sandbox-smoke.mjs
+      - scripts/fixtures/windows-detached-canary.cs
       - scripts/app-rust-windows-network-diagnostic.mjs
       - scripts/app-rust-network-matrix.mjs
   workflow_dispatch:
@@ -91,6 +92,16 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           exit $LASTEXITCODE
+      - name: Restore the verified source runtime build cache
+        id: sdk_cache
+        uses: actions/cache/restore@v4
+        with:
+          key: windows-crownforge-codex-1.95-x64-${{ hashFiles('scripts/fixtures/codex-native-runtime-lock.json', 'desktop/rust/windows-sandbox-patches/**', 'desktop/scripts/build-crownforge-codex-runtime.mjs', '.cargo/config.toml') }}
+          path: |
+            backend/vendor/codex/win-x64
+            .artifacts/codex-runtime-cache
+            .artifacts/cf-src
+            .artifacts/app-rust-sandbox/owner-readback-executable.json
       - name: Prepare verified CrownForge downstream sandbox runtime
         id: prepare_runtime
         env:
@@ -102,6 +113,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node desktop/scripts/prepare-codex-runtime.mjs x64
           exit $LASTEXITCODE
+      - name: Preserve the verified build for fixture-only reruns
+        if: steps.prepare_runtime.outcome == 'success' && steps.sdk_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.sdk_cache.outputs.cache-primary-key }}
+          path: |
+            backend/vendor/codex/win-x64
+            .artifacts/codex-runtime-cache
+            .artifacts/cf-src
+            .artifacts/app-rust-sandbox/owner-readback-executable.json
+      - name: Preserve the source-built sandbox runtime evidence
+        if: steps.prepare_runtime.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crownforge-codex-runtime-${{ github.run_id }}
+          path: backend/vendor/codex/win-x64
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Verify real native PowerShell isolation and cleanup (explicit disposable setup)
         id: native_smoke
         run: |
@@ -120,6 +150,13 @@ jobs:
         timeout-minutes: 3
         run: |
           $proof = Get-Content -LiteralPath '.artifacts/app-rust-sandbox/owner-readback-executable.json' -Raw | ConvertFrom-Json
+          $lock = Get-Content -LiteralPath 'scripts/fixtures/codex-native-runtime-lock.json' -Raw | ConvertFrom-Json
+          $expected = $lock.runtimeVariant + ':' + $lock.upstreamCommit + ':' + $lock.patchSha256
+          if ($proof.buildId -ne $expected) { throw 'WFP readback executable source identity mismatch.' }
+          $cacheRoot = (Resolve-Path -LiteralPath '.artifacts/cf-src').Path.TrimEnd('\') + '\'
+          $executable = (Resolve-Path -LiteralPath $proof.executable).Path
+          if (-not $executable.StartsWith($cacheRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Readback executable must stay inside the owned SDK cache.' }
+          if ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $proof.sha256) { throw 'WFP readback executable checksum mismatch.' }
           & $proof.executable --exact 'wfp::tests::crownforge_wfp_nonadmin_owner_readback_parent' --ignored --test-threads=1 --nocapture
           exit $LASTEXITCODE
       - name: Diagnose loopback denial with a disposable fixed-port all-user comparison
