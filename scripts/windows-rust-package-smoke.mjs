@@ -14,7 +14,7 @@ import http from "node:http";
 import { fileSha256 } from "../desktop/scripts/build-crownforge-codex-runtime.mjs";
 import { verifyCodexRuntime } from "../desktop/scripts/prepare-codex-runtime.mjs";
 import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
-import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
+import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment, powerShellPackageProbes, terminalDisplayText, observeTerminalClose } from "../desktop/scripts/windows-package-validation.mjs";
 
 assert.equal(process.platform, "win32", "Package acceptance must run on real Windows");
 assert.ok(process.argv.includes("--allow-disposable-install"), "Installation requires --allow-disposable-install");
@@ -55,6 +55,7 @@ let bootstrapToken = "";
 let bearer = "";
 let backendLog = "";
 let installed = false;
+let terminalDiagnostics;
 let runtime;
 let gitRuntime;
 const ownedIdentities = new Map();
@@ -282,17 +283,29 @@ try {
   report.checks.push("Installed backend starts with empty user settings and no running model, serves installed frontend, requires private bootstrap and executes installed Rust file/search services");
   report.checks.push("Verified installed Git performs init/commit/diff and the native Git status API works with runner Git removed from PATH");
 
-  stage = "installed native PowerShell terminal";
+  stage = "installed terminal WebSocket connection";
   const require = createRequire(path.join(runtime, "backend/package.json"));
   const { WebSocket } = require("ws");
   socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/terminal?protocol=2&token=${encodeURIComponent(bearer)}`);
+  const terminalClosed = observeTerminalClose(socket);
   const frames = []; let frameError; let cursor = ""; let cursorReplies = 0; let output = "";
+  let stdoutBytes = 0; let lastOutputAt; let socketClosed = false;
+  const terminalStartedAt = Date.now();
+  const frameTypes = {};
+  terminalDiagnostics = () => ({ elapsedMs: Date.now() - terminalStartedAt, frameCount: frames.length, frameTypes: { ...frameTypes }, cursorReplies, stdoutBytes,
+    lastOutputAgeMs: lastOutputAt === undefined ? null : Date.now() - lastOutputAt, socketReadyState: socket?.readyState ?? null, socketClosed,
+    backendExitCode: child.exitCode, backendSignalCode: child.signalCode, asciiExecutionVerified: report.terminalAsciiExecutionVerified === true, utf8ExecutionVerified: report.terminalUtf8ExecutionVerified === true });
   socket.on("error", () => { frameError = new Error("Installed terminal transport failed"); });
+  socket.on("close", () => { socketClosed = true; });
   socket.on("message", (bytes) => {
     try {
       const frame = JSON.parse(bytes.toString()); assert.equal(typeof frame.type, "string");
       frames.push(frame); assert.ok(frames.length <= 5000);
+      const diagnosticType = /^[a-z_]{1,32}$/.test(frame.type) ? frame.type : "unknown";
+      frameTypes[diagnosticType] = (frameTypes[diagnosticType] || 0) + 1;
+      if (frame.type === "error") frameError = new Error(`Installed terminal rejected the request: ${/^[a-z_]{1,64}$/.test(frame.code || "") ? frame.code : "unknown"}`);
       if (frame.type === "output") {
+        assert.equal(typeof frame.data, "string"); stdoutBytes += Buffer.byteLength(frame.data); lastOutputAt = Date.now();
         output = (output + frame.data).slice(-262144); cursor += frame.data;
         for (const _match of cursor.matchAll(/\x1b\[6n/g)) { socket.send(JSON.stringify({ type: "input", data: "\x1b[1;1R" })); cursorReplies++; }
         cursor = cursor.replace(/\x1b\[6n/g, "").slice(-8);
@@ -303,21 +316,34 @@ try {
   socket.send(JSON.stringify({ type: "attach", clientKey: crypto.randomUUID(), documentId: crypto.randomUUID() }));
   async function waitFrame(predicate, milliseconds = 60_000) {
     let timer;
-    try { return await bounded(new Promise((resolve, reject) => { timer = setInterval(() => { if (frameError) reject(frameError); else { const frame = frames.find(predicate); if (frame) resolve(frame); } }, 20); }), milliseconds); }
+    try { return await bounded(new Promise((resolve, reject) => { timer = setInterval(() => { if (frameError) reject(frameError); else { const frame = frames.find(predicate); if (frame) resolve(frame); else if (socketClosed) reject(new Error("Installed terminal closed before the expected frame")); } }, 20); }), milliseconds); }
     finally { clearInterval(timer); }
   }
-  const ready = await waitFrame((frame) => frame.type === "ready");
+  stage = "installed terminal attach readiness";
+  const ready = await waitFrame((frame) => frame.type === "ready", 20_000);
   socket.send(JSON.stringify({ type: "ready_ack", ticket: ready.ticket }));
-  const plainOutput = () => output.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-  await waitFrame(() => /PS [\s\S]*>\s*$/.test(plainOutput()));
+  stage = "installed PowerShell prompt after ConPTY handshake";
+  await waitFrame(() => /PS [\s\S]*>\s*$/.test(terminalDisplayText(output)));
+  const probes = powerShellPackageProbes();
+  socket.send(JSON.stringify({ type: "input", data: probes.ascii.command }));
+  socket.send(JSON.stringify({ type: "input", data: "\r" }));
+  stage = "installed PowerShell actual ASCII execution";
+  await waitFrame(() => terminalDisplayText(output).includes(probes.ascii.marker), 15_000);
+  report.terminalAsciiExecutionVerified = true;
   socket.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
-  const marker = `PKG_${crypto.randomUUID().replaceAll("-", "")}_中文`;
-  const split = Math.floor(marker.length / 2);
-  socket.send(JSON.stringify({ type: "input", data: `Write-Output ('${marker.slice(0, split)}' + '${marker.slice(split)}')\r` }));
-  await waitFrame(() => output.includes(marker));
+  socket.send(JSON.stringify({ type: "input", data: `${probes.utf8.command}\r` }));
+  stage = "installed PowerShell actual UTF-8 execution";
+  await waitFrame(() => terminalDisplayText(output).includes(probes.utf8.marker));
+  report.terminalUtf8ExecutionVerified = true;
   await processSnapshot(child.pid);
+  stage = "installed terminal stop cleanup";
   socket.send(JSON.stringify({ type: "stop" })); await waitFrame((frame) => frame.type === "exit");
-  socket.close(); await bounded(once(socket, "close"), 5000); socket = undefined;
+  stage = "installed terminal WebSocket shutdown";
+  if (!socketClosed) socket.close();
+  const [terminalCloseCode] = await bounded(terminalClosed, 5000);
+  assert.equal(terminalCloseCode, 1000, "Installed terminal must close normally after its exit frame");
+  assert.equal(socketClosed, true); assert.equal(socket.readyState, WebSocket.CLOSED);
+  socket = undefined;
   report.cursorReplies = cursorReplies;
   report.checks.push("Installed Node/Core provide a real PowerShell prompt, split-marker UTF-8 execution and terminal stop without Bash or node-pty");
   stage = "installed backend shutdown";
@@ -358,6 +384,7 @@ try {
   report.status = "passed";
 } catch (error) {
   report.failure = { stage, message: error instanceof Error ? error.message : String(error) };
+  if (terminalDiagnostics) report.terminalDiagnostics = terminalDiagnostics();
   process.exitCode = 1;
 } finally {
   socket?.terminate(); lines?.close();
@@ -410,5 +437,5 @@ try {
   if (failures.length) { report.status = "failed"; process.exitCode = 1; report.cleanupFailures = failures; }
   if (report.failure && backendLog) fs.writeFileSync(path.join(reportDirectory, "package-failure.log"), backendLog.replaceAll(bootstrapToken || "unused-bootstrap", "[redacted]").replaceAll(bearer || "unused-bearer", "[redacted]"));
   fs.writeFileSync(path.join(reportDirectory, "package-report.json"), `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify({ status: report.status, checks: report.checks, ...(report.failure ? { failure: report.failure } : {}), ...(report.cleanupFailure ? { cleanupFailure: report.cleanupFailure } : {}) }));
+  console.log(JSON.stringify({ status: report.status, checks: report.checks, ...(report.failure ? { failure: report.failure } : {}), ...(report.terminalDiagnostics ? { terminalDiagnostics: report.terminalDiagnostics } : {}), ...(report.cleanupFailure ? { cleanupFailure: report.cleanupFailure } : {}) }));
 }

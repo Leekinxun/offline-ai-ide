@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
+import { EventEmitter } from "node:events";
+import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment, powerShellPackageProbes, terminalDisplayText, observeTerminalClose } from "./windows-package-validation.mjs";
 import crypto from "node:crypto";
 import { writeVerifiedArchive } from "./windows-package-sdk-artifact.mjs";
 
@@ -201,6 +202,32 @@ test("WinPS5 helpers discard inherited pwsh7 module paths while preserving other
   assert.equal(prepared.PATH, original.PATH); assert.equal(prepared.LANG, original.LANG);
   assert.match(original.PSModulePath, /PowerShell\\7\\Modules/);
   assert.throws(() => windowsPowerShellEnvironment({ ProgramFiles: original.ProgramFiles }));
+});
+
+test("PowerShell execution markers cannot be satisfied by command echo and require separate ASCII and intact Unicode results", () => {
+  const probes = powerShellPackageProbes();
+  for (const probe of Object.values(probes)) {
+    const echo = `\x1b[32mPS C:\\owned> ${probe.command}\x1b[0m\r\n`;
+    assert.equal(terminalDisplayText(echo).includes(probe.marker), false);
+    assert.equal(terminalDisplayText(`${echo}\x1b[37m${probe.marker}\x1b[0m\r\n`).includes(probe.marker), true);
+  }
+  assert.equal(terminalDisplayText(probes.ascii.marker).includes(probes.utf8.marker), false);
+  assert.equal(terminalDisplayText(probes.utf8.marker.replace("中文", "??")).includes(probes.utf8.marker), false);
+});
+
+test("terminal close observation survives exit-plus-close before polling and handles an early error before awaiting", async () => {
+  const socket = new EventEmitter(), frames = [], closed = observeTerminalClose(socket);
+  socket.on("message", (frame) => frames.push(frame));
+  // TerminalSessions sends exit and then closes; a 20ms polling consumer may
+  // observe both only later. No second close event is needed to settle the test.
+  socket.emit("message", { type: "exit" }); socket.emit("close", 1000, "user_closed");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(frames.some((frame) => frame.type === "exit"));
+  assert.deepEqual(await closed, [1000, "user_closed"]);
+  const failedSocket = new EventEmitter(), failed = observeTerminalClose(failedSocket);
+  failedSocket.emit("error", new Error("owned fixture early transport error"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(failed, /owned fixture early transport error/);
 });
 
 test("installed Host must match the unique final NSIS payload, independently of restored build-input bytes", (t) => {

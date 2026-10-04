@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { once } from "node:events";
 import { fileSha256 } from "./build-crownforge-codex-runtime.mjs";
 
 export const SDK_PRODUCER = Object.freeze({
@@ -303,4 +304,23 @@ export function windowsPowerShellEnvironment(environment) {
     path.win32.join(programFiles, "WindowsPowerShell/Modules"),
   ].join(";");
   return result;
+}
+
+export function powerShellPackageProbes() {
+  return {
+    ascii: { marker: "CF_PKG_ASCII_READY", command: "[Console]::WriteLine('CF_PKG_' + 'ASCII_READY')" },
+    utf8: { marker: "CF_PKG_UTF8_中文", command: "Write-Output ('CF_PKG_' + 'UTF8_中文')" },
+  };
+}
+
+export function terminalDisplayText(output) {
+  return output.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+export function observeTerminalClose(socket) {
+  const closed = once(socket, "close");
+  // The server may close immediately after sending its exit frame. Register
+  // before polling that frame, and handle an early error before the later await.
+  void closed.catch(() => {});
+  return closed;
 }
