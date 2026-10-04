@@ -7,6 +7,11 @@ on:
       - .github/workflows/app-rust-package.yml
       - scripts/windows-rust-package-smoke.mjs
       - desktop/scripts/windows-package-*.mjs
+      - desktop/rust/src-tauri/**
+      - desktop/rust/crates/**
+      - desktop/scripts/prepare-rust-desktop.mjs
+      - desktop/scripts/prepare-git-runtime.mjs
+      - scripts/fixtures/git-runtime-lock.json
   workflow_dispatch:
 
 permissions:

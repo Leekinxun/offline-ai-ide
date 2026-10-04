@@ -42,6 +42,106 @@ fn project_root() -> PathBuf {
         .expect("Desktop project directory")
 }
 
+/// Rust's Windows canonical paths use the extended namespace. Keep those paths
+/// for Rust filesystem checks, but do not expose that namespace to Node's CLI
+/// module resolver or path-valued environment/IPC fields.
+#[cfg(any(windows, test))]
+fn windows_node_path(value: &str) -> io::Result<String> {
+    fn invalid() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows path cannot be represented safely at the Node boundary",
+        )
+    }
+    fn component(value: &str) -> bool {
+        if value.is_empty()
+            || value == "."
+            || value == ".."
+            || value.ends_with([' ', '.'])
+            || value
+                .chars()
+                .any(|character| character <= '\u{1f}' || "<>:\"/|?*".contains(character))
+        {
+            return false;
+        }
+        let base = value.split('.').next().unwrap_or("").to_ascii_uppercase();
+        if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str()) {
+            return false;
+        }
+        if let Some(suffix) = base
+            .strip_prefix("COM")
+            .or_else(|| base.strip_prefix("LPT"))
+        {
+            if suffix.len() == 1 && suffix.as_bytes()[0].is_ascii_digit()
+                || ["¹", "²", "³"].contains(&suffix)
+            {
+                return false;
+            }
+        }
+        true
+    }
+    fn tail(value: &str) -> bool {
+        if value.is_empty() {
+            return true;
+        }
+        let values = value.split('\\').collect::<Vec<_>>();
+        values
+            .iter()
+            .enumerate()
+            .all(|(index, value)| value.is_empty() && index == values.len() - 1 || component(value))
+    }
+    if value.contains('\0') {
+        return Err(invalid());
+    }
+    let Some(body) = value.strip_prefix(r"\\?\") else {
+        if value.starts_with(r"\\.\") || value.starts_with(r"\??\") || value.starts_with(r"\\??\") {
+            return Err(invalid());
+        }
+        return Ok(value.to_owned());
+    };
+    if body.len() >= 3
+        && body.as_bytes()[0].is_ascii_alphabetic()
+        && body.as_bytes()[1] == b':'
+        && body.as_bytes()[2] == b'\\'
+    {
+        return if tail(&body[3..]) {
+            Ok(body.to_owned())
+        } else {
+            Err(invalid())
+        };
+    }
+    if body
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
+    {
+        let unc = &body[4..];
+        let mut values = unc.split('\\');
+        let server = values.next().unwrap_or("");
+        let share = values.next().unwrap_or("");
+        if component(server) && component(share) && tail(unc) {
+            return Ok(format!(r"\\{unc}"));
+        }
+    }
+    Err(invalid())
+}
+
+fn node_path(path: &Path) -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        let value = path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Node paths must be valid Unicode",
+            )
+        })?;
+        windows_node_path(value).map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(path.to_owned())
+    }
+}
+
 fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -115,8 +215,8 @@ impl DesktopData {
             let created = create_initial_users(
                 &users,
                 &json!({
-                    "allowedRoots": [home, workspace], "pendingRegistrations": [],
-                    "users": [{"username":"admin", "password":password, "defaultWorkspace":workspace, "isAdmin":true}]
+                    "allowedRoots": [node_path(&home)?, node_path(&workspace)?], "pendingRegistrations": [],
+                    "users": [{"username":"admin", "password":password, "defaultWorkspace":node_path(&workspace)?, "isAdmin":true}]
                 }),
             )?;
             if created {
@@ -183,9 +283,9 @@ fn node_executable(root: &Path) -> Result<PathBuf, String> {
     )
 }
 
-fn bundled_git(
-    root: &Path,
-) -> Result<Option<(PathBuf, PathBuf, Vec<PathBuf>)>, Box<dyn std::error::Error>> {
+type BundledGitPaths = (PathBuf, PathBuf, Vec<PathBuf>);
+
+fn bundled_git(root: &Path) -> Result<Option<BundledGitPaths>, Box<dyn std::error::Error>> {
     let directory = root.join(if cfg!(debug_assertions) {
         "resources/git"
     } else {
@@ -279,27 +379,27 @@ impl Backend {
         let node = node_executable(&root)?;
         let git = bundled_git(&root)?;
         let bootstrap_token = create_bootstrap_token()?;
-        let mut command = Command::new(node);
+        let mut command = Command::new(node_path(&node)?);
         command
-            .arg(bridge)
-            .current_dir(&data.directory)
+            .arg(node_path(&bridge)?)
+            .current_dir(node_path(&data.directory)?)
             .env("CREWFORGE_DESKTOP", "1")
             .env("CROWNFORGE_DESKTOP_RUNTIME", "tauri")
             .env("CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN", &bootstrap_token)
-            .env("CROWNFORGE_BACKEND_BOOTSTRAP", bootstrap)
-            .env("CROWNFORGE_IDE_CORE_EXECUTABLE", ide_core)
+            .env("CROWNFORGE_BACKEND_BOOTSTRAP", node_path(&bootstrap)?)
+            .env("CROWNFORGE_IDE_CORE_EXECUTABLE", node_path(&ide_core)?)
             .env("NODE_ENV", "production")
             .env("HOST", "127.0.0.1")
             .env("PORT", "0")
-            .env("WORKSPACE_DIR", &data.workspace)
-            .env("USERS_CONFIG", &data.users)
+            .env("WORKSPACE_DIR", node_path(&data.workspace)?)
+            .env("USERS_CONFIG", node_path(&data.users)?)
             .env(
                 "APP_SETTINGS_CONFIG",
-                data.directory.join("app-settings.json"),
+                node_path(&data.directory.join("app-settings.json"))?,
             )
-            .env("TEAM_STORE_ROOT", &data.directory)
-            .env("PLUGINS_DIR", &data.plugins)
-            .env("STATIC_DIR", frontend)
+            .env("TEAM_STORE_ROOT", node_path(&data.directory)?)
+            .env("PLUGINS_DIR", node_path(&data.plugins)?)
+            .env("STATIC_DIR", node_path(&frontend)?)
             .env(
                 "VLLM_API_URL",
                 env::var("VLLM_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000/v1".into()),
@@ -308,15 +408,31 @@ impl Backend {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         if let Some((directory, executable, bins)) = git {
-            let paths = bins.into_iter().chain(
-                env::var_os("PATH")
-                    .into_iter()
-                    .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>()),
-            );
+            let paths = bins
+                .into_iter()
+                .chain(
+                    env::var_os("PATH")
+                        .into_iter()
+                        .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>()),
+                )
+                .map(|path| node_path(&path))
+                .collect::<io::Result<Vec<_>>>()?;
             command
-                .env("CROWNFORGE_GIT_EXECUTABLE", executable)
-                .env("CROWNFORGE_GIT_RUNTIME_ROOT", directory)
+                .env("CROWNFORGE_GIT_EXECUTABLE", node_path(&executable)?)
+                .env("CROWNFORGE_GIT_RUNTIME_ROOT", node_path(&directory)?)
                 .env("PATH", env::join_paths(paths)?);
+        }
+        #[cfg(windows)]
+        if command.get_envs().all(|(key, _)| {
+            !key.to_str()
+                .is_some_and(|value| value.eq_ignore_ascii_case("PATH"))
+        }) {
+            if let Some(value) = env::var_os("PATH") {
+                let paths = env::split_paths(&value)
+                    .map(|path| node_path(&path))
+                    .collect::<io::Result<Vec<_>>>()?;
+                command.env("PATH", env::join_paths(paths)?);
+            }
         }
         if !cfg!(debug_assertions) {
             command.env("CROWNFORGE_BUNDLED_TOOLS_REQUIRED", "1");
@@ -464,12 +580,19 @@ fn folder_picker(app: &tauri::AppHandle, backend: Arc<Backend>, message: Value) 
     }
     let app = app.clone();
     dialog.pick_folder(move |folder| {
-        let path = folder
-            .and_then(|folder| folder.into_path().ok())
+        let selected = folder.and_then(|folder| folder.into_path().ok());
+        let normalized = selected.as_deref().map(node_path).transpose();
+        let error = normalized.as_ref().err().map(|_| "INVALID_FOLDER_PATH");
+        let path = normalized
+            .ok()
+            .flatten()
             .map(|path| path.to_string_lossy().into_owned());
-        let _ = backend.send(
-            &json!({"type":"desktop-pick-folder-result", "requestId":request_id, "path":path}),
-        );
+        let mut response =
+            json!({"type":"desktop-pick-folder-result", "requestId":request_id, "path":path});
+        if let Some(error) = error {
+            response["error"] = json!(error);
+        }
+        let _ = backend.send(&response);
         app.state::<DesktopState>()
             .folder_picker_open
             .store(false, Ordering::SeqCst);
@@ -500,6 +623,90 @@ pub fn listen(app: tauri::AppHandle, backend: Arc<Backend>, messages: Receiver<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_node_boundary_removes_only_disk_and_unc_verbatim_prefixes() {
+        for (source, expected) in [
+            (
+                r"\\?\D:\CrownForge 安装\runtime\bootstrap.cjs",
+                r"D:\CrownForge 安装\runtime\bootstrap.cjs",
+            ),
+            (
+                r"\\?\c:\User's App\runtime\node\node.exe",
+                r"c:\User's App\runtime\node\node.exe",
+            ),
+            (r"\\?\C:\", r"C:\"),
+            (
+                r"\\?\UNC\server\share\runtime\frontend",
+                r"\\server\share\runtime\frontend",
+            ),
+            (r"\\?\unc\Server\Share\", r"\\Server\Share\"),
+        ] {
+            let rust_path = source.to_owned();
+            assert_eq!(windows_node_path(&rust_path).unwrap(), expected);
+            assert_eq!(
+                rust_path, source,
+                "Rust filesystem path must remain unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn normal_node_paths_and_existing_path_entries_are_not_rewritten() {
+        for value in [
+            r"D:\Apps\runtime\bootstrap.cjs",
+            r"D:/Apps/runtime",
+            r"\\server\share\runtime",
+            "tools",
+            "",
+            r"D:tools",
+        ] {
+            assert_eq!(windows_node_path(value).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn node_boundary_refuses_devices_and_semantically_ambiguous_names() {
+        for value in [
+            r"\\.\pipe\service",
+            r"\??\D:\runtime",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\runtime",
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\runtime",
+            r"\\?\D:",
+            r"\\?\D:relative",
+            r"\\?\D:/runtime",
+            r"\\?\UNC\server",
+            r"\\?\UNC\\share\runtime",
+            r"\\?\UNC\server\\runtime",
+            r"\\?\C:\a\..\bootstrap.cjs",
+            r"\\?\C:\a\.\bootstrap.cjs",
+            r"\\?\C:\a\\bootstrap.cjs",
+            r"\\?\C:\a.\bootstrap.cjs",
+            r"\\?\C:\a \bootstrap.cjs",
+            r"\\?\C:\NUL\bootstrap.cjs",
+            r"\\?\C:\COM1.txt",
+            r"\\?\C:\LPT²",
+            r"\\?\C:\bootstrap.cjs:stream",
+            "\\\\?\\C:\\a\0b",
+        ] {
+            assert!(
+                windows_node_path(value).is_err(),
+                "Unsafe conversion accepted: {value:?}"
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_node_boundary_preserves_literal_windows_looking_names() {
+        for value in [
+            "/Applications/CrownForge.app/runtime/bootstrap.cjs",
+            r"/tmp/\\?\D:\literal-name",
+            "relative/path",
+        ] {
+            assert_eq!(node_path(Path::new(value)).unwrap(), PathBuf::from(value));
+        }
+    }
 
     #[test]
     fn bootstrap_tokens_are_private_random_256_bit_values() {
