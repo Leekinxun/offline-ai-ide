@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
+import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
 import crypto from "node:crypto";
 import { writeVerifiedArchive } from "./windows-package-sdk-artifact.mjs";
 
@@ -113,4 +113,23 @@ test("WinPS5 helpers discard inherited pwsh7 module paths while preserving other
   assert.equal(prepared.PATH, original.PATH); assert.equal(prepared.LANG, original.LANG);
   assert.match(original.PSModulePath, /PowerShell\\7\\Modules/);
   assert.throws(() => windowsPowerShellEnvironment({ ProgramFiles: original.ProgramFiles }));
+});
+
+test("installed Host must match the unique final NSIS payload, independently of restored build-input bytes", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-nsis-host-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const extraction = path.join(directory, "extracted"); fs.mkdirSync(extraction);
+  const payload = path.join(extraction, "crownforge-desktop.exe"), input = path.join(directory, "build.exe"), installed = path.join(directory, "installed.exe");
+  const bytes = Buffer.alloc(180); bytes.write("MZ"); bytes.writeUInt32LE(128, 0x3c); bytes.write("PE\0\0", 128); bytes.writeUInt16LE(0x8664, 132);
+  fs.writeFileSync(input, bytes);
+  bytes.write("NSIS-bundle-payload", 144); fs.writeFileSync(payload, bytes); fs.writeFileSync(installed, bytes);
+  const options = { extractedFiles: [payload], extractRoot: extraction, mainBinaryName: "crownforge-desktop", installedHost: installed, originalBuildInput: input };
+  const evidence = assertInstalledHostPayload(options);
+  assert.equal(evidence.embeddedPayloadSha256, evidence.installedSha256);
+  assert.notEqual(evidence.originalBuildInputSha256, evidence.embeddedPayloadSha256);
+  assert.throws(() => assertInstalledHostPayload({ ...options, extractedFiles: [payload, payload] }), /exactly one/);
+  assert.throws(() => assertInstalledHostPayload({ ...options, mainBinaryName: "../outside" }));
+  fs.appendFileSync(installed, "changed"); assert.throws(() => assertInstalledHostPayload(options), /exact final NSIS payload/);
+  fs.writeFileSync(installed, bytes); bytes.writeUInt16LE(0x14c, 132); fs.writeFileSync(payload, bytes);
+  assert.throws(() => assertInstalledHostPayload(options), /x64 PE/);
 });

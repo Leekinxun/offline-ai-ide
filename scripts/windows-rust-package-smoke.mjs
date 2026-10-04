@@ -14,7 +14,7 @@ import http from "node:http";
 import { fileSha256 } from "../desktop/scripts/build-crownforge-codex-runtime.mjs";
 import { verifyCodexRuntime } from "../desktop/scripts/prepare-codex-runtime.mjs";
 import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
-import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
+import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
 
 assert.equal(process.platform, "win32", "Package acceptance must run on real Windows");
 assert.ok(process.argv.includes("--allow-disposable-install"), "Installation requires --allow-disposable-install");
@@ -188,7 +188,7 @@ try {
   const hostExecutable = path.join(installation, `${definitions.MAINBINARYNAME}.exe`);
   runtime = path.join(installation, "runtime");
   assert.ok(fs.statSync(hostExecutable).isFile());
-  assert.equal(fileSha256(hostExecutable), fileSha256(definitions.MAINBINARYSRCPATH), "Installed Host differs from its release build input");
+  report.hostPayload = assertInstalledHostPayload({ extractedFiles: extracted, extractRoot, mainBinaryName: definitions.MAINBINARYNAME, installedHost: hostExecutable, originalBuildInput: definitions.MAINBINARYSRCPATH });
   const manifest = assertRuntimeManifest(runtime);
   verifyCodexRuntime(path.join(runtime, "backend/vendor/codex/win-x64"), "x64");
   assert.ok(fs.statSync(path.join(runtime, "backend/dist/auth/desktopBootstrapCredential.js")).isFile());

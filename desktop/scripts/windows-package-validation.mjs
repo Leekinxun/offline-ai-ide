@@ -67,6 +67,26 @@ export function peMachine(file) {
   } finally { fs.closeSync(fd); }
 }
 
+export function assertInstalledHostPayload({ extractedFiles, extractRoot, mainBinaryName, installedHost, originalBuildInput }) {
+  assert.match(mainBinaryName || "", /^[A-Za-z0-9_-]+$/, "NSIS main executable name is required");
+  const expectedName = `${mainBinaryName}.exe`.toLowerCase();
+  const candidates = extractedFiles.filter((file) => path.basename(file).toLowerCase() === expectedName);
+  assert.equal(candidates.length, 1, "Final NSIS must contain exactly one Host executable payload");
+  const payload = candidates[0];
+  assert.ok(fs.lstatSync(payload).isFile() && !fs.lstatSync(payload).isSymbolicLink(), "Host payload must be a regular extracted file");
+  const relative = path.relative(fs.realpathSync.native(extractRoot), fs.realpathSync.native(payload));
+  assert.ok(relative && !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`), "Host payload must stay inside the owned NSIS extraction");
+  for (const file of [payload, installedHost, originalBuildInput]) {
+    assert.ok(fs.lstatSync(file).isFile() && !fs.lstatSync(file).isSymbolicLink(), "NSIS Host evidence must be a regular file");
+    assert.equal(peMachine(file), 0x8664, "NSIS Host evidence must be Windows x64 PE");
+  }
+  const embeddedPayloadSha256 = fileSha256(payload), installedSha256 = fileSha256(installedHost);
+  assert.equal(installedSha256, embeddedPayloadSha256, "Installed Host differs from its exact final NSIS payload");
+  // Tauri patches the main executable for each bundle, then restores the
+  // unsigned/unpatched target/release input. They are separate evidence fields.
+  return { mainBinaryName, embeddedPayloadPath: relative.replaceAll("\\", "/"), originalBuildInputSha256: fileSha256(originalBuildInput), embeddedPayloadSha256, installedSha256 };
+}
+
 export function filesUnder(directory) {
   const result = [];
   function visit(current) {
