@@ -53,7 +53,7 @@ npm --prefix desktop/rust run package -- --bundles nsis
 
 The package includes standalone Node, backend production dependencies,
 frontend assets, plugins and the Rust IDE binary. Windows also includes the
-pinned Codex runtime, complete resources and verified receipt under
+pinned CrownForge downstream Codex runtime, complete resources and schema 2 receipt under
 `backend/vendor/codex/win-<arch>`. Resource staging never includes root-level
 private configuration. Production JavaScript dependencies are installed using
 the selected Node runtime with install scripts disabled. The unused `node-pty`

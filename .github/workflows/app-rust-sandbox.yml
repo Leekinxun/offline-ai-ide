@@ -4,6 +4,7 @@ on:
   push:
     branches: [APP_RUST]
     paths:
+      - .gitattributes
       - .github/workflows/app-rust-sandbox.yml
       - backend/**
       - desktop/scripts/prepare-codex-runtime.mjs
@@ -95,6 +96,8 @@ jobs:
         env:
           CROWNFORGE_BUILD_WFP_TESTS: "1"
         run: |
+          node --input-type=module -e "import fs from 'node:fs'; import crypto from 'node:crypto'; const lock=JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json','utf8')); const digest=crypto.createHash('sha256').update(fs.readFileSync(lock.patchFile)).digest('hex'); console.log(JSON.stringify({expectedPatchSha256:lock.patchSha256,checkoutPatchSha256:digest})); if(digest!==lock.patchSha256) throw new Error('Reviewed source patch bytes changed during checkout');"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --input-type=module -e "import fs from 'node:fs'; const lock=JSON.parse(fs.readFileSync('scripts/fixtures/codex-native-runtime-lock.json','utf8')); if(lock.runtimeVersion!=='0.160.0'||lock.sourceTag!=='rust-v0.160.0'||lock.runtimeVariant!=='crownforge-network-v1'||lock.upstreamCommit!=='a956835d020762cb2b570053af06f643a11c0ecc') throw new Error('Acceptance requires the reviewed CrownForge source patch build');"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node desktop/scripts/prepare-codex-runtime.mjs x64
