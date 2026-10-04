@@ -125,6 +125,23 @@ These tests cover URL and preference boundaries, native bridge shape, pipe
 protocol and host-disconnect shutdown. UI behavior and native Windows sandbox
 behavior additionally require platform-specific end-to-end validation.
 
+After creating a macOS bundle, use its Node runtime for the offline backend
+check:
+
+```sh
+desktop/rust/target/release/bundle/macos/CrownForge.app/Contents/Resources/runtime/node/node scripts/desktop-rust-offline-smoke.mjs
+```
+
+This disposable check uses Seatbelt to deny networking except declared host-local
+fixture ports. It first confirms that an undeclared receiver is reachable
+outside the restriction and receives no request inside it. It then cold-starts
+the bundled backend, verifies private bootstrap and Rust tree access, serves
+the bundled frontend entry and completes a chat against a local model protocol
+fixture. The owned process group is checked after shutdown. Reports and fixtures
+are ignored. It does not execute GUI assets/workers or bundled plugins, verify
+real model weights, directly probe a public endpoint, or accept a Windows
+installer. See [offline deployment requirements](../../docs/app-rust-windows.md#offline-installation-and-operation).
+
 ## Current migration boundary
 
 The `APP_RUST` branch currently supplies these desktop-only replacements:

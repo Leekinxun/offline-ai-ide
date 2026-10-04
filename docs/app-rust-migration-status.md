@@ -1,6 +1,6 @@
 # APP_RUST migration status
 
-Desktop acceptance: `b4e327d34d2e6abe9043411b8d5e853e483e2799`.
+Desktop acceptance: `9b0d2b651208405a220d411f26bec7458abe4db0`.
 Evidence captured on 2026-10-04. This remains a prototype branch; no signed
 Windows installer or production release has been published.
 
@@ -18,16 +18,27 @@ continues draining its output pipes, and uses a bounded owned-process-tree
 fallback on Windows. Cleanup failure is reported as failure. Wrapper and native
 host deadlines allow the backend to complete that cleanup.
 
-[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37173503398).
+[Windows desktop acceptance passed](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37177448303).
 The job builds the Windows host and verifies real Rust file/search/Git services,
 the desktop HTTP contracts, PowerShell PTY input with Chinese text, resize, stop
 and private sidecar shutdown. This is not Agent sandbox or interactive installer
 acceptance.
 
-The macOS bundle from the previous increment was generated from isolated published
-source with official Node 22.23.3. Package-contained services passed private bootstrap,
-idle-change acknowledgment, same-mtime save detection and shutdown checks.
-Generated reports and fixtures are excluded from Git.
+The Windows desktop job also ran real Cargo against an empty dependency cache
+and a reachable disposable registry. Desktop diagnostics made zero registry
+requests and returned a clear offline dependency error. `RUSTUP_AUTO_INSTALL=0`
+prevents implicit toolchain installation; Web retains its prior command.
+
+An independent 177.39 MiB macOS bundle from the same published source uses
+official Node 22.23.3. The packaged backend passed cold start, private bootstrap,
+Rust tree access, a complete local model-protocol fixture chat and owned-process
+shutdown under a Seatbelt policy that denies networking except declared
+host-local fixture ports. An undeclared reachable receiver returned `EPERM` and
+received zero requests under that same policy. The generated
+`.artifacts/app-rust/offline-report.json` preserves the policy digest and resource
+hashes; fixtures and reports are excluded from Git. This did not run the GUI,
+workers or bundled plugins, verify real model weights, directly test a public
+endpoint, or accept a Windows installer. It is not complete offline App acceptance.
 
 ## Windows Agent acceptance blocker
 
