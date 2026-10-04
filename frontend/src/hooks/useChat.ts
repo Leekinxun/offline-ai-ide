@@ -28,6 +28,7 @@ import { useContextManifest } from "./useContextManifest";
 import { updateAssistantMessage } from "../utils/assistantActivity";
 import { applyToolApprovalSnapshot, canApproveToolInConversation } from "../utils/toolApprovalPolicy";
 import { acceptsConversationEvent, canBindAcceptedRequest, type ChatRequestScope, type ConversationActivity } from "../utils/chatScope";
+import { messageFailureText } from "../utils/runFailureNotice";
 
 interface ConversationsResponse {
   conversations?: ConversationSummary[];
@@ -46,12 +47,14 @@ interface RunListResponse {
   runs?: AgentRunSummary[];
 }
 interface RunPayloadFields {
+  summary?: ConversationRunSummary;
   executionContract?: ExecutionContract;
   executionContractKind?: ExecutionContract["kind"];
   completionEvidence?: CompletionEvidence;
   qualityGate?: AgentRunSummary["qualityGate"];
   executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
+  failureReason?: string;
 }
 
 export interface ChatRuntimeOptions {
@@ -711,26 +714,36 @@ export function useChat(
               events.push(event);
             }
             const fields = data as RunPayloadFields;
+            const summary = fields.summary || previousRun?.summary;
+            const status = data.status || "running";
+            const failureReason = status === "failed"
+              ? fields.failureReason || summary?.failureReason || previousRun?.failureReason
+              : undefined;
             return {
               runId: data.runId,
               conversationId: data.conversationId,
               mode: data.mode || previousRun?.mode || "code",
               modelName: data.modelName || previousRun?.modelName,
-              status: data.status || "running",
+              status,
               startedAt: previousRun?.startedAt || event?.timestamp || Date.now(),
               updatedAt: event?.timestamp || Date.now(),
               metrics: data.metrics || previousRun?.metrics || EMPTY_RUN_METRICS,
               eventCount: events.length,
               events,
               ...(event ? { event } : {}),
+              ...(summary ? { summary } : {}),
               ...(fields.executionContract ? { executionContract: fields.executionContract } : {}),
               ...(fields.executionContractKind ? { executionContractKind: fields.executionContractKind } : {}),
               ...(fields.completionEvidence ? { completionEvidence: fields.completionEvidence } : {}),
               ...(fields.qualityGate ? { qualityGate: fields.qualityGate } : {}),
               ...(fields.executionFacts || previousRun?.executionFacts ? { executionFacts: fields.executionFacts || previousRun?.executionFacts } : {}),
               ...(fields.executionPlan ? { executionPlan: fields.executionPlan } : {}),
+              ...(failureReason ? { failureReason } : {}),
             };
           });
+          if (data.summary) {
+            setCurrentRunSummary((data as RunPayloadFields).executionPlan ? { ...data.summary, executionPlan: (data as RunPayloadFields).executionPlan } : data.summary);
+          }
           if (data.status !== "running" && data.status !== "queued") {
             setActiveRequestIds([]);
             setPendingApprovals([]);
@@ -900,7 +913,7 @@ export function useChat(
             if (data.requestId) pendingAttachmentSendsRef.current.delete(data.requestId);
             updateAssistantByRequestId(data.requestId, (msg) => ({
               ...msg,
-              content: msg.content || `Error: ${data.content}`,
+              ...messageFailureText(msg.content, String(data.content || "Task failed")),
             }));
           }
           finishRequest(data.requestId);

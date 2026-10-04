@@ -16,6 +16,7 @@ import {
   failChatRequest,
   getChatRequestStatus,
   listConversationSummaries,
+  normalizeFailureReason,
   updateConversationTitle,
   updateConversationState,
   readConversationMessages,
@@ -337,7 +338,7 @@ export async function startMobileRun(
     return { ok: true, conversationId, runId: recorder.runId, created };
   } catch (error) {
     if (!accepted) failChatRequest(session.workspaceDir, requestId);
-    await failPreparedRun(executionSession, run);
+    await failPreparedRun(executionSession, run, error);
     return { ok: false, code: "error", message: error instanceof Error ? error.message : "Could not start run" };
   }
   } catch (error) {
@@ -661,7 +662,7 @@ export function handleChatWs(
           run
         );
         } catch (error) {
-          await failPreparedRun(session, run);
+          await failPreparedRun(session, run, error);
           throw error;
         } finally { run.finish(); }
         return;
@@ -893,7 +894,7 @@ export function handleChatWs(
         await beginRecordedRun(session, pendingMessage, run, recorder);
         await executeRecordedRun(session, pendingMessage, run, recorder);
       } catch (error) {
-        await failPreparedRun(session, run);
+        await failPreparedRun(session, run, error);
         throw error;
       }
     } catch (e: any) {
@@ -939,13 +940,20 @@ async function beginRecordedRun(
   });
 }
 
-async function failPreparedRun(session: UserSession, run: ActiveChatRun): Promise<void> {
+async function failPreparedRun(session: UserSession, run: ActiveChatRun, error: unknown): Promise<void> {
   const recorder = run.currentRecorder;
   if (recorder.snapshot().status === "running") {
     try {
-      const failed = await recorder.finish(run.controlState.stopped ? "stopped" : "failed");
+      const failureReason = normalizeFailureReason(error instanceof Error ? error.message : String(error));
+      const failed = await recorder.finish(run.controlState.stopped ? "stopped" : "failed", {}, undefined, undefined, undefined, failureReason);
       await updateConversationState(session.workspaceDir, failed.conversationId, {
-        mode: failed.mode, status: failed.status === "stopped" ? "stopped" : "failed", lastRunId: failed.runId,
+        mode: failed.mode, status: failed.status === "stopped" ? "stopped" : "failed", lastRunId: failed.runId, summary: failed.summary,
+      });
+      wsSend(run.transport, {
+        type: "run_state", conversationId: failed.conversationId, runId: failed.runId,
+        mode: failed.mode, modelName: failed.modelName, status: failed.status === "stopped" ? "stopped" : "failed",
+        metrics: failed.metrics, event: failed.events.at(-1), failureReason: failed.failureReason,
+        sequence: failed.events.length, version: failed.updatedAt,
       });
     } catch { /* Preserve the original startup failure. */ }
   }
@@ -965,22 +973,24 @@ async function executeRecordedRun(
     );
   } catch (error) {
     const current = run.currentRecorder;
+    const failureReason = normalizeFailureReason(error instanceof Error ? error.message : String(error));
     const record = current.snapshot();
     if (record.status === "running") {
       try {
-        const failed = await current.finish("failed");
+        const failed = await current.finish("failed", {}, undefined, undefined, undefined, failureReason);
         await updateConversationState(session.workspaceDir, current.conversationId, {
-          mode: failed.mode, status: "failed", lastRunId: failed.runId,
+          mode: failed.mode, status: "failed", lastRunId: failed.runId, summary: failed.summary,
         });
         wsSend(run.transport, {
           type: "run_state", conversationId: failed.conversationId,
           runId: failed.runId, mode: failed.mode, modelName: failed.modelName,
           status: "failed", metrics: failed.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(failed.executionFacts)), event: failed.events.at(-1),
+          failureReason: failed.failureReason,
           sequence: failed.events.length, version: failed.updatedAt,
         });
       } catch { /* Report the original failure below. */ }
     }
-    wsSend(run.transport, { type: "error", requestId: turn.requestId, content: error instanceof Error ? error.message : String(error) });
+    wsSend(run.transport, { type: "error", requestId: turn.requestId, content: failureReason || "Agent run failed" });
   } finally {
     run.finish();
   }
@@ -1135,6 +1145,7 @@ async function processConversationQueue(
     await run.closeSteeringGate();
   } catch (error) {
     await run.closeSteeringGate();
+    const failureReason = normalizeFailureReason(error instanceof Error ? error.message : String(error));
     const recordedQuality = recorder.snapshot().qualityGate;
     const qualityGate = error instanceof CompletionQualityGateError ? error.evidence : recordedQuality?.status === "blocked" ? recordedQuality : undefined;
     if (initialTurn.executionPlan) {
@@ -1153,7 +1164,7 @@ async function processConversationQueue(
         kind: "error",
         label: "Agent run crashed",
         isError: true,
-        detail: error instanceof Error ? error.message : String(error),
+        detail: failureReason,
       },
       { modelErrors: currentMetrics.modelErrors + 1 }
     );
@@ -1172,8 +1183,8 @@ async function processConversationQueue(
       changedFiles: runtimeState.changedFiles,
       blockers: { childRun: runtimeState.childRun, approval: runtimeState.approval, conflict: runtimeState.conflict, check: runtimeState.check, changeEvidence: runtimeState.changeEvidence, quality: Boolean(qualityGate) },
     });
-    const completedFailedSummary = { ...failedSummary, completionEvidence, ...(qualityGate ? { qualityGate } : {}) };
-    const finishedRecord = await recorder.finish("failed", {}, completedFailedSummary, completionEvidence, qualityGate);
+    const completedFailedSummary = { ...failedSummary, completionEvidence, ...(qualityGate ? { qualityGate } : {}), ...(failureReason ? { failureReason } : {}) };
+    const finishedRecord = await recorder.finish("failed", {}, completedFailedSummary, completionEvidence, qualityGate, failureReason);
     await updateConversationState(session.workspaceDir, activeConversationId, {
       mode: initialTurn.mode,
       status: "failed",
@@ -1187,6 +1198,7 @@ async function processConversationQueue(
       mode: initialTurn.mode,
       modelName: initialTurn.modelName,
       status: "failed",
+      failureReason: finishedRecord.failureReason,
       metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
       event: finishedRecord.events.at(-1),
       sequence: finishedRecord.events.length,
@@ -1207,7 +1219,7 @@ async function processConversationQueue(
     wsSend(ws, {
       type: "error",
       requestId: initialTurn.requestId,
-      content: error instanceof Error ? error.message : String(error),
+      content: failureReason || "Agent run failed",
     });
     return;
   }
@@ -1321,6 +1333,7 @@ async function processConversationQueue(
     mode: finalMode,
     modelName: initialTurn.modelName,
     status: finalStatus,
+    failureReason: finishedRecord.failureReason,
     metrics: finishedRecord.metrics, executionFacts: summarizeExecutionFacts(normalizeExecutionFacts(finishedRecord.executionFacts)),
     event: finishedRecord.events.at(-1),
     sequence: finishedRecord.events.length,

@@ -12,6 +12,7 @@ import { TaskStateStrip, type TaskStateTone } from "./TaskStateStrip";
 import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDialog";
 import { SafeExternalLink } from "./SafeExternalLink";
 import { RunChangesReview, type RunReviewComment } from "./RunChangesReview";
+import { runFailureNotice } from "../utils/runFailureNotice";
 import "./RunDetailsPanel.css";
 
 interface RunDetailsPanelProps {
@@ -79,6 +80,7 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
   const tabs: DetailTab[] = ["changes", "checks", "delivery", "context", "trace", "terminal"];
   const runTone: TaskStateTone = runState?.status === "running" || runState?.status === "queued" ? "running" : runState?.status === "completed" ? "success" : runState?.status === "failed" ? "danger" : "warning";
   const evidenceCount = (evidence?.ledger.verification.length || 0) + (evidence?.ledger.criteria.length || 0) + changedFiles.length + events.length;
+  const failureNotice = runFailureNotice(runState, summary);
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next = index;
     if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
@@ -145,6 +147,24 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
               </span>
             </div>
           </div>
+
+          {failureNotice && (
+            <div className="run-failure-reason-card" role="alert">
+              <AlertCircle size={15} aria-hidden="true" />
+              <div>
+                <strong>
+                  {failureNotice.kind === "max_iterations"
+                    ? t("chat.failure.maxIterations.title", { limit: failureNotice.limit || 0 })
+                    : t("chat.failure.generic.title")}
+                </strong>
+                <span>
+                  {failureNotice.kind === "max_iterations"
+                    ? t("chat.failure.maxIterations.body")
+                    : t("chat.failure.generic.body", { reason: failureNotice.reason })}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className="run-metrics-grid">
             <div className="run-metric-card">
