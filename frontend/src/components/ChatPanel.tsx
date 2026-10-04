@@ -72,6 +72,7 @@ import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferen
 import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
 import { assistantToolStatus } from "../utils/assistantActivity";
 import { useModalDialogFocus } from "./useModalDialogFocus";
+import { ApprovalModeControl } from "./ApprovalModeControl";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -621,6 +622,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         executionContract={runState?.executionContract || (runState?.executionContractKind ? { kind: runState.executionContractKind, planId: runState.executionPlan?.id || runState.executionPlanId } : currentRunSummary?.executionContract || (currentRunSummary?.executionContractKind ? { kind: currentRunSummary.executionContractKind, planId: currentRunSummary.executionPlan?.id } : undefined))}
         completionEvidence={runState?.completionEvidence || currentRunSummary?.completionEvidence}
       />
+      <ApprovalModeControl key={JSON.stringify([token, workspaceDir, currentConversationId, isolatedWindow])}
+        token={token} workspaceDir={workspaceDir} conversationId={currentConversationId} taskTitle={taskTitle} connected={connected} />
       {isolatedWindowError && <div className="workbench-panel-error" role="alert">{isolatedWindowError}</div>}
       {isolatedWindow && <div className="vibe-window-banner"><span>{t("chat.isolatedWindowActive")}</span><code>{t("chat.isolatedWindowHint")}</code></div>}
 

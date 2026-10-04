@@ -8,10 +8,12 @@ import {
 import { agentProfileAllowsTool, type AgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import type { FullAccessGrant } from "../chat/fullAccess.js";
 import { evaluateModeCapability } from "./modeCapabilities.js";
 import { PolicyAuditLog, type PolicyAuditSink } from "./policyAudit.js";
 import { redactSecrets } from "./secretRedaction.js";
 import path from "node:path";
+import fs from "node:fs";
 import { isNetworkToolRequest, issueNetworkExecutionGrant, networkPolicyDenial, type AgentNetworkPolicy, type NetworkExecutionGrant } from "./networkAccess.js";
 
 export interface PermissionRequest {
@@ -20,19 +22,29 @@ export interface PermissionRequest {
   name: string;
   input: Record<string, unknown>;
   agentName: string;
+  /** Actual execution workspace supplied by the runtime, never by tool input. */
+  workspaceDir?: string;
 }
 
 export interface PermissionResult {
   allowed: boolean;
   reason?: string;
-  decision?: ToolApprovalDecision | "not_required";
+  decision?: ToolApprovalDecision | "not_required" | "full_access";
   requiresReplan?: boolean;
   networkExecutionGrant?: NetworkExecutionGrant;
+  fullAccessGrant?: FullAccessGrant;
+  /** Server-only, synchronous final check; never copied into model/tool input. */
+  revalidate?: () => PermissionResult;
 }
 
 export type PermissionAuthorizer = (
   request: PermissionRequest
 ) => Promise<PermissionResult>;
+
+function canonicalWorkspace(workspace: string): string {
+  try { return fs.realpathSync(workspace); }
+  catch { return path.resolve(workspace); }
+}
 
 export function narrowPermissionAuthorizer(
   parent: PermissionAuthorizer,
@@ -61,6 +73,8 @@ export function createPermissionAuthorizer(options: {
   workspace?: string;
   auditLog?: PolicyAuditSink;
   executionPlan?: ExecutionPlan;
+  /** A trusted server getter bound to the authenticated session and workspace. */
+  getFullAccessGrant?: () => FullAccessGrant | null;
   /** Re-read after the approval prompt so a revoked grant cannot start a command. */
   networkPolicy?: (toolName: string) => { profileAllowsNetwork: boolean; networkOrigins?: readonly string[]; readOnly?: boolean };
 }): PermissionAuthorizer {
@@ -77,7 +91,7 @@ export function createPermissionAuthorizer(options: {
       toolName: request.name,
       input: safeInput,
     });
-    const decide = async (result: PermissionResult): Promise<PermissionResult> => {
+    const appendAudit = (result: PermissionResult): void => {
       if (audit && options.workspace && options.runId) {
         audit.append({
           runId: options.runId,
@@ -87,9 +101,20 @@ export function createPermissionAuthorizer(options: {
           toolName: request.name,
           allowed: result.allowed,
           ...(result.reason ? { reason: result.reason } : {}),
-          input: safeInput,
+          input: result.fullAccessGrant ? {
+            ...safeInput,
+            _authorization: {
+              source: "user-authorized",
+              decision: result.decision,
+              grantId: result.fullAccessGrant.grantId,
+              revision: result.fullAccessGrant.revision,
+            },
+          } : safeInput,
         });
       }
+    };
+    const decide = async (result: PermissionResult): Promise<PermissionResult> => {
+      appendAudit(result);
       await runAgentHooks("afterPermissionDecision", {
         agentId: request.agentName,
         runId: options.runId,
@@ -102,9 +127,12 @@ export function createPermissionAuthorizer(options: {
           reason: result.reason,
           decision: result.decision,
           requiresReplan: result.requiresReplan,
+          ...(result.fullAccessGrant ? { fullAccessGrant: result.fullAccessGrant } : {}),
         },
       });
-      return result;
+      // Hooks may yield while the user disables the mode. A previous automatic
+      // decision never survives that change, even before the caller's final check.
+      return result.revalidate ? result.revalidate() : result;
     };
     if (options.signal?.aborted) {
       return decide({ allowed: false, reason: "The agent run was stopped" });
@@ -164,6 +192,58 @@ export function createPermissionAuthorizer(options: {
     ) {
       return decide({ allowed: true, decision: "not_required" });
     }
+    const executionWorkspace = request.workspaceDir || (request.agentName === "primary" ? options.workspace : undefined);
+    if (request.name !== "submit_plan" && options.workspace && executionWorkspace
+      && canonicalWorkspace(executionWorkspace) === canonicalWorkspace(options.workspace)) {
+      const readGrant = (): FullAccessGrant | null => {
+        try {
+          const grant = options.getFullAccessGrant?.();
+          if (!grant || typeof grant.grantId !== "string" || !grant.grantId.trim()
+            || !Number.isSafeInteger(grant.revision) || grant.revision < 0) return null;
+          return { grantId: grant.grantId, revision: grant.revision };
+        } catch { return null; }
+      };
+      const grant = readGrant();
+      if (grant) {
+        const fullAccessGrant = Object.freeze(grant);
+        let revoked: PermissionResult | undefined;
+        const result: PermissionResult = {
+          allowed: true,
+          decision: "full_access",
+          reason: `User-authorized full access (grant ${grant.grantId}, revision ${grant.revision})`,
+          fullAccessGrant,
+          revalidate: () => {
+            if (revoked) return revoked;
+            const current = readGrant();
+            let networkDenial: string | undefined;
+            if (networkRequested) {
+              try { networkDenial = networkPolicyDenial(currentNetworkPolicy()); }
+              catch { networkDenial = "Network policy could not be verified"; }
+            }
+            if (!options.signal?.aborted && current?.grantId === grant.grantId && current.revision === grant.revision && !networkDenial) return result;
+            revoked = {
+              allowed: false,
+              decision: "deny",
+              reason: options.signal?.aborted ? "The agent run was stopped" : networkDenial ? `Network authorization was revoked before tool execution: ${networkDenial} (grant ${grant.grantId}, revision ${grant.revision})` : `User-authorized full access was disabled or changed before tool execution; this tool was not executed (grant ${grant.grantId}, revision ${grant.revision})`,
+              fullAccessGrant,
+            };
+            appendAudit(revoked);
+            return revoked;
+          },
+        };
+        if (networkRequested) {
+          try {
+            result.networkExecutionGrant = issueNetworkExecutionGrant(currentNetworkPolicy(), "full_access", options.workspace, requestedNetworkCommand, requestedNetworkTool, () => {
+              const currentPermission = result.revalidate!();
+              if (!currentPermission.allowed) throw new Error(currentPermission.reason || "Full access network authorization was revoked");
+            });
+          } catch (error) {
+            return decide({ allowed: false, decision: "deny", fullAccessGrant, reason: error instanceof Error ? error.message : "Network policy could not be verified" });
+          }
+        }
+        return decide(result);
+      }
+    }
     if (!options.requestApproval) {
       return decide({
         allowed: false,
@@ -194,6 +274,9 @@ export function createPermissionAuthorizer(options: {
           : cause === "invalid_decision" ? "This tool requires an explicit one-time approval; session approval was not accepted"
             : "The user denied this tool execution";
       return decide({ allowed: false, reason, decision });
+    }
+    if (request.name === "submit_plan" && decision !== "allow_once") {
+      return decide({ allowed: false, reason: "Plan approval requires an explicit allow_once decision; session approval is not accepted", decision });
     }
     if (networkRequested) {
       if (decision !== "allow_once") return decide({ allowed: false, reason: "Network access requires an explicit allow_once decision; session approval is not accepted", decision });

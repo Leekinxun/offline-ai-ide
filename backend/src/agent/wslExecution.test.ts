@@ -27,7 +27,7 @@ function fixture(t: test.TestContext) {
   return { root, workspace, outside, temp, helper };
 }
 
-function installWslPathMock(t: test.TestContext, helper: string, temp: string, extra?: { probe?: "ready" | "failed" }) {
+function installWslPathMock(_t: test.TestContext, helper: string, temp: string, extra?: { probe?: "ready" | "failed" }) {
   const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
   setWslExecutionTestHooks({
     platform: "win32",

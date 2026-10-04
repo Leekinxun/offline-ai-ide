@@ -34,6 +34,7 @@ import {
 } from "../chat/runHistory.js";
 import { createCheckpoint } from "../chat/checkpoints.js";
 import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
+import { getFullAccessGrant } from "../chat/fullAccess.js";
 import { sessionManager } from "../auth/sessionManager.js";
 import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "../team/sessionBridge.js";
 import {
@@ -1079,6 +1080,7 @@ async function processConversationQueue(
       });
     }
     const readWorkspace = session.workspaceDir;
+    const approvalSession = { ...session, workspaceDir: readWorkspace };
     assistantMessages = await runAgentLoop(
     ws,
     initialTurn.message,
@@ -1122,6 +1124,7 @@ async function processConversationQueue(
       contextReferences: initialTurn.contextReferences,
       conversationId: activeConversationId,
       runRecorder: recorder,
+      getFullAccessGrant: () => getFullAccessGrant(approvalSession, activeConversationId),
       requestToolApproval: (input) => {
         run.stopIfAccessRevoked();
         return controlState.stopped ? Promise.resolve({ decision: "deny" as const, cause: "cancelled" as const }) : approvals.requestDetailed({

@@ -16,12 +16,13 @@ export interface ActionConfirmIntent {
 interface ActionConfirmDialogProps {
   intent: ActionConfirmIntent | null;
   busy?: boolean;
+  confirmDisabled?: boolean;
   error?: string | null;
   onConfirm: (intent: ActionConfirmIntent) => Promise<void> | void;
   onClose: () => void;
 }
 
-export const ActionConfirmDialog: React.FC<ActionConfirmDialogProps> = ({ intent, busy = false, error, onConfirm, onClose }) => {
+export const ActionConfirmDialog: React.FC<ActionConfirmDialogProps> = ({ intent, busy = false, confirmDisabled = false, error, onConfirm, onClose }) => {
   const { t } = useI18n();
   const titleId = useId();
   const descriptionId = useId();
@@ -61,7 +62,7 @@ export const ActionConfirmDialog: React.FC<ActionConfirmDialogProps> = ({ intent
         {busy && <div className="sr-only" role="status" aria-live="polite">{t("common.loading")}</div>}
         <footer className="delivery-approval-actions">
           <button ref={cancelRef} type="button" className="dialog-btn" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button type="button" className={`dialog-btn ${intent.tone === "danger" ? "danger" : "primary"}`} onClick={() => void onConfirm(intent)} disabled={busy}><Check size={14} />{busy ? t("common.loading") : intent.confirmLabel || t("common.confirm")}</button>
+          <button type="button" className={`dialog-btn ${intent.tone === "danger" ? "danger" : "primary"}`} onClick={() => void onConfirm(intent)} disabled={busy || confirmDisabled}><Check size={14} />{busy ? t("common.loading") : intent.confirmLabel || t("common.confirm")}</button>
         </footer>
       </section>
     </div>,

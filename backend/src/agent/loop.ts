@@ -31,7 +31,7 @@ import {
 import { AgentRunRecorder } from "../chat/runHistory.js";
 import { classifyToolApproval, type ToolApprovalDecision, type ToolApprovalOutcome } from "./toolApproval.js";
 import { ProviderRequestError } from "./providerErrors.js";
-import { createPermissionAuthorizer } from "./permissionService.js";
+import { createPermissionAuthorizer, type PermissionResult } from "./permissionService.js";
 import { ThinkStreamSplitter } from "./thinkStream.js";
 import { processModelTurn } from "./modelProcessor.js";
 import { ToolLoopGuard } from "./toolLoopGuard.js";
@@ -219,6 +219,7 @@ export async function runAgentLoop(
     readOnly: readOnlyWorkspace,
     signal: runSignal,
     requestApproval: control?.requestToolApproval,
+    getFullAccessGrant: control?.getFullAccessGrant,
     profile: agentProfile,
     runId: control?.runRecorder?.runId,
     executionPlan: control?.executionPlan,
@@ -1082,6 +1083,7 @@ export async function runAgentLoop(
           let processResult: AgentProcessResult | undefined;
           let startedProcessVersions: Record<string, string> | undefined;
           let networkExecutionGrant: import("./networkAccess.js").NetworkExecutionGrant | undefined;
+          let permission: PermissionResult | undefined;
           let snapshotId: string | undefined;
           let executionAttempted = false;
           const readOnlyShellCommand = toolCall.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command)
@@ -1115,12 +1117,13 @@ export async function runAgentLoop(
             collaborationTrace({ action: "approval_requested", outcome: "requested", runId: control?.runRecorder?.runId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, taskId: Number.isSafeInteger(args.task_id) && Number(args.task_id) > 0 ? Number(args.task_id) : undefined, worktreeId: typeof args.worktree_id === "string" ? args.worktree_id : undefined, changeSetId: typeof args.change_set_id === "string" ? args.change_set_id : undefined, toolName: toolCall.function.name, risk: approval.risk });
           }
           if (shouldExecute) {
-            const permission = await authorizeTool({
+            permission = await authorizeTool({
               requestId: currentRequestId,
               toolCallId: toolCall.id,
               name: toolCall.function.name,
               input: args,
               agentName: "primary",
+              workspaceDir: session.workspaceDir,
             });
             networkExecutionGrant = permission.allowed ? permission.networkExecutionGrant : undefined;
             if (!permission.allowed || control?.isStopped()) {
@@ -1191,6 +1194,25 @@ export async function runAgentLoop(
               name: toolCall.function.name,
               status: "running",
             });
+          }
+
+          // Check after every asynchronous preparation step, immediately before
+          // dispatch. Disabling or replacing the grant cannot start this tool.
+          if (shouldExecute && permission?.revalidate) {
+            try {
+              permission = permission.revalidate();
+              if (!permission.allowed) {
+                result = `Error: Tool execution denied: ${permission.reason || "permission revoked"}`;
+                isError = true;
+                shouldExecute = false;
+                deniedByPolicyOrUser = true;
+              }
+            } catch (error) {
+              result = `Error: Tool permission could not be revalidated: ${error instanceof Error ? error.message : String(error)}`;
+              isError = true;
+              shouldExecute = false;
+              deniedByPolicyOrUser = true;
+            }
           }
 
           if (shouldExecute) executionAttempted = true;
@@ -1679,6 +1701,8 @@ interface PendingUserTurn {
 export interface AgentLoopControl {
   /** Server-authenticated read ceiling; never derived from prompt/tool arguments. */
   getExternalReadRoots?: () => readonly string[];
+  /** Trusted session/workspace authorization; the model cannot supply this. */
+  getFullAccessGrant?: () => import("../chat/fullAccess.js").FullAccessGrant | null;
   isStopped: () => boolean;
   createAbortSignal: () => AbortSignal | undefined;
   mode?: AgentMode;

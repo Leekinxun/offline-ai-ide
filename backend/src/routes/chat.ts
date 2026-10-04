@@ -7,6 +7,7 @@ import {
   forkConversation,
   getChatRequestStatus,
   isValidChatRequestId,
+  isValidConversationId,
   listConversationSummaries,
   readConversationMessages,
   pruneConversationHistory,
@@ -57,6 +58,7 @@ import { toContextManifestState } from "../agent/contextManifest.js";
 import { getContextIndexAdapter } from "../agent/contextManifestIndex.js";
 import { toSarifReviewFindings } from "../artifacts/reviewArtifact.js";
 import "../indexing/repositoryIndex.js";
+import { ApprovalModeError, getApprovalMode, updateApprovalMode } from "../chat/fullAccess.js";
 
 export const chatRouter = Router();
 chatRouter.use((req, res, next) => {
@@ -131,6 +133,28 @@ function writable(req: unknown, res: any): boolean {
   res.status(403).json({ error: "Workspace is read-only" });
   return false;
 }
+
+function approvalModeError(res: Response, error: unknown): void {
+  if (error instanceof ApprovalModeError) {
+    res.status(error.status).json({ error: error.message, ...(error.state ? { state: error.state } : {}) });
+  } else res.status(500).json({ error: "Approval mode could not be verified or audited" });
+}
+
+chatRouter.get("/conversations/:id/approval-mode", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!isValidConversationId(req.params.id)) return res.status(400).json({ error: "Invalid conversation id" });
+  try { res.json(getApprovalMode((req as any).userSession as UserSession, req.params.id)); }
+  catch (error) { approvalModeError(res, error); }
+});
+
+chatRouter.put("/conversations/:id/approval-mode", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!isValidConversationId(req.params.id)) return res.status(400).json({ error: "Invalid conversation id" });
+  // This control-plane action must explicitly bind the visible workspace.
+  if (!req.header("X-Workspace-Dir")) return res.status(400).json({ error: "X-Workspace-Dir is required for approval mode changes" });
+  try { res.json(updateApprovalMode((req as any).userSession as UserSession, req.params.id, req.body)); }
+  catch (error) { approvalModeError(res, error); }
+});
 
 function traceFilter(query: Record<string, unknown>): Partial<Pick<CausalTraceEvent, "runId" | "correlationId" | "kind">> | null {
   const text = (key: "runId" | "correlationId") => query[key] === undefined ? undefined : typeof query[key] === "string" && query[key].trim() ? query[key].trim() : null;

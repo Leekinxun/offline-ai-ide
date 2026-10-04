@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import type { AgentMode, WsServerMessage } from "../agent/types.js";
 import { isSameOrDescendantPath, sessionManager, type UserSession } from "../auth/sessionManager.js";
-import { ToolApprovalSession, createToolApprovalGrants, type ToolApprovalGrants, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
+import { ToolApprovalSession, clearToolApprovalGrants, createToolApprovalGrants, type ToolApprovalGrants, type ToolApprovalDecision, type ToolApprovalRequestEvent } from "../agent/toolApproval.js";
 import type { ChatAttachmentRef } from "./attachments.js";
 import type { ExecutionPlan } from "./executionPlans.js";
 import type { AgentRunRecorder } from "./runHistory.js";
@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { LiveTranscript } from "./liveTranscript.js";
 import { countAgentQuestions, subscribeAgentQuestionChanges } from "./agentQuestions.js";
+import { subscribeApprovalModeChanges } from "./fullAccess.js";
 
 export interface PendingUserMessage {
   requestId: string;
@@ -121,6 +122,19 @@ function conversationApprovalGrants(token: string, workspace: string, conversati
   return entry.grants;
 }
 
+subscribeApprovalModeChanges((change) => {
+  if (change.mode !== "ask") return;
+  const grantKey = `${change.namespace}\0${canonicalWorkspace(change.workspaceDir)}\0${change.conversationId}`;
+  const cached = approvalGrants.get(grantKey);
+  if (cached) clearToolApprovalGrants(cached.grants);
+  // An active run may still hold an evicted cache entry. Clear the shared
+  // grant object only; pending approvals remain explicitly user controlled.
+  for (const run of runs.values()) {
+    if (run.approvalScopeToken === change.namespace && run.conversationId === change.conversationId &&
+      canonicalWorkspace(run.workspaceDir) === canonicalWorkspace(change.workspaceDir)) run.approvals.clearGrants();
+  }
+});
+
 subscribeAgentQuestionChanges((change) => {
   const run = runs.get(key(change.workspaceDir, change.conversationId));
   if (!run || run.runId !== change.runId || run.ownerUsername !== change.owner) return;
@@ -208,6 +222,7 @@ export class ActiveChatRun {
   readonly ownerUsername: string;
   readonly ownerSessionToken: string;
   readonly teamId: string | null;
+  readonly approvalScopeToken: string | null;
   private readonly ownerSession: UserSession;
   private readonly ownerSessionRegistered: boolean;
   private recorder: AgentRunRecorder;
@@ -235,6 +250,7 @@ export class ActiveChatRun {
     if (!registeredOwner && input.session.createdAt !== undefined) throw new Error("Run owner session expired");
     this.ownerSessionRegistered = Boolean(registeredOwner);
     const approvalScopeToken = sessionManager.getApprovalScopeToken(input.session);
+    this.approvalScopeToken = approvalScopeToken;
     this.teamId = resolveActiveTeam(input.session)?.id || null;
     this.recorder = input.recorder;
     this.queueSteering = input.queueSteering;

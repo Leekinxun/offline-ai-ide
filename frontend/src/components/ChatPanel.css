@@ -4,6 +4,50 @@
 
 @import "./ChatPanelBase.css";
 
+.chat-approval-mode {
+  flex: 0 0 auto;
+  margin: 0 12px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.chat-approval-mode.is-full-access {
+  border-color: color-mix(in srgb, var(--warning, #d49c32) 65%, var(--border-light));
+  background: color-mix(in srgb, var(--warning, #d49c32) 12%, var(--bg-secondary));
+}
+
+.chat-approval-mode-row, .chat-approval-mode-status, .chat-approval-mode-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chat-approval-mode-row { justify-content: space-between; flex-wrap: wrap; }
+.chat-approval-mode-status { min-width: 0; }
+.chat-approval-mode-status strong { overflow-wrap: anywhere; }
+.chat-approval-mode.is-full-access .chat-approval-mode-status { color: var(--warning, #d49c32); }
+
+.chat-approval-mode-action, .chat-approval-mode-error button {
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-approval-mode-action:disabled, .chat-approval-mode-error button:disabled { cursor: default; opacity: .55; }
+.chat-approval-mode button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chat-approval-mode-boundaries, .chat-approval-mode-hint { margin: 5px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
+.chat-approval-mode-error { margin-top: 6px; align-items: flex-start; color: var(--danger, #e86b6b); }
+.chat-approval-mode-error span { flex: 1; overflow-wrap: anywhere; }
+
 /* 确保详情折叠时严格不占位 */
 .chat-details-region[hidden] {
   display: none !important;

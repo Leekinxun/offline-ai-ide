@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { listChildRuns, readRunRecord } from "../chat/runHistory.js";
+import { AgentRunRecorder, listChildRuns, readRunRecord } from "../chat/runHistory.js";
 import { clearModelCapabilityCache } from "./modelCapabilities.js";
 import { runSubagent } from "./subagent.js";
 import { listChangeSets, readChangeSetPatch } from "../chat/changeSets.js";
@@ -12,6 +12,7 @@ import { listManagedWorktrees } from "../chat/worktrees.js";
 import { listFileMutations } from "../files/mutationRegistry.js";
 import { registerAgentHooks } from "./agentHooks.js";
 import { TraceStore } from "../chat/traceStore.js";
+import { createPermissionAuthorizer, type PermissionAuthorizer } from "./permissionService.js";
 
 function initializeGitWorkspace(workspaceDir: string): void {
   execFileSync("git", ["init", "-q", workspaceDir]);
@@ -377,4 +378,121 @@ test("bounded child binary mutation evidence reaches ready review with binary pa
   assert.equal(mutations[0].path, "evidence.bin");
   assert.equal(mutations[0].postimageBinary, true);
   assert.equal(mutations[0].rollbackUnavailableReason, undefined);
+});
+
+async function subagentFullAccessFixture(t: test.TestContext) {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-full-access-"));
+  initializeGitWorkspace(workspaceDir);
+  const originalFetch = globalThis.fetch;
+  let completion = 0;
+  clearModelCapabilityCache();
+  globalThis.fetch = async (input) => {
+    if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
+    completion += 1;
+    return Response.json({ choices: [{ message: completion === 1
+      ? { role: "assistant", content: null, tool_calls: [{ id: "child-full-access-write", type: "function", function: {
+        name: "write_file", arguments: JSON.stringify({ path: "synthetic-child.txt", content: "synthetic child\n" }),
+      } }] }
+      : { role: "assistant", content: "Synthetic child test complete." }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+  };
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    clearModelCapabilityCache();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+  return {
+    workspaceDir,
+    execute: (authorize: PermissionAuthorizer) => runSubagent(
+      "Write one synthetic child fixture", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, authorize, undefined,
+      { parentRunId: "parent-full-access", parentConversationId: "conversation-full-access", parentRequestId: "request-full-access", parentToolCallId: "task-full-access" },
+    ),
+  };
+}
+
+test("a parent workspace full access grant cannot bypass approval in a child managed worktree", async (t) => {
+  const fixture = await subagentFullAccessFixture(t);
+  let approvals = 0;
+  const authorize = createPermissionAuthorizer({
+    mode: "code", readOnly: false, workspace: fixture.workspaceDir, runId: "parent-full-access",
+    getFullAccessGrant: () => ({ grantId: "parent-workspace-only", revision: 1 }),
+    requestApproval: async () => { approvals += 1; return "deny"; },
+  });
+  const output = await fixture.execute(authorize);
+  const child = listManagedWorktrees(fixture.workspaceDir)[0];
+  assert.equal(approvals, 1);
+  assert.match(output, /ChangeSet [a-f0-9]+ \(no_changes\)$/);
+  assert.equal(await fs.stat(path.join(child.path, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(await fs.stat(path.join(fixture.workspaceDir, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(readRunRecord(fixture.workspaceDir, child.runId!).toolExecutions.find((entry) => entry.toolCallId === "child-full-access-write")?.status, "denied");
+  assert.equal(listFileMutations(child.path, { toolCallId: "child-full-access-write" }).length, 0);
+});
+
+test("child authorization revoked during beforeToolExecute cannot write its isolated workspace", async (t) => {
+  const fixture = await subagentFullAccessFixture(t);
+  let active = true;
+  let hookReached = false;
+  let revalidations = 0;
+  const authorize: PermissionAuthorizer = async (request) => {
+    const child = listManagedWorktrees(fixture.workspaceDir)[0];
+    assert.equal(request.workspaceDir, child.path);
+    return {
+      allowed: true, decision: "full_access",
+      revalidate: () => {
+        revalidations += 1;
+        return active ? { allowed: true, decision: "full_access" } : { allowed: false, decision: "deny", reason: "Synthetic child grant revoked" };
+      },
+    };
+  };
+  const unregister = registerAgentHooks({
+    name: "revoke-child-full-access-before-execute",
+    handlers: { beforeToolExecute: async (context) => {
+      if (context.toolCallId !== "child-full-access-write") return;
+      hookReached = true;
+      await Promise.resolve();
+      active = false;
+    } },
+  });
+  t.after(unregister);
+  await fixture.execute(authorize);
+  const child = listManagedWorktrees(fixture.workspaceDir)[0];
+  const call = readRunRecord(fixture.workspaceDir, child.runId!).toolExecutions.find((entry) => entry.toolCallId === "child-full-access-write");
+  assert.equal(hookReached, true);
+  assert.ok(revalidations > 0);
+  assert.equal(call?.status, "denied");
+  assert.match(call?.resultSummary || "", /Synthetic child grant revoked/);
+  assert.equal(await fs.stat(path.join(child.path, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(await fs.stat(path.join(fixture.workspaceDir, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(listFileMutations(child.path, { toolCallId: "child-full-access-write" }).length, 0);
+});
+
+test("child authorization revoked during the running recorder await cannot reach its write handler", async (t) => {
+  const fixture = await subagentFullAccessFixture(t);
+  let active = true;
+  let runningReached = false;
+  let revalidations = 0;
+  const authorize: PermissionAuthorizer = async () => ({
+    allowed: true, decision: "full_access",
+    revalidate: () => {
+      revalidations += 1;
+      return active ? { allowed: true, decision: "full_access" } : { allowed: false, decision: "deny", reason: "Synthetic child grant revoked during recorder await" };
+    },
+  });
+  const originalToolState = AgentRunRecorder.prototype.toolState;
+  AgentRunRecorder.prototype.toolState = async function (entry) {
+    const result = await originalToolState.call(this, entry);
+    if (entry.toolCallId === "child-full-access-write" && entry.status === "running") {
+      runningReached = true;
+      active = false;
+    }
+    return result;
+  };
+  t.after(() => { AgentRunRecorder.prototype.toolState = originalToolState; });
+  await fixture.execute(authorize);
+  const child = listManagedWorktrees(fixture.workspaceDir)[0];
+  assert.equal(runningReached, true);
+  assert.ok(revalidations > 0);
+  assert.equal(readRunRecord(fixture.workspaceDir, child.runId!).toolExecutions.find((entry) => entry.toolCallId === "child-full-access-write")?.status, "denied");
+  assert.equal(await fs.stat(path.join(child.path, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(await fs.stat(path.join(fixture.workspaceDir, "synthetic-child.txt")).then(() => true).catch(() => false), false);
+  assert.equal(listFileMutations(child.path, { toolCallId: "child-full-access-write" }).length, 0);
 });

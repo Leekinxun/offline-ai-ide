@@ -287,7 +287,7 @@ export interface ToolContext {
   compatibilityShellAuthorized?: boolean;
   /** Immutable text of a server-classified read-only bash call. */
   readOnlyShellCommand?: string;
-  /** Opaque, single-command egress permission issued only by the approval path. */
+  /** Opaque, single-command egress permission issued only by server authorization. */
   networkExecutionGrant?: import("./networkAccess.js").NetworkExecutionGrant;
   sessionToken?: string;
   sessionOwner?: string;

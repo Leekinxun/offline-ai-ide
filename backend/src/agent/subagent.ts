@@ -55,11 +55,13 @@ async function dispatchSubTool(
   filesystemSandbox: ToolContext["filesystemSandbox"]
 ): Promise<string> {
   const readOnlyShellCommand = name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command) ? args.command as string : undefined;
-  const permission = await authorize({ requestId: agentName, toolCallId, name, input: args, agentName });
+  const permission = await authorize({ requestId: agentName, toolCallId, name, input: args, agentName, workspaceDir: cwd });
   if (!permission.allowed) return `Error: Tool denied: ${permission.reason || "permission denied"}`;
   signal?.throwIfAborted();
   await onAuthorized();
   signal?.throwIfAborted();
+  const currentPermission = permission.revalidate ? permission.revalidate() : permission;
+  if (!currentPermission.allowed) return `Error: Tool denied: ${currentPermission.reason || "permission revoked"}`;
   if (context) {
     const childContext = {
       ...context, toolCallId, compatibilityShellAuthorized: name === "bash", readOnlyShellCommand,

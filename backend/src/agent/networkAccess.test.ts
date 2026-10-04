@@ -14,6 +14,9 @@ import { intersectSandboxGrants } from "../extensions/policy/evaluator.js";
 import { ExtensionPolicyStore } from "../extensions/policy/store.js";
 import { probeFilesystemIsolation } from "./processSandbox.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { consumeNetworkExecutionGrant, issueNetworkExecutionGrant, networkGrantForTool, type AgentNetworkPolicy, type NetworkExecutionGrant } from "./networkAccess.js";
+import { registerAgentHooks } from "./agentHooks.js";
+import type { FullAccessGrant } from "../chat/fullAccess.js";
 
 const profile = resolveAgentProfile("code", { code: { isolation: { network: true } } });
 type HandlerContext = Parameters<typeof TOOL_DISPATCH.bash>[1];
@@ -144,4 +147,124 @@ test("existing policy store defaults deny and wildcard must survive the literal 
   assert.deepEqual(store.explain("bash").effectiveSandbox.networkOrigins, ["*", "http://127.0.0.1"]);
   store.putWorkspaceOverride({ adminPolicyVersion: admin.version, permissions: { allow: ["*"] }, sandbox: { readPaths: ["."], writePaths: ["."], networkOrigins: ["http://127.0.0.1"] } }, 0);
   assert.deepEqual(store.explain("bash").effectiveSandbox.networkOrigins, ["http://127.0.0.1"]);
+});
+
+test("full access networking issues a live server grant bound to one exact command, tool and workspace", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-network-full-binding-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const authorize = authorizer(workspace, {
+    getFullAccessGrant: () => ({ grantId: "full-network", revision: 1 }),
+    requestApproval: async () => { throw new Error("Full access should skip the prompt"); },
+  });
+  for (const toolName of ["bash", "process_start"] as const) {
+    const command = "curl http://127.0.0.1/synthetic";
+    const permission = await authorize(request(command, toolName));
+    assert.equal(permission.allowed, true); assert.equal(permission.decision, "full_access");
+    assert.ok(permission.networkExecutionGrant);
+    const grant = permission.networkExecutionGrant!;
+    assert.throws(() => consumeNetworkExecutionGrant(JSON.parse(JSON.stringify(grant)) as NetworkExecutionGrant, workspace, command, toolName), /missing, expired/);
+    assert.throws(() => consumeNetworkExecutionGrant(grant, workspace, `${command}?changed`, toolName), /does not match/);
+    assert.throws(() => consumeNetworkExecutionGrant(grant, path.dirname(workspace), command, toolName), /does not match/);
+    assert.throws(() => consumeNetworkExecutionGrant(grant, workspace, command, toolName === "bash" ? "process_start" : "bash"), /does not match/);
+    consumeNetworkExecutionGrant(grant, workspace, command, toolName);
+    assert.throws(() => consumeNetworkExecutionGrant(grant, workspace, command, toolName), /missing, expired/);
+  }
+  const ordinary = await authorize({ ...request("node synthetic.cjs"), input: { command: "node synthetic.cjs" } });
+  assert.equal(ordinary.decision, "full_access");
+  assert.equal(ordinary.networkExecutionGrant, undefined, "full access does not change default network denial");
+  const policy: AgentNetworkPolicy = { mode: "code", readOnly: false, primaryAgent: true, profileAllowsNetwork: true, networkOrigins: ["*"] };
+  assert.throws(() => issueNetworkExecutionGrant(policy, "full_access", workspace, "curl http://127.0.0.1", "bash"), /live server verification/);
+});
+
+test("full access network grants fail closed when authorization or hard network policy changes before consumption", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-network-full-revoke-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const command = "curl http://127.0.0.1/synthetic";
+  for (const change of ["disabled", "new-id", "new-revision", "profile", "origins", "read-only", "policy-unavailable"] as const) {
+    let grant: FullAccessGrant | null = { grantId: "full-network", revision: 1 };
+    let profileAllowsNetwork = true;
+    let networkOrigins = ["*"];
+    let readOnly = false;
+    let unavailable = false;
+    const authorize = authorizer(workspace, {
+      getFullAccessGrant: () => grant,
+      networkPolicy: () => {
+        if (unavailable) throw new Error("policy unavailable");
+        return { profileAllowsNetwork, networkOrigins, readOnly };
+      },
+      requestApproval: async () => { throw new Error("Full access should skip the prompt"); },
+    });
+    const permission = await authorize(request(command));
+    assert.equal(permission.allowed, true, change);
+    assert.ok(permission.networkExecutionGrant);
+    if (change === "disabled") grant = null;
+    if (change === "new-id") grant = { grantId: "replacement", revision: 1 };
+    if (change === "new-revision") grant = { grantId: "full-network", revision: 2 };
+    if (change === "profile") profileAllowsNetwork = false;
+    if (change === "origins") networkOrigins = ["http://127.0.0.1"];
+    if (change === "read-only") readOnly = true;
+    if (change === "policy-unavailable") unavailable = true;
+    assert.throws(() => consumeNetworkExecutionGrant(permission.networkExecutionGrant!, workspace, command, "bash"), /disabled or changed|Network authorization was revoked/, change);
+    grant = { grantId: "full-network", revision: 1 }; profileAllowsNetwork = true; networkOrigins = ["*"]; readOnly = false; unavailable = false;
+    assert.throws(() => consumeNetworkExecutionGrant(permission.networkExecutionGrant!, workspace, command, "bash"), /missing, expired/, "re-enabling must not revive the consumed stale grant");
+  }
+});
+
+test("network tool admission permits the primary recorder's self lineage while preserving delegated-agent denial", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-network-primary-lineage-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const input = { command: "curl http://127.0.0.1/synthetic", allow_network: true };
+  const permission = await authorizer(workspace, { getFullAccessGrant: () => ({ grantId: "full-network", revision: 1 }) })(request(input.command));
+  const ctx = { ...context(workspace), networkExecutionGrant: permission.networkExecutionGrant,
+    lineage: { parentRunId: "network-run", parentConversationId: "network-conversation", parentRequestId: "network-request", parentToolCallId: "network-call" },
+  };
+  assert.equal(networkGrantForTool(ctx, input), permission.networkExecutionGrant);
+  for (const child of [
+    { ...ctx, lineage: { ...ctx.lineage, parentRunId: "different-parent-run" } },
+    { ...ctx, runId: undefined },
+    { ...ctx, subagentDepth: 1 },
+    { ...ctx, agentProfileId: "subagent" as const },
+  ]) assert.throws(() => networkGrantForTool(child, input), /delegated Agents/);
+});
+
+test("full access cannot supply absent administrator network grants and hooks cannot preserve a revoked grant", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-network-full-policy-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const full = { getFullAccessGrant: () => ({ grantId: "full-network", revision: 1 }) };
+  const command = "curl http://127.0.0.1/synthetic";
+  for (const options of [
+    { networkPolicy: () => ({ profileAllowsNetwork: false, networkOrigins: ["*"] }) },
+    { networkPolicy: () => ({ profileAllowsNetwork: true, networkOrigins: [] }) },
+    { readOnly: true },
+    { mode: "plan" as const },
+    { profile: resolveAgentProfile("subagent") },
+  ]) {
+    const permission = await authorizer(workspace, { ...full, ...options })(request(command));
+    assert.equal(permission.allowed, false); assert.equal(permission.networkExecutionGrant, undefined);
+  }
+  const child = narrowPermissionAuthorizer(authorizer(workspace, full), resolveAgentProfile("subagent"));
+  assert.equal((await child(request(command))).allowed, false);
+  let networkAllowed = true;
+  const unregister = registerAgentHooks({ name: "revoke-full-network-after-permission", handlers: { afterPermissionDecision: () => { networkAllowed = false; } } });
+  try {
+    const permission = await authorizer(workspace, { ...full, networkPolicy: () => ({ profileAllowsNetwork: networkAllowed, networkOrigins: ["*"] }) })(request(command));
+    assert.equal(permission.allowed, false); assert.equal(permission.networkExecutionGrant, undefined);
+    assert.match(permission.reason || "", /Network authorization was revoked/);
+  } finally { unregister(); }
+});
+
+test("full access networking executes only against a synthetic loopback fixture when sandbox isolation is available", async (t) => {
+  if (!probeFilesystemIsolation().available) {
+    t.skip("Native filesystem sandbox is unavailable; grant verification remains covered separately");
+    return;
+  }
+  const f = await fixture(t);
+  const permission = await authorizer(f.workspace, {
+    getFullAccessGrant: () => ({ grantId: "full-network", revision: 1 }),
+    requestApproval: async () => { throw new Error("Full access should skip the prompt"); },
+  })(request(f.command));
+  assert.equal(permission.decision, "full_access");
+  const output = await TOOL_DISPATCH.bash({ command: f.command, allow_network: true }, { ...f.ctx, networkExecutionGrant: permission.networkExecutionGrant });
+  assert.equal(output, "LOCAL_NETWORK_OK");
+  assert.equal(f.connections(), 1);
 });

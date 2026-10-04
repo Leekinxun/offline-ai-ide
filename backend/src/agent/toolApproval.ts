@@ -110,7 +110,7 @@ export function classifyToolApproval(
     return {
       kind: "approval",
       risk: "high",
-      reason: network ? "NETWORK ACCESS: this one command may connect to any network destination and transmit workspace data. Requires both administrator grants and explicit one-time approval; Plan/session approval cannot authorize it" : "Execute this command through the compatibility shell in the workspace",
+      reason: network ? "NETWORK ACCESS: this one command may connect to any network destination and transmit workspace data. Requires both administrator grants and explicit one-time approval or user-enabled full access verified by the server; Plan/ordinary session approval cannot authorize it" : "Execute this command through the compatibility shell in the workspace",
       scope: command,
       canAllowSession: false,
     };
@@ -174,6 +174,7 @@ interface PendingApproval {
   risk: ToolRisk;
   canAllowSession: boolean;
   sessionKey?: string;
+  grantGeneration: number;
   resolve: (outcome: ToolApprovalOutcome) => void;
   timer: NodeJS.Timeout;
 }
@@ -181,10 +182,16 @@ interface PendingApproval {
 export interface ToolApprovalGrants {
   sessionAllowed: Set<string>;
   conversationAllowed: Set<string>;
+  generation: number;
 }
 
 export function createToolApprovalGrants(): ToolApprovalGrants {
-  return { sessionAllowed: new Set(), conversationAllowed: new Set() };
+  return { sessionAllowed: new Set(), conversationAllowed: new Set(), generation: 0 };
+}
+
+/** Invalidate reusable approvals without resolving any existing pending item. */
+export function clearToolApprovalGrants(grants: ToolApprovalGrants): void {
+  grants.sessionAllowed.clear(); grants.conversationAllowed.clear(); grants.generation += 1;
 }
 
 export class ToolApprovalSession {
@@ -229,6 +236,7 @@ export class ToolApprovalSession {
         risk: input.risk,
         canAllowSession: input.canAllowSession,
         sessionKey: input.sessionKey,
+        grantGeneration: this.grants.generation,
         resolve,
         timer,
       });
@@ -270,11 +278,12 @@ export class ToolApprovalSession {
 
     const acceptedDecision = decision === "allow_session" && pending.networkRequested
       ? "deny" : decision === "allow_session" && (!pending.canAllowSession || pending.risk === "high" || pending.request.name === "submit_plan") ? "allow_once" : decision;
-    if (acceptedDecision === "allow_session" && pending.sessionKey) {
+    const effectiveDecision = acceptedDecision === "allow_session" && pending.grantGeneration !== this.grants.generation ? "allow_once" : acceptedDecision;
+    if (effectiveDecision === "allow_session" && pending.sessionKey) {
       this.grants.sessionAllowed.add(`${pending.conversationId || ""}\0${pending.sessionKey}`);
     }
-    pending.resolve({ decision: acceptedDecision,
-      ...(acceptedDecision === "deny" ? { cause: decision === "deny" ? "user_denied" as const : "invalid_decision" as const } : {}) });
+    pending.resolve({ decision: effectiveDecision,
+      ...(effectiveDecision === "deny" ? { cause: decision === "deny" ? "user_denied" as const : "invalid_decision" as const } : {}) });
     return true;
   }
 
@@ -282,6 +291,8 @@ export class ToolApprovalSession {
     if (!conversationId) return this.pending.size;
     return [...this.pending.values()].filter((item) => item.conversationId === conversationId).length;
   }
+
+  clearGrants(): void { clearToolApprovalGrants(this.grants); }
 
   cancelAll(): void {
     for (const pending of this.pending.values()) {
