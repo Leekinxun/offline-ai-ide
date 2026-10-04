@@ -1232,7 +1232,7 @@ const RunFailureBanner: React.FC<{
       <span>
         {notice.kind === "max_iterations"
           ? t("chat.failure.maxIterations.body")
-          : t("chat.failure.generic.body", { reason: notice.reason })}
+          : notice.reason ? t("chat.failure.generic.body", { reason: notice.reason }) : t("chat.failure.unknown.body")}
       </span>
       <small>{t(canResume ? "chat.failure.resumeHint" : "chat.failure.noResumeHint")}</small>
     </div>

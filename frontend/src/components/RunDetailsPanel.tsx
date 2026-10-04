@@ -160,7 +160,7 @@ export const RunDetailsPanel: React.FC<RunDetailsPanelProps> = ({
                 <span>
                   {failureNotice.kind === "max_iterations"
                     ? t("chat.failure.maxIterations.body")
-                    : t("chat.failure.generic.body", { reason: failureNotice.reason })}
+                    : failureNotice.reason ? t("chat.failure.generic.body", { reason: failureNotice.reason }) : t("chat.failure.unknown.body")}
                 </span>
               </div>
             </div>

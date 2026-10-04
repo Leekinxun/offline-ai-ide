@@ -431,6 +431,42 @@
   font-size: 10px;
 }
 
+.run-failure-reason-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line-subtle));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-panel-strong) 92%, var(--danger) 8%);
+  color: var(--ink);
+}
+
+.run-failure-reason-card svg {
+  flex-shrink: 0;
+  color: var(--danger);
+  margin-top: 1px;
+}
+
+.run-failure-reason-card div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-failure-reason-card strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.run-failure-reason-card span {
+  color: var(--ink-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* 统计微卡 2x2 网格 */
 .run-metrics-grid {
   display: grid;

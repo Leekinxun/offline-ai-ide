@@ -32,7 +32,7 @@ export function failureReasonFromEvents(events?: readonly AgentRunEvent[]): stri
   }
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.kind !== "error" && event.isError !== true) continue;
+    if (event.kind !== "error" && !(event.kind === "run_finished" && event.isError === true)) continue;
     const detail = cleanReason(event.detail);
     if (detail) return detail;
     const label = cleanReason(event.label);
@@ -40,7 +40,7 @@ export function failureReasonFromEvents(events?: readonly AgentRunEvent[]): stri
   }
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.kind !== "error" && event.isError !== true) continue;
+    if (event.kind !== "error" && !(event.kind === "run_finished" && event.isError === true)) continue;
     const label = cleanReason(event.label);
     if (label) return label;
   }
@@ -51,11 +51,11 @@ export function resolveRunFailureReason(
   runState: Pick<AgentRunState, "status" | "failureReason" | "summary" | "events"> | null | undefined,
   summary?: ConversationRunSummary | null,
 ): string | null {
-  if (runState?.status !== "failed") return null;
-  return cleanReason(runState.failureReason)
-    || cleanReason(runState.summary?.failureReason)
+  if (runState && runState.status !== "failed") return null;
+  return cleanReason(runState?.failureReason)
+    || cleanReason(runState?.summary?.failureReason)
     || cleanReason(summary?.failureReason)
-    || failureReasonFromEvents(runState.events);
+    || failureReasonFromEvents(runState?.events);
 }
 
 export function runFailureNotice(
@@ -63,7 +63,8 @@ export function runFailureNotice(
   summary?: ConversationRunSummary | null,
 ): RunFailureNotice | null {
   const reason = resolveRunFailureReason(runState, summary);
-  if (!reason) return null;
+  if (!reason && runState?.status !== "failed") return null;
+  if (!reason || GENERIC_FAILURE_LABELS.has(reason)) return { kind: "generic", reason: "" };
   const match = MAX_ITERATIONS_REASON_PATTERN.exec(reason);
   const limit = match ? Number(match[1]) : 0;
   if (Number.isSafeInteger(limit) && limit > 0) {

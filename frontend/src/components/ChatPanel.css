@@ -31,6 +31,57 @@
   z-index: 20;
 }
 
+.chat-run-failure-banner,
+.chat-message-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line-subtle));
+  background: color-mix(in srgb, var(--surface-panel-strong) 92%, var(--danger) 8%);
+  color: var(--text-primary);
+}
+
+.chat-run-failure-banner {
+  margin: 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.chat-run-failure-banner svg,
+.chat-message-error svg {
+  flex-shrink: 0;
+  color: var(--danger);
+  margin-top: 1px;
+}
+
+.chat-run-failure-banner div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-run-failure-banner strong {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.chat-run-failure-banner span,
+.chat-run-failure-banner small {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.chat-message-error {
+  max-width: min(88%, 760px);
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .chat-panel.is-empty-session .chat-empty-state {
   display: flex;
   flex-direction: column;
