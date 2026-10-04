@@ -7,6 +7,44 @@ Codex native Windows sandbox.
 WSL 2 is an explicit selection in desktop execution settings. The integrated
 terminal's shell preference does not select the Agent execution environment.
 
+## Offline installation and operation
+
+The desktop App must install and operate without Internet access. Codex is the
+reference for execution and sandbox behavior, not the App's model provider or
+login service. The retained Agent uses the project's own configurable model
+client; offline deployments must supply reachable local or private-network
+primary and fallback model services. Local IPC and connections to those services
+remain part of the offline deployment; denying network access to sandboxed commands is a separate
+execution permission.
+
+The Windows bundle embeds the WebView2 offline installer through Tauri's
+`offlineInstaller` mode. It must not use the downloaded or embedded bootstrapper,
+both of which require Internet access when WebView2 is missing. See
+[Tauri's WebView2 installation options](https://v2.tauri.app/distribute/windows-installer/#webview2-installation-options).
+The generated installer still needs a real disconnected-machine installation
+check; an installed development-machine WebView2 is not proof of that behavior.
+
+Node, Rust IDE services and all sandbox executables are packaged resources.
+Missing resources fail explicitly rather than triggering a runtime download.
+Fetching source, compiler dependencies and the WebView2 installer belongs to the
+build environment. Model weights and their local serving runtime must also be
+available in the destination environment before Agent inference. Existing settings
+can name remote providers and fallbacks, so a prior online configuration must be
+reviewed for offline deployment; no cloud provider is a required dependency.
+
+Git integration currently uses the system Git CLI. Python language/debug tools,
+Ruff, Cargo and project-specific compiler/dependency caches are optional offline
+environment prerequisites for their respective features. They are not all
+included in the App. Desktop Cargo diagnostics use `--offline` with
+`RUSTUP_AUTO_INSTALL=0` and report a missing toolchain or unavailable cached
+dependencies without trying to fetch
+them. Web diagnostics retain their existing command. User-configured external
+model/MCP/plugin endpoints must be replaced with reachable local or private
+network services for an offline deployment.
+The rustup switch prevents the Cargo proxy from automatically installing an
+absent workspace toolchain before Cargo can process `--offline`; see
+[rustup's environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
+
 The wire contract follows Codex **0.160.0** at commit
 `a956835d020762cb2b570053af06f643a11c0ecc`. Variant
 `crownforge-network-v1` rebuilds the CLI, command runner and setup helper from
@@ -44,8 +82,10 @@ source checks alone do not establish DNS-service proxying or every Windows build
 
 The adapter checks an existing App-owned control configuration without rewriting
 it. A changed configuration stays on disk and blocks execution until explicit
-setup repairs it. The execution-only Codex client does not start model threads or
-login flows. It does not inherit API keys, Electron Node flags, injection settings,
+setup repairs it. The execution-only Codex client does not send model-thread or
+login RPCs. Its fixed unauthenticated custom provider skips upstream cloud/model
+catalog discovery, and analytics and update checks are disabled. It does not
+inherit API keys, Electron Node flags, injection settings,
 or `CODEX_WINDOWS_REGISTERED_CORE`. This last exclusion matters because the
 pinned upstream readiness handler can refresh registered service state when that
 environment variable is enabled.

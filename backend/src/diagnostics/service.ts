@@ -60,12 +60,12 @@ interface CommandResult {
   timedOut: boolean;
 }
 
-function run(command: string, args: string[], workspaceDir: string, input?: string): Promise<CommandResult> {
+function run(command: string, args: string[], workspaceDir: string, input?: string, env: NodeJS.ProcessEnv = {}): Promise<CommandResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: workspaceDir,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", ...env },
     });
     let stdout = "";
     let stderr = "";
@@ -307,10 +307,23 @@ async function executeDiagnostics(workspaceDir: string): Promise<DiagnosticsResu
     }
   }
   if (fs.existsSync(path.join(workspaceDir, "Cargo.toml"))) {
-    const result = await run("cargo", ["check", "--message-format=json"], workspaceDir);
+    const offline = desktopNativeIdeEnabled();
+    const result = await run(
+      "cargo", ["check", ...(offline ? ["--offline"] : []), "--message-format=json"],
+      workspaceDir, undefined, offline ? { RUSTUP_AUTO_INSTALL: "0" } : {}
+    );
+    const findings = parseCargo(workspaceDir, result.stdout);
     if (!result.missing) {
-      diagnostics.push(...parseCargo(workspaceDir, result.stdout));
+      diagnostics.push(...findings);
       tools.push("cargo");
+    }
+    if (offline && (result.missing || result.timedOut || (result.exitCode !== 0 && !findings.some((finding) => finding.severity === "error")))) {
+      const message = result.missing
+        ? "Cargo is not installed. Preinstall the Rust toolchain for offline diagnostics."
+        : result.timedOut
+          ? "Cargo check timed out in offline mode."
+          : `Cargo check failed in offline mode. Preinstall the project dependencies in this offline environment.${result.stderr.trim() ? `\n${result.stderr.trim().slice(0, 2_000)}` : ""}`;
+      diagnostics.push({ path: "Cargo.toml", line: 1, column: 1, severity: "error", message, source: "cargo" });
     }
   }
 

@@ -57,6 +57,13 @@ The cause of the cmdlet delay has not been established.
 
 ## Remaining sequence
 
+The destination App must install and operate in a completely offline environment.
+Codex is an execution/sandbox implementation reference, not a cloud-model or
+login dependency. The Windows bundle now selects the embedded WebView2 offline
+installer. Build-time source downloads do not establish offline runtime
+acceptance; the packaged App still needs disconnected installation and local-model
+execution checks. Web behavior remains outside this desktop migration.
+
 1. Resolve the native network boundary and rerun the complete Agent acceptance,
    including stdin and process cleanup. Then verify Windows packaging and actual
    WebView/installer behavior.

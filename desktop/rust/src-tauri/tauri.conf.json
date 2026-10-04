@@ -15,6 +15,6 @@
     "resources": { "../resources/": "runtime/" },
     "icon": ["icons/icon.png", "../../assets/icon.icns", "../../assets/icon.ico"],
     "macOS": { "minimumSystemVersion": "13.0" },
-    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true } }
+    "windows": { "webviewInstallMode": { "type": "offlineInstaller", "silent": true } }
   }
 }
