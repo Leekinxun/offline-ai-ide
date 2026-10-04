@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
+import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
 import crypto from "node:crypto";
 import { writeVerifiedArchive } from "./windows-package-sdk-artifact.mjs";
 
@@ -104,9 +104,32 @@ test("MinGit dependency resolution is scoped to its actual ucrt64 and usr loader
   assert.deepEqual(minGitDllDirectories(path.join(root, "cmd/git.exe"), root), [path.join(root, "cmd")]);
   assert.deepEqual(minGitDllDirectories(path.join(root, "usr/bin/sh.exe"), root), [path.join(root, "usr/bin")]);
   assert.deepEqual(minGitDllDirectories(path.join(root, "ucrt64/bin/git.exe"), root), [path.join(root, "ucrt64/bin")]);
-  assert.deepEqual(minGitDllDirectories(path.join(root, "ucrt64/libexec/git-core/git-remote-http.exe"), root), [path.join(root, "ucrt64/libexec/git-core"), path.join(root, "ucrt64/bin")]);
+  assert.deepEqual(minGitDllDirectories(path.join(root, "ucrt64/bin/git-remote-http.exe"), root), [path.join(root, "ucrt64/bin")]);
+  assert.throws(() => minGitDllDirectories(path.join(root, "ucrt64/libexec/git-core/git-remote-http.exe"), root));
   assert.throws(() => minGitDllDirectories(path.resolve("outside.exe"), root));
   assert.throws(() => minGitDllDirectories(path.join(root, "another/bin/unknown.exe"), root));
+});
+
+test("MinGit executable inspection uses the installed ucrt64 HTTP launcher and binds its receipt bytes and PE architecture", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-mingit-layout-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const files = {};
+  const bytes = Buffer.alloc(160); bytes.write("MZ"); bytes.writeUInt32LE(128, 0x3c); bytes.write("PE\0\0", 128); bytes.writeUInt16LE(0x8664, 132);
+  for (const relative of ["ucrt64/bin/git.exe", "usr/bin/sh.exe", "ucrt64/bin/git-remote-http.exe"]) {
+    const file = path.join(directory, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes);
+    files[relative] = crypto.createHash("sha256").update(bytes).digest("hex");
+  }
+  const git = { directory, manifest: { files } };
+  const executables = minGitSmokeExecutables(git);
+  assert.equal(executables.gitHttp, path.join(directory, "ucrt64/bin/git-remote-http.exe"));
+  const wrongFiles = { ...files }; delete wrongFiles["ucrt64/bin/git-remote-http.exe"];
+  wrongFiles["ucrt64/libexec/git-core/git-remote-http.exe"] = files["ucrt64/bin/git-remote-http.exe"];
+  assert.throws(() => minGitSmokeExecutables({ directory, manifest: { files: wrongFiles } }), /absent from its verified receipt/);
+  fs.appendFileSync(executables.gitHttp, "changed");
+  assert.throws(() => minGitSmokeExecutables(git), /differs from its verified receipt/);
+  bytes.writeUInt16LE(0x14c, 132); fs.writeFileSync(executables.gitHttp, bytes);
+  files["ucrt64/bin/git-remote-http.exe"] = crypto.createHash("sha256").update(bytes).digest("hex");
+  assert.throws(() => minGitSmokeExecutables(git), /Windows x64 PE/);
 });
 
 test("WinPS5 helpers discard inherited pwsh7 module paths while preserving other environment values", () => {

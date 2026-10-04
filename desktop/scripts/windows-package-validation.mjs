@@ -124,12 +124,22 @@ export function minGitDllDirectories(binary, gitRoot) {
   assert.ok(relative && !relative.startsWith("../") && !path.isAbsolute(relative), "MinGit PE inspection must stay in its verified runtime");
   const adjacent = path.dirname(binary);
   if (relative.startsWith("cmd/") || relative.startsWith("ucrt64/bin/") || relative.startsWith("usr/bin/")) return [adjacent];
-  if (relative.startsWith("ucrt64/libexec/git-core/")) {
-    // The cmd launcher/core supply this MinGit bin to their transport helpers.
-    // The real ls-remote receiver smoke separately proves that loading works.
-    return [adjacent, path.join(gitRoot, "ucrt64/bin")];
-  }
   throw new Error("No verified MinGit loader path is defined for this executable");
+}
+
+export function minGitSmokeExecutables(gitRuntime) {
+  // Pinned MinGit puts its transport launcher beside the ucrt64 core. Its
+  // libexec/git-core directory contains scripts, not the HTTP executable.
+  const paths = { gitCore: "ucrt64/bin/git.exe", gitShell: "usr/bin/sh.exe", gitHttp: "ucrt64/bin/git-remote-http.exe" };
+  return Object.fromEntries(Object.entries(paths).map(([key, relative]) => {
+    const file = path.join(gitRuntime.directory, ...relative.split("/"));
+    assert.ok(fs.lstatSync(file).isFile(), `Pinned MinGit executable is missing: ${relative}`);
+    const expected = gitRuntime.manifest.files[relative];
+    assert.match(expected || "", /^[a-f0-9]{64}$/, `Pinned MinGit executable is absent from its verified receipt: ${relative}`);
+    assert.equal(fileSha256(file), expected, `Pinned MinGit executable differs from its verified receipt: ${relative}`);
+    assert.equal(peMachine(file), 0x8664, `Pinned MinGit executable must be Windows x64 PE: ${relative}`);
+    return [key, file];
+  }));
 }
 
 export function assertRuntimeManifest(runtime) {

@@ -14,7 +14,7 @@ import http from "node:http";
 import { fileSha256 } from "../desktop/scripts/build-crownforge-codex-runtime.mjs";
 import { verifyCodexRuntime } from "../desktop/scripts/prepare-codex-runtime.mjs";
 import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
-import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
+import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
 
 assert.equal(process.platform, "win32", "Package acceptance must run on real Windows");
 assert.ok(process.argv.includes("--allow-disposable-install"), "Installation requires --allow-disposable-install");
@@ -204,8 +204,7 @@ try {
 
   stage = "installed release PE dependency closure";
   const dumpbin = (await ps(`$vswhere=Join-Path \${env:ProgramFiles(x86)} 'Microsoft Visual Studio\\Installer\\vswhere.exe'; $vs=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath; if($LASTEXITCODE -ne 0 -or -not $vs){throw 'MSVC tools missing'}; $toolset=Get-ChildItem (Join-Path $vs 'VC\\Tools\\MSVC') -Directory | Sort-Object Name -Descending | Select-Object -First 1; Join-Path $toolset.FullName 'bin\\Hostx64\\x64\\dumpbin.exe'`)).trim();
-  const gitCore = path.join(gitRuntime.directory, "ucrt64/bin/git.exe"), gitShell = path.join(gitRuntime.directory, "usr/bin/sh.exe"), gitHttp = path.join(gitRuntime.directory, "ucrt64/libexec/git-core/git-remote-http.exe");
-  for (const binary of [gitCore, gitShell, gitHttp]) assert.ok(fs.statSync(binary).isFile(), "Pinned MinGit layout is incomplete");
+  const { gitCore, gitShell, gitHttp } = minGitSmokeExecutables(gitRuntime);
   const gitBinaries = new Set([gitRuntime.executable, gitCore, gitShell, gitHttp]);
   const binaries = [hostExecutable, path.join(runtime, "node/node.exe"), path.join(runtime, "binaries/crownforge-ide-core.exe"), ...gitBinaries,
     ...filesUnder(path.join(runtime, "backend/vendor/codex/win-x64")).filter((file) => /\.exe$/i.test(file))];
