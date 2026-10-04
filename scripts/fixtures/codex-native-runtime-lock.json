@@ -6,7 +6,7 @@
   "runtimeVariant": "crownforge-network-v1",
   "upstreamCommit": "a956835d020762cb2b570053af06f643a11c0ecc",
   "patchFile": "desktop/rust/windows-sandbox-patches/crownforge-network-v1.patch",
-  "patchSha256": "9a12990d3e753927962151daea9f31b0d5be7cebfa9353c30ae695fd9c404956",
+  "patchSha256": "2cdf013509fd52ae27014e4ad0ae5e059698db08eea25923ecdc12980bc4fcde",
   "buildProfile": "release",
   "platform": "win32",
   "requiredFiles": [

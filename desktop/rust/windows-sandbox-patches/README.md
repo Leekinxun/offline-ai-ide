@@ -6,6 +6,13 @@ CrownForge downstream build, not an upstream fix or an unmodified official
 runtime. The integration receipt must identify the upstream commit, archive
 digest, patch digest, variant and final executable hashes independently.
 
+The release commit's manifests inherit workspace version `0.160.0` while its
+lockfile still labels 159 internal path packages `0.0.0`. The patch aligns only
+those manifest-identified package versions. All 1,313 third-party package blocks,
+including versions, sources, checksums and dependency lists, remain byte-identical.
+Builds continue to use `--locked`; this is release metadata alignment, not an
+external dependency update.
+
 Apply in a clean checkout with `git apply --check` followed by `git apply
 --index`. Rebuild all three cooperating executables from the same patched
 source and the upstream Rust 1.95.0 toolchain:

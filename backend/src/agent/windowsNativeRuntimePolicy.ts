@@ -5,7 +5,7 @@ export const WINDOWS_NATIVE_UPSTREAM_VERSION = "0.160.0" as const;
 export const WINDOWS_NATIVE_UPSTREAM_COMMIT = "a956835d020762cb2b570053af06f643a11c0ecc" as const;
 export const WINDOWS_NATIVE_RUNTIME_VARIANT = "crownforge-network-v1" as const;
 // Exact hash of the reviewed downstream source patch.
-export const WINDOWS_NATIVE_PATCH_SHA256 = "9a12990d3e753927962151daea9f31b0d5be7cebfa9353c30ae695fd9c404956" as const;
+export const WINDOWS_NATIVE_PATCH_SHA256 = "2cdf013509fd52ae27014e4ad0ae5e059698db08eea25923ecdc12980bc4fcde" as const;
 export const WINDOWS_NATIVE_BASE_ARCHIVE_SHA256 = Object.freeze({
   x64: "7f7fbbc8d6fd4ea2f3b13855ef47ea59663ba7e61fb2e9821df37163b8030891",
   arm64: "0bb6ecbad9c2f5d352ad539bbe43d627b32453bad1d61e5315ec9868f78e1b3c",
