@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileSha256, runtimeBuildId, validateSourceLock, buildCrownForgeCodexRuntime } from "./build-crownforge-codex-runtime.mjs";
+import { fileSha256, runtimeBuildId, sourceCacheDirectory, validateSourceLock, buildCrownForgeCodexRuntime } from "./build-crownforge-codex-runtime.mjs";
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-source-lock-"));
@@ -24,6 +24,9 @@ test("the reviewed source lock identifies exact upstream, patch and downstream b
   assert.equal(runtimeBuildId(lock), `${lock.runtimeVariant}:${lock.upstreamCommit}:${lock.patchSha256}`);
   const changed = { ...lock, patchSha256: "a".repeat(64) };
   assert.notEqual(runtimeBuildId(changed), runtimeBuildId(lock), "Patch changes must invalidate the compiled-runtime identity");
+  assert.notEqual(sourceCacheDirectory(root, lock, "x64"), sourceCacheDirectory(root, changed, "x64"));
+  assert.notEqual(sourceCacheDirectory(root, lock, "x64"), sourceCacheDirectory(root, lock, "arm64"));
+  assert.ok(path.relative(root, sourceCacheDirectory(root, lock, "x64")).length < 40, "Cache identity must leave room for upstream Windows source paths");
   fs.appendFileSync(patch, "unreviewed change\n");
   assert.throws(() => validateSourceLock(root, lock), /checksum mismatch/);
 });

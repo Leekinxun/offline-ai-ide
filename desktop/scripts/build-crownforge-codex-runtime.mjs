@@ -23,6 +23,11 @@ export function runtimeBuildId(lock) {
   return `${lock.runtimeVariant}:${lock.upstreamCommit}:${lock.patchSha256}`;
 }
 
+export function sourceCacheDirectory(project, lock, arch) {
+  const identity = crypto.createHash("sha256").update(`${runtimeBuildId(lock)}:${arch}`).digest("hex").slice(0, 16);
+  return path.join(project, ".artifacts/cf-src", identity);
+}
+
 export function validateSourceLock(project, lock) {
   if (lock.runtimeVariant !== "crownforge-network-v1" || lock.runtimeVersion !== "0.160.0" ||
       lock.sourceTag !== "rust-v0.160.0" || lock.upstreamCommit !== "a956835d020762cb2b570053af06f643a11c0ecc" ||
@@ -60,13 +65,14 @@ function rejectLinks(directory) {
 export function buildCrownForgeCodexRuntime({ project, lock, arch, baseline, destination, inventory, verifyPE }) {
   const patch = validateSourceLock(project, lock);
   if (process.platform !== "win32" || process.arch !== arch || !TARGETS[arch]) throw new Error("Build the patched sandbox on Windows with the matching native architecture");
-  const cache = path.join(project, ".artifacts/codex-source-build", lock.upstreamCommit, lock.patchSha256, arch);
+  const cache = sourceCacheDirectory(project, lock, arch);
   rejectLinks(cache); fs.mkdirSync(cache, { recursive: true });
   const source = path.join(cache, "source"), sourceReceipt = path.join(cache, "source.json");
   if (!fs.existsSync(sourceReceipt)) {
     if (fs.existsSync(source)) throw new Error("An incomplete sandbox source checkout exists; remove only this owned build cache before retrying");
     fs.mkdirSync(source);
     run("git", ["init", "--quiet"], source);
+    run("git", ["config", "core.longpaths", "true"], source);
     run("git", ["remote", "add", "origin", lock.sourceRepository], source);
     run("git", ["-c", "core.autocrlf=false", "fetch", "--depth", "1", "origin", lock.upstreamCommit], source);
     run("git", ["-c", "core.autocrlf=false", "checkout", "--detach", "FETCH_HEAD"], source);
