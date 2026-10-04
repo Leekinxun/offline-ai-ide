@@ -108,6 +108,110 @@ export function dumpbinDependencies(output) {
   return names;
 }
 
+export function minGitPeDependencies(file) {
+  // Read only the loader's import metadata. The pinned MinGit launchers retain
+  // an unmapped debug directory that makes dumpbin reject the entire image.
+  // Format: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
+  assert.ok(fs.lstatSync(file).isFile(), "MinGit PE must be a regular file");
+  assert.ok(fs.statSync(file).size <= 64 * 1024 * 1024, "MinGit PE exceeds its inspection bound");
+  const bytes = fs.readFileSync(file);
+  const span = (offset, size) => {
+    assert.ok(Number.isSafeInteger(offset) && Number.isSafeInteger(size) && offset >= 0 && size >= 0 && offset <= bytes.length - size, "PE table is truncated or outside the file");
+    return offset;
+  };
+  const u16 = (offset) => bytes.readUInt16LE(span(offset, 2));
+  const u32 = (offset) => bytes.readUInt32LE(span(offset, 4));
+  assert.equal(bytes.toString("ascii", span(0, 64), 2), "MZ", "PE DOS signature mismatch");
+  const pe = u32(0x3c); assert.ok(pe >= 64); span(pe, 24);
+  assert.equal(bytes.toString("ascii", pe, pe + 4), "PE\0\0", "PE signature mismatch");
+  assert.equal(u16(pe + 4), 0x8664, "MinGit imports require Windows x64 PE");
+  const count = u16(pe + 6), optionalSize = u16(pe + 20), optional = pe + 24;
+  assert.ok(count > 0 && count <= 96, "PE section count exceeds the Windows loader bound");
+  span(optional, optionalSize); assert.ok(optionalSize >= 112, "PE optional header is truncated");
+  assert.equal(u16(optional), 0x20b, "MinGit imports require a PE32+ optional header");
+  const directoryCount = u32(optional + 108);
+  assert.ok(directoryCount >= 14 && directoryCount <= 16 && optionalSize >= 112 + directoryCount * 8, "PE import data directories are truncated");
+  const imageSize = u32(optional + 56), headerSize = u32(optional + 60);
+  const sectionTable = optional + optionalSize; span(sectionTable, count * 40);
+  assert.ok(headerSize >= sectionTable + count * 40 && headerSize <= bytes.length && imageSize >= headerSize, "PE image/header bounds are invalid");
+  const sections = [];
+  for (let index = 0; index < count; index++) {
+    const entry = sectionTable + index * 40;
+    const virtualSize = u32(entry + 8), rva = u32(entry + 12), rawSize = u32(entry + 16), raw = u32(entry + 20);
+    const size = Math.max(virtualSize, rawSize);
+    assert.ok(rva >= headerSize && rva <= imageSize - size, "PE section RVA exceeds the image");
+    if (rawSize) { span(raw, rawSize); assert.ok(raw >= headerSize, "PE section overlaps its headers"); }
+    assert.ok(!sections.some((section) => rva < section.rva + section.size && section.rva < rva + size), "PE virtual sections overlap");
+    sections.push({ rva, size, raw, rawSize });
+  }
+  const mapped = (rva, size) => {
+    assert.ok(Number.isSafeInteger(rva) && rva > 0 && rva <= imageSize - size, "PE RVA exceeds the image");
+    if (rva < headerSize) { assert.ok(rva <= headerSize - size, "PE RVA crosses the headers"); return { offset: span(rva, size), remaining: headerSize - rva }; }
+    const section = sections.find((entry) => rva >= entry.rva && rva < entry.rva + entry.size);
+    assert.ok(section && rva - section.rva <= section.rawSize - size, "PE RVA has no complete file-backed section mapping");
+    return { offset: span(section.raw + rva - section.rva, size), remaining: section.rawSize - (rva - section.rva) };
+  };
+  const readName = (rva, max, dll = false) => {
+    const { offset, remaining } = mapped(rva, 1), limit = offset + Math.min(remaining, max);
+    const end = bytes.indexOf(0, offset);
+    assert.ok(end > offset && end < limit, "PE import name is empty, unterminated or exceeds its bound");
+    assert.ok(bytes.subarray(offset, end).every((byte) => byte >= 0x21 && byte <= 0x7e), "PE import name is not printable ASCII");
+    const name = bytes.toString("ascii", offset, end);
+    if (dll) assert.match(name, /^[A-Za-z0-9_.+-]+\.dll$/i, "PE imported DLL name is invalid");
+    return name;
+  };
+  const imageBase = bytes.readBigUInt64LE(span(optional + 24, 8));
+  const addressRva = (value, rvaBased = true) => {
+    const rva = rvaBased ? BigInt(value) : BigInt(value) - imageBase;
+    assert.ok(rva > 0n && rva <= 0xffffffffn, "PE import address cannot be represented as an RVA");
+    return Number(rva);
+  };
+  const verifyThunks = (lookup, iat, rvaBased = true) => {
+    assert.ok(lookup && iat, "PE import thunk tables are missing");
+    for (let index = 0; index < 65536; index++) {
+      const source = bytes.readBigUInt64LE(mapped(lookup + index * 8, 8).offset);
+      const target = bytes.readBigUInt64LE(mapped(iat + index * 8, 8).offset);
+      if (source === 0n) { assert.equal(target, 0n, "PE import address table lacks its terminator"); return (index + 1) * 8; }
+      if (source & 0x8000000000000000n) assert.equal(source & 0x7fffffffffff0000n, 0n, "PE ordinal import has reserved bits");
+      else { const nameRva = addressRva(source, rvaBased); mapped(nameRva, 2); readName(nameRva + 2, 4096); }
+    }
+    throw new Error("PE import thunk table exceeds its bound");
+  };
+  const directory = (index) => ({ rva: u32(optional + 112 + index * 8), size: u32(optional + 116 + index * 8) });
+  const imports = [], delayImports = [];
+  for (const [index, descriptorSize, names] of [[1, 20, imports], [13, 32, delayImports]]) {
+    const table = directory(index);
+    if (!table.rva && !table.size) continue;
+    assert.ok(table.rva && table.size >= descriptorSize && table.size <= 8 * 1024 * 1024, "PE import descriptor directory is invalid");
+    const start = mapped(table.rva, table.size).offset;
+    let terminated = false;
+    for (let offset = 0; offset <= table.size - descriptorSize && offset / descriptorSize < 4096; offset += descriptorSize) {
+      const values = Array.from({ length: descriptorSize / 4 }, (_, field) => u32(start + offset + field * 4));
+      if (values.every((value) => value === 0)) { terminated = true; break; }
+      if (index === 1) {
+        names.push(readName(values[3], 260, true));
+        assert.ok(values[0] || !values[1], "Bound PE import has no original lookup table");
+        verifyThunks(values[0] || values[4], values[4]);
+      } else {
+        assert.ok(values[0] === 0 || values[0] === 1, "PE delay-import attributes have reserved bits");
+        const rvaBased = values[0] === 1;
+        names.push(readName(addressRva(values[1], rvaBased), 260, true));
+        mapped(addressRva(values[2], rvaBased), 8);
+        const thunkBytes = verifyThunks(addressRva(values[4], rvaBased), addressRva(values[3], rvaBased), rvaBased);
+        for (const field of [5, 6]) if (values[field]) mapped(addressRva(values[field], rvaBased), thunkBytes);
+      }
+    }
+    assert.ok(terminated, "PE import descriptor table has no bounded terminator");
+  }
+  assert.ok(imports.length || delayImports.length, "PE contains no import dependency evidence");
+  const debug = directory(6); let debugDirectoryIssue;
+  if (debug.rva || debug.size) {
+    try { assert.ok(debug.rva && debug.size); mapped(debug.rva, debug.size); }
+    catch { debugDirectoryIssue = { rva: debug.rva, size: debug.size, reason: "debug-directory-has-no-complete-file-backed-mapping" }; }
+  }
+  return { names: [...new Set([...imports, ...delayImports])], imports: [...new Set(imports)], delayImports: [...new Set(delayImports)], inspectionMethod: "raw-pe-import-and-delay-import-directories", ...(debugDirectoryIssue ? { debugDirectoryIssue } : {}) };
+}
+
 const SYSTEM_DLLS = new Set(("advapi32 bcrypt bcryptprimitives cabinet cfgmgr32 comctl32 combase crypt32 cryptbase d3d11 d3d12 dbgcore dbghelp dhcpcsvc dnsapi dwmapi dxgi fwpuclnt gdi32 imm32 iphlpapi kernel32 kernelbase mpr msasn1 mmdevapi msimg32 msvcrt mswsock netapi32 ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 propsys psapi rpcrt4 samcli secur32 setupapi shell32 shfolder shlwapi shcore sspicli tdh ucrtbase user32 userenv uxtheme version win32u winhttp wininet winmm winspool wintrust winusb wldap32 wldp ws2_32 wtsapi32 windowscodecs").split(" ").map((name) => `${name}.dll`));
 
 export function classifyDependency(name, packagedDllNames) {

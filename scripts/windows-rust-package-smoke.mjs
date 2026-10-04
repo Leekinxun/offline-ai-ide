@@ -14,7 +14,7 @@ import http from "node:http";
 import { fileSha256 } from "../desktop/scripts/build-crownforge-codex-runtime.mjs";
 import { verifyCodexRuntime } from "../desktop/scripts/prepare-codex-runtime.mjs";
 import { verifyGitRuntime } from "../desktop/scripts/prepare-git-runtime.mjs";
-import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
+import { SDK_PRODUCER, nsisDefinitions, peMachine, filesUnder, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertRuntimeManifest, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "../desktop/scripts/windows-package-validation.mjs";
 
 assert.equal(process.platform, "win32", "Package acceptance must run on real Windows");
 assert.ok(process.argv.includes("--allow-disposable-install"), "Installation requires --allow-disposable-install");
@@ -211,15 +211,15 @@ try {
   const dependencies = [];
   for (const binary of binaries) {
     assert.equal(peMachine(binary), 0x8664, `Installed executable has the wrong architecture: ${path.relative(installation, binary)}`);
-    const output = await command(dumpbin, ["/DEPENDENTS", binary]);
+    const inspection = gitBinaries.has(binary) ? minGitPeDependencies(binary) : { names: dumpbinDependencies(await command(dumpbin, ["/DEPENDENTS", binary])), inspectionMethod: "msvc-dumpbin-dependents" };
     const searchPaths = gitBinaries.has(binary) ? minGitDllDirectories(binary, gitRuntime.directory) : [path.dirname(binary)];
     const dlls = new Map();
     for (const directory of searchPaths) for (const name of fs.readdirSync(directory).filter((entry) => /\.dll$/i.test(entry))) {
       const file = path.join(directory, name); assert.ok(fs.lstatSync(file).isFile());
       if (!dlls.has(name.toLowerCase())) dlls.set(name.toLowerCase(), file);
     }
-    const imports = dumpbinDependencies(output).map((name) => ({ name, resolution: classifyDependency(name, new Set(dlls.keys())), ...(dlls.has(name.toLowerCase()) ? { packagedPath: path.relative(installation, dlls.get(name.toLowerCase())).replaceAll("\\", "/") } : {}) }));
-    dependencies.push({ binary: path.relative(installation, binary).replaceAll("\\", "/"), sha256: fileSha256(binary), imports });
+    const imports = inspection.names.map((name) => ({ name, resolution: classifyDependency(name, new Set(dlls.keys())), ...(dlls.has(name.toLowerCase()) ? { packagedPath: path.relative(installation, dlls.get(name.toLowerCase())).replaceAll("\\", "/") } : {}) }));
+    dependencies.push({ binary: path.relative(installation, binary).replaceAll("\\", "/"), sha256: fileSha256(binary), inspectionMethod: inspection.inspectionMethod, ...(inspection.debugDirectoryIssue ? { debugDirectoryIssue: inspection.debugDirectoryIssue } : {}), ...(inspection.delayImports ? { delayImportedDlls: inspection.delayImports } : {}), imports });
   }
   fs.writeFileSync(path.join(reportDirectory, "release-pe-dependencies.json"), `${JSON.stringify({ sourceCommit: process.env.GITHUB_SHA, sdkProducer: SDK_PRODUCER, binaries: dependencies }, null, 2)}\n`);
   report.checks.push("Installed release Host/Core/Node/SDK and MinGit launcher/core/shell/HTTP helper have x64 PE evidence and explicit OS or verified loader-directory DLL resolution");

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
+import { SDK_PRODUCER, validateSdkProducer, nsisDefinitions, peMachine, dumpbinDependencies, minGitPeDependencies, classifyDependency, assertInstalledHostPayload, assertGitManifestFields, collectOwnedProcesses, runCleanupSteps, minGitDllDirectories, minGitSmokeExecutables, windowsPowerShellEnvironment } from "./windows-package-validation.mjs";
 import crypto from "node:crypto";
 import { writeVerifiedArchive } from "./windows-package-sdk-artifact.mjs";
 
@@ -49,6 +49,66 @@ test("dependency checks do not accept runner-installed VC runtime or unknown DLL
   assert.equal(classifyDependency("VCRUNTIME140_1.dll", new Set(["vcruntime140_1.dll"])), "packaged");
   assert.throws(() => classifyDependency("unverified.dll", new Set()));
   assert.throws(() => classifyDependency("../outside.dll", new Set()));
+});
+
+function importFixture() {
+  const bytes = Buffer.alloc(2048), pe = 128, optional = pe + 24, section = optional + 240;
+  bytes.write("MZ"); bytes.writeUInt32LE(pe, 0x3c); bytes.write("PE\0\0", pe); bytes.writeUInt16LE(0x8664, pe + 4); bytes.writeUInt16LE(1, pe + 6); bytes.writeUInt16LE(240, pe + 20);
+  bytes.writeUInt16LE(0x20b, optional); bytes.writeBigUInt64LE(0x140000000n, optional + 24); bytes.writeUInt32LE(0x2000, optional + 56); bytes.writeUInt32LE(512, optional + 60); bytes.writeUInt32LE(16, optional + 108);
+  bytes.write(".idata", section); bytes.writeUInt32LE(1536, section + 8); bytes.writeUInt32LE(0x1000, section + 12); bytes.writeUInt32LE(1536, section + 16); bytes.writeUInt32LE(512, section + 20);
+  bytes.writeUInt32LE(0x1000, optional + 120); bytes.writeUInt32LE(40, optional + 124);
+  bytes.writeUInt32LE(0x1180, 512); bytes.writeUInt32LE(0x1100, 524); bytes.writeUInt32LE(0x11a0, 528); bytes.write("KERNEL32.dll\0", 768);
+  bytes.writeBigUInt64LE(0x11c0n, 896); bytes.writeBigUInt64LE(0x11c0n, 928); bytes.write("OwnFunction\0", 962);
+  bytes.writeUInt32LE(0x1200, optional + 112 + 13 * 8); bytes.writeUInt32LE(64, optional + 116 + 13 * 8);
+  [1, 0x1300, 0x1320, 0x1340, 0x1360, 0, 0, 0].forEach((value, index) => bytes.writeUInt32LE(value, 1024 + index * 4));
+  bytes.write("fixture-delay.dll\0", 1280); bytes.writeBigUInt64LE(0x1380n, 1344); bytes.writeBigUInt64LE(0x1380n, 1376); bytes.write("DelayedFunction\0", 1410);
+  // Match the upstream launcher's unrelated orphaned debug-directory shape.
+  bytes.writeUInt32LE(0x3000, optional + 112 + 6 * 8); bytes.writeUInt32LE(28, optional + 116 + 6 * 8);
+  return bytes;
+}
+
+test("raw MinGit PE inspection includes delay imports without modifying orphaned debug metadata or hiding unknown DLLs", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-pe-imports-")); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "owned.exe"), bytes = importFixture(); fs.writeFileSync(file, bytes);
+  const result = minGitPeDependencies(file);
+  assert.deepEqual(result.imports, ["KERNEL32.dll"]); assert.deepEqual(result.delayImports, ["fixture-delay.dll"]);
+  assert.deepEqual(result.names, ["KERNEL32.dll", "fixture-delay.dll"]);
+  assert.equal(result.inspectionMethod, "raw-pe-import-and-delay-import-directories"); assert.equal(result.debugDirectoryIssue.rva, 0x3000);
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  assert.throws(() => classifyDependency(result.delayImports[0], new Set()), /no explicit Windows OS or packaged resolution/);
+  // The documented legacy delay descriptor uses VAs, rather than RVAs.
+  const legacy = Buffer.from(bytes); legacy.writeBigUInt64LE(0x400000n, 176); legacy.writeUInt32LE(0, 1024);
+  for (const field of [1, 2, 3, 4]) legacy.writeUInt32LE(legacy.readUInt32LE(1024 + field * 4) + 0x400000, 1024 + field * 4);
+  legacy.writeBigUInt64LE(0x401380n, 1376); fs.writeFileSync(file, legacy);
+  assert.deepEqual(minGitPeDependencies(file).delayImports, ["fixture-delay.dll"]);
+});
+
+test("raw PE imports fail closed for truncated headers, unmapped tables, names, thunk and descriptor boundaries", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crownforge-pe-invalid-")); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "owned.exe"), optional = 152, section = 392;
+  const mutations = [
+    ["truncated DOS", (b) => b.subarray(0, 63)],
+    ["bad PE offset", (b) => { b.writeUInt32LE(9999, 0x3c); return b; }],
+    ["wrong machine", (b) => { b.writeUInt16LE(0x14c, 132); return b; }],
+    ["truncated optional header", (b) => { b.writeUInt16LE(120, 148); return b; }],
+    ["missing delay directory", (b) => { b.writeUInt32LE(13, optional + 108); return b; }],
+    ["raw section escapes file", (b) => { b.writeUInt32LE(2000, section + 20); return b; }],
+    ["unmapped import directory", (b) => { b.writeUInt32LE(0x1800, optional + 120); return b; }],
+    ["directory crosses raw section", (b) => { b.writeUInt32LE(0x15f8, optional + 120); return b; }],
+    ["unmapped DLL name", (b) => { b.writeUInt32LE(0x3000, 524); return b; }],
+    ["unterminated DLL name", (b) => { b.fill(65, 768); return b; }],
+    ["invalid DLL path", (b) => { b.write("../outside.dll\0", 768); return b; }],
+    ["descriptor lacks bounded terminator", (b) => { b.writeUInt32LE(20, optional + 124); return b; }],
+    ["unmapped thunk table", (b) => { b.writeUInt32LE(0x3000, 512); return b; }],
+    ["unmapped symbol name", (b) => { b.writeBigUInt64LE(0x3000n, 896); return b; }],
+    ["IAT lacks terminator", (b) => { b.writeBigUInt64LE(1n, 936); return b; }],
+    ["delay descriptor lacks terminator", (b) => { b.writeUInt32LE(32, optional + 116 + 13 * 8); return b; }],
+    ["delay attributes reserved", (b) => { b.writeUInt32LE(2, 1024); return b; }],
+    ["unmapped delay DLL", (b) => { b.writeUInt32LE(0x3000, 1028); return b; }],
+    ["unmapped delay INT", (b) => { b.writeUInt32LE(0x3000, 1040); return b; }],
+    ["truncated delay bound table", (b) => { b.writeUInt32LE(0x15f8, 1044); return b; }],
+  ];
+  for (const [label, mutate] of mutations) { fs.writeFileSync(file, mutate(importFixture())); assert.throws(() => minGitPeDependencies(file), undefined, label); }
 });
 
 test("artifact bytes are published only after matching their exact digest and size limit", async (t) => {
