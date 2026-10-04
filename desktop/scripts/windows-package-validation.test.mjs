@@ -36,6 +36,9 @@ test("PE reads reject truncated headers and offsets outside the actual file", (t
 });
 
 test("dependency checks do not accept runner-installed VC runtime or unknown DLLs", () => {
+  // The source-built WFP boundary imports the documented Windows OS client.
+  assert.equal(classifyDependency("FWPUCLNT.dll", new Set()), "windows-os");
+  assert.throws(() => classifyDependency("FWP-unknown.dll", new Set()));
   const names = dumpbinDependencies("Header\n KERNEL32.dll\n VCRUNTIME140_1.dll\n\nSummary\n");
   assert.deepEqual(names, ["KERNEL32.dll", "VCRUNTIME140_1.dll"]);
   assert.equal(classifyDependency("KERNEL32.dll", new Set()), "windows-os");

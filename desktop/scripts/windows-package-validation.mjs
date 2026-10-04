@@ -108,7 +108,7 @@ export function dumpbinDependencies(output) {
   return names;
 }
 
-const SYSTEM_DLLS = new Set(("advapi32 bcrypt bcryptprimitives cabinet cfgmgr32 comctl32 combase crypt32 cryptbase d3d11 d3d12 dbgcore dbghelp dhcpcsvc dnsapi dwmapi dxgi gdi32 imm32 iphlpapi kernel32 kernelbase mpr msasn1 msimg32 msvcrt mswsock netapi32 ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 propsys psapi rpcrt4 samcli secur32 setupapi shell32 shfolder shlwapi shcore sspicli ucrtbase user32 userenv uxtheme version win32u winhttp wininet winmm winspool wintrust winusb wldap32 wldp ws2_32 wtsapi32 windowscodecs").split(" ").map((name) => `${name}.dll`));
+const SYSTEM_DLLS = new Set(("advapi32 bcrypt bcryptprimitives cabinet cfgmgr32 comctl32 combase crypt32 cryptbase d3d11 d3d12 dbgcore dbghelp dhcpcsvc dnsapi dwmapi dxgi fwpuclnt gdi32 imm32 iphlpapi kernel32 kernelbase mpr msasn1 msimg32 msvcrt mswsock netapi32 ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 propsys psapi rpcrt4 samcli secur32 setupapi shell32 shfolder shlwapi shcore sspicli ucrtbase user32 userenv uxtheme version win32u winhttp wininet winmm winspool wintrust winusb wldap32 wldp ws2_32 wtsapi32 windowscodecs").split(" ").map((name) => `${name}.dll`));
 
 export function classifyDependency(name, packagedDllNames) {
   const normalized = name.toLowerCase();
