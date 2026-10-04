@@ -4,6 +4,7 @@ on:
   push:
     branches: [APP_RUST]
     paths:
+      - .cargo/config.toml
       - .github/workflows/desktop-rust.yml
       - backend/**
       - frontend/**
@@ -81,6 +82,29 @@ jobs:
           exit $LASTEXITCODE
       - name: Run protocol regressions (not OS sandbox acceptance)
         run: npm --prefix desktop/rust test
+      - name: Inspect standalone Windows Rust runtime dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'MSVC inspection tools are required.' }
+          $toolsets = Join-Path $installation 'VC\Tools\MSVC'
+          $toolset = Get-ChildItem -LiteralPath $toolsets -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $toolset.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          $directory = '.artifacts/app-rust'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $report = @()
+          foreach ($binary in @('desktop/rust/target/debug/crownforge-ide-core.exe', 'desktop/rust/target/debug/crownforge-desktop.exe')) {
+            $output = & $dumpbin /DEPENDENTS $binary 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "PE dependency inspection failed for $binary" }
+            $dependencies = @($output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -match '^[A-Za-z0-9_.-]+\.dll$' })
+            if ($dependencies.Count -eq 0) { throw "No PE import evidence for $binary" }
+            if ($dependencies | Where-Object { $_ -match '^(?:VCRUNTIME|MSVCP|CONCRT)\d.*\.dll$' }) {
+              throw "Unbundled Visual C++ runtime dependency in $binary"
+            }
+            $report += @{ binary = $binary; dependencies = $dependencies; sourceCommit = $env:GITHUB_SHA }
+          }
+          $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $directory 'windows-runtime-dependencies.json') -Encoding utf8
       - name: Verify native PowerShell PTY and desktop HTTP contracts
         run: npm --prefix desktop/rust run smoke
       - name: Verify Agent defaults and read-only sandbox capability checks
@@ -106,6 +130,7 @@ jobs:
           path: |
             .artifacts/app-rust/smoke-report.json
             .artifacts/app-rust/smoke-failure.log
+            .artifacts/app-rust/windows-runtime-dependencies.json
           if-no-files-found: warn
           retention-days: 14
 

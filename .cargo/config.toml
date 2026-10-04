@@ -1,0 +1,8 @@
+# Keep the independent IDE service deployable on an offline Windows machine
+# without requiring a separately downloaded Visual C++ runtime. This must live
+# at the repository root: CI builds using `cargo --manifest-path` from here.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

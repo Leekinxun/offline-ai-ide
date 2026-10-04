@@ -45,6 +45,14 @@ The rustup switch prevents the Cargo proxy from automatically installing an
 absent workspace toolchain before Cargo can process `--offline`; see
 [rustup's environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
 
+The independent Rust IDE service is built with `+crt-static` for both Windows
+MSVC targets. The repository-root Cargo configuration covers direct CI
+`--manifest-path` builds as well as packaging. Windows CI inspects the built
+host/Core PE dependencies and rejects unprovided `VCRUNTIME`, `MSVCP` and
+`CONCRT` imports. The host also uses Tauri's static VC runtime defaults; Windows
+10+ provides the Universal CRT. Final installed binaries and bundled DLLs still
+need inspection during Windows package acceptance.
+
 The wire contract follows Codex **0.160.0** at commit
 `a956835d020762cb2b570053af06f643a11c0ecc`. Variant
 `crownforge-network-v1` rebuilds the CLI, command runner and setup helper from
