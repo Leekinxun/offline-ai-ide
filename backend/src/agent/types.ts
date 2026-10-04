@@ -146,6 +146,7 @@ export type WsServerMessage = (
       mode: AgentMode;
       modelName?: string;
       status: AgentRunStatus;
+      failureReason?: string;
       /** Monotonic trace ordering and optimistic state revision for WS consumers. */
       sequence?: number;
       version?: number;
@@ -223,6 +224,7 @@ export type WsServerMessage = (
       toolCallCount: number;
       errorCount: number;
       commandCount: number;
+      failureReason?: string;
       executionContractKind?: "direct_code" | "approved_plan";
       completionEvidence?: import("../chat/completionEvidence.js").CompletionEvidence;
       qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
