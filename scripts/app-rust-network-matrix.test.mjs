@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  classifyNetworkProbe, fixtureReceiver, hostProbe, matchingOfficialIdentities, officialDiagnostic,
+  classifyNetworkProbe, fixtureReceiver, hostProbe, matchingOfficialIdentities, officialBaselineConfiguration, officialDiagnostic,
   officialProbeArguments, parseProbeOutput, probeSource, writeOfficialProbeScript,
 } from "./app-rust-network-matrix.mjs";
 
@@ -72,11 +72,11 @@ test("official PowerShell receives the identical BOM script, not literal JSON in
   }
 });
 
-test("official diagnostics keep controlled error categories without fixture paths, source or credentials", () => {
+test("official diagnostics retain only fixed actions and numeric Windows errors, including logon password failures", () => {
   const root = "C:\\Users\\fixture-owner\\Temp\\matrix";
   const secret = "private-fixture-credential";
   const diagnostic = officialDiagnostic([
-    "ParserError: unexpected syntax",
+    "Error: CreateProcessWithLogonW failed: 1326; password=" + secret,
     "At " + root.toUpperCase() + "\\workspace\\probe.ps1:24 char:12",
     "+ [Console]::WriteLine('CROWNFORGE_NETWORK_MATRIX:' + $bytes)",
     "+ CategoryInfo : ParserError: (:) [], ParseException",
@@ -87,19 +87,28 @@ test("official diagnostics keep controlled error categories without fixture path
     "Error: argv=['-Command', 'private source']",
   ].join("\n"), root, true);
   assert.equal(diagnostic.category, "powershell_parse");
+  assert.equal(diagnostic.action, "CreateProcessWithLogonW");
+  assert.deepEqual(diagnostic.windowsErrorCodes, [1326]);
   assert.equal(diagnostic.truncated, true);
-  assert.match(diagnostic.snippet, /ParserError/);
-  assert.match(diagnostic.snippet, /<fixture>/);
-  assert.match(diagnostic.snippet, /UnexpectedToken/);
-  assert.doesNotMatch(diagnostic.snippet, /fixture-owner|C:\\Users|private-fixture-credential|Console|argv|-Command/);
-  const large = officialDiagnostic(("Error: " + "x".repeat(500) + "\n").repeat(100), root);
-  assert.ok(large.snippet.length <= 1680);
+  assert.deepEqual(Object.keys(diagnostic).sort(), ["action", "category", "truncated", "windowsErrorCodes"]);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /fixture-owner|C:\\Users|private-fixture-credential|Console|argv|-Command/);
+  assert.deepEqual(officialDiagnostic("LogonUserW failed: 1385 (Windows error 1385)\nOS error 5", root).windowsErrorCodes, [1385, 5]);
+  assert.deepEqual(officialDiagnostic("Error: password=1326; token=123456789", root).windowsErrorCodes, []);
+  assert.equal(officialDiagnostic("Error: LogonUserW failed: 1326", root).action, "LogonUserW");
   for (const [input, category] of [
     ["Error: unknown permission profile", "configuration"],
     ["Error: LogonUser failed", "sandbox_identity"],
     ["Error: access is denied", "access"],
     ["Error: CreateProcess failed", "launch"],
   ]) assert.equal(officialDiagnostic(input, root).category, category);
+});
+
+test("official setup and controls share an Online profile without model or auth requirements", () => {
+  const config = officialBaselineConfiguration();
+  assert.match(config, /\[permissions\.matrix\.network\]\nenabled = true\n$/);
+  assert.match(config, /requires_openai_auth = false/);
+  assert.match(config, /check_for_update_on_startup = false/);
+  assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:9"/);
 });
 
 test("PowerShell probes use fixed .NET socket operations and Console, with bounded socket timeouts", () => {

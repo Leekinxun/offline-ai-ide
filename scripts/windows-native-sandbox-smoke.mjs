@@ -297,12 +297,72 @@ try {
   });
 
   await step("session timeout reaps the complete payload subtree", async () => {
-    const tag = `timeout-${fixtureId}`;
-    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(subtreeSource(tag)), filesystem, timeoutMs: 20_000 });
-    const evidence = await subtreeEvidence(tag);
-    const finished = await until(() => { const poll = sessions.pollProcessSession(owner, session.id); return poll.session.status !== "running" ? poll : undefined; }, "session wall timeout", 30_000);
-    assert.equal(finished.session.status, "timed_out");
-    return { sessionId: session.id, status: finished.session.status, ...await assertSubtreeStopped(evidence) };
+    const tag = "timeout-" + fixtureId;
+    const wallTimeMs = 60_000; const startupBudgetMs = 45_000;
+    const roles = ["parent", "child", "grandchild"];
+    const files = roles.map((role) => path.join(heartbeatDir, tag + "-" + role + ".pid"));
+    const heartbeats = ["child", "grandchild"].map((role) => path.join(heartbeatDir, tag + "-" + role + ".heartbeat"));
+    const rootMarker = "TIMEOUT-FIXTURE-ROOT:";
+    // Publish the actual root before any cold cmdlet autoload. Start-Process
+    // still creates descendants inside the original sandbox token and Job.
+    const source = "[IO.File]::WriteAllText(" + psLiteral(files[0]) + ", [string]$PID); [Console]::WriteLine('" +
+      rootMarker + "' + $PID); $child = Start-Process -FilePath " + psLiteral(process.execPath) +
+      " -ArgumentList @('allowednested/fixture-worker.cjs', " + psLiteral(tag) +
+      ") -NoNewWindow -PassThru; while ($true) { Start-Sleep -Milliseconds 150 }";
+    const session = sessions.startAgentProcessSession({ ...owner, executable: powershell, args: psArgs(source), filesystem, timeoutMs: wallTimeMs });
+    const observed = new Set();
+    const diagnostic = { sessionId: session.id, stage: "startup", wallTimeMs, startupBudgetMs,
+      sessionStatus: session.status, startedAt: session.startedAt, deadlineAt: session.deadlineAt,
+      stdoutRootMarker: null, observedPids: [], rolePidFiles: [] };
+    const capture = () => {
+      const poll = sessions.pollProcessSession(owner, session.id);
+      diagnostic.sessionStatus = poll.session.status;
+      diagnostic.endedAt = poll.session.endedAt ?? null;
+      diagnostic.elapsedMs = (poll.session.endedAt ?? Date.now()) - session.startedAt;
+      const marker = text(poll).match(/TIMEOUT-FIXTURE-ROOT:(\d+)/);
+      if (marker) diagnostic.stdoutRootMarker = Number(marker[1]);
+      diagnostic.rolePidFiles = files.map((file, index) => {
+        const exists = fs.existsSync(file); const pid = exists ? Number(fs.readFileSync(file, "utf8").trim()) : null;
+        const validPid = Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+        if (validPid) observed.add(validPid);
+        return { role: roles[index], pidFile: path.basename(file), exists, pid: validPid, alive: validPid !== null && pidAlive(validPid) };
+      });
+      diagnostic.observedPids = [...observed];
+      return poll;
+    };
+    try {
+      assert.equal(session.deadlineAt - session.startedAt, wallTimeMs, "The actual session wall deadline must match the fixture");
+      const evidence = await until(() => {
+        const poll = capture();
+        assert.equal(poll.session.status, "running", "The payload must start before its wall deadline");
+        if (!diagnostic.rolePidFiles.every((entry) => entry.pid !== null && entry.alive) ||
+          !heartbeats.every((file) => fs.existsSync(file))) return;
+        const pids = diagnostic.rolePidFiles.map((entry) => entry.pid);
+        assert.equal(new Set(pids).size, 3, "All three live payload roles must have distinct PID receipts");
+        assert.equal(diagnostic.stdoutRootMarker, pids[0], "The stdout root marker must match the actual parent PID file");
+        return { pids, heartbeats };
+      }, tag + " live payload startup evidence", startupBudgetMs);
+      diagnostic.startupElapsedMs = Date.now() - session.startedAt;
+      assert.ok(diagnostic.startupElapsedMs < wallTimeMs, "Startup must finish while the wall timeout can still be observed");
+      rememberSupervisors(workspace, process.pid);
+      diagnostic.stage = "await_wall_timeout";
+      const remainingMs = Math.max(0, session.deadlineAt - Date.now());
+      const finished = await until(() => {
+        const poll = capture(); return poll.session.status !== "running" ? poll : undefined;
+      }, "session wall timeout after confirmed payload startup", remainingMs + 15_000);
+      assert.equal(finished.session.status, "timed_out", "The real session must expire without an explicit stop");
+      const elapsedMs = finished.session.endedAt - session.startedAt;
+      assert.ok(elapsedMs >= wallTimeMs - 250 && elapsedMs <= wallTimeMs + 15_000,
+        "The observed timeout must align with the declared wall deadline and bounded cleanup");
+      diagnostic.stage = "verify_stopped_subtree";
+      const cleanup = await assertSubtreeStopped(evidence);
+      diagnostic.stage = "complete";
+      return { status: finished.session.status, ...diagnostic, ...cleanup };
+    } catch (error) {
+      capture();
+      checks.push({ name: "timeout fixture PID and session diagnostics", status: "INFO", ...diagnostic });
+      throw error;
+    }
   });
 
   await step("a real backend crash leaves no sandbox payload descendants", async () => {

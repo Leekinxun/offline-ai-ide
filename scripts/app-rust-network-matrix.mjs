@@ -78,31 +78,55 @@ export function officialProbeArguments(workspace, powershell, script) {
 }
 
 export function officialDiagnostic(stderr, fixtureRoot, truncated = false) {
+  // Do not retain raw SDK text: even a legitimate logon error may mention
+  // credentials or a private path. Export only fixed actions and numeric codes.
   const raw = String(stderr).replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
   let category = "unknown";
   for (const [name, pattern] of [
     ["powershell_parse", /ParserError|ParseException|UnexpectedToken|MissingEndCurlyBrace/i],
     ["configuration", /permission.*profile|default_permissions|invalid.*config|failed.*load.*config|unknown.*(?:config|profile)/i],
-    ["sandbox_identity", /LogonUser|log on|logon|sandbox.*account|credential/i],
+    ["sandbox_identity", /LogonUser|CreateProcessWithLogon|log on|logon|sandbox.*account|credential/i],
     ["access", /ACCESS_DENIED|access is denied|permission denied|UnauthorizedAccess/i],
     ["launch", /CreateProcess|spawn|cannot.*executable|not.*recognized.*command|No such file/i],
     ["runtime_timeout", /Timeout|timed out/i],
   ]) if (pattern.test(raw)) { category = name; break; }
-  const escape = (value) => [...value].map((char) => "\\^$.*+?()[]{}|".includes(char) ? "\\" + char : char).join("");
-  let safe = raw;
-  if (fixtureRoot) for (const candidate of new Set([fixtureRoot, fixtureRoot.replaceAll("\\", "/"), fixtureRoot.replaceAll("/", "\\")])) {
-    safe = safe.replace(new RegExp(escape(candidate), "gi"), "<fixture>");
+  let action = category;
+  for (const [name, pattern] of [
+    ["CreateProcessWithLogonW", /CreateProcessWithLogonW/i],
+    ["LogonUserW", /LogonUserW|log on existing sandbox account/i],
+    ["LoadUserProfileW", /LoadUserProfileW/i],
+    ["CreateProcessAsUserW", /CreateProcessAsUserW/i],
+    ["CryptUnprotectData", /CryptUnprotectData/i],
+    ["runner_startup", /runner failed during/i],
+  ]) if (pattern.test(raw)) { action = name; break; }
+  const windowsErrorCodes = [];
+  for (const pattern of [
+    /\b(?:Windows|OS|Win32)\s+error(?:\s+code)?\s*[:=(]?\s*(0x[a-f0-9]+|\d{1,10})\b/gi,
+    /\bwindows_error_code["']?\s*[:=]\s*(0x[a-f0-9]+|\d{1,10})\b/gi,
+    /\b(?:CreateProcessWithLogonW|LogonUserW|LoadUserProfileW|CreateProcessAsUserW|CryptUnprotectData)\s+failed\s*:\s*(0x[a-f0-9]+|\d{1,10})\b/gi,
+  ]) {
+    for (const match of raw.matchAll(pattern)) {
+      const code = Number(match[1]);
+      if (Number.isInteger(code) && code >= 0 && code <= 0xffffffff && !windowsErrorCodes.includes(code)) windowsErrorCodes.push(code);
+      if (windowsErrorCodes.length === 8) break;
+    }
+    if (windowsErrorCodes.length === 8) break;
   }
-  const lines = safe.split(/\r?\n/).map((line) => line.trim()).filter((line) =>
-    /^(?:Error(?:\[[^\]]+\])?:|fatal:|ParserError:|At .+:\d+|(?:\+\s*)?(?:CategoryInfo|FullyQualifiedErrorId)\s*:|[\w.]+Exception:)/i.test(line) &&
-    !/\b(?:password|secrets?|token|authorization|credentials?|bearer)\b|api.?key|bootstrap|argv|arguments|command.?line|-Command|-File|CROWNFORGE_NETWORK_MATRIX|Console\]|\$/i.test(line));
-  const snippet = lines.slice(0, 6).map((line) => line
-    .replace(/\bS-1-\d+(?:-\d+)+\b/g, "<sid>")
-    .replace(/\b[a-f0-9]{64}\b/gi, "<digest>")
-    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]+/g, "<path>")
-    .replace(/https?:\/\/[^\s"'<>]+/g, "<url>")
-    .slice(0, 280)).join("\n").slice(0, 1680);
-  return { category, snippet, truncated };
+  return { category, action, windowsErrorCodes, truncated };
+}
+
+export function officialBaselineConfiguration() {
+  // Setup consumes the effective permissions profile. Keep the same Online
+  // selection for setup and both controls; provisioning still creates both users.
+  return [
+    'default_permissions = "matrix"', "check_for_update_on_startup = false", 'model_provider = "matrix-offline"',
+    'approval_policy = "never"', 'web_search = "disabled"', "allow_login_shell = false",
+    "[windows]", 'sandbox = "elevated"', "[features]", "prefer_mxc = false",
+    "[analytics]", "enabled = false", "[feedback]", "enabled = false",
+    "[model_providers.matrix-offline]", 'name = "Execution fixture only"', 'base_url = "http://127.0.0.1:9"',
+    'wire_api = "responses"', "requires_openai_auth = false", "[permissions.matrix.filesystem]", '":root" = "read"',
+    '":project_roots" = "read"', "[permissions.matrix.network]", "enabled = true", "",
+  ].join("\n");
 }
 
 export function probeSource(endpoint, nonce, privateFile, writeFile) {
@@ -338,16 +362,7 @@ export async function main() {
     const baseline = path.join(repo, ".artifacts/codex-runtime-cache/0.160.0", process.arch, "baseline");
     phase = "verify official baseline"; preparation.verifyOfficialCodexBaseline(baseline, process.arch);
     const officialExe = path.join(baseline, "bin/codex.exe"); const officialHome = path.join(root, "official-home"); fs.mkdirSync(officialHome);
-    const base = [
-      'default_permissions = "matrix"', "check_for_update_on_startup = false", 'model_provider = "matrix-offline"',
-      'approval_policy = "never"', 'web_search = "disabled"', "allow_login_shell = false",
-      "[windows]", 'sandbox = "elevated"', "[features]", "prefer_mxc = false",
-      "[analytics]", "enabled = false", "[feedback]", "enabled = false",
-      "[model_providers.matrix-offline]", 'name = "Execution fixture only"', 'base_url = "http://127.0.0.1:9"',
-      'wire_api = "responses"', "requires_openai_auth = false", "[permissions.matrix.filesystem]", '":root" = "read"',
-      '":project_roots" = "read"', "[permissions.matrix.network]",
-    ].join("\n") + "\n";
-    fs.writeFileSync(path.join(officialHome, "config.toml"), base + "enabled = false\n");
+    fs.writeFileSync(path.join(officialHome, "config.toml"), officialBaselineConfiguration());
     const client = new rpc.CodexSandboxClient({ executable: officialExe,
       args: ["-c", 'windows.sandbox="elevated"', "-c", "features.prefer_mxc=false", "app-server", "--stdio"],
       cwd: officialHome, env: controlledEnv(officialHome), spawn: launch });
@@ -357,7 +372,6 @@ export async function main() {
     assert.equal((await deadline(() => completed, 180_000)).success, true);
     assert.equal((await client.call("windowsSandbox/readiness")).status, "ready"); client.close(); clients.delete(client);
     report.officialBefore = snapshot("before"); check("official WFP inventory exists", report.officialBefore.filters.every((entry) => entry.count === 1 && entry.hash));
-    fs.writeFileSync(path.join(officialHome, "config.toml"), base + "enabled = true\n");
     let v4tcp;
     for (const host of ["127.0.0.1", "::1"]) for (const protocol of ["tcp", "udp"]) {
       try { const receiver = await fixtureReceiver(protocol, host); receivers.push(receiver); if (host === "127.0.0.1" && protocol === "tcp") v4tcp = receiver; }
