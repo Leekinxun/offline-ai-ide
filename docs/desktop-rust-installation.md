@@ -4,6 +4,8 @@ This guide describes the Tauri desktop package on the `APP_RUST` branch. The
 Electron commands in `desktop-app.md` describe the legacy package. Web deployment
 and its system dependencies retain their existing behavior.
 
+中文说明：[APP_RUST 安装与首次使用](desktop-rust-installation.zh-CN.md)。
+
 ## Application runtime
 
 The desktop installer contains the frontend and its Monaco workers, a standalone

@@ -33,6 +33,11 @@ Real Cargo with an empty cache and a reachable fixture registry made zero
 registry requests: desktop diagnostics use `--offline` and
 `RUSTUP_AUTO_INSTALL=0`; Web retains its previous command.
 
+[The desktop lane at `bde064dd`](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37189492265)
+also passed Windows compilation, 29 applicable Rust tests, actual PowerShell PTY
+and HTTP contracts, and desktop Git selection/read-grant regressions. Unix shell
+integration is covered separately by the 40-test macOS workspace run.
+
 macOS package acceptance uses official standalone Node 22.23.3 and the packaged
 Git. A relocated Git runtime works with system Git absent from PATH. The packaged
 backend, Rust search/Git status, private bootstrap, local protocol-fixture chat
@@ -40,6 +45,17 @@ and shutdown passed under a Seatbelt policy allowing only declared local fixture
 ports. A separate packaged Agent launcher verified its Git child under the
 Agent's own filesystem and network-deny policy; nested Seatbelt application is
 not used. These are transport/runtime tests, not model-weight acceptance.
+
+The `bde064dd` macOS arm64 App also passed actual GUI operation with its model
+endpoint unavailable, under a host-local-only Seatbelt network policy: Monaco
+editing and on-disk save, Rust search, bundled Git 2.56.0 in the terminal, Git
+init/commit/status and visual Diff, and clean App/Node/Core shutdown. A public
+TCP endpoint connected outside this policy and returned `EPERM` inside it with
+the same frozen IPv4 address, avoiding a DNS-failure-only result. This controls
+the test process's network environment, not a production App network policy.
+The 75.68 MiB Mac ZIP retained all 155 relative Git links and passed an unpacked
+bundle seal plus runtime inventory/hash verification. It is an ad-hoc-sealed
+preview, not Developer ID signing or notarization.
 
 ## Windows native Agent acceptance
 
@@ -65,6 +81,11 @@ delivered its own nonce. Original account and twelve-filter snapshots were
 unchanged; CrownForge and official identities remained distinct. The
 non-administrator parent and child both passed fresh policy readback.
 
+[The full native lane at `bde064dd`](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37189492298)
+independently repeated the complete acceptance and passed. Its actual timeout
+was 60.068 seconds with all three observed payload PIDs stopped; the complete
+SDK file inventory matches the accepted `74a2452b` producer.
+
 Routine readiness still performs no privileged setup, firewall repair or UAC.
 The user explicitly initializes the native sandbox in Settings. Failed readiness
 does not switch to unrestricted execution or WSL.
@@ -77,8 +98,24 @@ there is no implicit SDK source-build fallback. The installer embeds the
 Microsoft-signed complete WebView2 offline payload, standalone Node, Rust IDE
 service, complete MinGit runtime and execution adapter.
 
-Actual NSIS installation, installed-service/PTY execution, Host window creation,
-shutdown and uninstall still need the package lane's Windows result. A runner
+[Installed package acceptance at `fa7f7bd`](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37213445654)
+passed actual NSIS installation, installed-service/Git/PowerShell PTY execution,
+Host window creation, shutdown and uninstall with the model endpoint unavailable.
+The Host translates safely representable Windows canonical paths before passing
+them to Node; this fixes the actual installed Host's `EISDIR: lstat 'D:'` startup
+failure. Existing user settings remain intact, and Unix paths retain their
+previous behavior. The
+[Windows desktop platform lane](https://github.com/Leekinxun/offline-ai-ide/actions/runs/37213445648)
+also passed the new path-boundary tests and existing real PTY/HTTP contracts.
+
+The final NSIS Host payload is verified against its actual installed bytes;
+Tauri's bundle-specific executable patch is recorded separately from the
+restored raw build input. The pinned MinGit files contain orphaned upstream
+debug-directory metadata: only four receipt-verified MinGit executables use a
+bounded raw import/delay-import inspector, with actual Git and HTTP-helper
+execution still required. Other executables retain `dumpbin` verification.
+
+A runner
 with preinstalled WebView2 is not evidence of disconnected installation on a
 clean Windows machine with WebView2 absent. Neither a protocol model fixture nor
 an empty model configuration proves a user's real inference service is ready.
