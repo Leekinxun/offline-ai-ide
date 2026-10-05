@@ -2489,4 +2489,75 @@ mod writer_tests {
         assert_eq!(recovered.status, "needs_attention");
         assert!(tx_root.join("blobs/file-after").exists());
     }
+
+    #[test]
+    fn metadata_only_transaction_allows_empty_files_append_plans_and_rejects_unfixed_keys() {
+        let fixture = TempDir::new().unwrap();
+        let mutations = Mutations::default();
+        let lease = lease_for(&fixture, &mutations);
+        mutations
+            .transaction_begin(TransactionBeginParams {
+                lease_token: lease.lease_token.clone(),
+                transaction_id: "metadata-only".to_owned(),
+                mode: "metadataOnly".to_owned(),
+                files: Vec::new(),
+                publications: vec![TransactionPublicationPlan {
+                    namespace: "mutationJournal".to_owned(),
+                    key: "mutations.json".to_owned(),
+                    expected: ExpectedState {
+                        exists: Some(false),
+                        sha256: None,
+                        file: None,
+                        directory: None,
+                    },
+                    blob_id: "journal".to_owned(),
+                    size: 2,
+                    sha256: hex_sha256(b"{}"),
+                }],
+            })
+            .unwrap();
+        let appended = mutations
+            .transaction_append_plans(TransactionAppendPlansParams {
+                lease_token: lease.lease_token.clone(),
+                transaction_id: "metadata-only".to_owned(),
+                files: Vec::new(),
+                publications: vec![TransactionPublicationPlan {
+                    namespace: "repositoryIndex".to_owned(),
+                    key: "meta.json".to_owned(),
+                    expected: ExpectedState {
+                        exists: Some(false),
+                        sha256: None,
+                        file: None,
+                        directory: None,
+                    },
+                    blob_id: "index-meta".to_owned(),
+                    size: 2,
+                    sha256: hex_sha256(b"{}"),
+                }],
+            })
+            .unwrap();
+        assert_eq!(appended.file_count, 0);
+        assert_eq!(appended.publication_count, 2);
+        match mutations.transaction_append_plans(TransactionAppendPlansParams {
+            lease_token: lease.lease_token.clone(),
+            transaction_id: "metadata-only".to_owned(),
+            files: Vec::new(),
+            publications: vec![TransactionPublicationPlan {
+                namespace: "mutationJournal".to_owned(),
+                key: "evil.json".to_owned(),
+                expected: ExpectedState {
+                    exists: Some(false),
+                    sha256: None,
+                    file: None,
+                    directory: None,
+                },
+                blob_id: "evil".to_owned(),
+                size: 2,
+                sha256: hex_sha256(b"{}"),
+            }],
+        }) {
+            Ok(_) => panic!("unexpectedly accepted arbitrary mutation journal key"),
+            Err(error) => assert_eq!(error.code, "PATH_ESCAPE"),
+        }
+    }
 }
