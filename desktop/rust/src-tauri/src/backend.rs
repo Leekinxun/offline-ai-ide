@@ -1,7 +1,9 @@
 use crate::{policy, DesktopState};
 use serde_json::{json, Value};
 use std::{
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -139,6 +141,19 @@ fn node_path(path: &Path) -> io::Result<PathBuf> {
     #[cfg(not(windows))]
     {
         Ok(path.to_owned())
+    }
+}
+
+fn admin_policy_path(data_directory: &Path, override_path: Option<&OsStr>) -> PathBuf {
+    if let Some(value) = override_path.filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            path
+        } else {
+            data_directory.join(path)
+        }
+    } else {
+        data_directory.join(".crewforge").join("admin-policy.json")
     }
 }
 
@@ -379,6 +394,10 @@ impl Backend {
         let node = node_executable(&root)?;
         let git = bundled_git(&root)?;
         let bootstrap_token = create_bootstrap_token()?;
+        let admin_policy = admin_policy_path(
+            &data.directory,
+            env::var_os("CREWFORGE_ADMIN_POLICY").as_deref(),
+        );
         let mut command = Command::new(node_path(&node)?);
         command
             .arg(node_path(&bridge)?)
@@ -402,6 +421,7 @@ impl Backend {
                 node_path(&data.directory.join("app-settings.json"))?,
             )
             .env("TEAM_STORE_ROOT", node_path(&data.directory)?)
+            .env("CREWFORGE_ADMIN_POLICY", node_path(&admin_policy)?)
             .env("PLUGINS_DIR", node_path(&data.plugins)?)
             .env("STATIC_DIR", node_path(&frontend)?)
             .env(
@@ -710,6 +730,65 @@ mod tests {
         ] {
             assert_eq!(node_path(Path::new(value)).unwrap(), PathBuf::from(value));
         }
+    }
+
+    fn data_dir() -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(r"C:\data")
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from("/data")
+        }
+    }
+
+    fn absolute_admin_policy_override() -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(r"C:\override\admin.json")
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from("/override/admin.json")
+        }
+    }
+
+    #[test]
+    fn admin_policy_path_defaults_under_desktop_data_directory() {
+        let data = data_dir();
+        assert_eq!(
+            admin_policy_path(&data, None),
+            data.join(".crewforge").join("admin-policy.json")
+        );
+    }
+
+    #[test]
+    fn admin_policy_path_treats_empty_override_as_default() {
+        let data = data_dir();
+        assert_eq!(
+            admin_policy_path(&data, Some(OsStr::new(""))),
+            data.join(".crewforge").join("admin-policy.json")
+        );
+    }
+
+    #[test]
+    fn admin_policy_path_resolves_relative_override_against_desktop_data_directory() {
+        let data = data_dir();
+        assert_eq!(
+            admin_policy_path(&data, Some(OsStr::new("policy/admin.json"))),
+            data.join("policy").join("admin.json")
+        );
+    }
+
+    #[test]
+    fn admin_policy_path_preserves_absolute_override() {
+        let data = data_dir();
+        let override_path = absolute_admin_policy_override();
+        assert_eq!(
+            admin_policy_path(&data, Some(override_path.as_os_str())),
+            override_path
+        );
     }
 
     #[test]

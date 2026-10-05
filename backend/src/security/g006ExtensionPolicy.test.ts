@@ -175,6 +175,38 @@ test("effective agent policy and versioned workspace CAS cannot expand any autho
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
 
+test("desktop-provided admin policy path preserves persisted deny policy from runtime cwd", (t) => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "g006-desktop-policy-data-"));
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "g006-desktop-runtime-"));
+  const workspace = path.join(data, "workspace");
+  const adminPath = path.join(data, ".crewforge", "admin-policy.json");
+  fs.mkdirSync(path.dirname(adminPath), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(adminPath, JSON.stringify({
+    schemaVersion: 1,
+    version: 7,
+    permissions: { id: "admin", allow: ["*"], deny: ["hook.command.execute"] },
+    sandbox: { readPaths: ["."], writePaths: [], networkOrigins: [], secretEnv: [] },
+    updatedAt: new Date(0).toISOString(),
+  }));
+
+  const previousCwd = process.cwd();
+  const previousAdmin = process.env.CREWFORGE_ADMIN_POLICY;
+  t.after(() => {
+    process.chdir(previousCwd);
+    previousAdmin === undefined ? delete process.env.CREWFORGE_ADMIN_POLICY : process.env.CREWFORGE_ADMIN_POLICY = previousAdmin;
+    fs.rmSync(data, { recursive: true, force: true });
+    fs.rmSync(runtime, { recursive: true, force: true });
+  });
+
+  process.chdir(runtime);
+  process.env.CREWFORGE_ADMIN_POLICY = adminPath;
+  const store = new ExtensionPolicyStore(workspace);
+  assert.equal(store.adminPath, adminPath);
+  assert.equal(store.getAdminPolicy().version, 7);
+  assert.equal(store.explain("hook.command.execute").allowed, false);
+});
+
 function canonicalManifestForTest(value: Record<string, unknown>): Buffer {
   const normalize = (item: unknown): unknown => Array.isArray(item) ? item.map(normalize) : item && typeof item === "object" ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([key]) => key !== "signature").sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)])) : item;
   return Buffer.from(JSON.stringify(normalize(value)));
