@@ -42,7 +42,8 @@ const MAX_CONTEXT_SNIPPET_LINES = 80;
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|spec)(?:\/|$)|(?:^|\/)(?:test_[^/]+|[^/]+\.(?:test|spec))\.[^/]+$/i;
 const QUERY_STOPWORDS = new Set(["a", "an", "and", "as", "at", "by", "change", "definition", "for", "from", "in", "integration", "into", "of", "on", "or", "source", "test", "tests", "the", "through", "to", "unit", "update", "used", "with"]);
 const activeRebuilds = new Map<string, Promise<RepositoryIndexStatus>>();
-const pendingInvalidations = new Map<string, { mutations: Map<string, RepositoryMutation>; timer: NodeJS.Timeout }>();
+const pendingInvalidations = new Map<string, { workspaceRoot: string; mutations: Map<string, RepositoryMutation>; timer: NodeJS.Timeout }>();
+const activeInvalidations = new Map<string, Set<Promise<void>>>();
 const fileCache = new Map<string, { revision: number; files: Map<string, IndexedRepositoryFile> }>();
 const headCache = new Map<string, { value?: string; expiresAt: number }>();
 
@@ -599,6 +600,36 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
   return publicStatus(store);
 }
 
+function runPendingInvalidation(partitionId: string, pending: { workspaceRoot: string; mutations: Map<string, RepositoryMutation>; timer: NodeJS.Timeout }): Promise<void> {
+  clearTimeout(pending.timer);
+  pendingInvalidations.delete(partitionId);
+  const running = invalidateRepositoryIndex(pending.workspaceRoot, [...pending.mutations.values()]).then(() => undefined);
+  const active = activeInvalidations.get(partitionId) ?? new Set<Promise<void>>();
+  active.add(running); activeInvalidations.set(partitionId, active);
+  void running.finally(() => {
+    active.delete(running);
+    if (!active.size && activeInvalidations.get(partitionId) === active) activeInvalidations.delete(partitionId);
+  }).catch(() => undefined);
+  return running;
+}
+
+export async function flushRepositoryIndexInvalidationsForTests(workspaceDir: string): Promise<void> {
+  const partitionId = new RepositoryIndexStore(workspaceDir).partitionId;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const pending = pendingInvalidations.get(partitionId);
+    if (pending) {
+      await runPendingInvalidation(partitionId, pending);
+      continue;
+    }
+    const active = [...(activeInvalidations.get(partitionId) ?? [])];
+    if (!active.length) return;
+    const settled = await Promise.allSettled(active);
+    const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (rejected) throw rejected.reason;
+  }
+  throw new Error("Repository index invalidations did not become idle");
+}
+
 function queryTerms(query: string): string[] {
   return [...new Set(query.match(/[A-Za-z_$][\w$.-]*/g)?.map((term) => term.toLowerCase()).filter((term) => term.length > 1 && !QUERY_STOPWORDS.has(term)) || [])].slice(0, 30);
 }
@@ -733,6 +764,7 @@ export async function retrieveRepositoryContext(options: RetrieveRepositoryConte
 subscribeWorkspaceMutations((event) => {
   const store = new RepositoryIndexStore(event.workspaceDir);
   const pending = pendingInvalidations.get(store.partitionId) || {
+    workspaceRoot: store.workspaceRoot,
     mutations: new Map<string, RepositoryMutation>(),
     timer: setTimeout(() => undefined, 0),
   };
@@ -740,8 +772,7 @@ subscribeWorkspaceMutations((event) => {
   const mutation: RepositoryMutation = { path: event.path, operation: event.operation, ...(event.previousPath ? { previousPath: event.previousPath } : {}), ...(event.scope === "prefix" ? { scope: "prefix" as const } : {}) };
   pending.mutations.set(`${mutation.scope || "file"}:${mutation.previousPath || ""}:${event.path}`, mutation);
   pending.timer = setTimeout(() => {
-    pendingInvalidations.delete(store.partitionId);
-    void invalidateRepositoryIndex(store.workspaceRoot, [...pending.mutations.values()]).catch(() => undefined);
+    void runPendingInvalidation(store.partitionId, pending).catch(() => undefined);
   }, 25);
   pending.timer.unref?.();
   pendingInvalidations.set(store.partitionId, pending);

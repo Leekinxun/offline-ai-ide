@@ -15,7 +15,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -29,6 +32,7 @@ const TERMINAL_TRANSACTION_RECEIPT_LIMIT: usize = 1024;
 const TERMINAL_TRANSACTION_RECEIPT_LIMIT: usize = 8;
 const TX_DIR: &str = ".crewforge/desktop-transactions";
 const EXTERNAL_LOCK_FILE: &str = "external.lock";
+static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 pub struct Mutations {
@@ -3544,7 +3548,12 @@ fn transaction_id(value: &str) -> Result<String> {
 }
 
 fn opaque_token(prefix: &str) -> String {
-    let seed = format!("{prefix}\0{}\0{}", std::process::id(), now_ms());
+    let seed = format!(
+        "{prefix}\0{}\0{}\0{}",
+        std::process::id(),
+        now_ms(),
+        TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
     format!("{prefix}-{}", hex_sha256(seed.as_bytes()))
 }
 
@@ -3570,6 +3579,14 @@ mod writer_tests {
         WriterOwner {
             kind: "user".to_owned(),
             id: "tester".to_owned(),
+        }
+    }
+
+    #[test]
+    fn opaque_tokens_are_unique_across_burst_generation() {
+        let mut tokens = std::collections::HashSet::new();
+        for _ in 0..4096 {
+            assert!(tokens.insert(opaque_token("admit")));
         }
     }
 

@@ -9,6 +9,7 @@ import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
 import { recordKnownFileMutation } from "./mutationRegistry.js";
 import { RepositoryIndexStore } from "../indexing/indexStore.js";
 import {
+  flushRepositoryIndexInvalidationsForTests,
   getRepositoryIndexStatus,
   invalidateRepositoryIndex,
   rebuildRepositoryIndex,
@@ -21,7 +22,10 @@ function git(directory: string, args: string[]): string {
 
 function repository(t: TestContext): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-index-"));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  t.after(async () => {
+    await flushRepositoryIndexInvalidationsForTests(directory);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
   git(directory, ["init", "-q"]); git(directory, ["config", "user.email", "index@test.local"]); git(directory, ["config", "user.name", "Index Test"]);
   return directory;
 }
