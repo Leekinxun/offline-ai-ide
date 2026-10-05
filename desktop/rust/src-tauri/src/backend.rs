@@ -382,7 +382,11 @@ impl Backend {
         let mut command = Command::new(node_path(&node)?);
         command
             .arg(node_path(&bridge)?)
-            .current_dir(node_path(&data.directory)?)
+            // Keep the daemon cwd inside the packaged runtime. LaunchServices
+            // GUI children can stall in Node's getcwd() when cwd is a user
+            // document location gated by macOS privacy checks. User data still
+            // flows through explicit path-valued environment variables below.
+            .current_dir(node_path(&root)?)
             .env("CREWFORGE_DESKTOP", "1")
             .env("CROWNFORGE_DESKTOP_RUNTIME", "tauri")
             .env("CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN", &bootstrap_token)
