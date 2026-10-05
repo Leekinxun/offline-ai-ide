@@ -60,7 +60,15 @@ import { WorkbenchSelect } from "./WorkbenchSelect";
 import { isQuietCompletionEvent } from "../utils/runEventDisplay";
 import { ContextReferencePicker, ContextReferenceBadges } from "./ContextReferencePicker";
 import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
-import { activeAssistantMessage, assistantToolStatus, isAssistantMessageVisible } from "../utils/assistantActivity";
+import { activeAssistantMessage, assistantToolStatus } from "../utils/assistantActivity";
+import { getDesktopBridge } from "../desktop/bridge";
+import { runFailureNotice, type RunFailureNotice } from "../utils/runFailureNotice";
+import {
+  editorRunFailureBody,
+  editorRunFailureTitle,
+  formatEditorFailureReason,
+  isEditorAssistantMessageVisible,
+} from "../utils/editorAssistantFailure";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 
 interface EditorAssistantPanelProps {
@@ -132,6 +140,23 @@ function EventIcon({ event }: { event: AgentRunEvent }) {
   return <Activity size={13} />;
 }
 
+const EditorRunFailureBanner: React.FC<{
+  notice: RunFailureNotice;
+  canResume: boolean;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}> = ({ notice, canResume, t }) => {
+  const body = editorRunFailureBody(notice, t);
+  if (!body) return null;
+  return <section className="editor-assistant-failure-banner" role="alert" aria-live="assertive">
+    <AlertCircle size={14} aria-hidden="true" />
+    <div>
+      <strong>{editorRunFailureTitle(notice, t)}</strong>
+      <span>{body}</span>
+      {canResume && <small>{t("chat.failure.resumeHint")}</small>}
+    </div>
+  </section>;
+};
+
 export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   token,
   workspaceDir,
@@ -198,13 +223,14 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const [detailsCollapsed, setDetailsCollapsed] = useState(() =>
     localStorage.getItem("editorAssistantDetailsCollapsed") !== "0"
   );
+  const desktopFailureSurface = getDesktopBridge()?.workspaceChanges === "cursor";
   const contextPercent = contextState
     ? Math.min(100, Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100))
     : 0;
   const fileName = activeFilePath?.split("/").pop() || null;
   const visibleMessages = useMemo(
-    () => messages.filter(isAssistantMessageVisible),
-    [messages]
+    () => messages.filter((message) => isEditorAssistantMessageVisible(message, desktopFailureSurface)),
+    [desktopFailureSurface, messages]
   );
   const activeMessage = isStreaming ? activeAssistantMessage(messages, activeRequestIds, runState) : undefined;
   const runEvents = useMemo(
@@ -225,6 +251,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
   const hasRunningSummary = isStreaming || runState?.status === "running" || runState?.status === "queued";
   const hasRecoverySummary = !isStreaming && Boolean(runState && (runState.status === "failed" || runState.status === "stopped"));
   const showAssistantSummary = hasRunningSummary || hasRecoverySummary;
+  const failureNotice = desktopFailureSurface ? runFailureNotice(runState, currentRunSummary) : null;
   const hasBlockedQualityGate = qualityGate?.status === "blocked";
   const hasCompletionBlockers = Boolean(completionEvidence?.ledger.blockers.length);
   const showCompletionEvidence = Boolean(completionEvidence && (evidenceOutcome !== "completed" || hasCompletionBlockers));
@@ -487,6 +514,13 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
       )}
 
       {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
+      {failureNotice && (
+        <EditorRunFailureBanner
+          notice={failureNotice}
+          canResume={Boolean(runState && (runState.status === "failed" || runState.status === "stopped"))}
+          t={t}
+        />
+      )}
       {showRunAttention && <section className="editor-assistant-context" aria-label={t("chat.evidence")}>
         {showCompletionEvidence && completionEvidence && <div className="run-check-list">
           <div className={evidenceOutcome === "completed" ? "" : "warning"} role={evidenceOutcome === "completed" ? undefined : "alert"}>{evidenceOutcome === "completed" ? <Check size={14} /> : <AlertCircle size={14} />}<span>{t("chat.outcome")}</span><strong>{t(`chat.outcome.${evidenceOutcome}`)}</strong></div>
@@ -583,6 +617,12 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
                     })}
                   </div>}
                   {getRenderableMessageContent(message.content) && <div className="editor-assistant-message-content">{renderChatTextPart(getRenderableMessageContent(message.content), message)}</div>}
+                  {desktopFailureSurface && message.error?.trim() && (
+                    <div className="editor-assistant-message-error" role="alert">
+                      <AlertCircle size={13} aria-hidden="true" />
+                      <span>{t("chat.messageFailedWithReason", { reason: formatEditorFailureReason(message.error, t) })}</span>
+                    </div>
+                  )}
                 </>
               ) : getRenderableMessageContent(message.content) ? (
                 <p>{inlineInstructionLabel(message.content) || getRenderableMessageContent(message.content)}</p>

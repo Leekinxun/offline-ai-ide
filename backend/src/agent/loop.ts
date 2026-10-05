@@ -67,6 +67,7 @@ import { pendingAgentProcesses, stopAgentProcesses, type AgentProcessResult } fr
 import { planReadOnlyShell } from "./readOnlyShell.js";
 import { contextRequestBudget, fitsContextRequestBudget } from "./contextBudget.js";
 import { estimateModelRequest } from "./modelBudget.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
 
 const MAX_MODEL_ATTACHMENT_COUNT = 4;
 const MAX_MODEL_ATTACHMENT_BYTES = 12 * 1024 * 1024;
@@ -82,6 +83,10 @@ const SNAPSHOT_TOOL_NAMES = new Set([
   "task",
   "spawn_teammate",
 ]);
+
+// These desktop tools publish their exact before/after images with the source
+// bytes in one Rust transaction. They do not need a whole-workspace backup.
+const NATIVE_JOURNALED_FILE_TOOLS = new Set(["write_file", "edit_file", "rename_file"]);
 
 function shouldCreateStepSnapshot(toolName: string): boolean {
   return SNAPSHOT_TOOL_NAMES.has(toolName) || toolName.startsWith("mcp_");
@@ -1089,12 +1094,14 @@ export async function runAgentLoop(
           let executionAttempted = false;
           const readOnlyShellCommand = toolCall.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command)
             ? args.command as string : undefined;
-          const needsMutationSnapshot = readOnlyShellCommand === undefined && shouldCreateStepSnapshot(toolCall.function.name);
+          const mayMutateWorkspace = readOnlyShellCommand === undefined && shouldCreateStepSnapshot(toolCall.function.name);
+          const needsMutationSnapshot = mayMutateWorkspace
+            && !(desktopNativeIdeEnabled() && NATIVE_JOURNALED_FILE_TOOLS.has(toolCall.function.name));
           const handler = TOOL_DISPATCH[toolCall.function.name];
           const approval = classifyToolApproval(toolCall.function.name, args, { workspaceDir: session.workspaceDir });
           let shouldExecute = true;
           let deniedByPolicyOrUser = false;
-          if (needsMutationSnapshot && toolCall.function.name !== "process_start" && pendingAgentProcesses({ ...toolCtx, requestId: currentRequestId }, true).some((item) => item.session.status === "running")) {
+          if (mayMutateWorkspace && toolCall.function.name !== "process_start" && pendingAgentProcesses({ ...toolCtx, requestId: currentRequestId }, true).some((item) => item.session.status === "running")) {
             result = "Error: A workspace Agent process is still running. Poll or stop it before issuing another workspace mutation tool.";
             isError = true; shouldExecute = false;
           }

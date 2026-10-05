@@ -1,3 +1,4 @@
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
 import { normalizeExecutionFacts, summarizeExecutionFacts } from "../chat/executionFacts.js";
 import { WebSocket } from "ws";
 import { wsSend } from "../agent/types.js";
@@ -1066,27 +1067,31 @@ async function processConversationQueue(
           recorder.runId
         );
       }
-      const checkpoint = await createCheckpointForRuntime(session.workspaceDir, {
-        label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
-        conversationId: initialTurn.conversationId,
-        runId: recorder.runId,
-        kind: "run",
-      });
-      new TraceStore(session.workspaceDir).append({
-        kind: "checkpoint",
-        action: "Run checkpoint created",
-        correlationId: recorder.runId,
-        runId: recorder.runId,
-        conversationId: initialTurn.conversationId,
-        metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, fileCount: checkpoint.fileCount },
-      });
-      await recorder.event({
-        kind: "tool_result",
-        label: "Workspace checkpoint created",
-        requestId: initialTurn.requestId,
-        toolName: "workspace_checkpoint",
-        detail: `${checkpoint.id} · ${checkpoint.fileCount} files`,
-      });
+      // Native file tools persist per-file rollback evidence; uncertain tools
+      // retain their step checkpoints. Web keeps its existing run backup.
+      if (!desktopNativeIdeEnabled()) {
+        const checkpoint = await createCheckpointForRuntime(session.workspaceDir, {
+          label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
+          conversationId: initialTurn.conversationId,
+          runId: recorder.runId,
+          kind: "run",
+        });
+        new TraceStore(session.workspaceDir).append({
+          kind: "checkpoint",
+          action: "Run checkpoint created",
+          correlationId: recorder.runId,
+          runId: recorder.runId,
+          conversationId: initialTurn.conversationId,
+          metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, fileCount: checkpoint.fileCount },
+        });
+        await recorder.event({
+          kind: "tool_result",
+          label: "Workspace checkpoint created",
+          requestId: initialTurn.requestId,
+          toolName: "workspace_checkpoint",
+          detail: `${checkpoint.id} · ${checkpoint.fileCount} files`,
+        });
+      }
     }
     const readWorkspace = session.workspaceDir;
     assistantMessages = await runAgentLoop(

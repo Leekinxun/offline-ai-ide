@@ -403,6 +403,67 @@
   overflow-wrap: anywhere;
 }
 
+.editor-assistant-failure-banner,
+.editor-assistant-message-error {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface-panel-strong));
+  color: var(--text-primary);
+}
+
+.editor-assistant-failure-banner {
+  margin: 10px 12px 0;
+  padding: 10px 11px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.editor-assistant-message-error {
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 11px;
+  border-radius: 12px 12px 12px 3px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.editor-assistant-failure-banner svg,
+.editor-assistant-message-error svg {
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.editor-assistant-failure-banner div {
+  min-width: 0;
+}
+
+.editor-assistant-failure-banner strong,
+.editor-assistant-failure-banner span,
+.editor-assistant-failure-banner small,
+.editor-assistant-message-error span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.editor-assistant-failure-banner strong {
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+
+.editor-assistant-failure-banner span {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.editor-assistant-failure-banner small {
+  margin-top: 5px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
 .editor-assistant-message-content .chat-markdown {
   line-height: 1.58;
 }

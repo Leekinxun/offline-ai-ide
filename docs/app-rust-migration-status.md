@@ -158,6 +158,26 @@ Checkpoint creation, retention and blob garbage collection also take the native
 writer, so their existing Node schema code cannot race mutation-evidence
 publication in the shared blob store.
 
+Desktop Code turns no longer require a full workspace checkpoint before the
+first model response. Native Agent `write_file`, `edit_file` and `rename_file`
+use their existing transactional before/after blobs and mutation journal for
+review and rollback; they do not create duplicate workspace snapshots. Pending
+Agent processes still exclude these file mutations. An invalid journal or
+failed evidence publication still blocks the source write. Web retains its
+existing startup and step checkpoint behavior.
+
+The current official Codex
+[regular turn entry](https://github.com/openai/codex/blob/main/codex-rs/core/src/tasks/regular.rs)
+does not impose CrownForge's workspace-backup prerequisite, and its
+[turn diff tracker](https://github.com/openai/codex/blob/main/codex-rs/core/src/turn_diff_tracker.rs)
+tracks committed patch deltas by file. CrownForge retains a necessary current
+difference: shell, process, delegated and unknown MCP tools still need the
+existing bounded step snapshot to capture local side effects. Large workspaces
+can therefore still exceed that command snapshot limit. This does not prevent
+Q&A or direct native file edits, and it is not equivalent to Codex's shell
+execution contract. New desktop runs use journal-based rollback; whole-workspace
+run restore remains a manual or explicit legacy operation.
+
 The architectural boundary is deliberate: model configuration, approval and
 review decisions, hunk selection, checkpoint schema/retention, and ChangeSet v3
 state transitions remain in the bundled Node service. ChangeSet decision and
