@@ -12,7 +12,7 @@ import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
 import { runSubagent } from "./subagent.js";
-import { buildFileVersion, listFileMutations, recordFileMutation } from "../files/mutationRegistry.js";
+import { buildFileHash, buildFileVersion, listFileMutations, recordFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
@@ -32,6 +32,8 @@ import {
   assertFileVersion, atomicWriteFile, normalizeEditablePath, readEditableFile,
   rememberFileRead, rememberFileWrite, replaceUniqueText,
 } from "./fileEditSafety.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { mutateDesktopWorkspace, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
 
 // ---- Tool handler type ----
 
@@ -259,7 +261,18 @@ async function runWriteFile(
     }
     // A damaged/unreadable journal must fail before mutating the working file.
     listFileMutations(cwd);
-    const stat = atomicWriteFile(cwd, filePath, content, preimageContent);
+    const stat = desktopNativeIdeEnabled()
+      ? await mutateDesktopWorkspace(cwd, [{
+        type: "writeFile",
+        path: filePath,
+        content,
+        expected: preimageContent === undefined
+          ? { exists: false }
+          : { exists: true, file: true, sha256: buildFileHash(preimageContent) },
+        overwrite: preimageContent !== undefined,
+      }], { transactionId: nativeMutationTransactionId("agent-write"), intent: "agent-edit" })
+        .then((result) => ({ mtimeMs: result.entries.find((entry) => entry.path === filePath)?.mtimeMs ?? Date.now() }))
+      : atomicWriteFile(cwd, filePath, content, preimageContent);
     recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
@@ -307,7 +320,16 @@ async function runEditFile(
       return `No changes to ${filePath}`;
     }
     listFileMutations(cwd);
-    const stat = atomicWriteFile(cwd, filePath, updatedContent, content);
+    const stat = desktopNativeIdeEnabled()
+      ? await mutateDesktopWorkspace(cwd, [{
+        type: "writeFile",
+        path: filePath,
+        content: updatedContent,
+        expected: { exists: true, file: true, sha256: buildFileHash(content) },
+        overwrite: true,
+      }], { transactionId: nativeMutationTransactionId("agent-edit"), intent: "agent-edit" })
+        .then((result) => ({ mtimeMs: result.entries.find((entry) => entry.path === filePath)?.mtimeMs ?? Date.now() }))
+      : atomicWriteFile(cwd, filePath, updatedContent, content);
     recordFileMutation({
       workspaceDir: cwd,
       path: filePath,

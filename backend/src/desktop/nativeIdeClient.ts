@@ -32,6 +32,7 @@ interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
   cleanup(): void;
+  durable?: boolean;
 }
 
 function nativeEnvironment(): NodeJS.ProcessEnv {
@@ -118,6 +119,13 @@ export class NativeIdeClient {
     return this.send(method, params, options) as Promise<T>;
   }
 
+  /** A lost write receipt is an unknown outcome. Never send cancellation after
+   * a mechanical transaction may have crossed its durable publication boundary. */
+  async requestDurable<T>(method: string, params: Record<string, unknown>, options: { timeoutMs?: number } = {}): Promise<T> {
+    await this.ready;
+    return this.send(method, params, { ...options, durable: true }) as Promise<T>;
+  }
+
   onEvent(listener: (event: NativeIdeEvent) => void): () => void {
     this.events.on("event", listener);
     return () => this.events.off("event", listener);
@@ -128,7 +136,7 @@ export class NativeIdeClient {
     return () => this.events.off("disconnect", listener);
   }
 
-  private send(method: string, params: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown> {
+  private send(method: string, params: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs?: number; durable?: boolean }): Promise<unknown> {
     if (this.closed) return Promise.reject(new NativeIdeError("Desktop IDE runtime disconnected", "RUNTIME_DISCONNECTED"));
     if (options.signal?.aborted) return Promise.reject(new NativeIdeError("Operation cancelled", "ABORTED"));
     if (this.pending.size >= 256) return Promise.reject(new NativeIdeError("Desktop IDE request queue is full", "BUSY"));
@@ -137,13 +145,14 @@ export class NativeIdeClient {
       const cancel = (code: string, message: string) => {
         const pending = this.pending.get(id);
         if (!pending) return;
-        this.pending.delete(id); pending.cleanup(); reject(new NativeIdeError(message, code));
-        if (!this.closed) this.child.stdin.write(`${JSON.stringify({ id: ++this.sequence, method: "rpc.cancel", params: { requestId: id } })}\n`);
+        this.pending.delete(id); pending.cleanup();
+        reject(options.durable ? new NativeIdeError("Desktop publication outcome is unknown; query its transaction receipt before retrying", "OUTCOME_UNKNOWN") : new NativeIdeError(message, code));
+        if (!options.durable && !this.closed) this.child.stdin.write(`${JSON.stringify({ id: ++this.sequence, method: "rpc.cancel", params: { requestId: id } })}\n`);
       };
       const abort = () => cancel("ABORTED", "Operation cancelled");
       const timer = setTimeout(() => cancel("TIMEOUT", "Desktop IDE operation timed out"), options.timeoutMs ?? 30_000);
       const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); };
-      this.pending.set(id, { resolve, reject, cleanup });
+      this.pending.set(id, { resolve, reject, cleanup, durable: options.durable });
       options.signal?.addEventListener("abort", abort, { once: true });
       this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
         if (error) this.fail(new NativeIdeError("Desktop IDE runtime input closed", "RUNTIME_DISCONNECTED"));
@@ -177,7 +186,10 @@ export class NativeIdeClient {
     if (this.closed) return;
     this.closed = true;
     this.buffer = "";
-    for (const item of this.pending.values()) { item.cleanup(); item.reject(error); }
+    for (const item of this.pending.values()) {
+      item.cleanup();
+      item.reject(item.durable ? new NativeIdeError("Desktop publication outcome is unknown after runtime loss; recover its transaction before retrying", "OUTCOME_UNKNOWN") : error);
+    }
     this.pending.clear(); this.events.emit("disconnect", error);
   }
 

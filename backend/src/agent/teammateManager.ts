@@ -30,9 +30,12 @@ import { isProcessAlive } from "../utils/processLiveness.js";
 import { createManagedWorktree, listManagedWorktrees, updateManagedWorktreeMetadata, type ManagedWorktree } from "../chat/worktrees.js";
 import {
   captureCheckpointMutationsDetailed,
+  buildFileHash,
   listMutationEvidenceGaps,
   recordKnownFileMutation,
 } from "../files/mutationRegistry.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { mutateDesktopWorkspace, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
 import { OrchestrationStore } from "./orchestrationStore.js";
 import { TraceStore, type CollaborationEventReferences, type CollaborationLifecycleEventInput } from "../chat/traceStore.js";
 
@@ -87,10 +90,21 @@ async function dispatchTeammateTool(
       try {
         const full = safePath(args.path as string, cwd);
         const previous = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : "";
-        fs.mkdirSync(path.dirname(full), { recursive: true });
         const content = args.content as string;
-        fs.writeFileSync(full, content, "utf-8");
-        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: previous, runId, toolCallId });
+        const mtimeMs = desktopNativeIdeEnabled()
+          ? (await mutateDesktopWorkspace(cwd, [{
+            type: "writeFile",
+            path: args.path as string,
+            content,
+            expected: fs.existsSync(full) ? { exists: true, file: true, sha256: buildFileHash(previous) } : { exists: false },
+            overwrite: fs.existsSync(full),
+          }], { transactionId: nativeMutationTransactionId("teammate-write"), intent: "agent-edit" })).entries.find((entry) => entry.path === args.path)?.mtimeMs ?? Date.now()
+          : (() => {
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, content, "utf-8");
+            return fs.statSync(full).mtimeMs;
+          })();
+        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs, content, preimageContent: previous, runId, toolCallId });
         return `Wrote ${(args.content as string).length} bytes`;
       } catch (e: any) { return `Error: ${e.message}`; }
     case "edit_file":
@@ -103,8 +117,19 @@ async function dispatchTeammateTool(
         const c = fs.readFileSync(full, "utf-8");
         if (!c.includes(args.old_text as string)) return "Error: Text not found";
         const content = c.replace(args.old_text as string, args.new_text as string);
-        fs.writeFileSync(full, content, "utf-8");
-        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: c, runId, toolCallId });
+        const mtimeMs = desktopNativeIdeEnabled()
+          ? (await mutateDesktopWorkspace(cwd, [{
+            type: "writeFile",
+            path: args.path as string,
+            content,
+            expected: { exists: true, file: true, sha256: buildFileHash(c) },
+            overwrite: true,
+          }], { transactionId: nativeMutationTransactionId("teammate-edit"), intent: "agent-edit" })).entries.find((entry) => entry.path === args.path)?.mtimeMs ?? Date.now()
+          : (() => {
+            fs.writeFileSync(full, content, "utf-8");
+            return fs.statSync(full).mtimeMs;
+          })();
+        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs, content, preimageContent: c, runId, toolCallId });
         return "Edited";
       } catch (e: any) { return `Error: ${e.message}`; }
     case "send_message":

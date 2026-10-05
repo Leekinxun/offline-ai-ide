@@ -19,6 +19,7 @@ import {
 import { pushTeamSnapshot } from "../ws/team.js";
 import {
   buildFileVersion,
+  buildFileHash,
   assertMutationJournalReadable,
   lookupKnownFileMutation,
   MutationJournalEvidenceError,
@@ -31,6 +32,7 @@ import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { desktopNativeIdeEnabled, NativeIdeError } from "../desktop/nativeIdeClient.js";
 import { readDesktopFile, readDesktopFileTree, readDesktopGitStatus } from "../desktop/nativeIdeServices.js";
 import { readDesktopWorkspaceChanges } from "../desktop/nativeWorkspaceChanges.js";
+import { mutateDesktopWorkspace, nativeMutationErrorCode, nativeMutationHttpStatus, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
 import { MoveEntryError, moveWorkspaceEntry } from "../files/moveEntry.js";
 import {
@@ -462,6 +464,18 @@ function buildConflictSourcePayload(
   return { source: "external" };
 }
 
+function normalizeWorkspaceRel(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function nativeMutationErrorResponse(res: any, error: unknown, fallback = "Desktop file mutation failed") {
+  const detail = error instanceof Error ? error.message : fallback;
+  return res.status(nativeMutationHttpStatus(error)).json({
+    detail,
+    ...(nativeMutationErrorCode(error) ? { code: nativeMutationErrorCode(error) } : {}),
+  });
+}
+
 // GET /tree
 filesRouter.get("/tree", async (req, res) => {
   const workspaceDir = getWorkspace(req);
@@ -840,7 +854,7 @@ filesRouter.get("/download", (req, res) => {
 });
 
 // POST /write  { path, content }
-filesRouter.post("/write", (req, res) => {
+filesRouter.post("/write", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const { path: relPath, content, force, expectedVersion } = req.body;
   if (!relPath) return res.status(400).json({ detail: "path required" });
@@ -885,16 +899,33 @@ filesRouter.post("/write", (req, res) => {
         },
       });
     }
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, "utf-8");
     const nextVersion = buildFileVersion(content);
-    const stat = fs.statSync(full);
+    let updatedAt: number;
+    if (desktopNativeIdeEnabled()) {
+      try {
+        const result = await mutateDesktopWorkspace(getWorkspace(req), [{
+          type: "writeFile",
+          path: relPath,
+          content,
+          overwrite: Boolean(force),
+          ...(existedBeforeWrite && !force ? { expected: { exists: true, file: true, sha256: buildFileHash(currentContent) } } : {}),
+        }], { transactionId: nativeMutationTransactionId("user-save") });
+        const receipt = result.entries.find((entry) => entry.path === relPath);
+        updatedAt = receipt?.mtimeMs ?? Date.now();
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop save failed");
+      }
+    } else {
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, content, "utf-8");
+      updatedAt = fs.statSync(full).mtimeMs;
+    }
     recordKnownFileMutation({
       workspaceDir: getWorkspace(req),
       path: relPath,
       source: "user",
       actor: session.username,
-      mtimeMs: stat.mtimeMs,
+      mtimeMs: updatedAt,
       version: nextVersion,
     });
     maybeRecordTeamActivity(req, {
@@ -911,7 +942,7 @@ filesRouter.post("/write", (req, res) => {
     res.json({
       status: "ok",
       version: nextVersion,
-      updatedAt: stat.mtimeMs,
+      updatedAt,
     });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
@@ -919,7 +950,7 @@ filesRouter.post("/write", (req, res) => {
 });
 
 // POST /create  { path, is_directory }
-filesRouter.post("/create", (req, res) => {
+filesRouter.post("/create", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const { path: relPath, is_directory } = req.body;
   if (!relPath) return res.status(400).json({ detail: "path required" });
@@ -928,7 +959,16 @@ filesRouter.post("/create", (req, res) => {
     if (fs.existsSync(full)) {
       return res.status(409).json({ detail: "Already exists" });
     }
-    if (is_directory) {
+    if (desktopNativeIdeEnabled()) {
+      try {
+        await mutateDesktopWorkspace(getWorkspace(req), [is_directory
+          ? { type: "mkdir", path: relPath, recursive: true }
+          : { type: "writeFile", path: relPath, content: "", expected: { exists: false } }
+        ], { transactionId: nativeMutationTransactionId("user-create") });
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop create failed");
+      }
+    } else if (is_directory) {
       fs.mkdirSync(full, { recursive: true });
     } else {
       fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -949,14 +989,31 @@ filesRouter.post("/create", (req, res) => {
 });
 
 // POST /copy  { source_path, target_directory }
-filesRouter.post("/copy", (req, res) => {
+filesRouter.post("/copy", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const sourcePath = typeof req.body?.source_path === "string" ? req.body.source_path : "";
   const targetDirectory =
     typeof req.body?.target_directory === "string" ? req.body.target_directory : "";
 
   try {
-    const result = copyWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    let result: { sourcePath: string; path: string; type: "file" | "directory" };
+    if (desktopNativeIdeEnabled()) {
+      const normalizedSource = normalizeWorkspaceRel(sourcePath);
+      const normalizedTargetDirectory = normalizeWorkspaceRel(targetDirectory || "");
+      const targetDirectoryFullPath = safePathUtil(normalizedTargetDirectory || "", getWorkspace(req));
+      if (!fs.existsSync(targetDirectoryFullPath)) return res.status(404).json({ detail: "Target directory not found", code: "COPY_TARGET_NOT_FOUND" });
+      if (!fs.statSync(targetDirectoryFullPath).isDirectory()) return res.status(400).json({ detail: "Paste target must be a directory", code: "COPY_TARGET_NOT_DIRECTORY" });
+      const destination = normalizeWorkspaceRel(path.posix.join(normalizedTargetDirectory, path.posix.basename(normalizedSource)));
+      try {
+        const response = await mutateDesktopWorkspace(getWorkspace(req), [{ type: "copy", path: normalizedSource, newPath: destination }], { transactionId: nativeMutationTransactionId("user-copy") });
+        const receipt = response.entries.find((entry) => entry.path === destination);
+        result = { sourcePath: normalizedSource, path: destination, type: receipt?.isDirectory ? "directory" : "file" };
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop copy failed");
+      }
+    } else {
+      result = copyWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    }
     notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: result.path, operation: "create", ...(result.type === "directory" ? { scope: "prefix" as const } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_copied",
@@ -979,14 +1036,37 @@ filesRouter.post("/copy", (req, res) => {
 });
 
 // POST /move  { source_path, target_directory }
-filesRouter.post("/move", (req, res) => {
+filesRouter.post("/move", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const sourcePath = typeof req.body?.source_path === "string" ? req.body.source_path : "";
   const targetDirectory =
     typeof req.body?.target_directory === "string" ? req.body.target_directory : "";
 
   try {
-    const result = moveWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    let result: { sourcePath: string; path: string; type: "file" | "directory" };
+    if (desktopNativeIdeEnabled()) {
+      const normalizedSource = normalizeWorkspaceRel(sourcePath);
+      const normalizedTargetDirectory = normalizeWorkspaceRel(targetDirectory || "");
+      const targetDirectoryFullPath = safePathUtil(normalizedTargetDirectory || "", getWorkspace(req));
+      if (!fs.existsSync(targetDirectoryFullPath)) return res.status(404).json({ detail: "Target directory not found", code: "MOVE_TARGET_NOT_FOUND" });
+      if (!fs.statSync(targetDirectoryFullPath).isDirectory()) return res.status(400).json({ detail: "Move target must be a directory", code: "MOVE_TARGET_NOT_DIRECTORY" });
+      const destination = normalizeWorkspaceRel(path.posix.join(normalizedTargetDirectory, path.posix.basename(normalizedSource)));
+      if (destination === normalizedSource) {
+        const full = safePathUtil(normalizedSource, getWorkspace(req));
+        const stat = fs.lstatSync(full);
+        result = { sourcePath: normalizedSource, path: destination, type: stat.isDirectory() ? "directory" : "file" };
+      } else {
+        try {
+          const response = await mutateDesktopWorkspace(getWorkspace(req), [{ type: "rename", path: normalizedSource, newPath: destination }], { transactionId: nativeMutationTransactionId("user-move") });
+          const receipt = response.entries.find((entry) => entry.path === destination);
+          result = { sourcePath: normalizedSource, path: destination, type: receipt?.isDirectory ? "directory" : "file" };
+        } catch (error) {
+          return nativeMutationErrorResponse(res, error, "Desktop move failed");
+        }
+      }
+    } else {
+      result = moveWorkspaceEntry(getWorkspace(req), sourcePath, targetDirectory);
+    }
     if (result.sourcePath !== result.path) notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: result.path, previousPath: result.sourcePath, operation: "rename", ...(result.type === "directory" ? { scope: "prefix" as const } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_renamed",
@@ -1026,7 +1106,7 @@ filesRouter.post("/upload", (req, res, next) => {
     if (!requireWorkspaceWrite(req, res)) return;
     next();
   });
-}, (req, res) => {
+}, async (req, res) => {
   const { targetPath } = req.body;
   const overwrite =
     req.body.overwrite === true ||
@@ -1086,6 +1166,47 @@ filesRouter.post("/upload", (req, res, next) => {
     }
 
     assertMutationJournalReadable(workspaceDir);
+
+    if (desktopNativeIdeEnabled()) {
+      try {
+        const response = await mutateDesktopWorkspace(workspaceDir, prepared.map((file) => ({
+          type: "writeFile" as const,
+          path: file.relPath,
+          contentBase64: file.content.toString("base64"),
+          overwrite,
+          ...(!overwrite ? { expected: { exists: false } } : {}),
+        })), { transactionId: nativeMutationTransactionId("user-upload") });
+        const receipts = new Map(response.entries.map((entry) => [entry.path, entry]));
+        for (const file of prepared) {
+          writtenCount += 1;
+          if (!file.recordMutation) continue;
+          const receipt = receipts.get(file.relPath);
+          recordKnownFileMutation({
+            workspaceDir,
+            path: file.relPath,
+            source: "user",
+            actor: session.username,
+            mtimeMs: receipt?.mtimeMs ?? Date.now(),
+            version: buildFileVersion(file.content.toString("base64")),
+          });
+        }
+        maybeRecordTeamActivity(req, {
+          type: "entry_created",
+          payload: {
+            path: typeof targetPath === "string" && targetPath.trim() ? targetPath.trim() : "",
+            uploadedCount: prepared.length,
+            overwrittenCount: conflicts.length,
+          },
+        });
+        return res.json({
+          status: "ok",
+          uploaded: prepared.length,
+          overwritten: conflicts.length,
+        });
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop upload failed");
+      }
+    }
 
     fs.mkdirSync(workspaceDir, { recursive: true });
     for (const file of prepared) {
@@ -1151,7 +1272,7 @@ filesRouter.post("/upload", (req, res, next) => {
 });
 
 // DELETE /delete?path=xxx
-filesRouter.delete("/delete", (req, res) => {
+filesRouter.delete("/delete", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const relPath = req.query.path as string;
   if (!relPath) return res.status(400).json({ detail: "path required" });
@@ -1161,7 +1282,15 @@ filesRouter.delete("/delete", (req, res) => {
       return res.status(404).json({ detail: "Not found" });
     }
     const scope = fs.lstatSync(full).isDirectory() ? "prefix" as const : "file" as const;
-    fs.rmSync(full, { recursive: true, force: true });
+    if (desktopNativeIdeEnabled()) {
+      try {
+        await mutateDesktopWorkspace(getWorkspace(req), [{ type: "delete", path: relPath, recursive: scope === "prefix" }], { transactionId: nativeMutationTransactionId("user-delete") });
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop delete failed");
+      }
+    } else {
+      fs.rmSync(full, { recursive: true, force: true });
+    }
     notifyWorkspaceMutation({ workspaceDir: getWorkspace(req), path: relPath, operation: "delete", ...(scope === "prefix" ? { scope } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_deleted",
@@ -1176,7 +1305,7 @@ filesRouter.delete("/delete", (req, res) => {
 });
 
 // POST /rename  { old_path, new_path }
-filesRouter.post("/rename", (req, res) => {
+filesRouter.post("/rename", async (req, res) => {
   if (!requireWorkspaceWrite(req, res)) return;
   const { old_path, new_path } = req.body;
   if (!old_path || !new_path) return res.status(400).json({ detail: "paths required" });
@@ -1191,8 +1320,16 @@ filesRouter.post("/rename", (req, res) => {
       return res.status(409).json({ detail: "Target already exists" });
     }
     const scope = fs.lstatSync(oldFull).isDirectory() ? "prefix" as const : "file" as const;
-    fs.mkdirSync(path.dirname(newFull), { recursive: true });
-    fs.renameSync(oldFull, newFull);
+    if (desktopNativeIdeEnabled()) {
+      try {
+        await mutateDesktopWorkspace(wsDir, [{ type: "rename", path: old_path, newPath: new_path }], { transactionId: nativeMutationTransactionId("user-rename") });
+      } catch (error) {
+        return nativeMutationErrorResponse(res, error, "Desktop rename failed");
+      }
+    } else {
+      fs.mkdirSync(path.dirname(newFull), { recursive: true });
+      fs.renameSync(oldFull, newFull);
+    }
     notifyWorkspaceMutation({ workspaceDir: wsDir, path: new_path, previousPath: old_path, operation: "rename", ...(scope === "prefix" ? { scope } : {}) });
     maybeRecordTeamActivity(req, {
       type: "entry_renamed",

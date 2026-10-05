@@ -95,9 +95,19 @@ export class RepositoryIndexStore {
     try { return work(); } finally { this.releaseLock(lock); }
   }
 
+  async withLockAsync<T>(work: () => Promise<T>): Promise<T> {
+    const lock = this.acquireLock();
+    try { return await work(); } finally { this.releaseLock(lock); }
+  }
+
   withRebuildLock<T>(work: () => T): T {
     const lock = this.acquireLock(this.rebuildLockPath, 300_000);
     try { return work(); } finally { this.releaseLock(lock, this.rebuildLockPath); }
+  }
+
+  async withRebuildLockAsync<T>(work: () => Promise<T>): Promise<T> {
+    const lock = this.acquireLock(this.rebuildLockPath, 300_000);
+    try { return await work(); } finally { this.releaseLock(lock, this.rebuildLockPath); }
   }
 
   readMeta(): RepositoryIndexMeta | null {

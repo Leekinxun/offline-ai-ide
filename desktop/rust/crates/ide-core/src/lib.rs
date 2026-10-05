@@ -2,7 +2,10 @@
 
 mod change_version;
 mod error;
+mod file_identity;
 mod git;
+mod index;
+mod mutation;
 mod pty;
 mod resource_id;
 mod search;
@@ -38,6 +41,8 @@ pub struct Task {
 pub struct Core {
     emit: EventSink,
     change_versions: change_version::ChangeVersions,
+    indexes: index::Indexes,
+    mutations: mutation::Mutations,
     terminals: pty::Terminals,
     watches: watch::Watches,
     requests: Mutex<HashMap<u64, Arc<AtomicBool>>>,
@@ -48,6 +53,8 @@ impl Core {
     pub fn new(emit: EventSink) -> Self {
         Self {
             change_versions: change_version::ChangeVersions::new(emit.clone()),
+            indexes: Default::default(),
+            mutations: Default::default(),
             emit,
             terminals: Default::default(),
             watches: Default::default(),
@@ -80,7 +87,9 @@ impl Core {
             self.dispatch(&method, task.request.params, cancelled.clone())
         };
         // Cancellation can arrive after spawn/start created a native resource but before its response.
-        if cancelled.load(Ordering::Acquire) {
+        if cancelled.load(Ordering::Acquire)
+            && !matches!(method.as_str(), "transaction.commit" | "fs.mutate")
+        {
             if let Ok(resource) = &result {
                 if method == "pty.spawn" {
                     if let Ok(params) = parse(resource.clone()) {
@@ -89,6 +98,10 @@ impl Core {
                 } else if method == "watch.start" {
                     if let Ok(params) = parse(resource.clone()) {
                         let _ = self.watches.stop(params);
+                    }
+                } else if method == "index.scan" {
+                    if let Some(session_id) = resource.get("sessionId").and_then(Value::as_str) {
+                        self.indexes.discard(session_id);
                     }
                 }
             }
@@ -112,12 +125,33 @@ impl Core {
     fn dispatch(&self, method: &str, params: Value, cancelled: Arc<AtomicBool>) -> Result<Value> {
         match method {
             "ping" => Ok(
-                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "search", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
+                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "fs.mutate", "fs.writer.admit", "fs.writer.acquire", "fs.writer.inspect", "fs.writer.release", "fs.transaction.begin", "fs.transaction.chunk", "fs.transaction.commit", "fs.transaction.abort", "fs.transaction.status", "fs.transaction.recover", "search", "index.scan", "index.page", "index.readBatch", "index.policy", "index.close", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
             ),
             "fs.entries" => serialize(workspace::entries(parse(params)?)?),
             "fs.read" => serialize(workspace::read(parse(params)?)?),
             "fs.changeVersion" => serialize(self.change_versions.query(parse(params)?)?),
+            "fs.mutate" => serialize(self.mutations.mutate(parse(params)?)?),
+            "fs.writer.admit" => serialize(self.mutations.writer_admit(parse(params)?)?),
+            "fs.writer.acquire" => serialize(self.mutations.writer_acquire(parse(params)?)?),
+            "fs.writer.inspect" => serialize(self.mutations.writer_inspect(parse(params)?)?),
+            "fs.writer.release" => serialize(self.mutations.writer_release(parse(params)?)?),
+            "fs.transaction.begin" => serialize(self.mutations.transaction_begin(parse(params)?)?),
+            "fs.transaction.chunk" => serialize(self.mutations.transaction_chunk(parse(params)?)?),
+            "fs.transaction.commit" => {
+                serialize(self.mutations.transaction_commit(parse(params)?)?)
+            }
+            "fs.transaction.abort" => serialize(self.mutations.transaction_abort(parse(params)?)?),
+            "fs.transaction.status" => serialize(self.mutations.status(parse(params)?)?),
+            "fs.transaction.recover" => serialize(self.mutations.recover(parse(params)?)?),
             "search" => serialize(search::search(parse(params)?, cancelled)?),
+            "index.scan" => serialize(self.indexes.scan(parse(params)?, cancelled)?),
+            "index.page" => serialize(self.indexes.page(parse(params)?)?),
+            "index.readBatch" => serialize(self.indexes.read_batch(parse(params)?)?),
+            "index.policy" => serialize(self.indexes.policy(parse(params)?)?),
+            "index.close" => {
+                self.indexes.close(parse(params)?)?;
+                Ok(Value::Null)
+            }
             "git.exec" => serialize(git::execute(parse(params)?, cancelled)?),
             "watch.start" => self.watches.start(parse(params)?, self.emit.clone()),
             "watch.stop" => self.watches.stop(parse(params)?),
@@ -155,6 +189,7 @@ impl Core {
         }
         self.watches.shutdown();
         self.change_versions.shutdown();
+        self.indexes.shutdown();
         self.terminals.shutdown();
     }
 }

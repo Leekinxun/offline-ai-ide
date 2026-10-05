@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { UserSession } from "../auth/sessionManager.js";
-import { createCheckpoint, getCheckpointStorageStats, listCheckpoints, pruneCheckpointBlobs, readCheckpointSettings, restoreCheckpoint, updateCheckpointRetention, verifyCheckpointBlobs } from "../chat/checkpoints.js";
+import { createCheckpoint, getCheckpointStorageStats, listCheckpoints, pruneCheckpointBlobs, readCheckpointSettings, restoreCheckpointForRuntime, updateCheckpointRetention, verifyCheckpointBlobs } from "../chat/checkpoints.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 import { listFileMutations, rollbackFileMutations } from "../files/mutationRegistry.js";
 import { applyChangeSetDecision, ChangeSetCollaborationGateError, ChangeSetIntegrationConflictError, ChangeSetLockRecoveryRequiredError, ChangeSetReviewGateError, getChangeSet, listChangeSets, preflightChangeSetDecision, recoverInterruptedChangeSetWithOutcome, type ChangeSet, type ChangeSetDecision } from "../chat/changeSets.js";
@@ -97,12 +97,12 @@ checkpointsRouter.post("/create", (req, res) => {
   }
 });
 
-checkpointsRouter.post("/:id/restore", (req, res) => {
+checkpointsRouter.post("/:id/restore", async (req, res) => {
   if (!canWriteActiveWorkspace((req as any).userSession as UserSession)) {
     return res.status(403).json({ error: "Workspace is read-only" });
   }
   try {
-    const checkpoint = restoreCheckpoint(workspace(req), req.params.id);
+    const checkpoint = await restoreCheckpointForRuntime(workspace(req), req.params.id);
     res.json({ restored: true, checkpoint });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Restore failed";

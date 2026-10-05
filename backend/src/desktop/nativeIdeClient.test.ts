@@ -11,12 +11,16 @@ function fixture(t: test.TestContext): NativeIdeClient {
   fs.writeFileSync(file, `
 const readline = require('node:readline');
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+let commits = 0, cancels = 0;
 readline.createInterface({input:process.stdin}).on('line', (line) => {
   const request = JSON.parse(line);
   if (request.method === 'ping') send({id:request.id,result:{protocolVersion:1}});
   else if (request.method === 'die') process.exit(4);
   else if (request.method === 'malformed') process.stdout.write('not json\\n');
   else if (request.method === 'delay') setTimeout(() => send({id:request.id,result:true}), 200);
+  else if (request.method === 'slowCommit') setTimeout(() => { commits++; send({id:request.id,result:{committed:true}}); }, 100);
+  else if (request.method === 'receipt') send({id:request.id,result:{commits,cancels}});
+  else if (request.method === 'rpc.cancel') { cancels++; send({id:request.id,result:null}); }
   else if (request.method === 'unicode') {
     const bytes = Buffer.from(JSON.stringify({id:request.id,result:'中文😀'})+'\\n');
     const split = bytes.indexOf(Buffer.from('中'))+1;
@@ -68,6 +72,19 @@ test("runtime crash rejects active operations instead of silently using Node", a
   const client = fixture(t);
   await assert.rejects(client.request("die", {}), (error: unknown) => error instanceof NativeIdeError && error.code === "RUNTIME_DISCONNECTED");
   await assert.rejects(client.request("echo", {}), /disconnected/);
+});
+
+test("lost durable receipts remain unknown without cancelling an in-flight publication", async (t) => {
+  const client = fixture(t);
+  await assert.rejects(client.requestDurable("slowCommit", {}, { timeoutMs: 20 }),
+    (error: unknown) => error instanceof NativeIdeError && error.code === "OUTCOME_UNKNOWN");
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  assert.deepEqual(await client.request("receipt", {}), { commits: 1, cancels: 0 });
+});
+
+test("runtime loss during durable publication does not claim it was uncommitted", async (t) => {
+  await assert.rejects(fixture(t).requestDurable("die", {}),
+    (error: unknown) => error instanceof NativeIdeError && error.code === "OUTCOME_UNKNOWN");
 });
 
 test("malformed native protocol closes the service", async (t) => {

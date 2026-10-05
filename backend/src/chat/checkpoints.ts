@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { mutateDesktopWorkspace, nativeMutationTransactionId, type NativeMutationOperation } from "../desktop/nativeWorkspaceMutation.js";
 
 const CHECKPOINT_DIR = ".checkpoints";
 const INDEX_FILE = "index.json";
@@ -71,4 +73,34 @@ export function getCheckpointStorageStats(workspaceDir: string): CheckpointStora
 function previewRetention(checkpoints: WorkspaceCheckpoint[], maxCheckpoints: number): { retainedIds: Set<string>; removedCheckpointIds: string[] } { const protectedRunIds = new Set<string>(); const protectedIds = new Set<string>(); for (const checkpoint of checkpoints) if (checkpoint.kind === "run" && checkpoint.runId && protectedRunIds.size < 4 && !protectedRunIds.has(checkpoint.runId)) { protectedRunIds.add(checkpoint.runId); protectedIds.add(checkpoint.id); } const retained: WorkspaceCheckpoint[] = []; const stale: WorkspaceCheckpoint[] = []; for (const checkpoint of checkpoints) (retained.length < maxCheckpoints || protectedIds.has(checkpoint.id) ? retained : stale).push(checkpoint); while (retained.length > maxCheckpoints) { let target = -1; for (let index = retained.length - 1; index > 0; index -= 1) if (!protectedIds.has(retained[index].id)) { target = index; break; } if (target < 0) break; stale.push(...retained.splice(target, 1)); } return { retainedIds: new Set(retained.map((entry) => entry.id)), removedCheckpointIds: stale.map((entry) => entry.id) }; }
 export function updateCheckpointRetention(workspaceDir: string, input: { maxCheckpoints: number; dryRun?: boolean }): { dryRun: boolean; settings: CheckpointSettings; removedCheckpointIds: string[]; stats: CheckpointStorageStats } { if (!Number.isInteger(input.maxCheckpoints) || input.maxCheckpoints < MIN_CHECKPOINTS || input.maxCheckpoints > MAX_CONFIGURED_CHECKPOINTS) throw new RangeError(`maxCheckpoints must be between ${MIN_CHECKPOINTS} and ${MAX_CONFIGURED_CHECKPOINTS}`); const settings: CheckpointSettings = { schemaVersion: 1, maxCheckpoints: input.maxCheckpoints }; const checkpoints = readIndex(workspaceDir); const { removedCheckpointIds } = previewRetention(checkpoints, input.maxCheckpoints); if (input.dryRun) return { dryRun: true, settings, removedCheckpointIds, stats: { ...getCheckpointStorageStats(workspaceDir), retention: settings } }; atomicWrite(settingsPath(workspaceDir), JSON.stringify(settings, null, 2)); const retained = pruneRetention(workspaceDir, checkpoints); writeIndex(workspaceDir, retained); pruneBlobs(workspaceDir, retained); return { dryRun: false, settings, removedCheckpointIds, stats: getCheckpointStorageStats(workspaceDir) }; }
 export function restoreCheckpoint(workspaceDir: string, checkpointId: string): PublicWorkspaceCheckpoint { if (!/^\d+-[a-f0-9]{8}$/.test(checkpointId)) throw new Error("Invalid checkpoint id"); const index = readIndex(workspaceDir); let checkpoint = index.find((entry) => entry.id === checkpointId); if (!checkpoint) throw new Error("Checkpoint not found"); const snapshot = checkpoint.storageVersion ? resolveSnapshot(workspaceDir, checkpoint.id, index) : legacySnapshot(workspaceDir, checkpoint); if (checkpoint.storageVersion) verifySnapshotBlobs(workspaceDir, snapshot); for (const entry of snapshot.values()) safeWorkspaceTarget(workspaceDir, entry.path); createCheckpoint(workspaceDir, { label: `Before restore · ${checkpoint.label}`, conversationId: checkpoint.conversationId, runId: checkpoint.runId, kind: "revert", retainId: checkpointId }); checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId); if (!checkpoint) throw new Error("Checkpoint not found"); const captured = new Set(snapshot.keys()); for (const current of walkWorkspace(workspaceDir)) if (!captured.has(current.relative)) fs.unlinkSync(current.absolute); for (const entry of snapshot.values()) { const target = safeWorkspaceTarget(workspaceDir, entry.path); const source = checkpoint.storageVersion ? blobPath(workspaceDir, entry.sha256) : path.join(checkpointRoot(workspaceDir), checkpoint.id, "files", ...entry.path.split("/")); fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, fs.readFileSync(source)); } return publicCheckpoint(checkpoint); }
+export async function restoreCheckpointForRuntime(workspaceDir: string, checkpointId: string): Promise<PublicWorkspaceCheckpoint> {
+  if (!desktopNativeIdeEnabled()) return restoreCheckpoint(workspaceDir, checkpointId);
+  if (!/^\d+-[a-f0-9]{8}$/.test(checkpointId)) throw new Error("Invalid checkpoint id");
+  const index = readIndex(workspaceDir);
+  let checkpoint = index.find((entry) => entry.id === checkpointId);
+  if (!checkpoint) throw new Error("Checkpoint not found");
+  const snapshot = checkpoint.storageVersion ? resolveSnapshot(workspaceDir, checkpoint.id, index) : legacySnapshot(workspaceDir, checkpoint);
+  if (checkpoint.storageVersion) verifySnapshotBlobs(workspaceDir, snapshot);
+  for (const entry of snapshot.values()) safeWorkspaceTarget(workspaceDir, entry.path);
+  createCheckpoint(workspaceDir, { label: `Before restore · ${checkpoint.label}`, conversationId: checkpoint.conversationId, runId: checkpoint.runId, kind: "revert", retainId: checkpointId });
+  checkpoint = readIndex(workspaceDir).find((entry) => entry.id === checkpointId);
+  if (!checkpoint) throw new Error("Checkpoint not found");
+  const captured = new Set(snapshot.keys());
+  const operations: NativeMutationOperation[] = [];
+  for (const current of walkWorkspace(workspaceDir)) {
+    if (!captured.has(current.relative)) {
+      const bytes = fs.readFileSync(current.absolute);
+      operations.push({ type: "delete", path: current.relative, expected: { exists: true, file: true, sha256: hashBuffer(bytes) } });
+    }
+  }
+  for (const entry of snapshot.values()) {
+    const target = safeWorkspaceTarget(workspaceDir, entry.path);
+    const source = checkpoint.storageVersion ? blobPath(workspaceDir, entry.sha256) : path.join(checkpointRoot(workspaceDir), checkpoint.id, "files", ...entry.path.split("/"));
+    const content = fs.readFileSync(source);
+    const expected = fs.existsSync(target) ? { exists: true, file: true, sha256: hashBuffer(fs.readFileSync(target)) } : { exists: false };
+    operations.push({ type: "writeFile", path: entry.path, contentBase64: content.toString("base64"), expected, overwrite: true });
+  }
+  if (operations.length) await mutateDesktopWorkspace(workspaceDir, operations, { transactionId: nativeMutationTransactionId("checkpoint-restore"), intent: "checkpoint" });
+  return publicCheckpoint(checkpoint);
+}
 export function findCheckpointForRun(workspaceDir: string, runId: string): PublicWorkspaceCheckpoint | undefined { const normalized = runId.trim(); if (!normalized) return undefined; const matching = readIndex(workspaceDir).filter((entry) => entry.runId === normalized); const checkpoint = matching.filter((entry) => entry.kind === "run").sort((a, b) => b.createdAt - a.createdAt)[0]; const legacy = matching.filter((entry) => !entry.kind && entry.label.startsWith("Before agent task")).sort((a, b) => b.createdAt - a.createdAt)[0]; return checkpoint || legacy ? publicCheckpoint(checkpoint || legacy) : undefined; }

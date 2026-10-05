@@ -25,7 +25,7 @@ import {
   listRunSummaries,
   readRunRecord,
 } from "../chat/runHistory.js";
-import { findCheckpointForRun, restoreCheckpoint } from "../chat/checkpoints.js";
+import { findCheckpointForRun, restoreCheckpointForRuntime } from "../chat/checkpoints.js";
 import { keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, MutationReviewConflictError, rollbackFileMutations, safeMutationRelativePath } from "../files/mutationRegistry.js";
 import { assertRunChangesOwner, keepAllRunChanges, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
@@ -650,7 +650,7 @@ chatRouter.post("/runs/:runId/changes/keep", (req, res) => {
   }
 });
 
-chatRouter.post("/runs/:runId/revert", (req, res) => {
+chatRouter.post("/runs/:runId/revert", async (req, res) => {
   const session = (req as any).userSession as UserSession;
   let preparedFork: ConversationSummary | undefined;
   if (!canWriteActiveWorkspace(session)) {
@@ -710,7 +710,7 @@ chatRouter.post("/runs/:runId/revert", (req, res) => {
     }
     const checkpoint = findCheckpointForRun(session.workspaceDir, req.params.runId);
     if (!checkpoint) return res.status(404).json({ error: "Run checkpoint not found" });
-    res.json({ restored: true, checkpoint: restoreCheckpoint(session.workspaceDir, checkpoint.id), mode: "legacy-full-restore" });
+    res.json({ restored: true, checkpoint: await restoreCheckpointForRuntime(session.workspaceDir, checkpoint.id), mode: "legacy-full-restore" });
   } catch (error) {
     if (preparedFork) {
       try { deleteConversation(session.workspaceDir, preparedFork.id); } catch { /* Keep a recoverable fork if cleanup is unavailable. */ }

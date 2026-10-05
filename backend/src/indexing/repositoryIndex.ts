@@ -3,13 +3,17 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { rgPath } from "@vscode/ripgrep";
 import { getDiagnostics } from "../diagnostics/service.js";
-import { evaluateContextPath, readAuthorizedWorkspaceFile } from "../agent/contextPolicy.js";
+import { assertAuthorizedContextContent, evaluateContextPath, readAuthorizedWorkspaceFile } from "../agent/contextPolicy.js";
+import { closeNativeIndex, nativeIndexEnabled, nativeIndexPolicy, pageNativeIndex, readNativeIndexBatch, scanNativeIndex, type NativeIndexContent, type NativeIndexEntry } from "../desktop/nativeIndex.js";
 import { searchWorkspace } from "../files/workspaceSearch.js";
 import { subscribeWorkspaceMutations } from "../files/mutationRegistry.js";
 import { registerContextIndexAdapter, type ContextIndexStatus } from "../agent/contextManifestIndex.js";
-import { indexLanguageFile, LANGUAGE_ADAPTER_VERSIONS } from "./languageAdapters.js";
+import { indexLanguageFile, LANGUAGE_ADAPTER_VERSIONS, type LanguageIndexResult } from "./languageAdapters.js";
 import { RepositoryIndexStore } from "./indexStore.js";
 import { resolveRepositoryOwnership } from "./ownershipResolver.js";
 import type {
@@ -43,6 +47,42 @@ const headCache = new Map<string, { value?: string; expiresAt: number }>();
 
 function digest(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function parseWorkerUrl(): URL {
+  return new URL(import.meta.url.endsWith(".ts") ? "./languageParseWorker.ts" : "./languageParseWorker.js", import.meta.url);
+}
+
+async function parseLanguageFiles(files: Array<{ path: string; content: string }>): Promise<Map<string, LanguageIndexResult>> {
+  if (files.length === 0) return new Map();
+  return new Promise((resolve, reject) => {
+    const sourceMode = import.meta.url.endsWith(".ts");
+    const registration = sourceMode ? createRequire(import.meta.url).resolve("tsx/cjs") : undefined;
+    const worker = sourceMode
+      ? new Worker(`require(${JSON.stringify(registration)});require(${JSON.stringify(fileURLToPath(parseWorkerUrl()))});`, { eval: true, workerData: { files }, execArgv: [] })
+      : new Worker(parseWorkerUrl(), { workerData: { files }, execArgv: [] });
+    let settled = false;
+    const cleanup = () => {
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+      worker.off("exit", onExit);
+    };
+    const onMessage = (message: unknown) => {
+      settled = true;
+      cleanup();
+      const values = (message as { files?: Array<{ path: string; indexed: LanguageIndexResult }> }).files;
+      if (!Array.isArray(values)) { reject(new Error("Language parser worker returned an invalid response")); return; }
+      resolve(new Map(values.map((entry) => [entry.path, entry.indexed])));
+    };
+    const onError = (error: Error) => { settled = true; cleanup(); reject(error); };
+    const onExit = (code: number) => {
+      cleanup();
+      if (!settled) reject(new Error(`Language parser worker exited without a result (code ${code})`));
+    };
+    worker.once("message", onMessage);
+    worker.once("error", onError);
+    worker.once("exit", onExit);
+  });
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -163,6 +203,11 @@ function ignoreFingerprint(workspaceDir: string): string {
   return hash.digest("hex");
 }
 
+async function currentIgnoreFingerprint(workspaceDir: string, signal?: AbortSignal): Promise<string> {
+  if (!nativeIndexEnabled()) return ignoreFingerprint(workspaceDir);
+  return (await nativeIndexPolicy(workspaceDir, { signal })).policyFingerprint;
+}
+
 function filterGitIgnoredPaths(workspaceDir: string, paths: string[]): string[] {
   if (!paths.length || !gitInfoExcludePath(workspaceDir)) return paths;
   const input = Buffer.from(`${paths.join("\0")}\0`);
@@ -269,6 +314,73 @@ function indexOne(workspaceDir: string, filePath: string, gitSignals: Map<string
   } catch { return null; }
 }
 
+function nativeIndexedFile(content: NativeIndexContent, indexed: LanguageIndexResult, gitSignals: Map<string, GitFileSignal>): IndexedRepositoryFile | null {
+  try {
+    const policy = evaluateContextPath(content.path);
+    if (!policy.allowed || !policy.normalizedPath || policy.normalizedPath !== content.path) return null;
+    const buffer = Buffer.from(content.content, "utf8");
+    assertAuthorizedContextContent(buffer);
+    if (digest(buffer) !== content.contentHash) return null;
+    return {
+      path: content.path, language: indexed.language, size: content.size, mtimeMs: content.mtimeMs,
+      contentHash: content.contentHash, indexedAt: Date.now(), generated: policy.generated, test: TEST_PATH.test(content.path),
+      symbols: indexed.symbols, imports: indexed.imports, references: indexed.references, git: gitSignals.get(content.path),
+    };
+  } catch { return null; }
+}
+
+async function indexNativeScan(workspaceDir: string, gitSignals: Map<string, GitFileSignal>, options: { prefix?: string; signal?: AbortSignal } = {}): Promise<{ files: Map<string, IndexedRepositoryFile>; policyFingerprint: string }> {
+  const scan = await scanNativeIndex(workspaceDir, options);
+  const files = new Map<string, IndexedRepositoryFile>();
+  let cursor = 0;
+  try {
+    while (true) {
+      options.signal?.throwIfAborted();
+      const page = await pageNativeIndex(scan.sessionId, { cursor, limit: 1000, signal: options.signal });
+      for (let index = 0; index < page.entries.length;) {
+        const batch: NativeIndexEntry[] = [];
+        let batchBytes = 0;
+        for (; index < page.entries.length; index += 1) {
+          const entry = page.entries[index];
+          if (batch.length && batchBytes + entry.size > 8 * 1024 * 1024) break;
+          batch.push(entry); batchBytes += entry.size;
+        }
+        const contents = await readNativeIndexBatch(scan.sessionId, batch.map((entry) => entry.path), { signal: options.signal });
+        const parsed = await parseLanguageFiles(contents.files.map((file) => ({ path: file.path, content: file.content })));
+        for (const content of contents.files) {
+          const indexed = parsed.get(content.path);
+          if (!indexed) continue;
+          const file = nativeIndexedFile(content, indexed, gitSignals);
+          if (file) files.set(file.path, file);
+        }
+      }
+      if (page.done || page.nextCursor === undefined) break;
+      cursor = page.nextCursor;
+    }
+    return { files, policyFingerprint: scan.policyFingerprint };
+  } finally {
+    await closeNativeIndex(scan.sessionId).catch(() => undefined);
+  }
+}
+
+async function indexFiles(workspaceDir: string, gitSignals: Map<string, GitFileSignal>, options: { prefix?: string; signal?: AbortSignal } = {}): Promise<{ files: Map<string, IndexedRepositoryFile>; policyFingerprint: string }> {
+  if (nativeIndexEnabled()) return indexNativeScan(workspaceDir, gitSignals, options);
+  const policyFingerprint = ignoreFingerprint(workspaceDir);
+  const files = new Map<string, IndexedRepositoryFile>();
+  for (const filePath of listIndexablePaths(workspaceDir, options.prefix)) {
+    options.signal?.throwIfAborted();
+    const file = indexOne(workspaceDir, filePath, gitSignals);
+    if (file) files.set(filePath, file);
+  }
+  return { files, policyFingerprint };
+}
+
+async function indexOneAsync(workspaceDir: string, filePath: string, gitSignals: Map<string, GitFileSignal>, signal?: AbortSignal): Promise<IndexedRepositoryFile | null> {
+  if (!nativeIndexEnabled()) return indexOne(workspaceDir, filePath, gitSignals);
+  const indexed = await indexNativeScan(workspaceDir, gitSignals, { prefix: filePath, signal });
+  return indexed.files.get(filePath) || null;
+}
+
 function meta(store: RepositoryIndexStore, previous: RepositoryIndexMeta | null, fileCount: number, status: RepositoryIndexMeta["status"] = "ready", error?: string, policyFingerprint = ignoreFingerprint(store.workspaceRoot)): RepositoryIndexMeta {
   const now = Date.now();
   return {
@@ -337,39 +449,34 @@ export async function rebuildRepositoryIndex(workspaceDir: string): Promise<Repo
   const store = new RepositoryIndexStore(workspaceDir);
   const existing = activeRebuilds.get(store.partitionId);
   if (existing) return existing;
-  const running = Promise.resolve().then(() => store.withRebuildLock(() => {
+  const running = store.withRebuildLockAsync(async () => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       let marker!: RepositoryIndexMeta;
-      store.withLock(() => { const previous = store.readMeta(); marker = meta(store, previous, previous?.fileCount || 0, "rebuilding"); store.writeMeta(marker); });
+      const markerPolicyFingerprint = await currentIgnoreFingerprint(store.workspaceRoot);
+      store.withLock(() => { const previous = store.readMeta(); marker = meta(store, previous, previous?.fileCount || 0, "rebuilding", undefined, markerPolicyFingerprint); store.writeMeta(marker); });
       try {
-        const buildIgnoreFingerprint = ignoreFingerprint(store.workspaceRoot);
-        const paths = listIndexablePaths(store.workspaceRoot);
-        if (buildIgnoreFingerprint !== ignoreFingerprint(store.workspaceRoot)) continue;
         const gitSignals = readGitSignals(store.workspaceRoot);
-        const files = new Map<string, IndexedRepositoryFile>();
-        for (const filePath of paths) {
-          const file = indexOne(store.workspaceRoot, filePath, gitSignals);
-          if (file) files.set(filePath, file);
-        }
+        const { files, policyFingerprint: buildIgnoreFingerprint } = await indexFiles(store.workspaceRoot, gitSignals);
+        if (buildIgnoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) continue;
         const known = new Set(files.keys());
         for (const file of files.values()) for (const imported of file.imports) imported.resolvedPath = resolveImport(file.path, imported.source, known);
         if (process.env.NODE_ENV === "test") {
           const delay = Number(process.env.CREWFORGE_INDEX_REBUILD_TEST_DELAY_MS || 0);
           if (Number.isFinite(delay) && delay > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(delay, 5_000));
         }
-        if (buildIgnoreFingerprint !== ignoreFingerprint(store.workspaceRoot)) continue;
+        if (buildIgnoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) continue;
         const completed = meta(store, marker, files.size, "ready", undefined, buildIgnoreFingerprint);
         if (!store.replaceAllIfRevision(files, completed, marker.revision)) continue;
         fileCache.set(store.partitionId, { revision: completed.revision, files });
         return publicStatus(store, completed);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Repository index rebuild failed";
-        store.withLock(() => { const current = store.readMeta(); if (current?.revision === marker.revision) store.writeMeta(meta(store, current, current.fileCount, "error", message)); });
+        store.withLock(() => { const current = store.readMeta(); if (current?.revision === marker.revision) store.writeMeta(meta(store, current, current.fileCount, "error", message, current.ignoreFingerprint)); });
         return publicStatus(store);
       }
     }
     return publicStatus(store);
-  })).finally(() => activeRebuilds.delete(store.partitionId));
+  }).finally(() => activeRebuilds.delete(store.partitionId));
   activeRebuilds.set(store.partitionId, running);
   return running;
 }
@@ -382,7 +489,7 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
   }
   const changes = new Map<string, IndexedRepositoryFile | null>();
   const currentMeta = store.readMeta();
-  const policyFingerprint = ignoreFingerprint(store.workspaceRoot);
+  const policyFingerprint = await currentIgnoreFingerprint(store.workspaceRoot);
   if (!currentMeta || currentMeta.ignoreFingerprint !== policyFingerprint) return rebuildRepositoryIndex(store.workspaceRoot);
   const currentFiles = currentMeta ? indexedFiles(store, currentMeta) : new Map<string, IndexedRepositoryFile>();
   const gitSignals = new Map<string, GitFileSignal>();
@@ -407,12 +514,15 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
         for (const filePath of currentFiles.keys()) if (underPrefix(filePath, prefix)) changes.set(filePath, null);
         continue;
       }
-      const discovered = new Set(listIndexablePaths(store.workspaceRoot, prefix));
+      const indexed = await indexFiles(store.workspaceRoot, gitSignals, { prefix });
+      if (indexed.policyFingerprint !== policyFingerprint) return rebuildRepositoryIndex(store.workspaceRoot);
+      const discovered = new Set(indexed.files.keys());
       for (const filePath of currentFiles.keys()) if (underPrefix(filePath, prefix) && !discovered.has(filePath)) changes.set(filePath, null);
-      for (const filePath of discovered) {
+      for (const [filePath, file] of indexed.files) {
         const previous = currentFiles.get(filePath)?.git;
-        gitSignals.set(filePath, { ...(previous || { changeCount: 0 }), dirty: true });
-        changes.set(filePath, indexOne(store.workspaceRoot, filePath, gitSignals));
+        if (previous) file.git = { ...previous, dirty: true };
+        else file.git = { changeCount: 0, dirty: true };
+        changes.set(filePath, file);
       }
       continue;
     }
@@ -420,7 +530,7 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
     else {
       const previous = currentFiles.get(policy.normalizedPath)?.git;
       gitSignals.set(policy.normalizedPath, { ...(previous || { changeCount: 0 }), dirty: true });
-      changes.set(policy.normalizedPath, indexOne(store.workspaceRoot, policy.normalizedPath, gitSignals));
+      changes.set(policy.normalizedPath, await indexOneAsync(store.workspaceRoot, policy.normalizedPath, gitSignals));
     }
   }
   if (changes.size === 0) return publicStatus(store);
@@ -443,7 +553,7 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
     const resolvedFile = { ...file, imports, indexedAt: changes.has(filePath) ? file.indexedAt : Date.now() };
     nextFiles.set(filePath, resolvedFile); changes.set(filePath, resolvedFile);
   }
-  if (policyFingerprint !== ignoreFingerprint(store.workspaceRoot)) return rebuildRepositoryIndex(store.workspaceRoot);
+  if (policyFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) return rebuildRepositoryIndex(store.workspaceRoot);
   const updatedMeta = store.updateFiles(changes, (current, fileCount) => meta(store, current, fileCount, "ready", undefined, policyFingerprint));
   const cacheFiles = updatedMeta.revision === currentMeta.revision + 1 ? nextFiles : store.readAllFiles();
   fileCache.set(store.partitionId, { revision: updatedMeta.revision, files: cacheFiles });
@@ -473,11 +583,11 @@ export async function retrieveRepositoryContext(options: RetrieveRepositoryConte
   if (status.status !== "ready") return [];
   const store = new RepositoryIndexStore(options.workspaceDir);
   let metaValue = store.readMeta(); if (!metaValue) return [];
-  const startingIgnoreFingerprint = ignoreFingerprint(store.workspaceRoot);
+  const startingIgnoreFingerprint = await currentIgnoreFingerprint(store.workspaceRoot, options.signal);
   if (metaValue.ignoreFingerprint !== startingIgnoreFingerprint) {
     status = await rebuildRepositoryIndex(store.workspaceRoot);
     if (status.status !== "ready") return [];
-    metaValue = store.readMeta(); if (!metaValue || metaValue.ignoreFingerprint !== ignoreFingerprint(store.workspaceRoot)) return [];
+    metaValue = store.readMeta(); if (!metaValue || metaValue.ignoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot, options.signal)) return [];
   }
   const files = indexedFiles(store, metaValue); const terms = queryTerms(options.query);
   const testIntent = /\b(?:test|tests|testing|spec|specs)\b/i.test(options.query);
@@ -577,7 +687,7 @@ export async function retrieveRepositoryContext(options: RetrieveRepositoryConte
   }
   // Ignore rules are mutable workspace policy. A change anywhere during the
   // retrieval invalidates the whole result instead of exposing a stale record.
-  if (metaValue.ignoreFingerprint !== ignoreFingerprint(store.workspaceRoot)) return [];
+  if (metaValue.ignoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot, options.signal)) return [];
   return result;
 }
 
