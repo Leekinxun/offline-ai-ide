@@ -79,7 +79,6 @@ pub(crate) fn install_file(
         } else {
             fs::rename(staged, &target)?;
         }
-        File::open(&target)?.sync_all()?;
         sync_parent(&target)?;
         Ok(())
     }
@@ -99,7 +98,7 @@ pub(crate) fn install_file(
         } else {
             fs::rename(staged, &target)?;
         }
-        File::open(&target)?.sync_all()?;
+        sync_file(&target)?;
         sync_parent(&target)?;
         Ok(())
     }
@@ -540,8 +539,43 @@ fn system_time_ms(time: SystemTime) -> Result<f64> {
 
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
+        sync_directory(parent)?;
     }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_file(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const GENERIC_WRITE: u32 = 0x40000000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    // FILE_FLAG_BACKUP_SEMANTICS is required for CreateFile to open directories
+    // on Windows. FlushFileBuffers, which backs sync_all, also requires a
+    // GENERIC_WRITE handle.
+    let directory = fs::OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .custom_flags(0x02000000 | 0x00200000)
+        .open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(CoreError::new("PATH_ESCAPE", "Sync refuses reparse points"));
+    }
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
     Ok(())
 }
 

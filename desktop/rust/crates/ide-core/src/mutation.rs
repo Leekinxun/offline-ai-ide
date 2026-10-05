@@ -1952,7 +1952,7 @@ fn backup_publication_preimage(tx_root: &Path, target: &Path, index: usize) -> R
     let backup = tx_root.join("backups").join(&backup_blob);
     fs::create_dir_all(parent(&backup)?)?;
     fs::copy(target, &backup)?;
-    File::open(&backup)?.sync_all()?;
+    sync_file(&backup)?;
     sync_parent(&backup)?;
     Ok(backup_blob)
 }
@@ -2017,7 +2017,7 @@ fn backup_private_preimages(
                 let target = backup_root.join(format!("{index}.bin"));
                 if !target.exists() {
                     fs::copy(&source, &target)?;
-                    File::open(&target)?.sync_all()?;
+                    sync_file(&target)?;
                     sync_parent(&target)?;
                 }
             }
@@ -2375,7 +2375,7 @@ fn rollback_publications(
                 }
             }
             fs::copy(&backup, &target)?;
-            File::open(&target)?.sync_all()?;
+            sync_file(&target)?;
             sync_parent(&target)?;
         } else {
             fs::remove_file(&target)?;
@@ -3469,8 +3469,63 @@ fn unique_temp_path(target: &Path) -> PathBuf {
 
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
+        sync_directory(parent)?;
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_file(path: &Path) -> Result<()> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const GENERIC_WRITE: u32 = 0x40000000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    let file = OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .custom_flags(0x00200000)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(CoreError::new("PATH_ESCAPE", "Sync refuses reparse points"));
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_file(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const GENERIC_WRITE: u32 = 0x40000000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    // FILE_FLAG_BACKUP_SEMANTICS is required for CreateFile to open directories
+    // on Windows. FlushFileBuffers, which backs sync_all, also requires a
+    // GENERIC_WRITE handle.
+    let directory = OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .custom_flags(0x02000000 | 0x00200000)
+        .open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(CoreError::new("PATH_ESCAPE", "Sync refuses reparse points"));
+    }
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
     Ok(())
 }
 
