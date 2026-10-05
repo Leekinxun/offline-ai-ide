@@ -62,6 +62,7 @@ export interface AgentToolExecution {
   resultSummary?: string;
   error?: string;
   snapshotId?: string;
+  rollbackCoverage?: "untracked";
 }
 
 export const RESUME_PROMPT =
@@ -407,6 +408,7 @@ function normalizeToolExecution(raw: unknown): AgentToolExecution | null {
     ...(typeof value.resultSummary === "string" ? { resultSummary: value.resultSummary.slice(0, 2000) } : {}),
     ...(typeof value.error === "string" ? { error: value.error.slice(0, 2000) } : {}),
     ...(typeof value.snapshotId === "string" ? { snapshotId: value.snapshotId.slice(0, 120) } : {}),
+    ...(value.rollbackCoverage === "untracked" ? { rollbackCoverage: "untracked" as const } : {}),
   };
 }
 
@@ -598,6 +600,7 @@ export class AgentRunRecorder {
     resultSummary?: string;
     error?: string;
     snapshotId?: string;
+    rollbackCoverage?: "untracked";
   }): Promise<AgentRunRecord> {
     return this.mutate((record) => {
       const now = Date.now();
@@ -625,6 +628,7 @@ export class AgentRunRecorder {
       }
       if (input.error !== undefined) execution.error = redactSecrets(input.error).slice(0, 2000);
       if (input.snapshotId !== undefined) execution.snapshotId = input.snapshotId.slice(0, 120);
+      if (input.rollbackCoverage === "untracked") execution.rollbackCoverage = "untracked";
       if (!existing) record.toolExecutions.push(execution);
       record.toolExecutions = record.toolExecutions.slice(-MAX_STORED_TOOL_EXECUTIONS);
       return record;

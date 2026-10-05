@@ -36,6 +36,8 @@ import {
   publishDesktopFileMutation,
 } from "../files/mutationRegistry.js";
 import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { beginDesktopExternalToolEffects, type DesktopExternalToolAudit } from "../desktop/nativeExternalEffects.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
 import { mutateDesktopWorkspace, nativeMutationTransactionId, withDesktopWorkspaceWriter, beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
 import { normalizeEditablePath, readEditableFile, replaceUniqueText } from "./fileEditSafety.js";
 import { OrchestrationStore } from "./orchestrationStore.js";
@@ -457,7 +459,7 @@ export class TeammateManager {
       this.audit({ action: "spawn_failed", outcome: "failed", reasonCode: "run_start_failed", ...childReferences });
       throw error;
     }
-    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal, parentModelName).catch(() => {
+    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal, parentModelName, recorder).catch(() => {
       try { this.finalizeManagedWorktree(name, "failure"); } catch { /* report once below */ }
       try { this.setStatus(name, "failed", "Execution failed", control.generation); } catch { /* report once below */ }
       console.error(`[teammate:${name}] Critical collaboration lifecycle handling failed`);
@@ -480,7 +482,8 @@ export class TeammateManager {
     childWorkspaceDir: string,
     childRunId: string,
     signal?: AbortSignal,
-    parentModelName = config.modelName
+    parentModelName = config.modelName,
+    recorder?: AgentRunRecorder
   ): Promise<void> {
     this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work", control.generation);
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${childWorkspaceDir}. This is your isolated managed worktree; never access the parent workspace. Use idle when done with current work.`;
@@ -639,6 +642,7 @@ export class TeammateManager {
 
         if (tc.function.name === "idle") idleRequested = true;
         let desktopCommand: DesktopExternalProcessGuard | undefined;
+        let desktopToolAudit: DesktopExternalToolAudit | undefined;
         try {
         let output: string;
         let snapshotId: string | undefined;
@@ -658,7 +662,14 @@ export class TeammateManager {
               authorize,
               tc.id,
               async () => {
-                if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
+                if (desktopNativeIdeEnabled() && tc.function.name === "bash" && !planReadOnlyShell(args.command)) {
+                  desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
+                  desktopToolAudit = await beginDesktopExternalToolEffects(childWorkspaceDir, {
+                    runId: childRunId, requestId: `teammate:${name}`, toolCallId: tc.id, toolName: tc.function.name,
+                  }, desktopCommand, this.workspaceDir);
+                  await recorder?.toolState({ toolCallId: tc.id, requestId: `teammate:${name}`, name: tc.function.name, status: "running", rollbackCoverage: "untracked" });
+                }
+                if (!desktopNativeIdeEnabled() && ["bash", "write_file", "edit_file"].includes(tc.function.name)) {
                   try {
                     if (tc.function.name === "bash") desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
                     const checkpointWork = () => createCheckpointForRuntime(childWorkspaceDir, {
@@ -707,6 +718,16 @@ export class TeammateManager {
             }
           }
           if (mutationEvidenceFailure) output = `Error: ${mutationEvidenceFailure}${output ? `\nTool output:\n${output}` : ""}`;
+          if (desktopToolAudit) {
+            await desktopToolAudit.finish();
+            output += "\n\n[Command file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]";
+            await recorder?.toolState({
+              toolCallId: tc.id, requestId: `teammate:${name}`, name: tc.function.name,
+              status: output.startsWith("Error:") ? "failed" : "completed",
+              resultSummary: output.slice(0, 2000),
+              ...(output.startsWith("Error:") ? { error: output.slice(0, 2000) } : {}),
+            });
+          }
           await runAgentHooks("afterToolExecute", {
             agentId: `teammate:${name}`,
             toolCallId: tc.id,
@@ -718,7 +739,10 @@ export class TeammateManager {
         }
         console.log(`  [${name}] ${tc.function.name}: ${output.slice(0, 120)}`);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
-        } finally { await desktopCommand?.release(); }
+        } finally {
+          try { await desktopToolAudit?.finish(); }
+          finally { await desktopCommand?.release(); }
+        }
       }
 
       // The command receipt is committed only after every requested tool call

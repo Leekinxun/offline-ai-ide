@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import fs from "node:fs";
@@ -60,6 +61,24 @@ async function withChatApi(workspaceDir: string, run: (baseUrl: string) => Promi
   try { await run(`http://127.0.0.1:${address.port}`); } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 }
 
+
+function withDesktopNativeEnabled(t: test.TestContext) {
+  const previousDesktop = process.env.CREWFORGE_DESKTOP;
+  const previousExecutable = process.env.CROWNFORGE_IDE_CORE_EXECUTABLE;
+  process.env.CREWFORGE_DESKTOP = "1";
+  process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousExecutable || process.execPath;
+  t.after(() => {
+    if (previousDesktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = previousDesktop;
+    if (previousExecutable === undefined) delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE; else process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousExecutable;
+  });
+}
+function writeExternalToolEffect(workspaceDir: string, receipt: Record<string, unknown>) {
+  const directory = path.join(workspaceDir, ".history", "external-tools");
+  fs.mkdirSync(directory, { recursive: true });
+  const key = crypto.createHash("sha256").update(`${receipt.runId}\0${typeof receipt.requestId === "string" ? receipt.requestId : ""}\0${receipt.toolCallId}`).digest("hex");
+  fs.writeFileSync(path.join(directory, `${key}.json`), JSON.stringify(receipt, null, 2));
+}
+
 test("turn undo restores only its files and forks context at the exact request boundary", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-turn-undo-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
@@ -85,6 +104,61 @@ test("turn undo restores only its files and forks context at the exact request b
     assert.equal(fs.readFileSync(path.join(workspace, "human.txt"), "utf8"), "keep me");
     assert.deepEqual(readConversationMessages(workspace, result.conversation.id).map((message) => message.content), ["first", "first result"]);
     assert.equal(readConversationMessages(workspace, conversationId).length, 4);
+  });
+});
+
+test("desktop external command receipts block broad undo while exact file rollback still works", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-undo-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const run = new AgentRunRecorder(workspace, "run-external-undo", "conversation", "code");
+  await run.start();
+  await run.toolState({ toolCallId: "shell-1", requestId: "turn", name: "bash", status: "running", rollbackCoverage: "untracked" });
+  await run.finish("completed");
+  writeExternalToolEffect(workspace, {
+    schemaVersion: 1,
+    runId: run.runId,
+    requestId: "turn",
+    toolCallId: "shell-1",
+    toolName: "bash",
+    startedAt: 1,
+    rollbackCoverage: "untracked",
+    observedPaths: ["generated.txt"],
+    observationComplete: true,
+  });
+  fs.writeFileSync(path.join(workspace, "code.ts"), "B");
+  recordFileMutation({ workspaceDir: workspace, path: "code.ts", source: "assistant_tool", runId: run.runId, requestId: "turn", preimageContent: "A", postimageContent: "B" });
+
+  await withChatApi(workspace, async (baseUrl) => {
+    const evidence = await (await fetch(`${baseUrl}/runs/${run.runId}/changes?requestId=turn`)).json() as { revision: string; externalToolEffects?: unknown[]; files: Array<{ path: string; revision: string }> };
+    assert.equal(evidence.externalToolEffects?.length, 1);
+    const broad = await fetch(`${baseUrl}/runs/${run.runId}/revert`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: "turn", expectedRevision: evidence.revision }) });
+    assert.equal(broad.status, 409);
+    assert.equal((await broad.json() as { code?: string }).code, "external_tool_rollback_unavailable");
+    assert.equal(fs.readFileSync(path.join(workspace, "code.ts"), "utf8"), "B");
+
+    delete process.env.CREWFORGE_DESKTOP;
+    delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE;
+    const selected = await fetch(`${baseUrl}/runs/${run.runId}/revert`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: "turn", path: "code.ts", expectedRevision: evidence.files[0].revision }) });
+    assert.equal(selected.status, 200, JSON.stringify(await selected.json()));
+    assert.equal(fs.readFileSync(path.join(workspace, "code.ts"), "utf8"), "A");
+  });
+});
+
+test("missing expected desktop external command receipts fail closed", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-missing-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const run = new AgentRunRecorder(workspace, "run-external-missing", "conversation", "code");
+  await run.start();
+  await run.toolState({ toolCallId: "shell-missing", requestId: "turn", name: "bash", status: "failed", rollbackCoverage: "untracked" });
+  await run.finish("failed");
+  recordFileMutation({ workspaceDir: workspace, path: "code.ts", source: "assistant_tool", runId: run.runId, requestId: "turn", preimageContent: "A", postimageContent: "B" });
+
+  await withChatApi(workspace, async (baseUrl) => {
+    const evidence = await fetch(`${baseUrl}/runs/${run.runId}/changes?requestId=turn`);
+    assert.equal(evidence.status, 409);
+    assert.equal((await evidence.json() as { code?: string }).code, "external_tool_rollback_unavailable");
   });
 });
 

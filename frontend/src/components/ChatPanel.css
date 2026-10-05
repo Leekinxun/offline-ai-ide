@@ -784,6 +784,10 @@
   color: var(--text-tertiary);
 }
 
+.chat-changes-command-effects-note {
+  color: var(--text-secondary);
+}
+
 .chat-changes-return-action {
   margin-top: 8px;
   height: 32px;

@@ -1,5 +1,6 @@
 import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
 import { beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
+import { beginDesktopExternalToolEffects, type DesktopExternalToolAudit, type DesktopExternalToolEffects } from "../desktop/nativeExternalEffects.js";
 import path from "node:path";
 import fs from "node:fs";
 import { createCheckpointForRuntime } from "../chat/checkpoints.js";
@@ -20,14 +21,16 @@ export interface AgentProcessResult {
   toolCallId?: string;
   evidenceError?: string;
   auditing?: boolean;
+  workspaceEffects?: DesktopExternalToolEffects;
   output: string;
   truncated: boolean;
 }
 interface Binding {
   owner: ProcessSessionOwner;
   command: string;
-  checkpointId: string;
+  checkpointId?: string;
   desktopCommand?: DesktopExternalProcessGuard;
+  desktopAudit?: DesktopExternalToolAudit;
   toolCallId: string;
   requestId?: string;
   actor?: string;
@@ -36,6 +39,7 @@ interface Binding {
   auditingPromise?: Promise<void>;
   audited: boolean;
   evidenceError?: string;
+  workspaceEffects?: DesktopExternalToolEffects;
 }
 const bindings = new Map<string, Binding>();
 type ProcessOwnerContext = Pick<ToolContext, "workspaceDir" | "runId" | "requestId" | "actorName" | "sessionOwner" | "sessionToken">;
@@ -58,6 +62,7 @@ function ownBinding(context: ToolContext, id: string): Binding | undefined {
 
 subscribeWorkspaceMutations((event) => {
   for (const binding of bindings.values()) {
+    if (binding.desktopAudit) continue;
     if (!binding.audited && (!binding.auditing || desktopNativeIdeEnabled()) && sameWorkspace(binding.owner.workspaceDir, event.workspaceDir)) binding.conflicts.add(event.path);
   }
 });
@@ -66,6 +71,7 @@ function finalizeWeb(id: string, binding: Binding): void {
   if (binding.audited) return;
   binding.auditing = true;
   try {
+    if (!binding.checkpointId) throw new Error("Process checkpoint ownership was not retained; this result cannot prove validation after restart");
     if (binding.conflicts.size) throw new Error(`Concurrent workspace edits prevent safe attribution of process changes: ${[...binding.conflicts].slice(0, 20).join(", ")}`);
     const captured = captureCheckpointMutationsDetailed(binding.owner.workspaceDir, {
       checkpointId: binding.checkpointId, runId: binding.owner.runId!, requestId: binding.requestId,
@@ -89,14 +95,32 @@ function finalize(id: string, binding: Binding): Promise<void> {
   if (binding.audited) return Promise.resolve();
   binding.auditing = true;
   binding.auditingPromise = (async () => {
+    if (binding.desktopAudit) {
+      try {
+        await waitForProcessSessionCleanup(binding.owner, id);
+        binding.workspaceEffects = await binding.desktopAudit.finish();
+      } catch (error) {
+        binding.evidenceError = error instanceof Error ? error.message : String(error);
+      } finally {
+        try { await binding.desktopCommand?.release(); }
+        catch (error) { binding.evidenceError = error instanceof Error ? error.message : String(error); }
+        binding.audited = true;
+        binding.auditing = false;
+      }
+      try { if (fs.existsSync(binding.owner.workspaceDir)) new TraceStore(binding.owner.workspaceDir).append({ kind: "validation", action: "Agent process effects recorded", correlationId: binding.owner.runId || id, runId: binding.owner.runId, requestId: binding.requestId, toolCallId: binding.toolCallId, decision: binding.evidenceError ? "blocked" : "recorded", evidence: binding.evidenceError, metadata: { processId: id, rollbackCoverage: binding.workspaceEffects?.rollbackCoverage || "untracked" } }); } catch { /* The native effects receipt remains authoritative. */ }
+      if (bindings.size > 256) for (const [key, item] of bindings) if (key !== id && item.audited) { bindings.delete(key); if (bindings.size <= 256) break; }
+      return;
+    }
     const assertAttribution = () => {
       if (binding.conflicts.size) throw new Error(`Concurrent workspace edits prevent safe attribution of process changes: ${[...binding.conflicts].slice(0, 20).join(", ")}`);
     };
     try {
+      if (!binding.checkpointId) throw new Error("Process checkpoint ownership was not retained; this result cannot prove validation after restart");
+      const checkpointId = binding.checkpointId;
       await waitForProcessSessionCleanup(binding.owner, id);
       assertAttribution();
       const captureWork = () => captureCheckpointMutationsDetailedAsync(binding.owner.workspaceDir, {
-        checkpointId: binding.checkpointId, runId: binding.owner.runId!, requestId: binding.requestId,
+        checkpointId, runId: binding.owner.runId!, requestId: binding.requestId,
         toolCallId: binding.toolCallId, actor: binding.actor,
       }, { preflight: () => { assertAttribution(); binding.desktopCommand?.assertUnchanged(); } });
       const captured = binding.desktopCommand ? await binding.desktopCommand.audit(captureWork) : await captureWork();
@@ -124,7 +148,7 @@ export function pendingAgentProcesses(context: ProcessOwnerContext, acrossRuns =
     try {
       const state = pollProcessSession(binding.owner, id);
       if (state.session.status !== "running" && !binding.audited) void finalize(id, binding);
-      if (includeCompleted || state.session.status === "running" || !binding.audited || binding.evidenceError) results.push({ session: !binding.audited && state.session.status !== "running" ? { ...state.session, status: "running", exitCode: null } : state.session, ...(desktopNativeIdeEnabled() ? { auditing: binding.auditing } : {}), command: binding.command, checkpointId: binding.checkpointId, toolCallId: binding.toolCallId, evidenceError: binding.evidenceError, output: state.events.map((event) => event.text).join(""), truncated: state.truncated });
+      if (includeCompleted || state.session.status === "running" || !binding.audited || binding.evidenceError) results.push({ session: !binding.audited && state.session.status !== "running" ? { ...state.session, status: "running", exitCode: null } : state.session, ...(desktopNativeIdeEnabled() ? { auditing: binding.auditing } : {}), command: binding.command, checkpointId: binding.checkpointId, toolCallId: binding.toolCallId, evidenceError: binding.evidenceError, workspaceEffects: binding.workspaceEffects, output: state.events.map((event) => event.text).join(""), truncated: state.truncated });
     } catch (error) {
       binding.evidenceError = error instanceof Error ? error.message : String(error);
       results.push({ session: { id, taskId: "agent:command", label: binding.command, status: "interrupted", startedAt: 0, exitCode: null, nextCursor: 0, runId: binding.owner.runId }, command: binding.command, evidenceError: binding.evidenceError, output: "", truncated: false });
@@ -150,11 +174,16 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
       const capability = await probeWindowsNativeSandbox();
       if (!capability.available) throw new Error(capability.reason || "Set up the Windows sandbox in desktop settings");
     }
-    const desktopCommand = context.desktopExternalProcess ?? await beginDesktopExternalProcess(context.workspaceDir);
+    const desktopCommand = desktopNativeIdeEnabled() ? context.desktopExternalProcess ?? await beginDesktopExternalProcess(context.workspaceDir) : undefined;
     try {
-      const checkpointWork = () => createCheckpointForRuntime(context.workspaceDir, { label: `Before Agent process · ${command.slice(0, 80)}`, runId: owner.runId, conversationId: context.conversationId, kind: "step", toolCallId: context.toolCallId });
-      const checkpointId = context.stepCheckpointId || (desktopCommand ? await desktopCommand.audit(checkpointWork) : await checkpointWork()).id;
-      const binding: Binding = { owner, command, checkpointId, desktopCommand, toolCallId: context.toolCallId || `process-${Date.now()}`, requestId: context.requestId, actor: context.actorName, conflicts: new Set(), auditing: false, audited: false };
+      const toolCallId = context.toolCallId || `process-${Date.now()}`;
+      const desktopAudit = desktopNativeIdeEnabled()
+        ? ((context as ToolContext & { desktopExternalToolAudit?: DesktopExternalToolAudit }).desktopExternalToolAudit
+          ?? await beginDesktopExternalToolEffects(context.workspaceDir, { runId: owner.runId!, requestId: context.requestId, toolCallId, toolName: "process_start" }, desktopCommand))
+        : undefined;
+      const checkpointWork = () => createCheckpointForRuntime(context.workspaceDir, { label: `Before Agent process · ${command.slice(0, 80)}`, runId: owner.runId, conversationId: context.conversationId, kind: "step", toolCallId });
+      const checkpointId = desktopNativeIdeEnabled() ? undefined : context.stepCheckpointId || (await checkpointWork()).id;
+      const binding: Binding = { owner, command, ...(checkpointId ? { checkpointId } : {}), desktopCommand, desktopAudit, toolCallId, requestId: context.requestId, actor: context.actorName, conflicts: new Set(), auditing: false, audited: false };
       const session = startAgentProcessSession({
         ...owner, ...agentShellInvocation(command),
         timeoutMs: args.timeout_ms as number | undefined, signal: context.signal,
@@ -163,7 +192,7 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
         onExit: (processId) => { void finalize(processId, binding); },
       });
       bindings.set(session.id, binding);
-      const result = { session, command, checkpointId, toolCallId: binding.toolCallId, output: "", truncated: false };
+      const result = { session, command, ...(checkpointId ? { checkpointId } : {}), toolCallId: binding.toolCallId, workspaceEffects: binding.workspaceEffects, output: "", truncated: false };
       return { output: JSON.stringify({ ...result, nextCursor: session.nextCursor, events: [], note: "Process is running; poll for final exit status. A running process is not verification success." }), process: result };
     } catch (error) { await desktopCommand?.release(); throw error; }
   }
@@ -188,9 +217,10 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
   const result: AgentProcessResult = {
     session: state.session, command: binding?.command || "", checkpointId: binding?.checkpointId, toolCallId: binding?.toolCallId,
     evidenceError: binding?.evidenceError || (!binding ? "Process checkpoint ownership was not retained; this result cannot prove validation after restart" : undefined),
+    workspaceEffects: binding?.workspaceEffects,
     output: pollProcessSession(owner, id).events.map((event) => event.text).join(""), truncated: state.truncated,
   };
-  return { output: JSON.stringify({ ...state, command: result.command, evidenceError: result.evidenceError }), process: result };
+  return { output: JSON.stringify({ ...state, command: result.command, evidenceError: result.evidenceError, workspaceEffects: result.workspaceEffects }), process: result };
 }
 
 export async function stopAgentProcesses(context: ProcessOwnerContext): Promise<void> {

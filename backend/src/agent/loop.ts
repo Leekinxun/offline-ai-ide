@@ -68,6 +68,7 @@ import { planReadOnlyShell } from "./readOnlyShell.js";
 import { contextRequestBudget, fitsContextRequestBudget } from "./contextBudget.js";
 import { estimateModelRequest } from "./modelBudget.js";
 import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { beginDesktopExternalToolEffects, type DesktopExternalToolAudit } from "../desktop/nativeExternalEffects.js";
 
 const MAX_MODEL_ATTACHMENT_COUNT = 4;
 const MAX_MODEL_ATTACHMENT_BYTES = 12 * 1024 * 1024;
@@ -84,9 +85,7 @@ const SNAPSHOT_TOOL_NAMES = new Set([
   "spawn_teammate",
 ]);
 
-// These desktop tools publish their exact before/after images with the source
-// bytes in one Rust transaction. They do not need a whole-workspace backup.
-const NATIVE_JOURNALED_FILE_TOOLS = new Set(["write_file", "edit_file", "rename_file"]);
+const NATIVE_TRACKED_OR_ISOLATED_TOOLS = new Set(["write_file", "edit_file", "rename_file", "task", "spawn_teammate"]);
 
 function shouldCreateStepSnapshot(toolName: string): boolean {
   return SNAPSHOT_TOOL_NAMES.has(toolName) || toolName.startsWith("mcp_");
@@ -311,6 +310,7 @@ export async function runAgentLoop(
   const explicitContextSources = new Map<string, ContextSourceHint>();
   const changedContextPaths = new Set<string>(resumedValidation.changedFiles);
   let validationEvidenceError: string | undefined;
+  let externalEffectsUntracked = Boolean(resumedValidation.externalEffectsUntracked);
   const processStartVersions = new Map<string, Record<string, string>>();
   const observedProcessCompletions = new Set<string>();
   const validationChangedFiles = () => {
@@ -1081,6 +1081,7 @@ export async function runAgentLoop(
           });
 
           let desktopCommand: DesktopExternalProcessGuard | undefined;
+          let desktopToolAudit: DesktopExternalToolAudit | undefined;
           try {
           let result = "";
           const executionId = String(++toolExecutionSequence);
@@ -1095,8 +1096,9 @@ export async function runAgentLoop(
           const readOnlyShellCommand = toolCall.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command)
             ? args.command as string : undefined;
           const mayMutateWorkspace = readOnlyShellCommand === undefined && shouldCreateStepSnapshot(toolCall.function.name);
-          const needsMutationSnapshot = mayMutateWorkspace
-            && !(desktopNativeIdeEnabled() && NATIVE_JOURNALED_FILE_TOOLS.has(toolCall.function.name));
+          const nativeRuntime = desktopNativeIdeEnabled();
+          const needsMutationSnapshot = mayMutateWorkspace && !nativeRuntime;
+          const needsNativeAudit = nativeRuntime && mayMutateWorkspace && !NATIVE_TRACKED_OR_ISOLATED_TOOLS.has(toolCall.function.name);
           const handler = TOOL_DISPATCH[toolCall.function.name];
           const approval = classifyToolApproval(toolCall.function.name, args, { workspaceDir: session.workspaceDir });
           let shouldExecute = true;
@@ -1143,6 +1145,19 @@ export async function runAgentLoop(
           }
 
           if (shouldExecute) {
+            if (needsNativeAudit) {
+              try {
+                if (toolCall.function.name === "bash" || toolCall.function.name === "process_start") desktopCommand = await beginDesktopExternalProcess(session.workspaceDir);
+                desktopToolAudit = await beginDesktopExternalToolEffects(session.workspaceDir, {
+                  runId: control?.runRecorder?.runId || currentRequestId,
+                  requestId: currentRequestId, toolCallId: toolCall.id, toolName: toolCall.function.name,
+                }, desktopCommand);
+              } catch (error) {
+                result = `Error: Native command preflight unavailable: ${error instanceof Error ? error.message : String(error)}`;
+                isError = true;
+                shouldExecute = false;
+              }
+            }
             if (needsMutationSnapshot) {
               try {
                 if (toolCall.function.name === "bash" || toolCall.function.name === "process_start") desktopCommand = await beginDesktopExternalProcess(session.workspaceDir);
@@ -1202,6 +1217,7 @@ export async function runAgentLoop(
               requestId: currentRequestId,
               name: toolCall.function.name,
               status: "running",
+              ...(desktopToolAudit ? { rollbackCoverage: "untracked" as const } : {}),
             });
           }
 
@@ -1258,6 +1274,7 @@ export async function runAgentLoop(
                 toolCallId: toolCall.id,
                 stepCheckpointId: snapshotId,
                 desktopExternalProcess: desktopCommand,
+                desktopExternalToolAudit: desktopToolAudit,
                 // The shell compatibility path is available only after this tool call
                 // has passed the ordinary mode, policy, and approval checks above.
                 compatibilityShellAuthorized: ["bash", "process_start", "process_input"].includes(toolCall.function.name),
@@ -1282,7 +1299,11 @@ export async function runAgentLoop(
                 result = execution.output;
                 fileUpdate = execution.fileUpdate;
                 processResult = execution.process;
-                if (toolCall.function.name === "process_start" && processResult) desktopCommand = undefined;
+                if (toolCall.function.name === "process_start" && processResult) {
+                  externalEffectsUntracked ||= Boolean(desktopToolAudit);
+                  desktopCommand = undefined;
+                  desktopToolAudit = undefined;
+                }
                 if (processResult) {
                   if (startedProcessVersions) processStartVersions.set(processResult.session.id, startedProcessVersions);
                   isError = Boolean(processResult.evidenceError) || (processResult.session.status !== "running" && (processResult.session.status !== "exited" || processResult.session.exitCode !== 0));
@@ -1302,6 +1323,11 @@ export async function runAgentLoop(
           if (result.startsWith("Error:") || result.startsWith("[MCP Error]")) {
             isError = true;
             fileUpdate = undefined;
+          }
+          if (desktopToolAudit && executionAttempted) {
+            await desktopToolAudit.finish();
+            externalEffectsUntracked = true;
+            result += "\n\n[Command file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]";
           }
           if (
             executionAttempted &&
@@ -1462,7 +1488,10 @@ export async function runAgentLoop(
           if (await consumeSteeringTurns(currentAssistantMessage)) {
             continue outer;
           }
-          } finally { await desktopCommand?.release(); }
+          } finally {
+            try { await desktopToolAudit?.finish(); }
+            finally { await desktopCommand?.release(); }
+          }
         }
 
         if (mode === "plan" && approvedPlanSubmitted) {
@@ -1538,6 +1567,12 @@ export async function runAgentLoop(
         }
         const changedFiles = validationChangedFiles();
         const assessment = validation.assess(changedFiles, completionFeedbackRounds < 2 && !validationEvidenceError && !pendingProcesses.length);
+        if (externalEffectsUntracked || pendingProcesses.some((process) => process.workspaceEffects)) {
+          assessment.report.changeCoverage = "tracked_edits_only";
+          assessment.report.reason = assessment.report.status === "not_required"
+            ? "No recorded code edits require automatic checks. External command file effects are not covered by this assessment or automatic undo."
+            : `${assessment.report.reason} Coverage is limited to recorded edits and executed verification commands; other command file effects are not automatically undoable.`;
+        }
         if (pendingProcesses.length) {
           assessment.report.status = "unverified";
           assessment.report.reason = pendingProcesses.some((item) => item.session.status === "running") ? "Agent processes did not finish before completion; cancellation was requested and their changes remain unverified." : pendingProcesses.map((item) => item.evidenceError).filter(Boolean).join("; ");

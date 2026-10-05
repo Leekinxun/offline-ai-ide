@@ -1,6 +1,6 @@
 # APP_RUST migration status
 
-Evidence captured on 2026-10-04. This remains a preview branch; no signed
+Evidence captured on 2026-10-05. This remains a preview branch; no signed
 production release has been published. Installation and user configuration are
 described in [the Tauri installation guide](desktop-rust-installation.md).
 
@@ -146,10 +146,10 @@ copies; manual save evidence remains metadata-only. Multi-file publication has
 observable intermediate states and is not an atomic filesystem snapshot.
 
 Bounded and long-running Agent commands reserve an advisory Rust writer guard
-from the pre-execution checkpoint through process-tree cleanup and native
-mutation-evidence publication. Other cooperative Agent, rollback, restore and
+from native recovery preflight through process-tree cleanup and audit receipt
+finalization. Other cooperative Agent, rollback, restore and
 ChangeSet integration writers are blocked. Human saves and index refreshes
-remain available; concurrent human saves block attribution to the command.
+remain available. Command receipts do not attribute human saves to a command.
 Polling cannot report terminal validation success while the audit is pending.
 Guard ownership survives Rust service restart and is tied to the supervising
 Node PID, workspace identity and opaque owner token.
@@ -167,16 +167,30 @@ failed evidence publication still blocks the source write. Web retains its
 existing startup and step checkpoint behavior.
 
 The current official Codex
-[regular turn entry](https://github.com/openai/codex/blob/main/codex-rs/core/src/tasks/regular.rs)
-does not impose CrownForge's workspace-backup prerequisite, and its
-[turn diff tracker](https://github.com/openai/codex/blob/main/codex-rs/core/src/turn_diff_tracker.rs)
-tracks committed patch deltas by file. CrownForge retains a necessary current
-difference: shell, process, delegated and unknown MCP tools still need the
-existing bounded step snapshot to capture local side effects. Large workspaces
-can therefore still exceed that command snapshot limit. This does not prevent
-Q&A or direct native file edits, and it is not equivalent to Codex's shell
-execution contract. New desktop runs use journal-based rollback; whole-workspace
-run restore remains a manual or explicit legacy operation.
+[command handler](https://github.com/openai/codex/blob/823ea830c0fd418b09ff02d36cad9a1fff66465b/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs)
+executes ordinary commands through sandbox, approval and process management
+without a full-workspace backup prerequisite. Its
+[turn diff tracker](https://github.com/openai/codex/blob/823ea830c0fd418b09ff02d36cad9a1fff66465b/codex-rs/core/src/turn_diff_tracker.rs)
+tracks committed patch deltas; this is not guaranteed undo for arbitrary shell
+file effects. Desktop shell, process, subagent, teammate and MCP paths now follow
+that boundary: the 20,000-file / 64-MiB workspace snapshot gate is absent.
+
+Before external execution, Rust publishes a small protected receipt under
+`.history/external-tools`. Admission still recovers unfinished transactions and
+rejects unresolved writes; there is no workspace traversal or content backup.
+Child receipts use their recorder's parent evidence workspace while recovery
+and command exclusion use the physical child worktree. Command completion keeps
+its real exit/timeout/cancellation result. Receipts explicitly declare untracked
+file effects, even when optional observation or metadata finalization is
+unavailable. Repository discovery becomes stale and refreshes on demand.
+
+Direct file edits retain exact journal-based review and conflict-checked undo.
+Runs with external tool effects cannot claim a complete run/turn undo; explicit
+file or hunk selections remain available. Missing or corrupt expected receipts
+fail closed. Child ChangeSets retain their existing independent Git patch/CAS
+review. Manual checkpoint operations and Web retain their existing limits and
+behavior. This is an explicit change to command rollback coverage, not an
+unlimited backup implementation.
 
 The architectural boundary is deliberate: model configuration, approval and
 review decisions, hunk selection, checkpoint schema/retention, and ChangeSet v3

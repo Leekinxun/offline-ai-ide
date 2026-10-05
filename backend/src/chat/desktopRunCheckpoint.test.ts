@@ -20,7 +20,7 @@ import { getActiveRunContext, listActiveRuns } from "./runCoordinator.js";
 const providerUrl = "https://desktop-run-checkpoint.invalid/v1";
 const releaseCore = fileURLToPath(new URL(`../../../desktop/rust/target/release/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const debugCore = fileURLToPath(new URL(`../../../desktop/rust/target/debug/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
-const nativeCore = process.env.CROWNFORGE_TEST_NATIVE_IDE || (fs.existsSync(releaseCore) ? releaseCore : debugCore);
+const nativeCore = process.env.CROWNFORGE_TEST_NATIVE_IDE || (fs.existsSync(debugCore) ? debugCore : releaseCore);
 const nativeOptions = { skip: !fs.existsSync(nativeCore), timeout: 90_000 };
 
 function sessionFor(workspaceDir: string): UserSession {
@@ -140,6 +140,7 @@ function frameDiagnostics(frames: any[], workspace: string, fixture?: Awaited<Re
     name: frame.name,
     toolCallId: frame.toolCallId,
     isError: frame.isError,
+    result: typeof frame.result === "string" ? frame.result.slice(0, 240) : undefined,
   }));
   let checkpoints: number | string = "unreadable";
   try { checkpoints = listCheckpoints(workspace).length; } catch { /* keep diagnostics bounded */ }
@@ -309,25 +310,26 @@ test("desktop Code corrupt mutation journal blocks direct write before touching 
   assert.match(messages.flatMap((message) => message.toolCalls || []).find((call) => call.toolCallId === "blocked-write")?.result || "", /mutation journal evidence|invalid|unreadable/i);
 });
 
-test("desktop Code uncertain bash retains checkpoint gate and does not execute when checkpoint is blocked", nativeOptions, async (t) => {
-  const workspace = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-desktop-bash-checkpoint-")));
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(workspace, ".checkpoints"), "not a directory");
+test("desktop Code bash succeeds on oversized workspaces with large untracked native effects and no checkpoints", nativeOptions, async (t) => {
+  const workspace = hugeWorkspace(t, "crewforge-desktop-bash-large-");
+  const outputPath = path.join(workspace, "bash-large.bin");
+  const scriptPath = path.join(workspace, "large-bash.cjs");
+  fs.writeFileSync(scriptPath, `require("node:fs").writeFileSync(${JSON.stringify(outputPath)}, Buffer.alloc(65 * 1024 * 1024, 5));\n`);
   await seedConversation(workspace);
   const fixture = await withFixture(t, workspace, {
     desktop: true,
     responses: [
-      tools([{ id: "blocked-bash", name: "bash", arguments: { command: "printf effect > bash-effect.txt" } }]),
-      stop("The command did not run."),
+      tools([{ id: "large-bash", name: "bash", arguments: { command: `node ${JSON.stringify(scriptPath)}` } }]),
+      stop("The command ran."),
     ],
   });
 
-  const frames = await runWsTurn(workspace, "run a command", "bash-request", fixture);
-  const tool = frames.find((frame) => frame.type === "tool_result" && frame.toolCallId === "blocked-bash");
+  const frames = await runWsTurn(workspace, "run a large command", "bash-request", fixture);
+  const tool = frames.find((frame) => frame.type === "tool_result" && frame.toolCallId === "large-bash");
 
-  assert.equal(fs.existsSync(path.join(workspace, "bash-effect.txt")), false);
-  assert.equal(tool?.isError, true);
-  assert.match(tool?.result || "", /required mutation checkpoint unavailable/i);
+  assert.equal(tool?.isError, false, JSON.stringify({ tool, diagnostics: frameDiagnostics(frames, workspace, fixture) }));
+  assert.equal(fs.statSync(outputPath).size, 65 * 1024 * 1024);
+  assert.equal(listCheckpoints(workspace).length, 0);
 });
 
 test("web Code still requires the full startup checkpoint on oversized workspaces before model execution", async (t) => {

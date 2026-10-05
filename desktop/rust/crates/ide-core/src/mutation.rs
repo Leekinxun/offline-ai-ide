@@ -2468,6 +2468,7 @@ fn publication_relative(publication: &TransactionPublicationPlan) -> Result<Stri
         "mutationBlob" => ".checkpoints/blobs",
         "repositoryIndex" => ".history/repository-index/v1",
         "changeSetWal" => ".history/change-sets/transactions",
+        "externalToolEffects" => ".history/external-tools",
         _ => return Err(CoreError::invalid("Unsupported metadata namespace")),
     };
     validate_publication_key(&publication.key)?;
@@ -2973,12 +2974,21 @@ fn validate_publication(publication: &TransactionPublicationPlan) -> Result<()> 
         "mutationBlob" if is_hex_sha256(&publication.key) => Ok(()),
         "repositoryIndex" if valid_index_store_key(&publication.key) => Ok(()),
         "changeSetWal" if valid_changeset_wal_key(&publication.key) => Ok(()),
-        "mutationJournal" | "mutationBlob" | "repositoryIndex" | "changeSetWal" => {
-            Err(CoreError::new(
-                "PATH_ESCAPE",
-                "Metadata publication key is not in the fixed namespace map",
-            ))
+        "externalToolEffects"
+            if publication.key.strip_suffix(".json").is_some_and(|hash| {
+                is_hex_sha256(hash) && hash.bytes().all(|byte| !byte.is_ascii_uppercase())
+            }) =>
+        {
+            Ok(())
         }
+        "mutationJournal"
+        | "mutationBlob"
+        | "repositoryIndex"
+        | "changeSetWal"
+        | "externalToolEffects" => Err(CoreError::new(
+            "PATH_ESCAPE",
+            "Metadata publication key is not in the fixed namespace map",
+        )),
         _ => Err(CoreError::invalid("Unsupported metadata namespace")),
     }
 }
@@ -5632,6 +5642,38 @@ mod writer_tests {
         WriterOwner {
             kind: "agent".to_owned(),
             id: id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn external_tool_receipts_use_only_scoped_hash_basenames() {
+        let plan = |key: &str| TransactionPublicationPlan {
+            namespace: "externalToolEffects".to_owned(),
+            key: key.to_owned(),
+            expected: ExpectedState {
+                exists: Some(false),
+                sha256: None,
+                file: None,
+                directory: None,
+                identity: None,
+            },
+            blob_id: "receipt".to_owned(),
+            size: 2,
+            sha256: hex_sha256(b"{}"),
+        };
+        let key = format!("{}.json", "a".repeat(64));
+        validate_publication(&plan(&key)).unwrap();
+        assert_eq!(
+            publication_relative(&plan(&key)).unwrap(),
+            format!(".history/external-tools/{key}")
+        );
+        for key in [
+            "run.json",
+            "../other.json",
+            "nested/receipt.json",
+            &format!("{}.json", "A".repeat(64)),
+        ] {
+            assert!(validate_publication(&plan(key)).is_err());
         }
     }
 

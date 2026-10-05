@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { AgentRunRecorder } from "./runHistory.js";
 import { keepAllRunChanges, readRunChanges, RunChangesKeepError } from "./runChanges.js";
 import { buildFileHash, captureCheckpointMutationsDetailed, keepFileMutations, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "../files/mutationRegistry.js";
 import { createCheckpoint } from "./checkpoints.js";
+import { DesktopExternalToolEvidenceError, listDesktopExternalToolEffects } from "../desktop/nativeExternalEffects.js";
 
 async function fixture(t: test.TestContext): Promise<string> {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-run-changes-"));
@@ -14,6 +16,35 @@ async function fixture(t: test.TestContext): Promise<string> {
   const recorder = new AgentRunRecorder(workspace, "run", "conversation", "code");
   await recorder.start(); await recorder.finish("completed");
   return workspace;
+}
+
+
+function withDesktopNativeEnabled(t: test.TestContext) {
+  const previousDesktop = process.env.CREWFORGE_DESKTOP;
+  const previousExecutable = process.env.CROWNFORGE_IDE_CORE_EXECUTABLE;
+  process.env.CREWFORGE_DESKTOP = "1";
+  process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousExecutable || process.execPath;
+  t.after(() => {
+    if (previousDesktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = previousDesktop;
+    if (previousExecutable === undefined) delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE; else process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousExecutable;
+  });
+}
+
+function withDesktopNativeDisabled(t: test.TestContext) {
+  const previousDesktop = process.env.CREWFORGE_DESKTOP;
+  const previousExecutable = process.env.CROWNFORGE_IDE_CORE_EXECUTABLE;
+  delete process.env.CREWFORGE_DESKTOP;
+  delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE;
+  t.after(() => {
+    if (previousDesktop === undefined) delete process.env.CREWFORGE_DESKTOP; else process.env.CREWFORGE_DESKTOP = previousDesktop;
+    if (previousExecutable === undefined) delete process.env.CROWNFORGE_IDE_CORE_EXECUTABLE; else process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = previousExecutable;
+  });
+}
+function writeExternalToolEffect(workspaceDir: string, receipt: Record<string, unknown>) {
+  const directory = path.join(workspaceDir, ".history", "external-tools");
+  fs.mkdirSync(directory, { recursive: true });
+  const key = crypto.createHash("sha256").update(`${receipt.runId}\0${typeof receipt.requestId === "string" ? receipt.requestId : ""}\0${receipt.toolCallId}`).digest("hex");
+  fs.writeFileSync(path.join(directory, `${key}.json`), JSON.stringify(receipt, null, 2));
 }
 
 test("auditable binary changes expose hashes and sizes and support whole-file review", async (t) => {
@@ -83,6 +114,117 @@ test("run changes use fixed journal images after later disk edits and across rol
   assert.equal(reverted.files[0].modified, before.files[0].modified);
   assert.equal(reverted.files[0].rollbackState, "reverted");
   assert.notEqual(reverted.revision, before.revision);
+});
+
+test("desktop external tool receipts are listed separately and included in run-change revision", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = await fixture(t);
+  recordFileMutation({ workspaceDir: workspace, path: "source.txt", source: "assistant_tool", runId: "run", requestId: "turn", preimageContent: "A", postimageContent: "B" });
+  const before = readRunChanges(workspace, "run", undefined, "turn");
+  writeExternalToolEffect(workspace, {
+    schemaVersion: 1,
+    runId: "run",
+    requestId: "turn",
+    toolCallId: "shell-1",
+    toolName: "bash",
+    startedAt: 1,
+    finishedAt: 2,
+    rollbackCoverage: "untracked",
+    observedPaths: ["source.txt"],
+    observationComplete: true,
+  });
+  const after = readRunChanges(workspace, "run", undefined, "turn");
+  assert.equal(after.externalToolEffects?.[0]?.toolCallId, "shell-1");
+  assert.notEqual(after.revision, before.revision);
+  assert.deepEqual(listDesktopExternalToolEffects(workspace, { runId: "run", requestId: "turn", expectedExecutions: [{ toolCallId: "shell-1", requestId: "turn" }] }).map((receipt) => receipt.toolCallId), ["shell-1"]);
+});
+
+test("external-only command receipts do not imply missing mutation evidence", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-only-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const recorder = new AgentRunRecorder(workspace, "external-only-run", "conversation", "code");
+  await recorder.start();
+  await recorder.toolState({ toolCallId: "shell-only", requestId: "turn", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.finish("completed");
+  writeExternalToolEffect(workspace, {
+    schemaVersion: 1,
+    runId: recorder.runId,
+    requestId: "turn",
+    toolCallId: "shell-only",
+    toolName: "bash",
+    startedAt: 1,
+    rollbackCoverage: "untracked",
+    observedPaths: ["generated.txt"],
+    observationComplete: true,
+  });
+
+  const changes = readRunChanges(workspace, recorder.runId, undefined, "turn");
+  assert.deepEqual(changes.files, []);
+  assert.equal(changes.externalToolEffects?.length, 1);
+  assert.equal(changes.unavailableReason, undefined);
+});
+
+test("same external tool id reused across requests requires the scoped receipt", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-reused-tool-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const recorder = new AgentRunRecorder(workspace, "external-reused-tool-run", "conversation", "code");
+  await recorder.start();
+  await recorder.toolState({ toolCallId: "shell-reused", requestId: "turn-one", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.toolState({ toolCallId: "shell-reused", requestId: "turn-two", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.finish("completed");
+  writeExternalToolEffect(workspace, {
+    schemaVersion: 1,
+    runId: recorder.runId,
+    requestId: "turn-one",
+    toolCallId: "shell-reused",
+    toolName: "bash",
+    startedAt: 1,
+    rollbackCoverage: "untracked",
+    observedPaths: ["one.txt"],
+    observationComplete: true,
+  });
+
+  assert.throws(
+    () => readRunChanges(workspace, recorder.runId, undefined, "turn-two"),
+    DesktopExternalToolEvidenceError,
+  );
+});
+
+test("desktop external tool receipts fail closed when expected evidence is missing or malformed", async (t) => {
+  withDesktopNativeEnabled(t);
+  const workspace = await fixture(t);
+  assert.throws(
+    () => listDesktopExternalToolEffects(workspace, { runId: "run", expectedToolCallIds: ["missing-tool"] }),
+    DesktopExternalToolEvidenceError,
+  );
+  const directory = path.join(workspace, ".history", "external-tools");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "bad.json"), JSON.stringify({ schemaVersion: 1, runId: "run" }));
+  assert.throws(
+    () => listDesktopExternalToolEffects(workspace, { runId: "run" }),
+    DesktopExternalToolEvidenceError,
+  );
+});
+
+test("web run changes ignore malformed native external receipt directories", async (t) => {
+  withDesktopNativeDisabled(t);
+  const workspace = await fixture(t);
+  recordFileMutation({ workspaceDir: workspace, path: "source.txt", source: "assistant_tool", runId: "run", requestId: "turn", preimageContent: "A", postimageContent: "B" });
+  const directory = path.join(workspace, ".history", "external-tools");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "bad.json"), JSON.stringify({ schemaVersion: 1, runId: "run" }));
+
+  const changes = readRunChanges(workspace, "run", undefined, "turn");
+  const expectedWebRevision = buildFileHash(JSON.stringify([
+    changes.runId,
+    changes.requestId,
+    changes.files.map((file) => [file.path, file.revision, file.unavailableReason]),
+  ]));
+  assert.equal(changes.revision, expectedWebRevision);
+  assert.equal(changes.externalToolEffects, undefined);
+  assert.equal(changes.files.length, 1);
 });
 
 test("run changes reject unowned runs and unsafe or unrelated file selections", async (t) => {

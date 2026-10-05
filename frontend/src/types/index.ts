@@ -752,6 +752,19 @@ export interface OfflineBundleVerification {
   issues: Array<{ code?: string; message: string; path?: string }>;
 }
 
+export interface DesktopExternalToolEffects {
+  schemaVersion: 1;
+  runId: string;
+  requestId?: string;
+  toolCallId: string;
+  toolName: string;
+  startedAt: number;
+  finishedAt?: number;
+  rollbackCoverage: "untracked";
+  observedPaths: string[];
+  observationComplete: boolean;
+}
+
 export interface ConversationSummary {
   id: string;
   title: string;

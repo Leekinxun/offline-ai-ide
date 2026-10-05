@@ -24,6 +24,7 @@ export interface RuntimeValidationReport {
   schemaVersion: 1;
   status: "passed" | "failed" | "unverified" | "not_required";
   reason: string;
+  changeCoverage?: "tracked_edits_only";
   changedFiles: string[];
   versions: Record<string, string>;
   verification: Array<{
@@ -116,10 +117,11 @@ function attemptedLocalVerification(command: string): boolean {
 }
 
 export class ResumeValidationScopeError extends Error {}
-export function resolveResumedValidation(workspaceDir: string, conversationId: string, resumedFromRunId?: string, owner?: string): { changedFiles: string[]; commands: string[]; error?: string } {
+export function resolveResumedValidation(workspaceDir: string, conversationId: string, resumedFromRunId?: string, owner?: string): { changedFiles: string[]; commands: string[]; externalEffectsUntracked?: boolean; error?: string } {
   const changedFiles = new Set<string>();
   const commands = new Set<string>();
   const seen = new Set<string>();
+  let externalEffectsUntracked = false;
   let current = resumedFromRunId;
   try {
     while (current) {
@@ -127,6 +129,7 @@ export function resolveResumedValidation(workspaceDir: string, conversationId: s
       seen.add(current);
       const source = readRunRecord(workspaceDir, current);
       if (source.conversationId !== conversationId || source.mode !== "code" || source.parentRunId) throw new ResumeValidationScopeError("Resume validation source does not belong to this primary Code conversation");
+      externalEffectsUntracked ||= source.toolExecutions.some((tool) => tool.rollbackCoverage === "untracked");
       if (owner && listProcessSessions({ workspaceDir, owner, runId: current }).some((session) => session.taskId === "agent:command" && (session.status === "running" || session.status === "interrupted"))) throw new Error("Previous Agent process was interrupted before reliable mutation capture; inspect its workspace changes before claiming validation");
       const evidence = source.completionEvidence;
       if (!evidence) throw new Error("Previous run completion evidence is missing or invalid");
@@ -145,10 +148,10 @@ export function resolveResumedValidation(workspaceDir: string, conversationId: s
       }
       current = source.resumedFromRunId;
     }
-    return { changedFiles: [...changedFiles], commands: [...commands] };
+    return { changedFiles: [...changedFiles], commands: [...commands], ...(externalEffectsUntracked ? { externalEffectsUntracked } : {}) };
   } catch (error) {
     if (error instanceof ResumeValidationScopeError) throw error;
-    return { changedFiles: [...changedFiles], commands: [...commands], error: `Previous run verification evidence cannot be trusted: ${redactSecrets(error instanceof Error ? error.message : String(error))}` };
+    return { changedFiles: [...changedFiles], commands: [...commands], ...(externalEffectsUntracked ? { externalEffectsUntracked } : {}), error: `Previous run verification evidence cannot be trusted: ${redactSecrets(error instanceof Error ? error.message : String(error))}` };
   }
 }
 

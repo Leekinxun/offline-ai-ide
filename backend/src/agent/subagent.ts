@@ -1,4 +1,6 @@
 import { beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { beginDesktopExternalToolEffects, type DesktopExternalToolAudit } from "../desktop/nativeExternalEffects.js";
 import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
 import {
@@ -229,7 +231,7 @@ export async function runSubagent(
     };
   }
   await recorder?.start();
-  if (recorder && profile.stepSnapshots) {
+  if (recorder && profile.stepSnapshots && !desktopNativeIdeEnabled()) {
     try {
       const checkpoint = await createCheckpointForRuntime(childWorkspaceDir, {
         label: `Before ${agentName}`,
@@ -503,6 +505,7 @@ export async function runSubagent(
         { toolCalls: (toolMetrics?.toolCalls || 0) + 1 }
       );
       let desktopCommand: DesktopExternalProcessGuard | undefined;
+      let desktopToolAudit: DesktopExternalToolAudit | undefined;
       try {
       let output: string;
       let snapshotId: string | undefined;
@@ -555,7 +558,15 @@ export async function runSubagent(
           authorize,
           tc.id,
           async () => {
+            if (desktopNativeIdeEnabled() && ((tc.function.name === "bash" && !(args.allow_network !== true && planReadOnlyShell(args.command))) || tc.function.name.startsWith("mcp_"))) {
+              if (tc.function.name === "bash") desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
+              desktopToolAudit = await beginDesktopExternalToolEffects(childWorkspaceDir, {
+                runId: childRunId, toolCallId: tc.id, toolName: tc.function.name,
+                requestId: lineage?.parentRequestId || agentName,
+              }, desktopCommand, workspaceDir);
+            }
             if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)
+              && !desktopNativeIdeEnabled()
               && !(tc.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command))) {
               try {
                 if (tc.function.name === "bash") desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
@@ -594,6 +605,7 @@ export async function runSubagent(
               requestId: lineage?.parentRequestId || agentName,
               name: tc.function.name,
               status: "running",
+              ...(desktopToolAudit ? { rollbackCoverage: "untracked" as const } : {}),
               ...(snapshotId ? { snapshotId } : {}),
             });
             if (Date.now() - startedAt >= profile.budget.maxDurationMs) {
@@ -614,6 +626,10 @@ export async function runSubagent(
         output = `Error: ${error instanceof Error ? error.message : String(error)}`;
       }
       await captureBashMutations();
+      if (desktopToolAudit) {
+        await desktopToolAudit.finish();
+        output += "\n\n[External tool file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]";
+      }
       if (mutationEvidenceFailure) output = `Error: ${mutationEvidenceFailure}${output ? `\nTool output:\n${output}` : ""}`;
       const isError = output.startsWith("Error:");
       const denied = output.startsWith("Error: Tool denied:");
@@ -655,7 +671,10 @@ export async function runSubagent(
       if (toolCallCount > profile.budget.maxToolCalls || Date.now() - startedAt >= profile.budget.maxDurationMs) {
         return finish("failed", output.startsWith("Error:") ? output : "Error: Subagent execution budget exceeded");
       }
-      } finally { await desktopCommand?.release(); }
+      } finally {
+        try { await desktopToolAudit?.finish(); }
+        finally { await desktopCommand?.release(); }
+      }
     }
   }
 

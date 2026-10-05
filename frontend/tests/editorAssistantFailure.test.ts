@@ -30,7 +30,7 @@ test("desktop editor assistant keeps error-only assistant messages visible while
 
 test("checkpoint file-limit failures get a concrete editor-panel explanation", () => {
   assert.equal(checkpointFileLimit("Checkpoint exceeds 20000 files"), 20_000);
-  assert.equal(formatEditorFailureReason("Checkpoint exceeds 20000 files", t), "工作区快照超出 20000 个文件。问答和直接文件编辑可继续；需要快照的命令请缩小工作区。");
+  assert.equal(formatEditorFailureReason("Checkpoint exceeds 20000 files", t), "工作区快照超出 20000 个文件。桌面 Agent 任务已不再依赖此快照，可重新执行；手动工作区快照仍有此限制。");
 
   const notice = runFailureNotice(null, {
     changedFiles: [],
@@ -41,7 +41,7 @@ test("checkpoint file-limit failures get a concrete editor-panel explanation", (
   });
   assert.ok(notice);
   assert.equal(editorRunFailureTitle(notice, t), "工作区快照过大");
-  assert.equal(editorRunFailureBody(notice, t), "工作区快照超出 20000 个文件。问答和直接文件编辑可继续；需要快照的命令请缩小工作区。");
+  assert.equal(editorRunFailureBody(notice, t), "工作区快照超出 20000 个文件。桌面 Agent 任务已不再依赖此快照，可重新执行；手动工作区快照仍有此限制。");
 });
 
 test("generic editor failure reasons remain server-provided and bounded", () => {

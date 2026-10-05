@@ -4,9 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { shutdownDesktopNativeIde } from "./nativeIdeClient.js";
-import { rebuildRepositoryIndex, retrieveRepositoryContext, findRepositoryDefinitionAsync } from "../indexing/repositoryIndex.js";
+import { rebuildRepositoryIndex, retrieveRepositoryContext, findRepositoryDefinitionAsync, getRepositoryIndexStatus } from "../indexing/repositoryIndex.js";
+import { beginDesktopExternalToolEffects } from "./nativeExternalEffects.js";
 import { RepositoryIndexStore } from "../indexing/indexStore.js";
 const executable = process.env.CROWNFORGE_TEST_NATIVE_IDE ?? fileURLToPath(new URL(`../../../desktop/rust/target/debug/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 
@@ -43,4 +45,32 @@ test("desktop index publishes through Rust and parses sources without blocking t
   fs.writeFileSync(path.join(workspace, ".ignore"), "module1.ts\n");
   const found = await retrieveRepositoryContext({ workspaceDir: workspace, query: "item1_0", pinnedPaths: ["module1.ts"] });
   assert.ok(found.every((entry) => entry.path !== "module1.ts"));
+});
+
+test("external command receipts invalidate native discovery across a backend restart without rebuilding at command exit", { skip: !fs.existsSync(executable), timeout: 30_000 }, async (t) => {
+  const workspace = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "native-command-index-")));
+  const previous = [process.env.CREWFORGE_DESKTOP, process.env.CROWNFORGE_IDE_CORE_EXECUTABLE];
+  process.env.CREWFORGE_DESKTOP = "1"; process.env.CROWNFORGE_IDE_CORE_EXECUTABLE = executable;
+  t.after(async () => {
+    await shutdownDesktopNativeIde();
+    for (const [index, name] of ["CREWFORGE_DESKTOP", "CROWNFORGE_IDE_CORE_EXECUTABLE"].entries()) {
+      if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
+    }
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(workspace, "before.ts"), "export const before = 1;");
+  assert.equal((await rebuildRepositoryIndex(workspace)).status, "ready");
+  const revision = getRepositoryIndexStatus(workspace).revision;
+  const audit = await beginDesktopExternalToolEffects(workspace, { runId: "index-run", toolCallId: "command", toolName: "bash" });
+  fs.writeFileSync(path.join(workspace, "generated.ts"), "export function fromCommand() { return 2; }");
+  await audit!.finish();
+  assert.equal(getRepositoryIndexStatus(workspace).status, "stale");
+  assert.equal(getRepositoryIndexStatus(workspace).revision, revision, "command exit must not synchronously rebuild the index");
+  const restarted = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", "import { getRepositoryIndexStatus } from './src/indexing/repositoryIndex.ts'; process.stdout.write(getRepositoryIndexStatus(process.env.FIXTURE_COMMAND_INDEX).status);"], {
+    cwd: fileURLToPath(new URL("../../", import.meta.url)), env: { ...process.env, FIXTURE_COMMAND_INDEX: workspace }, encoding: "utf8",
+  });
+  assert.match(restarted, /stale$/);
+  const matches = await retrieveRepositoryContext({ workspaceDir: workspace, query: "fromCommand", pinnedPaths: ["generated.ts"] });
+  assert.ok(matches.some((entry) => entry.path === "generated.ts"));
+  assert.equal(getRepositoryIndexStatus(workspace).status, "ready");
 });

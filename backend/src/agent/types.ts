@@ -296,6 +296,7 @@ export interface ToolContext {
   stepCheckpointId?: string;
   /** Trusted command reservation transferred to process supervision; never tool input. */
   desktopExternalProcess?: import("../desktop/nativeWorkspaceMutation.js").DesktopExternalProcessGuard;
+  desktopExternalToolAudit?: import("../desktop/nativeExternalEffects.js").DesktopExternalToolAudit;
   /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
   /** Trusted server-provided read-only roots; never accepted from tool input. */

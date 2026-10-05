@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   binaryEvidenceForFile,
   bulkReviewPolicy,
+  hasExternalToolEffects,
+  isExternalOnlyReview,
+  parseReviewChanges,
   reviewActionPolicy,
   type ReviewFile,
 } from "../src/components/runReviewPolicy.ts";
@@ -65,6 +68,53 @@ test("bulk keep accepts pending binary files with complete evidence", () => {
   const binary = baseFile();
   const policy = bulkReviewPolicy({ runId: "run", revision: "rev", files: [text, binary] }, { readOnly: false, busy: false, loading: false });
   assert.deepEqual(policy, { count: 2, allowed: true, unavailable: false });
+});
+
+test("external command receipts stay separate from recorded file review actions", () => {
+  const changes = parseReviewChanges({
+    runId: "run",
+    revision: "rev",
+    files: [baseFile()],
+    externalToolEffects: [{
+      schemaVersion: 1,
+      runId: "run",
+      requestId: "turn",
+      toolCallId: "shell-1",
+      toolName: "bash",
+      startedAt: 1,
+      rollbackCoverage: "untracked",
+      observedPaths: ["src/generated.ts"],
+      observationComplete: true,
+    }],
+  }, "run");
+
+  assert.equal(hasExternalToolEffects(changes), true);
+  assert.deepEqual(reviewActionPolicy(changes.files[0], idle), { keep: true, revert: true, comment: false });
+  assert.throws(() => parseReviewChanges({ ...changes, externalToolEffects: [{ ...changes.externalToolEffects![0], rollbackCoverage: "whole-file" }] }, "run"), /External command evidence/);
+});
+
+test("external-only command receipts do not create fake file entries or unavailable evidence", () => {
+  const changes = parseReviewChanges({
+    runId: "run",
+    revision: "rev",
+    files: [],
+    externalToolEffects: [{
+      schemaVersion: 1,
+      runId: "run",
+      requestId: "turn",
+      toolCallId: "shell-1",
+      toolName: "bash",
+      startedAt: 1,
+      rollbackCoverage: "untracked",
+      observedPaths: ["src/generated.ts"],
+      observationComplete: true,
+    }],
+  }, "run");
+
+  assert.equal(isExternalOnlyReview(changes), true);
+  assert.equal(changes.files.length, 0);
+  assert.equal(changes.unavailableReason, undefined);
+  assert.equal(bulkReviewPolicy(changes, { readOnly: false, busy: false, loading: false }).count, 0);
 });
 
 test("binary create and delete require evidence only for existing sides", () => {

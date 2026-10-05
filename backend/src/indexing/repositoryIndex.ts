@@ -46,6 +46,15 @@ const pendingInvalidations = new Map<string, { workspaceRoot: string; mutations:
 const activeInvalidations = new Map<string, Set<Promise<void>>>();
 const fileCache = new Map<string, { revision: number; files: Map<string, IndexedRepositoryFile> }>();
 const headCache = new Map<string, { value?: string; expiresAt: number }>();
+const dirtyWorkspaces = new Map<string, number>();
+
+/** External commands invalidate discovery without rebuilding on their exit path. */
+export function markRepositoryIndexDirty(workspaceDir: string): void {
+  const store = new RepositoryIndexStore(workspaceDir);
+  dirtyWorkspaces.set(store.partitionId, (dirtyWorkspaces.get(store.partitionId) || 0) + 1);
+  fileCache.delete(store.partitionId);
+  headCache.delete(path.resolve(workspaceDir));
+}
 
 function digest(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -421,7 +430,14 @@ function meta(store: RepositoryIndexStore, previous: RepositoryIndexMeta | null,
 function publicStatus(store: RepositoryIndexStore, value = store.readMeta()): RepositoryIndexStatus {
   const head = currentHead(store.workspaceRoot);
   const adaptersStale = Boolean(value && Object.entries(LANGUAGE_ADAPTER_VERSIONS).some(([id, version]) => value.adapterVersions[id] !== version));
-  const stale = adaptersStale || Boolean(value?.headSha && head && value.headSha !== head);
+  let externalEffectsStale = false;
+  if (nativeIndexEnabled() && value) {
+    try {
+      const receiptDirectory = fs.lstatSync(path.join(store.workspaceRoot, ".history", "external-tools"));
+      externalEffectsStale = !receiptDirectory.isDirectory() || receiptDirectory.isSymbolicLink() || receiptDirectory.mtimeMs > value.updatedAt;
+    } catch (error) { externalEffectsStale = (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  }
+  const stale = dirtyWorkspaces.has(store.partitionId) || externalEffectsStale || adaptersStale || Boolean(value?.headSha && head && value.headSha !== head);
   return {
     schemaVersion: 1, partitionId: store.partitionId, revision: value?.revision || 0,
     status: !value ? "missing" : stale ? "stale" : value.status, fileCount: value?.fileCount || 0,
@@ -490,6 +506,7 @@ export async function rebuildRepositoryIndex(workspaceDir: string): Promise<Repo
   const existing = activeRebuilds.get(store.partitionId);
   if (existing) return existing;
   const running = store.withRebuildLockAsync(async () => {
+    const dirtyGeneration = dirtyWorkspaces.get(store.partitionId);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       let marker!: RepositoryIndexMeta;
       const markerPolicyFingerprint = await currentIgnoreFingerprint(store.workspaceRoot);
@@ -508,6 +525,7 @@ export async function rebuildRepositoryIndex(workspaceDir: string): Promise<Repo
         const completed = meta(store, marker, files.size, "ready", undefined, buildIgnoreFingerprint);
         if (!await store.replaceAllIfRevisionAsync(files, completed, marker.revision)) continue;
         fileCache.set(store.partitionId, { revision: completed.revision, files });
+        if (dirtyWorkspaces.get(store.partitionId) === dirtyGeneration) dirtyWorkspaces.delete(store.partitionId);
         return publicStatus(store, completed);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Repository index rebuild failed";

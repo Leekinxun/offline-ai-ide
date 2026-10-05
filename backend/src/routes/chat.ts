@@ -30,6 +30,7 @@ import { keepFileMutationsAsync, listFileMutations, listMutationEvidenceGaps, Mu
 import { assertRunChangesOwner, keepAllRunChangesAsync, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
 import { nativeMutationErrorCode, nativeMutationHttpStatus } from "../desktop/nativeWorkspaceMutation.js";
+import { DesktopExternalToolEvidenceError } from "../desktop/nativeExternalEffects.js";
 import {
   createManagedWorktree,
   listManagedWorktrees,
@@ -179,6 +180,10 @@ function reviewFindingFilter(query: Record<string, unknown>): ReviewFindingFilte
 
 function activeRun(workspaceDir: string, runId: string): boolean {
   try { const status = readRunRecord(workspaceDir, runId).status; return status === "running" || status === "queued"; } catch { return false; }
+}
+
+function externalToolRollbackUnavailable(res: Response, message = "Command changes are not covered by automatic rollback") {
+  return res.status(409).json({ error: message, code: "external_tool_rollback_unavailable" });
 }
 
 function planRouteError(error: unknown, fallback: string): { status: 400 | 404; error: string } {
@@ -608,6 +613,7 @@ chatRouter.get("/runs/:runId/changes", (req, res) => {
     res.json(readRunChanges(getSessionWorkspace(req), req.params.runId, req.query.path as string | undefined, req.query.requestId as string | undefined));
   } catch (error) {
     if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    if (error instanceof DesktopExternalToolEvidenceError) return res.status(409).json({ error: "External tool rollback evidence is unavailable", code: "external_tool_rollback_unavailable" });
     const message = error instanceof Error ? error.message : "Failed to load run changes";
     res.status(message === "Run not found" || message === "Run file change not found" ? 404 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Run evidence is unavailable" : message });
   }
@@ -682,6 +688,10 @@ chatRouter.post("/runs/:runId/revert", async (req, res) => {
     if (selectedPath === null || ids === null || hunkIds === null || (body.expectedRevision !== undefined && (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)))) return res.status(400).json({ error: "Invalid run rollback selection" });
     const scoped = requestId !== undefined || selectedPath !== undefined || ids !== undefined || hunkIds !== undefined;
     if (scoped && !body.expectedRevision) return res.status(400).json({ error: "expectedRevision is required for a scoped rollback" });
+    const broadRollbackScope = selectedPath === undefined && ids === undefined && hunkIds === undefined;
+    if (broadRollbackScope && readRunChanges(session.workspaceDir, req.params.runId, undefined, requestId).externalToolEffects?.length) {
+      return externalToolRollbackUnavailable(res);
+    }
     const mutations = listFileMutations(session.workspaceDir, { runId: req.params.runId, requestId });
     const selected = mutations.filter((mutation) => (!selectedPath || mutation.path === selectedPath) && (!ids || ids.includes(mutation.id)));
     if ((scoped && !selected.length) || ids?.some((id) => !selected.some((mutation) => mutation.id === id)) || hunkIds?.some((id) => !selected.some((mutation) => mutation.hunks?.some((hunk) => hunk.id === id)))) return res.status(400).json({ error: "Rollback selection does not belong to this run, request and file" });
@@ -702,6 +712,7 @@ chatRouter.post("/runs/:runId/revert", async (req, res) => {
       const rollback = await rollbackFileMutationsAsync(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}), ...(selectedIds ? { ids: selectedIds } : {}), ...(hunkIds ? { hunkIds } : {}) }, {
         preflight: () => {
           if (!ids && !hunkIds && listMutationEvidenceGaps(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}) }).length) throw new MutationJournalEvidenceError(session.workspaceDir, "rollback has incomplete mutation evidence");
+          if (broadRollbackScope && readRunChanges(session.workspaceDir, req.params.runId, undefined, requestId).externalToolEffects?.length) throw new DesktopExternalToolEvidenceError("Command changes are not covered by automatic rollback");
           if (!body.expectedRevision) return;
           const changes = readRunChanges(session.workspaceDir, req.params.runId, selectedPath, requestId);
           if ((selectedPath ? changes.files[0].revision : changes.revision) !== body.expectedRevision) throw new MutationReviewConflictError();
@@ -729,6 +740,7 @@ chatRouter.post("/runs/:runId/revert", async (req, res) => {
     }
     if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    if (error instanceof DesktopExternalToolEvidenceError) return externalToolRollbackUnavailable(res, error.message);
     if (nativeMutationErrorCode(error)) return res.status(nativeMutationHttpStatus(error)).json({ error: "Native rollback publication failed", code: nativeMutationErrorCode(error) });
     const message = error instanceof Error ? error.message : "Failed to revert run";
     res.status(message === "Run not found" || message === "Checkpoint not found" ? 404 : 400).json({ error: message });

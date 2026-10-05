@@ -39,13 +39,15 @@ export interface NativeMutationResult {
 }
 
 export type DesktopWriterIntent = "editor" | "agent-edit" | "rollback" | "checkpoint" | "changeset" | "index" | "external-audit";
-interface WriterContext { workspace: string; admissionToken: string; leaseToken: string; client: NativeIdeClient; active: boolean; }
+interface WriterContext { workspace: string; admissionToken: string; leaseToken: string; client: NativeIdeClient; active: boolean; metadataOnly?: boolean; }
 const writerContext = new AsyncLocalStorage<WriterContext>();
-interface ExternalAuditContext { active: boolean; workspace: string; externalToken: string; owner: { kind: "agent"; id: string }; }
+interface ExternalAuditContext { active: boolean; workspace: string; externalToken: string; owner: { kind: "agent"; id: string }; metadataOnly?: boolean; }
 const externalAuditContext = new AsyncLocalStorage<ExternalAuditContext>();
 const activeExternalProcesses = new Map<string, DesktopExternalProcessGuard>();
 export interface DesktopExternalProcessGuard {
   audit<T>(work: () => Promise<T>): Promise<T>;
+  /** Publishes external-tool receipts without attributing human source edits. */
+  metadata<T>(work: () => Promise<T>): Promise<T>;
   assertUnchanged(): void;
   release(): Promise<void>;
 }
@@ -73,6 +75,11 @@ export async function beginDesktopExternalProcess(workspaceDir: string): Promise
     async audit(work) {
       guard.assertUnchanged();
       const context = { active: true, workspace, externalToken, owner };
+      try { return await externalAuditContext.run(context, work); }
+      finally { context.active = false; }
+    },
+    async metadata(work) {
+      const context = { active: true, workspace, externalToken, owner, metadataOnly: true };
       try { return await externalAuditContext.run(context, work); }
       finally { context.active = false; }
     },
@@ -121,7 +128,7 @@ export interface NativeTransactionBlobRef {
 }
 
 export interface NativeTransactionPublicationPlan {
-  namespace: "mutationJournal" | "mutationBlob" | "repositoryIndex" | "changeSetWal";
+  namespace: "mutationJournal" | "mutationBlob" | "repositoryIndex" | "changeSetWal" | "externalToolEffects";
   key: string;
   expected: NativeMutationExpected;
   blobId: string;
@@ -217,6 +224,11 @@ async function commitDesktopTransaction(input: {
 }): Promise<NativeMutationResult> {
   return withDesktopWorkspaceWriter(input.workspaceDir, input.intent, async () => {
     const context = writerContext.getStore()!;
+    const external = externalAuditContext.getStore();
+    const metadataOnly = context.metadataOnly || external?.active && external.workspace === context.workspace && external.metadataOnly;
+    if (metadataOnly && (input.files.length || input.publications?.some((publication) => publication.namespace !== "externalToolEffects"))) {
+      throw new NativeIdeError("External-tool metadata audit cannot publish workspace files or other metadata", "PATH_ESCAPE");
+    }
     const client = context.client;
     const lease = { leaseToken: context.leaseToken };
     try {
@@ -224,7 +236,7 @@ async function commitDesktopTransaction(input: {
       await client.requestDurable("fs.transaction.begin", {
         leaseToken: lease.leaseToken,
         transactionId: input.transactionId,
-        mode: input.intent === "editor" ? "metadataOnly" : "privateBackup",
+        mode: input.intent === "editor" || metadataOnly ? "metadataOnly" : "privateBackup",
         files: input.files.slice(0, 128),
         publications: (input.publications ?? []).slice(0, 128),
       }, { timeoutMs: 30_000 });
@@ -302,7 +314,7 @@ export async function withDesktopWorkspaceWriter<T>(
         await pause(25);
       }
     }
-    context = { workspace, admissionToken: admission.admissionToken, leaseToken, client, active: true };
+    context = { workspace, admissionToken: admission.admissionToken, leaseToken, client, active: true, ...(audit?.metadataOnly ? { metadataOnly: true } : {}) };
     return await writerContext.run(context, work);
   } finally {
     if (context) context.active = false;
