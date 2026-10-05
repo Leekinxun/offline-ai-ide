@@ -8,6 +8,7 @@ import type { CompletionEvidence } from "./completionEvidence.js";
 import { deleteUnreferencedChatAttachments, isChatAttachmentRef, type ChatAttachmentRef } from "./attachments.js";
 import { parseContextReferences } from "./contextReferences.js";
 import { isRuntimeValidationReport, type RuntimeValidationReport } from "../agent/validationFeedback.js";
+import { redactSecrets } from "../agent/secretRedaction.js";
 
 export type ExecutionContractKind = "direct_code" | "approved_plan";
 
@@ -93,6 +94,12 @@ export interface ConversationRunSummary {
   executionContractKind?: ExecutionContractKind;
   completionEvidence?: CompletionEvidence;
   qualityGate?: import("../extensions/policy/completionGate.js").CompletionGateEvidence;
+  failureReason?: string;
+}
+
+export function normalizeFailureReason(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  return redactSecrets(raw).trim().slice(0, 2000) || undefined;
 }
 
 export function normalizeConversationRunSummary(raw: unknown): ConversationRunSummary | null {
@@ -135,6 +142,8 @@ export function normalizeConversationRunSummary(raw: unknown): ConversationRunSu
     : [];
   const completionEvidence = normalizeCompletionEvidence(candidate.completionEvidence);
   const qualityGate = candidate.qualityGate && typeof candidate.qualityGate === "object" && candidate.qualityGate.schemaVersion === 1 ? candidate.qualityGate : undefined;
+  const failureReason = completionEvidence?.outcome === "completed" || completionEvidence?.outcome === "stopped"
+    ? undefined : normalizeFailureReason(candidate.failureReason);
 
   return {
     changedFiles,
@@ -147,6 +156,7 @@ export function normalizeConversationRunSummary(raw: unknown): ConversationRunSu
       : "direct_code",
     ...(completionEvidence ? { completionEvidence } : {}),
     ...(qualityGate ? { qualityGate } : {}),
+    ...(failureReason ? { failureReason } : {}),
   };
 }
 
@@ -786,6 +796,10 @@ export function updateConversationState(
       ...(state.lastRunId ? { lastRunId: state.lastRunId } : {}),
       updatedAt: Date.now(),
     };
+    if (state.status && state.status !== "failed" && parsed.meta.summary) {
+      const { failureReason: _failureReason, ...summary } = parsed.meta.summary;
+      parsed.meta.summary = summary;
+    }
     writeConversationFile(workspaceDir, conversationId, parsed);
   });
 }

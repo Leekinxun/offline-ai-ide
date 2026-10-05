@@ -11,6 +11,7 @@ import type {
 import {
   normalizeCompletionEvidence,
   normalizeConversationRunSummary,
+  normalizeFailureReason,
   type ConversationRunSummary,
   type ExecutionContractKind,
 } from "./history.js";
@@ -93,6 +94,7 @@ export interface AgentRunRecord {
   mode: AgentMode;
   modelName?: string;
   status: AgentRunStatus | "interrupted";
+  failureReason?: string;
   startedAt: number;
   updatedAt: number;
   endedAt?: number;
@@ -122,6 +124,7 @@ export interface AgentRunSummary {
   mode: AgentMode;
   modelName?: string;
   status: AgentRunStatus | "interrupted";
+  failureReason?: string;
   startedAt: number;
   updatedAt: number;
   endedAt?: number;
@@ -278,6 +281,11 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     ["passed", "passed_with_warnings", "blocked"].includes(value.qualityGate.status) &&
     typeof value.qualityGate.runId === "string" && typeof value.qualityGate.scopeId === "string"
     ? value.qualityGate as CompletionGateEvidence : undefined;
+  const failureReason = value.status === "failed" ? resolveFailureReason({ ...value, events, qualityGate, summary: summary || undefined, completionEvidence: completionEvidence || undefined }) : undefined;
+  if (summary) {
+    if (failureReason) summary.failureReason = failureReason;
+    else delete summary.failureReason;
+  }
   const toolExecutions = Array.isArray(value.toolExecutions)
     ? value.toolExecutions
         .map(normalizeToolExecution)
@@ -307,6 +315,7 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
       ? { modelName: value.modelName.trim().slice(0, 200) }
       : {}),
     status: value.status,
+    ...(failureReason ? { failureReason } : {}),
     startedAt,
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : startedAt,
     ...(typeof value.endedAt === "number" ? { endedAt: value.endedAt } : {}),
@@ -333,6 +342,26 @@ function normalizeRecord(raw: unknown): AgentRunRecord | null {
     toolExecutions,
     contextManifestIds,
   };
+}
+
+/** Fatal run errors are distinct from tool failures that an agent may recover from. */
+function resolveFailureReason(record: Pick<Partial<AgentRunRecord>, "failureReason" | "events" | "qualityGate" | "summary" | "completionEvidence">): string | undefined {
+  const explicit = normalizeFailureReason(record.failureReason || record.summary?.failureReason);
+  if (explicit) return explicit;
+  const terminalEvent = [...(record.events || [])].reverse().find((event) => event.kind === "run_finished" && event.isError && event.detail);
+  if (terminalEvent) return normalizeFailureReason(terminalEvent.detail);
+  const fatalEvent = [...(record.events || [])].reverse().find((event) => event.kind === "error" && event.isError !== false && (
+    event.label === "Agent run crashed" || event.label === "Subagent model request failed" ||
+    event.label === "Subagent iteration limit reached" || /^Agent (?:duration|cost) budget exceeded/.test(event.label) ||
+    event.label === "Context budget cannot safely preserve user instructions"
+  ));
+  if (fatalEvent) return normalizeFailureReason(fatalEvent.detail || fatalEvent.label);
+  if (record.qualityGate?.status === "blocked") return normalizeFailureReason(record.qualityGate.error) || "Repository quality gate blocked completion";
+  const evidence = record.completionEvidence || record.summary?.completionEvidence;
+  const failedChecks = evidence?.ledger.verification.filter((check) => check.status === "failed" || check.status === "timed_out");
+  if (failedChecks?.length) return normalizeFailureReason(`Verification failed: ${failedChecks.map((check) => `${check.command} (${check.status})`).join("; ")}`);
+  if (evidence?.ledger.blockers.length) return `Completion blocked: ${evidence.ledger.blockers.join(", ")}`;
+  return undefined;
 }
 
 function normalizeRunSchemaVersion(raw: unknown): number | null {
@@ -648,7 +677,8 @@ export class AgentRunRecorder {
     metricsPatch: Partial<AgentRunMetrics> = {},
     summary?: ConversationRunSummary,
     completionEvidence?: CompletionEvidence,
-    suppliedQualityGate?: CompletionGateEvidence
+    suppliedQualityGate?: CompletionGateEvidence,
+    failureReason?: string
   ): Promise<AgentRunRecord> {
     let effectiveStatus = status;
     let qualityGate: CompletionGateEvidence | undefined = suppliedQualityGate;
@@ -689,6 +719,16 @@ export class AgentRunRecorder {
           ? { ...effectiveSummary, completionEvidence: effectiveCompletionEvidence }
           : effectiveSummary));
         if (effectiveCompletionEvidence) record.completionEvidence = redactSecrets(clone(effectiveCompletionEvidence));
+        if (effectiveStatus === "failed") {
+          record.failureReason = normalizeFailureReason(failureReason) || resolveFailureReason(record);
+          if (record.failureReason) record.summary = {
+            ...(record.summary || { changedFiles: [], toolCallCount: record.metrics.toolCalls, errorCount: record.metrics.toolErrors + record.metrics.modelErrors, commandCount: 0 }),
+            failureReason: record.failureReason,
+          };
+        } else {
+          delete record.failureReason;
+          if (record.summary) delete record.summary.failureReason;
+        }
         interruptNonterminalTools(record, endedAt);
         record.events = [
           ...record.events,
@@ -703,6 +743,7 @@ export class AgentRunRecorder {
                   ? "Agent run stopped"
                   : "Agent run failed",
             isError: effectiveStatus === "failed",
+            ...(record.failureReason ? { detail: record.failureReason.slice(0, 500) } : {}),
           },
         ].slice(-MAX_STORED_EVENTS);
         return record;
@@ -765,6 +806,7 @@ export function listRunSummaries(
     mode: record.mode,
     ...(record.modelName ? { modelName: record.modelName } : {}),
     status: record.status,
+    ...(record.failureReason ? { failureReason: record.failureReason } : {}),
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     ...(record.endedAt ? { endedAt: record.endedAt } : {}),

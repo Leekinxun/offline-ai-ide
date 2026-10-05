@@ -43,6 +43,7 @@ import {
   Layers,
   History,
   AtSign,
+  AlertCircle,
 } from "lucide-react";
 import "./ChatPanel.css";
 import "./ExecutionFactsCard.css";
@@ -73,6 +74,7 @@ import { AssistantActivity, AssistantReasoning } from "./AssistantActivity";
 import { assistantToolStatus } from "../utils/assistantActivity";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import { ApprovalModeControl } from "./ApprovalModeControl";
+import { runFailureNotice, type RunFailureNotice } from "../utils/runFailureNotice";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -581,6 +583,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const runTone: TaskStateTone = pendingApprovals.length ? "warning" : runStatus === "running" || runStatus === "queued" ? "running" : runStatus === "completed" ? "success" : runStatus === "failed" ? "danger" : "warning";
   const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
   const hasRecoveryAction = runState?.status === "failed" || runState?.status === "stopped";
+  const failureNotice = runFailureNotice(runState, currentRunSummary);
   const taskActionKind = approvalTaskAction(pendingApprovals.length > 0, isStreaming, hasRecoveryAction);
   const taskAction = taskActionKind === "approval" ? t("chat.approval.view") : taskActionKind === "stop" ? t("chat.stop") : taskActionKind === "resume" ? t("workbench.resumeRun") : currentRunSummary?.changedFiles.length ? t("chat.changes") : t("chat.focusComposer");
   const handleTaskAction = () => {
@@ -688,6 +691,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           {(messages.length > 0 || isStreaming || Boolean(runState)) && (
             <TaskStateStrip requested={`${t(`chat.mode.${agentMode}.label`)} · ${taskTitle}`} running={pendingApprovals.length ? t("chat.approval.waiting") : t(`chat.taskStatus.${runStatus}`)} runningTone={runTone} evidence={evidenceCount ? t("taskState.evidenceCount", { count: evidenceCount }) : t("taskState.noEvidence")} evidenceTone={evidenceCount ? "success" : "neutral"} action={taskAction} actionTone={isStreaming ? "warning" : hasRecoveryAction ? "danger" : "neutral"} onAction={handleTaskAction} actionDisabled={!connected && !currentRunSummary?.changedFiles.length} actionDisabledReason={!connected ? t("chat.offline") : undefined} compact />
           )}
+          {failureNotice && <RunFailureBanner notice={failureNotice} canResume={hasRecoveryAction} t={t} />}
           {(runState || currentRunSummary) && <ExecutionFactsCard facts={runState ? runState.executionFacts || runState.summary?.executionFacts : currentRunSummary?.executionFacts} t={t} />}
 
           <div className="chat-messages">
@@ -1215,6 +1219,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
 // --- Message rendering with code block extraction ---
 
+const RunFailureBanner: React.FC<{
+  notice: RunFailureNotice;
+  canResume: boolean;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}> = ({ notice, canResume, t }) => (
+  <section className="chat-run-failure-banner" role="alert" aria-live="assertive">
+    <AlertCircle size={15} aria-hidden="true" />
+    <div>
+      <strong>
+        {notice.kind === "max_iterations"
+          ? t("chat.failure.maxIterations.title", { limit: notice.limit || 0 })
+          : t("chat.failure.generic.title")}
+      </strong>
+      <span>
+        {notice.kind === "max_iterations"
+          ? t("chat.failure.maxIterations.body")
+          : t("chat.failure.generic.body", { reason: notice.reason })}
+      </span>
+      <small>{t(canResume ? "chat.failure.resumeHint" : "chat.failure.noResumeHint")}</small>
+    </div>
+  </section>
+);
+
 interface MessageItemProps {
   token: string;
   message: ChatMessage;
@@ -1289,6 +1316,12 @@ const MessageItem: React.FC<MessageItemProps> = ({
               </React.Fragment>
             )
           )}
+        </div>
+      )}
+      {message.error && (
+        <div className="chat-message-error" role="alert">
+          <AlertCircle size={13} aria-hidden="true" />
+          <span>{t("chat.messageFailedWithReason", { reason: message.error })}</span>
         </div>
       )}
       <ContextReferenceBadges references={message.contextReferences} />

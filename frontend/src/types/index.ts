@@ -86,6 +86,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallStep[];
   thinking?: string;
   parts?: ChatMessagePart[];
+  error?: string;
   /** Transient event-backed activity; never a synthetic model reasoning message. */
   activity?: { phase: "waiting" | "reasoning" | "responding" | "tool"; updatedAt: number; toolCallId?: string; waitingFor?: "acceptance" | "model" };
 }
@@ -165,6 +166,7 @@ export interface AgentRunSummary {
   executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
   executionPlanId?: string;
+  failureReason?: string;
 }
 
 export interface AgentRunState extends AgentRunSummary {
@@ -239,6 +241,7 @@ export interface ConversationRunSummary {
   qualityGate?: CompletionQualityGateEvidence;
   executionFacts?: ExecutionFactsSummary;
   executionPlan?: ExecutionPlan;
+  failureReason?: string;
 }
 
 export type ReviewSeverity = "critical" | "error" | "warning" | "info";
@@ -758,6 +761,7 @@ export interface ConversationSummary {
   status?: ConversationStatus;
   lastRunId?: string;
   summary?: ConversationRunSummary;
+  failureReason?: string;
 }
 
 export interface FileContext {
