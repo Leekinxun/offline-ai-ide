@@ -21,7 +21,14 @@ const providerUrl = "https://desktop-run-checkpoint.invalid/v1";
 const releaseCore = fileURLToPath(new URL(`../../../desktop/rust/target/release/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const debugCore = fileURLToPath(new URL(`../../../desktop/rust/target/debug/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const nativeCore = process.env.CROWNFORGE_TEST_NATIVE_IDE || (fs.existsSync(debugCore) ? debugCore : releaseCore);
-const nativeOptions = { skip: !fs.existsSync(nativeCore), timeout: 90_000 };
+const nativeSkipReason = !fs.existsSync(nativeCore) ? `Native IDE core executable not found: ${nativeCore}` : false;
+const nativeOptions = { skip: nativeSkipReason, timeout: 90_000 };
+const nativeBashOptions = {
+  skip: process.platform === "win32"
+    ? "Bash command fixture requires the Windows SDK sandbox account setup; adjacent native desktop tests remain Windows coverage"
+    : nativeSkipReason,
+  timeout: 90_000,
+};
 
 function sessionFor(workspaceDir: string): UserSession {
   const taskManager = new TaskManager(workspaceDir);
@@ -310,7 +317,7 @@ test("desktop Code corrupt mutation journal blocks direct write before touching 
   assert.match(messages.flatMap((message) => message.toolCalls || []).find((call) => call.toolCallId === "blocked-write")?.result || "", /mutation journal evidence|invalid|unreadable/i);
 });
 
-test("desktop Code bash succeeds on oversized workspaces with large untracked native effects and no checkpoints", nativeOptions, async (t) => {
+test("desktop Code bash succeeds on oversized workspaces with large untracked native effects and no checkpoints", nativeBashOptions, async (t) => {
   const workspace = hugeWorkspace(t, "crewforge-desktop-bash-large-");
   const outputPath = path.join(workspace, "bash-large.bin");
   const scriptPath = path.join(workspace, "large-bash.cjs");

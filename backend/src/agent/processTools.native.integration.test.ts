@@ -15,7 +15,12 @@ import { agentProcessOwner, executeProcessTool, pendingAgentProcesses, stopAgent
 const releaseCore = fileURLToPath(new URL(`../../../desktop/rust/target/release/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const debugCore = fileURLToPath(new URL(`../../../desktop/rust/target/debug/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const executable = process.env.CROWNFORGE_TEST_NATIVE_IDE || (fs.existsSync(debugCore) ? debugCore : releaseCore);
-const nativeOptions = { skip: !fs.existsSync(executable), timeout: 45_000 };
+const nativeSkipReason = process.platform === "win32"
+  ? "Native executable-command fixtures require the Windows SDK sandbox account setup; this lane verifies non-command native desktop paths on Windows"
+  : !fs.existsSync(executable)
+    ? `Native IDE core executable not found: ${executable}`
+    : false;
+const nativeOptions = { skip: nativeSkipReason, timeout: 45_000 };
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function fixture(t: test.TestContext, script: string, options: { huge?: boolean } = {}) {

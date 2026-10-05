@@ -25,7 +25,12 @@ const providerUrl = "https://delegated-effects.invalid/v1";
 const releaseCore = fileURLToPath(new URL(`../../../desktop/rust/target/release/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const debugCore = fileURLToPath(new URL(`../../../desktop/rust/target/debug/crownforge-ide-core${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 const nativeCore = process.env.CROWNFORGE_TEST_NATIVE_IDE || (fs.existsSync(debugCore) ? debugCore : releaseCore);
-const nativeOptions = { skip: !fs.existsSync(nativeCore), timeout: 45_000 };
+const nativeSkipReason = process.platform === "win32"
+  ? "Delegated bash fixtures require the Windows SDK sandbox account setup; this lane verifies non-command native desktop paths on Windows"
+  : !fs.existsSync(nativeCore)
+    ? `Native IDE core executable not found: ${nativeCore}`
+    : false;
+const nativeOptions = { skip: nativeSkipReason, timeout: 45_000 };
 
 type ToolCall = { id: string; name: string; args: Record<string, unknown> };
 type Turn = { content: string } | { toolCalls: ToolCall[] };
