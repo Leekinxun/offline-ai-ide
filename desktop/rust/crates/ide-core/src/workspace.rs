@@ -113,7 +113,43 @@ impl Workspace {
             }
             Ok(descriptor)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+            // Denying delete sharing pins every ancestor while the final handle opens.
+            // OPEN_REPARSE_POINT lets us reject a junction/link rather than following it.
+            let open = |candidate: &Path, directory: bool| -> Result<fs::File> {
+                let file = fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(3)
+                    .custom_flags(0x00200000 | if directory { 0x02000000 } else { 0 })
+                    .open(candidate)?;
+                let metadata = file.metadata()?;
+                if metadata.file_attributes() & 0x400 != 0 || (directory && !metadata.is_dir()) {
+                    return Err(CoreError::new(
+                        "PATH_ESCAPE",
+                        "Workspace read refuses reparse points",
+                    ));
+                }
+                Ok(file)
+            };
+            let mut handles = vec![open(&self.root, true)?];
+            let mut current = self.root.clone();
+            let mut components = relative.components().peekable();
+            while let Some(component) = components.next() {
+                let Component::Normal(name) = component else {
+                    return Err(CoreError::new("PATH_ESCAPE", "Invalid file path"));
+                };
+                current.push(name);
+                let file = open(&current, components.peek().is_some())?;
+                if components.peek().is_none() {
+                    return Ok(file);
+                }
+                handles.push(file);
+            }
+            Err(CoreError::invalid("File path is empty"))
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = relative;
             fs::File::open(path).map_err(CoreError::from)

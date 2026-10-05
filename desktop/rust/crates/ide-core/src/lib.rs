@@ -88,7 +88,9 @@ impl Core {
         };
         // Cancellation can arrive after spawn/start created a native resource but before its response.
         if cancelled.load(Ordering::Acquire)
-            && !matches!(method.as_str(), "transaction.commit" | "fs.mutate")
+            && !(method.starts_with("fs.transaction.")
+                || method.starts_with("fs.writer.")
+                || method == "fs.mutate")
         {
             if let Ok(resource) = &result {
                 if method == "pty.spawn" {
@@ -125,7 +127,7 @@ impl Core {
     fn dispatch(&self, method: &str, params: Value, cancelled: Arc<AtomicBool>) -> Result<Value> {
         match method {
             "ping" => Ok(
-                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "fs.mutate", "fs.writer.admit", "fs.writer.acquire", "fs.writer.inspect", "fs.writer.release", "fs.transaction.begin", "fs.transaction.chunk", "fs.transaction.commit", "fs.transaction.abort", "fs.transaction.status", "fs.transaction.recover", "search", "index.scan", "index.page", "index.readBatch", "index.policy", "index.close", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
+                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "fs.mutate", "fs.writer.admit", "fs.writer.acquire", "fs.writer.inspect", "fs.writer.release", "fs.writer.revoke", "fs.writer.externalBegin", "fs.writer.externalEnd", "fs.transaction.appendPlans", "fs.transaction.begin", "fs.transaction.chunk", "fs.transaction.commit", "fs.transaction.abort", "fs.transaction.status", "fs.transaction.recover", "search", "index.scan", "index.page", "index.readBatch", "index.readFiles", "index.policy", "index.close", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
             ),
             "fs.entries" => serialize(workspace::entries(parse(params)?)?),
             "fs.read" => serialize(workspace::read(parse(params)?)?),
@@ -134,8 +136,20 @@ impl Core {
             "fs.writer.admit" => serialize(self.mutations.writer_admit(parse(params)?)?),
             "fs.writer.acquire" => serialize(self.mutations.writer_acquire(parse(params)?)?),
             "fs.writer.inspect" => serialize(self.mutations.writer_inspect(parse(params)?)?),
+            "fs.writer.externalBegin" => {
+                serialize(self.mutations.writer_external_begin(parse(params)?)?)
+            }
+            "fs.writer.externalEnd" => {
+                serialize(self.mutations.writer_external_end(parse(params)?)?)
+            }
+            "fs.writer.revoke" => Ok(serde_json::to_value(
+                self.mutations.writer_revoke(parse(params)?)?,
+            )?),
             "fs.writer.release" => serialize(self.mutations.writer_release(parse(params)?)?),
             "fs.transaction.begin" => serialize(self.mutations.transaction_begin(parse(params)?)?),
+            "fs.transaction.appendPlans" => {
+                serialize(self.mutations.transaction_append_plans(parse(params)?)?)
+            }
             "fs.transaction.chunk" => serialize(self.mutations.transaction_chunk(parse(params)?)?),
             "fs.transaction.commit" => {
                 serialize(self.mutations.transaction_commit(parse(params)?)?)
@@ -145,6 +159,9 @@ impl Core {
             "fs.transaction.recover" => serialize(self.mutations.recover(parse(params)?)?),
             "search" => serialize(search::search(parse(params)?, cancelled)?),
             "index.scan" => serialize(self.indexes.scan(parse(params)?, cancelled)?),
+            "index.readFiles" => Ok(serde_json::to_value(
+                self.indexes.read_files(parse(params)?, cancelled)?,
+            )?),
             "index.page" => serialize(self.indexes.page(parse(params)?)?),
             "index.readBatch" => serialize(self.indexes.read_batch(parse(params)?)?),
             "index.policy" => serialize(self.indexes.policy(parse(params)?)?),
@@ -192,11 +209,18 @@ impl Core {
         self.indexes.shutdown();
         self.terminals.shutdown();
     }
+
+    // Called after owned request workers have drained. Do not revoke a lease
+    // while an applying transaction is still publishing its durable ledger.
+    pub fn finish_shutdown(&self) {
+        self.mutations.shutdown();
+    }
 }
 
 impl Drop for Core {
     fn drop(&mut self) {
         self.shutdown();
+        self.finish_shutdown();
     }
 }
 

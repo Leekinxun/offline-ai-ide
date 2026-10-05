@@ -2,6 +2,9 @@ use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
+};
+#[cfg(unix)]
+use std::{
     sync::mpsc,
     thread,
     time::{Duration, Instant},

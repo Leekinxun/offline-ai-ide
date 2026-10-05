@@ -4,6 +4,8 @@ import path from "path";
 import { CHECKPOINT_EXCLUDED_NAMES, isGeneratedCachePath } from "../chat/checkpoints.js";
 import { safePath } from "../utils/safePath.js";
 import { CollaborationStore } from "../collaboration/collaborationStore.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { commitDesktopWorkspacePublication, withDesktopWorkspaceWriter, type NativeTransactionFilePlan, type NativeTransactionPublicationPlan } from "../desktop/nativeWorkspaceMutation.js";
 
 export type KnownFileMutationSource = "user" | "assistant_tool";
 export interface MutationHunk {
@@ -410,6 +412,102 @@ export interface FileMutationBatchInput {
   preimageContent?: string; postimageContent?: string;
 }
 
+export interface DesktopFileMutationInput extends FileMutationBatchInput {
+  hunks?: Array<{ id: string; preimage: string; postimage: string }>;
+  hunkSelections?: FileMutationRecord["hunkSelections"];
+}
+
+function desktopEvidence(workspaceDir: string, inputs: readonly DesktopFileMutationInput[]): {
+  records: FileMutationRecord[];
+  publications: Array<Omit<NativeTransactionPublicationPlan, "size" | "sha256"> & { bytes: Buffer }>;
+} {
+  const workspace = path.resolve(workspaceDir);
+  const original = loadJournal(workspace, true);
+  const previous = workspaceRecords(workspace);
+  const firstSequence = previous.reduce((highest, entry, index) => Math.max(highest, entry.sequence ?? index + 1), 0) + 1;
+  const blobs = new Map<string, Buffer>();
+  const paths = new Set<string>();
+  const records = inputs.map((input, index): FileMutationRecord => {
+    const relative = safeRelativePath(input.path);
+    if (!relative || paths.has(relative) || path.resolve(input.workspaceDir) !== workspace) throw new Error("Mutation publication paths must be distinct files in one workspace");
+    paths.add(relative);
+    if (input.requestId && !validRequestId(input.requestId)) throw new Error("Invalid mutation request id");
+    if (input.preimageContent === undefined && input.postimageContent === undefined) throw new Error("Mutation publication requires an image");
+    for (const image of [input.preimageContent, input.postimageContent]) {
+      if (image !== undefined && (typeof image !== "string" || image.includes("\0") || Buffer.byteLength(image) > MAX_CAPTURE_FILE_BYTES)) throw new Error("Mutation publication images must be bounded text");
+    }
+    const before = input.preimageContent ?? "", after = input.postimageContent ?? "";
+    const timestamp = Date.now();
+    const preimageHash = buildFileHash(before), postimageHash = buildFileHash(after);
+    if (input.preimageContent !== undefined) blobs.set(preimageHash, Buffer.from(before));
+    if (input.postimageContent !== undefined) blobs.set(postimageHash, Buffer.from(after));
+    const hunks = input.hunks?.map((hunk) => ({ ...hunk, preimageHash: buildFileHash(hunk.preimage), postimageHash: buildFileHash(hunk.postimage) }))
+      ?? (input.preimageContent !== undefined && input.postimageContent !== undefined ? generateTextHunks(relative, before, after) : []);
+    return {
+      workspaceDir: workspace, path: relative, source: input.source, ...(input.actor ? { actor: input.actor } : {}),
+      id: `${timestamp}-${crypto.randomBytes(4).toString("hex")}`, recordedAt: timestamp, mtimeMs: input.mtimeMs ?? timestamp,
+      sequence: firstSequence + index, version: buildFileVersion(after), preimageHash, postimageHash,
+      ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}), ...(input.requestId ? { requestId: input.requestId } : {}), ...(input.toolCallId?.trim() ? { toolCallId: input.toolCallId.trim() } : {}),
+      operation: input.preimageContent === undefined ? "create" : input.postimageContent === undefined ? "delete" : "modify",
+      ...(input.preimageContent === undefined ? {} : { preimageContent: before, preimageBlob: preimageHash }),
+      ...(input.postimageContent === undefined ? {} : { postimageBlob: postimageHash }),
+      rollbackScope: hunks.length ? "hunks" : "whole-file", ...(hunks.length ? { hunks } : {}), ...(input.hunkSelections ? { hunkSelections: input.hunkSelections } : {}),
+    };
+  });
+  const publications: Array<Omit<NativeTransactionPublicationPlan, "size" | "sha256"> & { bytes: Buffer }> = [];
+  for (const [hash, content] of blobs) {
+    const target = inspectJournalTarget(workspace, `${JOURNAL_DIR}/blobs/${hash}`);
+    const exists = fs.existsSync(target);
+    if (exists && (!fs.lstatSync(target).isFile() || fs.lstatSync(target).isSymbolicLink() || buildFileHash(fs.readFileSync(target)) !== hash)) throw new Error("Mutation blob hash mismatch");
+    publications.push({ namespace: "mutationBlob", key: hash, blobId: `evidence-${hash}`, expected: exists ? { exists: true, sha256: hash } : { exists: false }, bytes: content });
+  }
+  const skipped = workspaceEvidenceGaps(workspace).sort((a, b) => a.recordedAt - b.recordedAt).slice(-MAX_MUTATION_ENTRIES);
+  publications.push({ namespace: "mutationJournal", key: JOURNAL_FILE, blobId: "mutation-journal", expected: original === undefined ? { exists: false } : { exists: true, sha256: buildFileHash(original) },
+    bytes: Buffer.from(JSON.stringify({ schemaVersion: 1, records: [...previous, ...records].slice(-MAX_MUTATION_ENTRIES), ...(skipped.length ? { skipped } : {}) } satisfies MutationJournal, null, 2)) });
+  return { records, publications };
+}
+
+function acceptDesktopRecords(workspaceDir: string, records: FileMutationRecord[], rename?: { sourcePath: string; targetPath: string }): void {
+  reloadMutationJournal(workspaceDir);
+  for (const record of records) {
+    mutationRegistry.set(key(workspaceDir, record.path), record);
+    if (!rename) notifyWorkspaceMutation({ workspaceDir, path: record.path, operation: record.operation, recordedAt: record.recordedAt });
+    try { new CollaborationStore(workspaceDir).recordMutation(record.path, record.actor || "system"); } catch { /* durable evidence is already committed */ }
+  }
+  if (rename) notifyWorkspaceMutation({ workspaceDir, path: rename.targetPath, previousPath: rename.sourcePath, operation: "rename" });
+}
+
+/** Working bytes and immutable review evidence share one native publication. */
+export async function publishDesktopFileMutation(input: DesktopFileMutationInput): Promise<{ records: FileMutationRecord[]; mtimeMs: number }> {
+  if (!desktopNativeIdeEnabled()) throw new Error("Native mutation publication is desktop-only");
+  return withDesktopWorkspaceWriter(input.workspaceDir, "agent-edit", async () => {
+    const plan = desktopEvidence(input.workspaceDir, [input]);
+    const record = plan.records[0];
+    const content = input.postimageContent === undefined ? undefined : Buffer.from(input.postimageContent);
+    const blobId = "working-file";
+    const file: NativeTransactionFilePlan = { path: input.path, operation: content === undefined ? "delete" : "write", expected: input.preimageContent === undefined ? { exists: false } : { exists: true, file: true, sha256: buildFileHash(input.preimageContent) },
+      ...(content === undefined ? {} : { output: { blobId, size: content.length, sha256: buildFileHash(content), modifiedAtMs: record.mtimeMs } }) };
+    const receipt = await commitDesktopWorkspacePublication(input.workspaceDir, { intent: "agent-edit", files: [file], blobs: content === undefined ? [] : [{ blobId, bytes: content }], publications: plan.publications });
+    const stat = receipt.entries.find((entry) => entry.path === input.path);
+    if (!stat) throw new Error("Native publication did not return its working-file receipt");
+    record.mtimeMs = stat.mtimeMs;
+    acceptDesktopRecords(input.workspaceDir, plan.records);
+    return { records: plan.records, mtimeMs: stat.mtimeMs };
+  });
+}
+
+export async function publishDesktopRenameMutation(input: { workspaceDir: string; sourcePath: string; targetPath: string; content: string; actor?: string; runId?: string; requestId?: string; toolCallId?: string }): Promise<{ records: FileMutationRecord[]; mtimeMs: number }> {
+  return withDesktopWorkspaceWriter(input.workspaceDir, "agent-edit", async () => {
+    const shared = { workspaceDir: input.workspaceDir, source: "assistant_tool" as const, actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, mtimeMs: fs.statSync(safePath(input.sourcePath, input.workspaceDir)).mtimeMs };
+    const plan = desktopEvidence(input.workspaceDir, [{ ...shared, path: input.sourcePath, preimageContent: input.content }, { ...shared, path: input.targetPath, postimageContent: input.content }]);
+    const receipt = await commitDesktopWorkspacePublication(input.workspaceDir, { intent: "agent-edit", files: [{ path: input.sourcePath, operation: "rename", toPath: input.targetPath, expected: { exists: true, file: true, sha256: buildFileHash(input.content), ...(process.platform === "win32" ? {} : { identity: (() => { const stat = fs.statSync(safePath(input.sourcePath, input.workspaceDir), { bigint: true }); return { device: String(stat.dev), inode: String(stat.ino), nlink: Number(stat.nlink) }; })() }) } }], blobs: [], publications: plan.publications });
+    const stat = receipt.entries.find((entry) => entry.path === input.targetPath);
+    if (!stat) throw new Error("Native rename did not return its target receipt");
+    acceptDesktopRecords(input.workspaceDir, plan.records, input);
+    return { records: plan.records, mtimeMs: stat.mtimeMs };
+  });
+}
+
 /** Prepare bounded whole-file evidence before a multi-path operation changes disk. */
 export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean } = {}): {
   commit: () => FileMutationRecord[];
@@ -486,8 +584,23 @@ export function recordFileMutationBatch(inputs: readonly FileMutationBatchInput[
   try { return prepared.commit(); } finally { prepared.cancel(); }
 }
 /** Review decisions belong to the existing immutable mutation evidence, not current disk text. */
-export function keepFileMutations(workspaceDir: string, selection: { runId: string; requestId?: string; path: string; ids?: string[]; hunkIds?: string[] }): string[] {
-  const records = listFileMutations(workspaceDir, selection).filter((record) => !selection.ids || selection.ids.includes(record.id));
+interface KeepFileMutationSelection { runId: string; requestId?: string; path: string; ids?: string[]; hunkIds?: string[]; expectedRevision?: string; }
+interface RollbackMutationSelection { runId?: string; requestId?: string; toolCallId?: string; path?: string; ids?: string[]; hunkIds?: string[]; }
+interface RollbackMutationOptions { strategy?: "refuse" | "skip-conflicts"; }
+
+function requireSynchronousWebReview(): void {
+  if (desktopNativeIdeEnabled()) throw new Error("Desktop mutation reviews require the asynchronous native publication API");
+}
+
+export function keepFileMutations(workspaceDir: string, selection: KeepFileMutationSelection): string[] {
+  requireSynchronousWebReview();
+  const kept = markKeptMutations(listFileMutations(workspaceDir, selection), selection);
+  if (kept.length) persistJournal(workspaceDir);
+  return kept;
+}
+
+function markKeptMutations(records: FileMutationRecord[], selection: KeepFileMutationSelection): string[] {
+  records = records.filter((record) => !selection.ids || selection.ids.includes(record.id));
   if (!records.length || selection.ids?.some((id) => !records.some((record) => record.id === id))) throw new Error("Invalid review mutation selection");
   if (selection.hunkIds?.some((id) => !records.some((record) => record.hunks?.some((hunk) => hunk.id === id)))) throw new Error("Invalid review hunk selection");
   const kept: string[] = [];
@@ -500,7 +613,6 @@ export function keepFileMutations(workspaceDir: string, selection: { runId: stri
     } else record.keptAt = record.keptAt ?? Date.now();
     kept.push(record.id);
   }
-  if (kept.length) persistJournal(workspaceDir);
   return kept;
 }
 
@@ -512,11 +624,12 @@ export function fileMutationRevision(records: readonly FileMutationRecord[]): st
   return buildFileHash(JSON.stringify(records.map((record) => [record.id, record.preimageHash, record.postimageHash, record.revertedAt, record.revertedHunkIds, record.keptAt, record.keptHunkIds])));
 }
 
-/** Commits review metadata once, after all selected immutable evidence is checked. */
-export function keepRunMutationBatch(workspaceDir: string, selection: {
+interface KeepRunMutationSelection {
   runId: string; requestId?: string; ids: readonly string[];
   expectedFileRevisions: Readonly<Record<string, string>>;
-}): string[] {
+}
+
+function prepareKeepRunMutationBatch(workspaceDir: string, selection: KeepRunMutationSelection) {
   const workspace = path.resolve(workspaceDir);
   const source = loadJournal(workspace, true);
   if (source === undefined) throw new MutationJournalEvidenceError(journalPath(workspace), "batch review source is missing");
@@ -529,7 +642,7 @@ export function keepRunMutationBatch(workspaceDir: string, selection: {
   const ids = new Set(selection.ids);
   if (ids.size !== selection.ids.length || [...ids].some((id) => !scoped.some((record) => record.id === id))) throw new Error("Invalid review mutation selection");
   const selected = scoped.filter((record) => ids.has(record.id) && !isMutationReviewComplete(record));
-  if (!selected.length) return [];
+  if (!selected.length) return { workspace, source, journal, kept: [] as string[] };
   // Gaps are unreviewable changes even when older mutations in that path were kept.
   if (journal.skipped?.some((gap) => gap.runId === selection.runId && (!selection.requestId || gap.requestId === selection.requestId))) throw new MutationJournalEvidenceError(journalPath(workspace), "batch review has incomplete mutation evidence");
   for (const record of selected) {
@@ -545,24 +658,35 @@ export function keepRunMutationBatch(workspaceDir: string, selection: {
   const kept = selected.map((record) => record.id);
   const keptIds = new Set(kept); const keptAt = Date.now();
   const records = journal.records.map((record) => keptIds.has(record.id) ? { ...record, keptAt } : record);
+  return { workspace, source, journal: { ...journal, records }, kept };
+}
+
+/** Commits review metadata once, after all selected immutable evidence is checked. */
+export function keepRunMutationBatch(workspaceDir: string, selection: KeepRunMutationSelection): string[] {
+  requireSynchronousWebReview();
+  const { workspace, source, journal, kept } = prepareKeepRunMutationBatch(workspaceDir, selection);
+  if (!kept.length) return kept;
   const target = inspectJournalTarget(workspace, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
   const temporary = `${target}.keep-${process.pid}-${crypto.randomUUID()}`;
   try {
     if (fs.readFileSync(target, "utf8") !== source) throw new MutationReviewConflictError();
-    fs.writeFileSync(temporary, JSON.stringify({ ...journal, records }, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    fs.writeFileSync(temporary, JSON.stringify(journal, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
     const revalidated = inspectJournalTarget(workspace, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
     if (fs.readFileSync(revalidated, "utf8") !== source) throw new MutationReviewConflictError();
     fs.renameSync(temporary, revalidated);
   } finally { fs.rmSync(temporary, { force: true }); }
   // Publish new cache objects only after the atomic journal write succeeded.
-  for (const record of records) mutationHistory.set(record.id, record);
+  for (const record of journal.records) mutationHistory.set(record.id, record);
   return kept;
 }
 
-/** Refuses diverged files by default. Every file is simulated backwards before any write. */
-export function rollbackFileMutations(workspaceDir: string, selection: { runId?: string; requestId?: string; toolCallId?: string; path?: string; ids?: string[]; hunkIds?: string[] }, options: { strategy?: "refuse" | "skip-conflicts" } = {}): MutationRollbackResult {
+interface PendingRollbackFile {
+  path: string; initialContent: string | Buffer; initialExists: boolean; content: string | Buffer; exists: boolean;
+  mutations: Array<{ mutation: FileMutationRecord; hunkIds?: string[] }>;
+}
+
+function prepareFileRollback(workspaceDir: string, selection: RollbackMutationSelection, options: RollbackMutationOptions, allRecords: FileMutationRecord[]) {
   // Journal insertion order is authoritative, including for legacy records with equal timestamps.
-  const allRecords = listFileMutations(workspaceDir);
   const selectedPath = selection.path === undefined ? undefined : safeRelativePath(selection.path);
   const candidates = allRecords.filter((entry) => selectedPath !== null
     && (!selection.runId || entry.runId === selection.runId)
@@ -578,11 +702,7 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
     for (const [id, images] of buildEffectiveMutationImages(workspaceDir, fileRecords)) effectiveImages.set(id, images);
     for (const [id, images] of buildEffectiveMutationBytes(workspaceDir, fileRecords)) effectiveBytes.set(id, images);
   }
-  interface PendingFile {
-    path: string; initialContent: string | Buffer; initialExists: boolean; content: string | Buffer; exists: boolean;
-    mutations: Array<{ mutation: FileMutationRecord; hunkIds?: string[] }>;
-  }
-  const pendingText = (file: PendingFile): string => {
+  const pendingText = (file: PendingRollbackFile): string => {
     if (typeof file.content === "string") return file.content;
     if (file.content.includes(0)) throw new Error("target is binary");
     const content = decodeUtf8RoundTrip(file.content);
@@ -590,7 +710,7 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
     file.content = content;
     return content;
   };
-  const pending = new Map<string, PendingFile>();
+  const pending = new Map<string, PendingRollbackFile>();
   const invalidPaths = new Set<string>();
   for (const mutation of candidates) {
     const selectedHunks = selection.hunkIds?.length ? mutation.hunks?.filter((hunk) => selection.hunkIds!.includes(hunk.id)) || [] : undefined;
@@ -657,10 +777,9 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
       invalidPaths.add(mutation.path);
     }
   }
-  if ((result.conflicts.length || result.unavailable.length) && options.strategy !== "skip-conflicts") return result;
+  if ((result.conflicts.length || result.unavailable.length) && options.strategy !== "skip-conflicts") return { result, files: [] as PendingRollbackFile[] };
   const valid = [...pending.values()].filter((file) => file.mutations.length && !invalidPaths.has(file.path));
-  // Revalidate the complete batch before the first mutation. Each commit checks again.
-  // Cross-file atomicity against an external process still requires filesystem transactions.
+  // Revalidate the complete batch before either runtime publishes it.
   for (const file of valid) {
     try { assertRollbackTarget(workspaceDir, file.path, file.initialExists, buildFileHash(file.initialContent)); }
     catch (error) {
@@ -668,9 +787,15 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
       result.unavailable.push({ id: file.mutations[0].mutation.id, path: file.path, reason: safeRollbackReason(error) });
     }
   }
-  if (result.unavailable.length && options.strategy !== "skip-conflicts") return result;
-  for (const file of valid) {
-    if (invalidPaths.has(file.path)) continue;
+  if (result.unavailable.length && options.strategy !== "skip-conflicts") return { result, files: [] as PendingRollbackFile[] };
+  return { result, files: valid.filter((file) => !invalidPaths.has(file.path)) };
+}
+
+/** Refuses diverged files by default. Every file is simulated backwards before any write. */
+export function rollbackFileMutations(workspaceDir: string, selection: RollbackMutationSelection, options: RollbackMutationOptions = {}): MutationRollbackResult {
+  requireSynchronousWebReview();
+  const { result, files } = prepareFileRollback(workspaceDir, selection, options, listFileMutations(workspaceDir));
+  for (const file of files) {
     try {
       const expectedHash = buildFileHash(file.initialContent);
       if (!file.exists) {
@@ -693,6 +818,92 @@ export function rollbackFileMutations(workspaceDir: string, selection: { runId?:
     }
   }
   return result;
+}
+
+/** Existing immutable blobs are hash-checked again by the native transaction. */
+function desktopReviewPublications(workspaceDir: string, source: string, journal: MutationJournal, evidence: FileMutationRecord[]) {
+  const blobs = new Map<string, Buffer>();
+  for (const record of evidence) for (const side of ["preimage", "postimage"] as const) {
+    const bytes = readMutationBytes(workspaceDir, record, side);
+    const blob = side === "preimage" ? record.preimageBlob : record.postimageBlob;
+    if (blob && bytes !== undefined) blobs.set(blob, bytes);
+  }
+  const publications: Array<Omit<NativeTransactionPublicationPlan, "size" | "sha256"> & { bytes: Buffer }> = [...blobs].map(([hash, bytes]) => ({
+    namespace: "mutationBlob", key: hash, blobId: `review-evidence-${hash}`, expected: { exists: true, file: true, sha256: hash }, bytes,
+  }));
+  publications.push({ namespace: "mutationJournal", key: JOURNAL_FILE, blobId: "mutation-review-journal",
+    expected: { exists: true, file: true, sha256: buildFileHash(source) }, bytes: Buffer.from(JSON.stringify(journal, null, 2)) });
+  return publications;
+}
+
+export async function keepFileMutationsAsync(workspaceDir: string, selection: KeepFileMutationSelection): Promise<string[]> {
+  if (!desktopNativeIdeEnabled()) return keepFileMutations(workspaceDir, selection);
+  return withDesktopWorkspaceWriter(workspaceDir, "rollback", async () => {
+    const workspace = path.resolve(workspaceDir);
+    const source = loadJournal(workspace, true);
+    if (source === undefined) throw new MutationJournalEvidenceError(journalPath(workspace), "review source is missing");
+    const journal = JSON.parse(source) as MutationJournal;
+    const relative = safeRelativePath(selection.path);
+    const records = journal.records.filter((record) => record.runId === selection.runId && (!selection.requestId || record.requestId === selection.requestId) && record.path === relative);
+    if (journal.skipped?.some((gap) => gap.runId === selection.runId && (!selection.requestId || gap.requestId === selection.requestId) && gap.path === relative)) throw new MutationJournalEvidenceError(journalPath(workspace), "review has incomplete mutation evidence");
+    if (selection.expectedRevision && fileMutationRevision(records) !== selection.expectedRevision) throw new MutationReviewConflictError();
+    const kept = markKeptMutations([...records].reverse(), selection);
+    if (!kept.length) return kept;
+    const selected = records.filter((record) => kept.includes(record.id));
+    await commitDesktopWorkspacePublication(workspace, { intent: "rollback", files: [], blobs: [], publications: desktopReviewPublications(workspace, source, journal, selected) });
+    reloadMutationJournal(workspace);
+    return kept;
+  });
+}
+
+export async function keepRunMutationBatchAsync(workspaceDir: string, selection: KeepRunMutationSelection): Promise<string[]> {
+  if (!desktopNativeIdeEnabled()) return keepRunMutationBatch(workspaceDir, selection);
+  return withDesktopWorkspaceWriter(workspaceDir, "rollback", async () => {
+    const { workspace, source, journal, kept } = prepareKeepRunMutationBatch(workspaceDir, selection);
+    if (!kept.length) return kept;
+    await commitDesktopWorkspacePublication(workspace, { intent: "rollback", files: [], blobs: [],
+      publications: desktopReviewPublications(workspace, source, journal, journal.records.filter((record) => kept.includes(record.id))) });
+    reloadMutationJournal(workspace);
+    return kept;
+  });
+}
+
+/** Publishes all valid rollback paths and their review state in one native transaction. */
+export async function rollbackFileMutationsAsync(workspaceDir: string, selection: RollbackMutationSelection, options: RollbackMutationOptions & { preflight?: () => void } = {}): Promise<MutationRollbackResult> {
+  if (!desktopNativeIdeEnabled()) { options.preflight?.(); return rollbackFileMutations(workspaceDir, selection, options); }
+  return withDesktopWorkspaceWriter(workspaceDir, "rollback", async () => {
+    options.preflight?.();
+    const workspace = path.resolve(workspaceDir);
+    const source = loadJournal(workspace, true);
+    if (source === undefined) return { applied: [], alreadyReverted: [], conflicts: [], unavailable: [] };
+    const journal = JSON.parse(source) as MutationJournal;
+    const { result, files } = prepareFileRollback(workspace, selection, options, [...journal.records].reverse());
+    if (!files.length) return result;
+    const blobs: Array<{ blobId: string; bytes: Buffer }> = [];
+    const plans = files.flatMap((file, index): NativeTransactionFilePlan[] => {
+      const blobId = `rollback-file-${index}`;
+      const bytes = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content);
+      if (file.exists) blobs.push({ blobId, bytes });
+      const revertedAt = Date.now();
+      for (const { mutation, hunkIds } of file.mutations) {
+        if (hunkIds) mutation.revertedHunkIds = [...new Set([...(mutation.revertedHunkIds || []), ...hunkIds])];
+        else mutation.revertedAt = revertedAt;
+      }
+      if (!file.initialExists && !file.exists) return [];
+      return [{ path: file.path, operation: file.exists ? "write" : "delete",
+        expected: file.initialExists ? { exists: true, file: true, sha256: buildFileHash(file.initialContent) } : { exists: false },
+        ...(file.exists ? { output: { blobId, size: bytes.length, sha256: buildFileHash(bytes) } } : {}) }];
+    });
+    await commitDesktopWorkspacePublication(workspace, { intent: "rollback", files: plans, blobs,
+      publications: desktopReviewPublications(workspace, source, journal, files.flatMap((file) => file.mutations.map(({ mutation }) => mutation))) });
+    reloadMutationJournal(workspace);
+    for (const file of files) {
+      result.applied.push(...file.mutations.map(({ mutation }) => mutation.id));
+      mutationRegistry.delete(key(workspace, file.path));
+      notifyWorkspaceMutation({ workspaceDir: workspace, path: file.path, operation: file.exists ? file.initialExists ? "modify" : "create" : "delete" });
+    }
+    return result;
+  });
 }
 
 class MutationHunkConflictError extends Error {
@@ -893,6 +1104,7 @@ function currentWorkspaceFiles(workspaceDir: string): Map<string, CapturedFile> 
 }
 /** Compare the workspace against a checkpoint and persist exact create/modify/delete mutation records. */
 export function captureCheckpointMutationsDetailed(workspaceDir: string, input: { checkpointId: string; runId: string; requestId?: string; toolCallId: string; actor?: string }): MutationCaptureResult {
+  requireSynchronousWebReview();
   const correlation = requireCaptureCorrelation(input);
   const before = checkpointFiles(workspaceDir, input.checkpointId); const after = currentWorkspaceFiles(workspaceDir); const paths = new Set([...before.keys(), ...after.keys()]); const result: MutationCaptureResult = { records: [], skipped: [] };
   for (const relative of [...paths].sort()) {
@@ -917,4 +1129,75 @@ export function captureCheckpointMutationsDetailed(workspaceDir: string, input: 
     persistJournal(workspace);
   }
   return result;
+}
+
+
+/** Captures process outputs without publishing working bytes from Node. */
+export async function captureCheckpointMutationsDetailedAsync(workspaceDir: string, input: { checkpointId: string; runId: string; requestId?: string; toolCallId: string; actor?: string }, options: { preflight?: () => void } = {}): Promise<MutationCaptureResult> {
+  if (!desktopNativeIdeEnabled()) { options.preflight?.(); return captureCheckpointMutationsDetailed(workspaceDir, input); }
+  return withDesktopWorkspaceWriter(workspaceDir, "agent-edit", async () => {
+    options.preflight?.();
+    const correlation = requireCaptureCorrelation(input);
+    const workspace = path.resolve(workspaceDir);
+    const source = loadJournal(workspace, true);
+    const previous = workspaceRecords(workspace);
+    const firstSequence = previous.reduce((highest, record, index) => Math.max(highest, record.sequence ?? index + 1), 0) + 1;
+    const before = checkpointFiles(workspace, input.checkpointId);
+    const after = currentWorkspaceFiles(workspace);
+    const result: MutationCaptureResult = { records: [], skipped: [] };
+    const blobs = new Map<string, Buffer>();
+    for (const relative of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+      const preimage = before.get(relative); const postimage = after.get(relative);
+      const blocking = [preimage?.reason, postimage?.reason].find((reason) => reason === "unreadable" || reason === "oversized");
+      if (blocking) {
+        if (!preimage?.hash || !postimage?.hash || preimage.hash !== postimage.hash || preimage.size !== postimage.size || preimage.reason !== postimage.reason) result.skipped.push({ path: relative, reason: blocking });
+        continue;
+      }
+      if (preimage?.hash === postimage?.hash && preimage?.reason === postimage?.reason) continue;
+      const capturedBlob = (image: CapturedFile | undefined): string | undefined => {
+        if (!image) return undefined;
+        const bytes = image.bytes ?? (image.content === undefined ? undefined : Buffer.from(image.content));
+        if (!bytes || bytes.length > MAX_CAPTURE_FILE_BYTES || buildFileHash(bytes) !== image.hash) throw new Error("Captured mutation image is not bounded hash-verified evidence");
+        blobs.set(image.hash!, bytes); return image.hash;
+      };
+      const preimageBlob = capturedBlob(preimage); const postimageBlob = capturedBlob(postimage);
+      const timestamp = Date.now();
+      const binary = preimage?.reason === "binary" || postimage?.reason === "binary";
+      const hunks = !binary && preimage?.content !== undefined && postimage?.content !== undefined ? generateTextHunks(relative, preimage.content, postimage.content) : [];
+      result.records.push({
+        workspaceDir: workspace, path: relative, source: "assistant_tool", ...(input.actor ? { actor: input.actor } : {}), ...correlation,
+        id: `${timestamp}-${crypto.randomBytes(4).toString("hex")}`, recordedAt: timestamp, mtimeMs: postimage ? fs.statSync(inspectWorkspaceTarget(workspace, relative).target).mtimeMs : timestamp,
+        sequence: firstSequence + result.records.length, version: postimage?.content !== undefined ? buildFileVersion(postimage.content) : postimage?.hash || buildFileVersion(""),
+        operation: !preimage ? "create" : !postimage ? "delete" : "modify",
+        preimageHash: preimage?.hash || buildFileHash(""), postimageHash: postimage?.hash || buildFileHash(""),
+        ...(preimage?.content !== undefined ? { preimageContent: preimage.content } : {}),
+        ...(preimageBlob ? { preimageBlob } : {}), ...(postimageBlob ? { postimageBlob } : {}),
+        ...(preimage ? { preimageSize: preimage.size } : {}), ...(postimage ? { postimageSize: postimage.size } : {}),
+        ...(preimage?.reason === "binary" ? { preimageBinary: true } : {}), ...(postimage?.reason === "binary" ? { postimageBinary: true } : {}),
+        rollbackScope: hunks.length ? "hunks" : "whole-file", ...(hunks.length ? { hunks } : {}),
+      });
+    }
+    if (!result.records.length && !result.skipped.length) return result;
+    const publications: Array<Omit<NativeTransactionPublicationPlan, "size" | "sha256"> & { bytes: Buffer }> = [];
+    for (const [hash, bytes] of blobs) {
+      const target = inspectJournalTarget(workspace, `${JOURNAL_DIR}/blobs/${hash}`);
+      const exists = fs.existsSync(target);
+      if (exists && (!fs.lstatSync(target).isFile() || buildFileHash(fs.readFileSync(target)) !== hash)) throw new Error("Mutation blob hash mismatch");
+      publications.push({ namespace: "mutationBlob", key: hash, blobId: `capture-${hash}`, expected: exists ? { exists: true, file: true, sha256: hash } : { exists: false }, bytes });
+    }
+    const gaps = new Map(workspaceEvidenceGaps(workspace).map((gap) => [evidenceGapKey(gap), gap]));
+    const recordedAt = Date.now();
+    for (const skipped of result.skipped) {
+      const gap: MutationEvidenceGap = { workspaceDir: workspace, ...correlation, ...skipped, recordedAt };
+      gaps.set(evidenceGapKey(gap), gap);
+    }
+    const skipped = [...gaps.values()].sort((a, b) => a.recordedAt - b.recordedAt).slice(-MAX_MUTATION_ENTRIES);
+    const journal: MutationJournal = { schemaVersion: 1, records: [...previous, ...result.records].slice(-MAX_MUTATION_ENTRIES), ...(skipped.length ? { skipped } : {}) };
+    publications.push({ namespace: "mutationJournal", key: JOURNAL_FILE, blobId: "captured-mutation-journal",
+      expected: source === undefined ? { exists: false } : { exists: true, file: true, sha256: buildFileHash(source) }, bytes: Buffer.from(JSON.stringify(journal, null, 2)) });
+    options.preflight?.();
+    await commitDesktopWorkspacePublication(workspace, { intent: "agent-edit", files: [], blobs: [], publications });
+    acceptDesktopRecords(workspace, result.records);
+    return result;
+  });
 }

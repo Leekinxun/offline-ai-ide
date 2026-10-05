@@ -1,3 +1,4 @@
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,8 +17,9 @@ export interface ProcessSessionSummary { id: string; taskId: string; label: stri
 export interface ProcessOutputEvent { seq: number; stream: "stdout" | "stderr"; text: string; }
 export interface ProcessSessionOwner { workspaceDir: string; owner: string; sessionToken?: string; runId?: string; }
 interface StoredSession extends ProcessSessionSummary { ownerHash: string; workspaceDir: string; events: ProcessOutputEvent[]; }
-interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; cancel?: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; stdinError?: Error; }
+interface LiveSession { record: StoredSession; child: ChildProcess; cleanup: () => void; cancel?: () => void; timer: NodeJS.Timeout; force?: NodeJS.Timeout; forceCompletion?: Promise<void>; save?: NodeJS.Timeout; signal?: AbortSignal; abort?: () => void; token?: string; requestedStatus?: ProcessSessionStatus; stdinError?: Error; }
 const active = new Map<string, LiveSession>();
+const processCleanup = new Map<string, { promise: Promise<void>; force?: NodeJS.Timeout }>();
 /** Execution-environment changes apply only after managed Agent jobs finish. */
 export function hasRunningAgentProcessSessions(): boolean {
   return [...active.values()].some((session) => session.record.taskId === "agent:command");
@@ -64,14 +66,21 @@ export function windowsProcessTreeKillInvocation(pid: number): { executable: str
   if (!/^[A-Za-z]:[\\/]/.test(systemRoot) || systemRoot.includes("\0")) throw new Error("Invalid Windows system directory");
   return { executable: path.win32.join(systemRoot, "System32", "taskkill.exe"), args: ["/pid", String(pid), "/T", "/F"] };
 }
-function killWindowsProcessTree(pid: number | undefined): void {
-  if (!pid) return;
-  try {
-    const invocation = windowsProcessTreeKillInvocation(pid);
-    const killer = spawn(invocation.executable, invocation.args, { stdio: "ignore", windowsHide: true });
-    killer.once("error", () => { /* taskkill may be unavailable or the process may have exited. */ });
-  } catch { /* exited or invalid */ }
+function killWindowsProcessTree(pid: number | undefined): Promise<void> {
+  if (!pid) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    try {
+      const invocation = windowsProcessTreeKillInvocation(pid);
+      const killer = spawn(invocation.executable, invocation.args, { stdio: "ignore", windowsHide: true });
+      const timer = desktopNativeIdeEnabled() ? setTimeout(() => { killer.kill(); }, 15_000) : undefined;
+      timer?.unref();
+      const done = () => { if (timer) clearTimeout(timer); resolve(); };
+      killer.once("error", done);
+      killer.once("close", done);
+    } catch { resolve(); }
+  });
 }
+
 function watchdogEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
   const result = nodeRuntimeEnvironment(environment);
   if (process.env.CROWNFORGE_WATCHDOG_DIAGNOSTICS === "1") result.CROWNFORGE_WATCHDOG_DIAGNOSTICS = "1";
@@ -130,10 +139,15 @@ export function pollProcessSession(owner: ProcessSessionOwner, id: string, curso
   const record = owned(owner, id);
   return { session: summary(record), events: record.events.filter((event) => event.seq > cursor), nextCursor: record.nextCursor, truncated: cursor < (record.events[0]?.seq ?? 1) - 1 };
 }
-function signalGroup(live: LiveSession, signal: NodeJS.Signals): void {
-  if (!live.child.pid) return;
-  try { if (process.platform === "win32") killWindowsProcessTree(live.child.pid); else process.kill(-live.child.pid, signal); } catch { /* exited */ }
+function signalGroup(live: LiveSession, signal: NodeJS.Signals): Promise<void> {
+  if (!live.child.pid) return Promise.resolve();
+  try {
+    if (process.platform === "win32") return killWindowsProcessTree(live.child.pid);
+    process.kill(-live.child.pid, signal);
+  } catch { /* exited */ }
+  return Promise.resolve();
 }
+
 function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   if (live.requestedStatus) return;
   live.requestedStatus = status;
@@ -141,8 +155,13 @@ function terminate(live: LiveSession, status: ProcessSessionStatus): void {
   // Linux process tree has stopped.
   try { if (live.cancel) live.cancel(); else live.cleanup(); }
   catch { /* A failed lease marker must not prevent process-tree termination. */ }
-  signalGroup(live, "SIGTERM");
-  live.force = setTimeout(() => signalGroup(live, "SIGKILL"), 1500); live.force.unref();
+  void signalGroup(live, "SIGTERM");
+  live.forceCompletion = new Promise<void>((resolve) => {
+    live.force = setTimeout(() => { void signalGroup(live, "SIGKILL").then(resolve); }, 1500);
+    live.force.unref();
+    const cleanup = processCleanup.get(live.record.id);
+    if (cleanup) cleanup.force = live.force;
+  });
 }
 export function stopProcessSession(owner: ProcessSessionOwner, id: string): ProcessSessionSummary {
   const record = owned(owner, id);
@@ -150,6 +169,14 @@ export function stopProcessSession(owner: ProcessSessionOwner, id: string): Proc
   if (live) terminate(live, "cancelled");
   return summary(record);
 }
+/** Terminal status alone does not prove scheduled descendant cleanup is finished. */
+export async function waitForProcessSessionCleanup(owner: ProcessSessionOwner, id: string): Promise<void> {
+  owned(owner, id);
+  const cleanup = processCleanup.get(id);
+  cleanup?.force?.ref();
+  try { await cleanup?.promise; } finally { cleanup?.force?.unref(); }
+}
+
 function closedInputError(error: unknown): boolean {
   return ["EPIPE", "ECONNRESET", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END", "ERR_STREAM_PREMATURE_CLOSE"].includes((error as NodeJS.ErrnoException | undefined)?.code || "");
 }
@@ -173,7 +200,7 @@ interface StartOptions extends ProcessSessionOwner {
   taskId: string; label: string; executable: string; args: string[]; timeoutMs?: number;
   launchExecutable?: string; launchArgs?: string[];
   agent?: boolean; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits;
-  runId?: string; signal?: AbortSignal; onOutput?: (event: ProcessOutputEvent) => void; onExit?: () => void;
+  runId?: string; signal?: AbortSignal; onOutput?: (event: ProcessOutputEvent) => void; onExit?: (sessionId: string) => void;
   privateInvocation?: boolean;
   /** Trusted launch state, never accepted by HTTP or model tool arguments. */
   networkAuthorized?: boolean;
@@ -214,6 +241,8 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
     record.status = "failed"; record.endedAt = Date.now(); persist(record); throw error;
   }
   const live: LiveSession = { record, child, cleanup: prepared.cleanup, cancel: prepared.cancel, timer: setTimeout(() => terminate(live, "timed_out"), Math.max(0, record.deadlineAt! - Date.now())), signal: input.signal, token: input.sessionToken };
+  let resolveCleanup!: () => void;
+  processCleanup.set(record.id, { promise: new Promise<void>((resolve) => { resolveCleanup = resolve; }) });
   live.timer.unref(); active.set(record.id, live);
   const append = (stream: ProcessOutputEvent["stream"], text: string) => {
     if (!text) return;
@@ -243,8 +272,11 @@ function startManagedSession(input: StartOptions): ProcessSessionSummary {
     record.exitCode = code; record.endedAt = Date.now();
     input.signal?.removeEventListener("abort", live.abort!);
     active.delete(record.id); prepared.cleanup();
+    void (live.forceCompletion ?? Promise.resolve()).then(() => {
+      resolveCleanup(); processCleanup.delete(record.id);
+    });
     try { persist(record); } catch { /* workspace may have been removed during shutdown */ }
-    try { input.onExit?.(); } catch { /* Audit callbacks cannot crash process supervision. */ }
+    try { input.onExit?.(record.id); } catch { /* Audit callbacks cannot crash process supervision. */ }
   });
   return summary(record);
 }
@@ -255,7 +287,7 @@ export function startProjectTaskSession(owner: ProcessSessionOwner, taskId: stri
   return startManagedSession({ ...owner, taskId, label: task.label, executable: task.command, args: task.args, launchExecutable: execution.executable, launchArgs: execution.args, timeoutMs, nodeRuntime: false });
 }
 /** Default network deny; a separately approved, exact-command grant is single-use. */
-export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: () => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
+export function startAgentProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; runId?: string; timeoutMs?: number; signal?: AbortSignal; filesystem?: WorkspaceFilesystemGrant; limits?: ProcessResourceLimits; onExit?: (sessionId: string) => void; networkExecutionGrant?: NetworkExecutionGrant }): ProcessSessionSummary {
   let networkAuthorized = false;
   if (input.networkExecutionGrant) {
     const commandIndex = input.args.findIndex((arg) => arg.toLowerCase() === "-command");
@@ -268,7 +300,7 @@ export function startAgentProcessSession(input: ProcessSessionOwner & { executab
   return startManagedSession({ ...input, taskId: "agent:command", label: input.executable, agent: true, networkAuthorized, nodeRuntime: false });
 }
 /** Internal preview launch: no HTTP route accepts arbitrary executables or arguments. */
-export function startPreviewProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; targetId: string; onOutput: (event: ProcessOutputEvent) => void; onExit: () => void }): ProcessSessionSummary {
+export function startPreviewProcessSession(input: ProcessSessionOwner & { executable: string; args: string[]; targetId: string; onOutput: (event: ProcessOutputEvent) => void; onExit: (sessionId: string) => void }): ProcessSessionSummary {
   return startManagedSession({ ...input, taskId: input.targetId, label: "Web preview", timeoutMs: 60 * 60_000, privateInvocation: true, nodeRuntime: true });
 }
 export function stopProcessSessionsForToken(token: string): void { for (const live of active.values()) if (live.token === token) terminate(live, "cancelled"); }

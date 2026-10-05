@@ -85,3 +85,7 @@ export async function nativeIndexPolicy(
 export async function closeNativeIndex(sessionId: string, input?: NativeIdeClient): Promise<void> {
   await client(input).request("index.close", { sessionId }, { timeoutMs: 10_000 });
 }
+
+export async function readNativeIndexFiles(workspaceDir: string, paths: string[], options: { signal?: AbortSignal } = {}): Promise<NativeIndexReadBatch> {
+  return client().request("index.readFiles", { workspaceDir, paths }, { signal: options.signal, timeoutMs: 60_000 });
+}

@@ -91,6 +91,13 @@ pub struct ReadBatchParams {
     paths: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadFilesParams {
+    workspace_dir: String,
+    paths: Vec<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadBatchResponse {
@@ -186,6 +193,79 @@ impl Indexes {
         Ok(response)
     }
 
+    pub fn read_files(
+        &self,
+        params: ReadFilesParams,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<ReadBatchResponse> {
+        if params.paths.len() > MAX_PAGE_SIZE {
+            return Err(CoreError::invalid("Too many index read paths"));
+        }
+        let workspace = Workspace::open(&params.workspace_dir)?;
+        let identity = directory_identity(workspace.root())?;
+        let policy = policy_fingerprint(&workspace)?;
+        let wanted: std::collections::HashSet<String> = params
+            .paths
+            .into_iter()
+            .filter(|path| allowed_context_path(path))
+            .collect();
+        let selected = wanted.clone();
+        let filtered = workspace.clone();
+        let mut builder = WalkBuilder::new(workspace.root());
+        builder
+            .standard_filters(true)
+            .hidden(false)
+            .follow_links(false)
+            .max_filesize(Some(MAX_FILE_BYTES))
+            .current_dir(workspace.root())
+            .add_custom_ignore_filename(".rgignore");
+        builder.filter_entry(move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let Some(relative) = filtered.relative(entry.path()) else {
+                return false;
+            };
+            allowed_context_path(&relative)
+                && selected
+                    .iter()
+                    .any(|path| path == &relative || path.starts_with(&format!("{relative}/")))
+        });
+        let mut files = Vec::new();
+        let mut used = 0;
+        let mut truncated = false;
+        for entry in builder.build() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(CoreError::aborted());
+            }
+            let entry = entry.map_err(|error| CoreError::failed(error.to_string()))?;
+            let Some(relative) = workspace.relative(entry.path()) else {
+                continue;
+            };
+            if !wanted.contains(&relative) {
+                continue;
+            }
+            let Ok(file) = read_indexed_content(&workspace, &relative) else {
+                continue;
+            };
+            if used + file.size > MAX_BATCH_CONTENT_BYTES {
+                truncated = true;
+                break;
+            }
+            used += file.size;
+            files.push(file);
+        }
+        if directory_identity(workspace.root())? != identity
+            || policy_fingerprint(&workspace)? != policy
+        {
+            return Err(CoreError::new(
+                "POLICY_CHANGED",
+                "Workspace or ignore policy changed during index read",
+            ));
+        }
+        Ok(ReadBatchResponse { files, truncated })
+    }
+
     pub fn page(&self, params: PageParams) -> Result<PageResponse> {
         let sessions = self.sessions.lock().unwrap();
         let session = sessions
@@ -239,6 +319,10 @@ impl Indexes {
             }
             match read_indexed_content(&workspace, &entry.path) {
                 Ok(file) => {
+                    if used.saturating_add(file.size) > MAX_BATCH_CONTENT_BYTES {
+                        truncated = true;
+                        break;
+                    }
                     used = used.saturating_add(file.size);
                     files.push(file);
                 }

@@ -82,6 +82,17 @@ jobs:
           exit $LASTEXITCODE
       - name: Run protocol regressions (not OS sandbox acceptance)
         run: npm --prefix desktop/rust test
+      - name: Exercise native indexing and transaction evidence without installation
+        working-directory: backend
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CROWNFORGE_TEST_NATIVE_IDE = (Resolve-Path '../desktop/rust/target/debug/crownforge-ide-core.exe').Path
+          node --import tsx --test src/desktop/nativeIndex.integration.test.ts src/desktop/nativeWriteEvidence.integration.test.ts src/files/mutationRegistry.native.integration.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CREWFORGE_DESKTOP = '1'
+          $env:CROWNFORGE_IDE_CORE_EXECUTABLE = $env:CROWNFORGE_TEST_NATIVE_IDE
+          node --import tsx --test src/files/repositoryIndex.test.ts
+          exit $LASTEXITCODE
       - name: Inspect standalone Windows Rust runtime dependencies
         run: |
           $ErrorActionPreference = 'Stop'

@@ -145,6 +145,7 @@ fn main() {
             eprintln!("Desktop core request worker failed");
         }
     }
+    core.finish_shutdown();
 }
 
 // Drain overlong records without allocating their full length. A sentinel marks rejection.

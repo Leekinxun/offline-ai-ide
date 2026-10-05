@@ -205,3 +205,38 @@ fn recover_reports_existing_phase_without_replaying_content() {
     ));
     assert_eq!(response["status"], "applying");
 }
+
+#[cfg(unix)]
+#[test]
+fn recovery_admission_rejects_symlinked_transaction_directory() {
+    use std::os::unix::fs::symlink;
+    let fixture = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    fs::write(
+        outside.path().join("transaction.json"),
+        "private outside record",
+    )
+    .unwrap();
+    let directory = fixture.path().join(".crewforge/desktop-transactions");
+    fs::create_dir_all(&directory).unwrap();
+    symlink(outside.path(), directory.join("foreign-transaction")).unwrap();
+    let core = core();
+    let admission = request(
+        &core,
+        1,
+        "fs.writer.admit",
+        json!({ "workspaceDir": fixture.path(), "owner": { "kind": "agent", "id": "test-owner" }, "intent": "agent-edit" }),
+    );
+    assert!(admission.get("error").is_none(), "{admission}");
+    let acquire = request(
+        &core,
+        2,
+        "fs.writer.acquire",
+        json!({ "admissionToken": admission["result"]["admissionToken"] }),
+    );
+    assert_eq!(acquire["error"]["code"], "PATH_ESCAPE");
+    assert_eq!(
+        fs::read_to_string(outside.path().join("transaction.json")).unwrap(),
+        "private outside record"
+    );
+}

@@ -5,6 +5,7 @@ import multer from "multer";
 import path from "path";
 import { execFileSync } from "child_process";
 import { safePath as safePathUtil } from "../utils/safePath.js";
+import { findRepositoryDefinitionAsync } from "../indexing/repositoryIndex.js";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
 import { searchContextSymbols } from "../chat/contextSymbols.js";
 import { findTypeScriptReferences, getTypeScriptLanguageServiceMetrics } from "../utils/typescriptLanguageService.js";
@@ -772,7 +773,9 @@ filesRouter.get("/definition", async (req, res) => {
   try {
     const pythonLocation = await findPythonDefinition(getWorkspace(req), currentPath, symbol);
     if (pythonLocation) return res.json(pythonLocation);
-    const location = findDefinitionInWorkspace(getWorkspace(req), symbol, currentPath);
+    const location = desktopNativeIdeEnabled()
+      ? await findRepositoryDefinitionAsync(getWorkspace(req), symbol, currentPath) ?? findDefinitionInWorkspace(getWorkspace(req), symbol, currentPath)
+      : findDefinitionInWorkspace(getWorkspace(req), symbol, currentPath);
     if (!location) {
       return res.status(404).json({ detail: "Definition not found" });
     }
@@ -908,7 +911,7 @@ filesRouter.post("/write", async (req, res) => {
           path: relPath,
           content,
           overwrite: Boolean(force),
-          ...(existedBeforeWrite && !force ? { expected: { exists: true, file: true, sha256: buildFileHash(currentContent) } } : {}),
+          ...(existedBeforeWrite && !force ? { expected: { exists: true, file: true, sha256: buildFileHash(currentContent) } } : !existedBeforeWrite ? { expected: { exists: false } } : {}),
         }], { transactionId: nativeMutationTransactionId("user-save") });
         const receipt = result.entries.find((entry) => entry.path === relPath);
         updatedAt = receipt?.mtimeMs ?? Date.now();

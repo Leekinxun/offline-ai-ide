@@ -5,7 +5,10 @@ import {
   buildFileVersion,
   notifyWorkspaceMutation,
   prepareFileMutationBatch,
+  publishDesktopRenameMutation,
 } from "../files/mutationRegistry.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { withDesktopWorkspaceWriter } from "../desktop/nativeWorkspaceMutation.js";
 import { safePath } from "../utils/safePath.js";
 import { evaluateContextPath } from "./contextPolicy.js";
 import { assertFileVersion, normalizeEditablePath, readEditableFile, rememberFileWrite } from "./fileEditSafety.js";
@@ -29,6 +32,26 @@ export interface RenameFileResult {
   mtimeMs: number;
   changed: boolean;
   mutationIds: string[];
+}
+
+export async function renameWorkspaceFileAsync(input: RenameFileInput, context: RenameFileContext): Promise<RenameFileResult> {
+  if (!desktopNativeIdeEnabled()) return renameWorkspaceFile(input, context);
+  return withDesktopWorkspaceWriter(input.workspaceDir, "agent-edit", async () => {
+    const workspaceDir = path.resolve(input.workspaceDir);
+    const sourcePath = authorizePath(input.source_path), targetPath = authorizePath(input.target_path);
+    const content = readEditableFile(workspaceDir, sourcePath);
+    if (content === undefined) throw new Error(`File not found: ${sourcePath}`);
+    assertFileVersion(workspaceDir, sourcePath, content, input.expected_version, true, context);
+    const source = existingParent(workspaceDir, sourcePath), target = existingParent(workspaceDir, targetPath);
+    const initial = fs.lstatSync(source);
+    if (!fs.readFileSync(source).equals(Buffer.from(content))) throw new Error("Rename requires lossless UTF-8 text evidence");
+    const result = { sourcePath, path: targetPath, content, version: buildFileVersion(content), mtimeMs: initial.mtimeMs };
+    if (sourcePath === targetPath) return { ...result, changed: false, mutationIds: [] };
+    if (statIfPresent(target)) throw new Error(`Rename target already exists: ${targetPath}`);
+    const published = await publishDesktopRenameMutation({ workspaceDir, sourcePath, targetPath, content, actor: context.actorName, runId: context.runId, requestId: context.requestId, toolCallId: context.toolCallId });
+    rememberFileWrite(workspaceDir, targetPath, content, context, true);
+    return { ...result, mtimeMs: published.mtimeMs, changed: true, mutationIds: published.records.map((record) => record.id) };
+  });
 }
 
 function authorizePath(value: unknown): string {

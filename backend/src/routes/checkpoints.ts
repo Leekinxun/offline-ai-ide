@@ -1,9 +1,10 @@
 import { Router } from "express";
 import type { UserSession } from "../auth/sessionManager.js";
-import { createCheckpoint, getCheckpointStorageStats, listCheckpoints, pruneCheckpointBlobs, readCheckpointSettings, restoreCheckpointForRuntime, updateCheckpointRetention, verifyCheckpointBlobs } from "../chat/checkpoints.js";
+import { createCheckpointForRuntime, getCheckpointStorageStats, listCheckpoints, pruneCheckpointBlobsForRuntime, readCheckpointSettings, restoreCheckpointForRuntime, updateCheckpointRetentionForRuntime, verifyCheckpointBlobs } from "../chat/checkpoints.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
-import { listFileMutations, rollbackFileMutations } from "../files/mutationRegistry.js";
-import { applyChangeSetDecision, ChangeSetCollaborationGateError, ChangeSetIntegrationConflictError, ChangeSetLockRecoveryRequiredError, ChangeSetReviewGateError, getChangeSet, listChangeSets, preflightChangeSetDecision, recoverInterruptedChangeSetWithOutcome, type ChangeSet, type ChangeSetDecision } from "../chat/changeSets.js";
+import { nativeMutationErrorCode, nativeMutationHttpStatus } from "../desktop/nativeWorkspaceMutation.js";
+import { listFileMutations, MutationJournalEvidenceError, rollbackFileMutationsAsync } from "../files/mutationRegistry.js";
+import { applyChangeSetDecisionForRuntime, ChangeSetCollaborationGateError, ChangeSetIntegrationConflictError, ChangeSetLockRecoveryRequiredError, ChangeSetReviewGateError, getChangeSet, listChangeSets, preflightChangeSetDecision, recoverInterruptedChangeSetForRuntime, type ChangeSet, type ChangeSetDecision } from "../chat/changeSets.js";
 import { listChangeSetReviewRuns, scheduleChangeSetReview } from "../chat/changeSetReviewRun.js";
 import { buildReviewArtifact, toSarifReviewArtifact } from "../artifacts/reviewArtifact.js";
 import { EVIDENCE_BUNDLE_MEDIA_TYPE, verifyEvidenceBundle } from "../artifacts/evidenceBundle.js";
@@ -32,22 +33,32 @@ checkpointsRouter.get("/mutations", (req, res) => {
   res.json({ mutations: listFileMutations(workspace(req), { runId: query.runId as string | undefined, toolCallId: query.toolCallId as string | undefined, path: query.path as string | undefined }).map(publicMutation) });
 });
 
-checkpointsRouter.post("/mutations/rollback", (req, res) => {
+checkpointsRouter.post("/mutations/rollback", async (req, res) => {
   if (!writable(req, res)) return;
   const ids = req.body?.ids === undefined ? undefined : strings(req.body.ids); const hunkIds = req.body?.hunkIds === undefined ? undefined : strings(req.body.hunkIds);
   if ((req.body?.ids !== undefined && !ids) || (req.body?.hunkIds !== undefined && !hunkIds) || (req.body?.strategy !== undefined && req.body.strategy !== "refuse" && req.body.strategy !== "skip-conflicts")) return res.status(400).json({ error: "Invalid rollback selection" });
   const selected = { ...(typeof req.body?.runId === "string" ? { runId: req.body.runId } : {}), ...(typeof req.body?.toolCallId === "string" ? { toolCallId: req.body.toolCallId } : {}), ...(typeof req.body?.path === "string" ? { path: req.body.path } : {}), ...(ids ? { ids } : {}), ...(hunkIds ? { hunkIds } : {}) };
   if (!ids && !selected.runId && !selected.toolCallId && !selected.path) return res.status(400).json({ error: "Select a mutation, run, tool call, or file" });
+  try {
   if (ids && ids.some((id) => !listFileMutations(workspace(req)).some((mutation) => mutation.id === id))) return res.status(400).json({ error: "Invalid mutation id" });
-  const result = rollbackFileMutations(workspace(req), selected, { strategy: req.body?.strategy });
+  const result = await rollbackFileMutationsAsync(workspace(req), selected, { strategy: req.body?.strategy });
   if (result.conflicts.length && req.body?.strategy !== "skip-conflicts") return res.status(409).json({ error: "Rollback conflicts detected; no files were changed", ...result });
   res.json(result);
+  } catch (error) {
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    const code = nativeMutationErrorCode(error);
+    res.status(code ? nativeMutationHttpStatus(error) : 400).json({ error: code ? "Native rollback publication failed" : error instanceof Error ? error.message : "Rollback failed", ...(code ? { code } : {}) });
+  }
 });
 
 checkpointsRouter.post("/verify", (req, res) => { const id = typeof req.body?.checkpointId === "string" ? req.body.checkpointId : undefined; res.json({ verification: verifyCheckpointBlobs(workspace(req), id) }); });
-checkpointsRouter.post("/repair", (req, res) => { if (!writable(req, res)) return; const apply = req.body?.apply === true; res.json({ dryRun: !apply, removed: pruneCheckpointBlobs(workspace(req), { dryRun: !apply }) }); });
+checkpointsRouter.post("/repair", async (req, res) => {
+  if (!writable(req, res)) return;
+  try { const apply = req.body?.apply === true; res.json({ dryRun: !apply, removed: await pruneCheckpointBlobsForRuntime(workspace(req), { dryRun: !apply }) }); }
+  catch (error) { res.status(nativeMutationErrorCode(error) ? nativeMutationHttpStatus(error) : 400).json({ error: error instanceof Error ? error.message : "Checkpoint repair failed" }); }
+});
 checkpointsRouter.get("/retention", (req, res) => { const workspaceDir = workspace(req); res.json({ settings: readCheckpointSettings(workspaceDir), storage: getCheckpointStorageStats(workspaceDir) }); });
-checkpointsRouter.put("/retention", (req, res) => { if (!writable(req, res)) return; try { const { maxCheckpoints, dryRun } = req.body || {}; if (dryRun !== undefined && typeof dryRun !== "boolean") return res.status(400).json({ error: "dryRun must be boolean" }); res.json(updateCheckpointRetention(workspace(req), { maxCheckpoints, ...(dryRun === true ? { dryRun } : {}) })); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Invalid retention policy" }); } });
+checkpointsRouter.put("/retention", async (req, res) => { if (!writable(req, res)) return; try { const { maxCheckpoints, dryRun } = req.body || {}; if (dryRun !== undefined && typeof dryRun !== "boolean") return res.status(400).json({ error: "dryRun must be boolean" }); res.json(await updateCheckpointRetentionForRuntime(workspace(req), { maxCheckpoints, ...(dryRun === true ? { dryRun } : {}) })); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Invalid retention policy" }); } });
 
 checkpointsRouter.get("/change-sets", (req, res) => { try { res.json({ changeSets: listChangeSets(workspace(req)).map(publicChangeSet) }); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Failed to list change sets" }); } });
 checkpointsRouter.get("/change-sets/:id", (req, res) => { try { res.json({ changeSet: publicChangeSet(getChangeSet(workspace(req), req.params.id)) }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error }); } });
@@ -57,11 +68,11 @@ checkpointsRouter.post("/change-sets/:id/bundle-exports", (req, res) => { if (!w
 checkpointsRouter.post("/change-sets/:id/review", (req, res) => { if (!writable(req, res)) return; try { const run = scheduleChangeSetReview(workspace(req), req.params.id, decisionActor(req).id || "authenticated-user", "review"); res.status(202).json({ reviewRun: run }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error }); } });
 checkpointsRouter.post("/change-sets/:id/reverify", (req, res) => { if (!writable(req, res)) return; try { const run = scheduleChangeSetReview(workspace(req), req.params.id, decisionActor(req).id || "authenticated-user", "reverify"); res.status(202).json({ reviewRun: run }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error }); } });
 checkpointsRouter.post("/change-sets/:id/preflight", (req, res) => { const decision = req.body?.decision as ChangeSetDecision; if (!["apply", "cherry_pick", "merge", "reject", "request_revision"].includes(decision)) return res.status(400).json({ error: "Invalid change set decision" }); try { res.json({ preflight: preflightChangeSetDecision(workspace(req), req.params.id, decision, decisionActor(req)) }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error, ...(response.blockingFindings ? { blockingFindings: response.blockingFindings } : {}) }); } });
-checkpointsRouter.post("/change-sets/:id/decision", (req, res) => { if (!writable(req, res)) return; const decision = req.body?.decision as ChangeSetDecision; if (!["apply", "cherry_pick", "merge", "reject", "request_revision"].includes(decision)) return res.status(400).json({ error: "Invalid change set decision" }); try { const result = applyChangeSetDecision(workspace(req), req.params.id, decision, decisionActor(req)); res.json({ changeSet: publicChangeSet(result.changeSet), preflight: result.preflight }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error, ...(response.code ? { code: response.code, recovery: { state: "manual_recovery", transactionStatus: "lock_stale", manualRecoveryRequired: true } } : {}), ...(response.blockingFindings ? { blockingFindings: response.blockingFindings } : {}), ...(response.collaborationConflicts ? { collaborationConflicts: response.collaborationConflicts } : {}) }); } });
-checkpointsRouter.post("/change-sets/:id/recover", (req, res) => {
+checkpointsRouter.post("/change-sets/:id/decision", async (req, res) => { if (!writable(req, res)) return; const decision = req.body?.decision as ChangeSetDecision; if (!["apply", "cherry_pick", "merge", "reject", "request_revision"].includes(decision)) return res.status(400).json({ error: "Invalid change set decision" }); try { const result = await applyChangeSetDecisionForRuntime(workspace(req), req.params.id, decision, decisionActor(req)); res.json({ changeSet: publicChangeSet(result.changeSet), preflight: result.preflight }); } catch (error) { const response = changeSetError(error); res.status(response.status).json({ error: response.error, ...(response.code ? { code: response.code, recovery: { state: "manual_recovery", transactionStatus: "lock_stale", manualRecoveryRequired: true } } : {}), ...(response.blockingFindings ? { blockingFindings: response.blockingFindings } : {}), ...(response.collaborationConflicts ? { collaborationConflicts: response.collaborationConflicts } : {}) }); } });
+checkpointsRouter.post("/change-sets/:id/recover", async (req, res) => {
   if (!writable(req, res)) return;
   try {
-    const result = recoverInterruptedChangeSetWithOutcome(workspace(req), req.params.id);
+    const result = await recoverInterruptedChangeSetForRuntime(workspace(req), req.params.id);
     res.json({ changeSet: publicChangeSet(result.changeSet), recovery: result.recovery });
   } catch (error) {
     if (error instanceof ChangeSetIntegrationConflictError) return res.status(409).json({ error: error.message, code: error.code, recovery: { state: "integration_in_progress", transactionStatus: "live", manualRecoveryRequired: false } });
@@ -79,12 +90,12 @@ checkpointsRouter.get("/bundle-exports/:id/download", (req, res) => { try { cons
 checkpointsRouter.get("/bundle-exports/:id", (req, res) => { try { res.json({ export: new EvidenceBundleExportStore(workspace(req)).get(req.params.id) }); } catch (error) { const message = error instanceof Error ? error.message : "Failed to load evidence bundle export"; res.status(message.includes("not found") ? 404 : 400).json({ error: message }); } });
 checkpointsRouter.post("/bundles/verify", (req, res) => { const value = req.body?.bundleBase64; if (typeof value !== "string" || value.length > 48 * 1024 * 1024 || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value) || Buffer.from(value, "base64").toString("base64") !== value) return res.status(400).json({ error: "bundleBase64 must be canonical base64" }); res.json({ verification: verifyEvidenceBundle(workspace(req), Buffer.from(value, "base64")) }); });
 
-checkpointsRouter.post("/create", (req, res) => {
+checkpointsRouter.post("/create", async (req, res) => {
   if (!canWriteActiveWorkspace((req as any).userSession as UserSession)) {
     return res.status(403).json({ error: "Workspace is read-only" });
   }
   try {
-    const checkpoint = createCheckpoint(workspace(req), {
+    const checkpoint = await createCheckpointForRuntime(workspace(req), {
       label: typeof req.body?.label === "string" ? req.body.label : undefined,
       conversationId:
         typeof req.body?.conversationId === "string" ? req.body.conversationId : undefined,

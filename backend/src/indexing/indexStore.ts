@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { IndexedRepositoryFile, RepositoryIndexMeta } from "./types.js";
+import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
+import { commitDesktopWorkspacePublication, withDesktopWorkspaceWriter } from "../desktop/nativeWorkspaceMutation.js";
 import { isProcessAlive } from "../utils/processLiveness.js";
 
 const STORE_DIR = path.join(".history", "repository-index", "v1");
@@ -77,6 +79,7 @@ export class RepositoryIndexStore {
           try { fs.rmSync(lockPath, { force: true }); } catch { /* another contender recovered it */ }
           continue;
         }
+        if (waitMs === 0) break;
         pause(LOCK_RETRY_MS);
       }
     }
@@ -95,8 +98,19 @@ export class RepositoryIndexStore {
     try { return work(); } finally { this.releaseLock(lock); }
   }
 
+  private async acquireLockAsync(lockPath = this.lockPath, waitMs = LOCK_WAIT_MS): Promise<StoreLock> {
+    const deadline = Date.now() + waitMs;
+    while (true) {
+      try { return this.acquireLock(lockPath, 0); }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== "Repository index lock is held by a live owner" || Date.now() >= deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+      }
+    }
+  }
+
   async withLockAsync<T>(work: () => Promise<T>): Promise<T> {
-    const lock = this.acquireLock();
+    const lock = await this.acquireLockAsync();
     try { return await work(); } finally { this.releaseLock(lock); }
   }
 
@@ -106,7 +120,7 @@ export class RepositoryIndexStore {
   }
 
   async withRebuildLockAsync<T>(work: () => Promise<T>): Promise<T> {
-    const lock = this.acquireLock(this.rebuildLockPath, 300_000);
+    const lock = await this.acquireLockAsync(this.rebuildLockPath, 300_000);
     try { return await work(); } finally { this.releaseLock(lock, this.rebuildLockPath); }
   }
 
@@ -121,6 +135,64 @@ export class RepositoryIndexStore {
   writeMeta(meta: RepositoryIndexMeta): void {
     if (meta.partitionId !== this.partitionId || meta.workspaceRoot !== this.workspaceRoot) throw new Error("Repository index partition mismatch");
     atomicWrite(path.join(this.rootDir, "meta.json"), meta);
+  }
+
+  /** Node retains the schema/revision policy; Rust publishes the cache bytes. */
+  private async publishNative(values: Map<string, unknown>): Promise<void> {
+    const publications = [...values].map(([key, value], index) => {
+      const target = path.join(this.rootDir, key);
+      let previous: Buffer | undefined;
+      try { previous = fs.readFileSync(target); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      return { namespace: "repositoryIndex" as const, key, blobId: `index-${index}`,
+        expected: previous === undefined ? { exists: false } : { exists: true, sha256: crypto.createHash("sha256").update(previous).digest("hex") },
+        bytes: Buffer.from(`${JSON.stringify(value)}\n`) };
+    });
+    await commitDesktopWorkspacePublication(this.workspaceRoot, { intent: "index", files: [], blobs: [], publications });
+  }
+
+  async writeMetaAsync(meta: RepositoryIndexMeta): Promise<void> {
+    if (!desktopNativeIdeEnabled()) return this.writeMeta(meta);
+    if (meta.partitionId !== this.partitionId || meta.workspaceRoot !== this.workspaceRoot) throw new Error("Repository index partition mismatch");
+    await this.publishNative(new Map([["meta.json", meta]]));
+  }
+
+  async replaceAllIfRevisionAsync(files: Map<string, IndexedRepositoryFile>, meta: RepositoryIndexMeta, expectedRevision: number): Promise<boolean> {
+    if (!desktopNativeIdeEnabled()) return this.replaceAllIfRevision(files, meta, expectedRevision);
+    return this.withLockAsync(async () => withDesktopWorkspaceWriter(this.workspaceRoot, "index", async () => {
+      if (this.readMeta()?.revision !== expectedRevision) return false;
+      const values = new Map<string, unknown>();
+      const shards = new Map<string, Record<string, IndexedRepositoryFile>>();
+      for (const [filePath, file] of files) {
+        const id = this.shardId(filePath); const shard = shards.get(id) ?? {};
+        shard[filePath] = file; shards.set(id, shard);
+      }
+      // Empty shards replace obsolete entries without permitting arbitrary metadata deletion.
+      for (let id = 0; id < 256; id += 1) {
+        const key = id.toString(16).padStart(2, "0");
+        if (shards.has(key) || fs.existsSync(path.join(this.rootDir, "shards", `${key}.json`)))
+          values.set(`shards/${key}.json`, { schemaVersion: 1, files: shards.get(key) ?? {} });
+      }
+      values.set("meta.json", meta);
+      await this.publishNative(values); return true;
+    }));
+  }
+
+  async updateFilesAsync(changes: Map<string, IndexedRepositoryFile | null>, nextMeta: (current: RepositoryIndexMeta | null, fileCount: number) => RepositoryIndexMeta): Promise<RepositoryIndexMeta> {
+    if (!desktopNativeIdeEnabled()) return this.updateFiles(changes, nextMeta);
+    return this.withLockAsync(async () => withDesktopWorkspaceWriter(this.workspaceRoot, "index", async () => {
+      const current = this.readMeta(); let count = current?.fileCount ?? 0;
+      const shards = new Map<string, Record<string, IndexedRepositoryFile>>();
+      for (const [filePath, file] of changes) {
+        const id = this.shardId(filePath), shard = shards.get(id) ?? this.readShard(id);
+        const existed = Boolean(shard[filePath]);
+        if (file) { shard[filePath] = file; if (!existed) count++; }
+        else if (existed) { delete shard[filePath]; count--; }
+        shards.set(id, shard);
+      }
+      const meta = nextMeta(current, Math.max(0, count));
+      const values = new Map<string, unknown>([...shards].map(([id, shard]) => [`shards/${id}.json`, { schemaVersion: 1, files: shard }]));
+      values.set("meta.json", meta); await this.publishNative(values); return meta;
+    }));
   }
 
   shardId(filePath: string): string {

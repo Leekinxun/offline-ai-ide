@@ -33,7 +33,7 @@ import {
   readRunRecord,
   RESUME_PROMPT,
 } from "../chat/runHistory.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
+import { createCheckpointForRuntime } from "../chat/checkpoints.js";
 import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
 import { sessionManager } from "../auth/sessionManager.js";
 import { canWriteActiveWorkspace, getTeamManager, resolveActiveTeam, teamWorkspaceContains } from "../team/sessionBridge.js";
@@ -1066,7 +1066,7 @@ async function processConversationQueue(
           recorder.runId
         );
       }
-      const checkpoint = createCheckpoint(session.workspaceDir, {
+      const checkpoint = await createCheckpointForRuntime(session.workspaceDir, {
         label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
         conversationId: initialTurn.conversationId,
         runId: recorder.runId,

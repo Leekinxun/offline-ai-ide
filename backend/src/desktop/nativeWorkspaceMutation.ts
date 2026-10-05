@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
-import { getDesktopNativeIde, NativeIdeError } from "./nativeIdeClient.js";
+import fs from "node:fs";
+import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { desktopNativeIdeEnabled, getDesktopNativeIde, NativeIdeError, shutdownDesktopNativeIde, type NativeIdeClient } from "./nativeIdeClient.js";
 
 export interface NativeMutationExpected {
   exists?: boolean;
   sha256?: string;
   file?: boolean;
   directory?: boolean;
+  identity?: { device: string; inode: string; nlink: number };
 }
 
 export type NativeMutationOperation =
@@ -34,7 +38,64 @@ export interface NativeMutationResult {
   publications?: NativePublicationReceipt[];
 }
 
-export type DesktopWriterIntent = "editor" | "agent-edit" | "rollback" | "checkpoint" | "changeset";
+export type DesktopWriterIntent = "editor" | "agent-edit" | "rollback" | "checkpoint" | "changeset" | "index" | "external-audit";
+interface WriterContext { workspace: string; admissionToken: string; leaseToken: string; client: NativeIdeClient; active: boolean; }
+const writerContext = new AsyncLocalStorage<WriterContext>();
+interface ExternalAuditContext { active: boolean; workspace: string; externalToken: string; owner: { kind: "agent"; id: string }; }
+const externalAuditContext = new AsyncLocalStorage<ExternalAuditContext>();
+const activeExternalProcesses = new Map<string, DesktopExternalProcessGuard>();
+export interface DesktopExternalProcessGuard {
+  audit<T>(work: () => Promise<T>): Promise<T>;
+  assertUnchanged(): void;
+  release(): Promise<void>;
+}
+
+/** Advisory reservation: human saves remain allowed; Agent/integration writers wait for audit. */
+export async function beginDesktopExternalProcess(workspaceDir: string): Promise<DesktopExternalProcessGuard | undefined> {
+  if (!desktopNativeIdeEnabled()) return undefined;
+  const workspace = fs.realpathSync.native(workspaceDir), client = getDesktopNativeIde();
+  const owner = { kind: "agent" as const, id: crypto.randomUUID() };
+  const { subscribeWorkspaceMutations } = await import("../files/mutationRegistry.js");
+  const conflicts = new Set<string>();
+  const unsubscribe = subscribeWorkspaceMutations((event) => {
+    if (fs.existsSync(event.workspaceDir) && fs.realpathSync.native(event.workspaceDir) === workspace) conflicts.add(event.path);
+  });
+  let externalToken: string;
+  try { externalToken = (await client.requestDurable<{ externalToken: string }>("fs.writer.externalBegin", { workspaceDir: workspace, owner, ownerPid: process.pid, intent: "external-process" })).externalToken; }
+  catch (error) {
+    if (!(error instanceof NativeIdeError) || error.code !== "OUTCOME_UNKNOWN") { unsubscribe(); throw error; }
+    try { externalToken = (await client.requestDurable<{ externalToken: string }>("fs.writer.externalBegin", { workspaceDir: workspace, owner, ownerPid: process.pid, intent: "external-process" })).externalToken; }
+    catch (retryError) { unsubscribe(); throw retryError; }
+  }
+  let released = false;
+  const guard: DesktopExternalProcessGuard = {
+    assertUnchanged() { if (conflicts.size) throw new NativeIdeError(`Concurrent edits prevent command attribution: ${[...conflicts].slice(0, 20).join(", ")}`, "CONFLICT"); },
+    async audit(work) {
+      guard.assertUnchanged();
+      const context = { active: true, workspace, externalToken, owner };
+      try { return await externalAuditContext.run(context, work); }
+      finally { context.active = false; }
+    },
+    async release() {
+      if (released) return;
+      try { await client.requestDurable("fs.writer.externalEnd", { externalToken, workspaceDir: workspace }); }
+      catch (error) {
+        if (!(error instanceof NativeIdeError) || !["RUNTIME_DISCONNECTED", "OUTCOME_UNKNOWN"].includes(error.code)) throw error;
+        await shutdownDesktopNativeIde();
+        await getDesktopNativeIde().requestDurable("fs.writer.externalEnd", { externalToken, workspaceDir: workspace });
+      }
+      released = true; unsubscribe(); if (activeExternalProcesses.get(workspace) === guard) activeExternalProcesses.delete(workspace);
+    },
+  };
+  activeExternalProcesses.set(workspace, guard); return guard;
+}
+
+const writerQueues = new Map<string, Promise<void>>();
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export function desktopWorkspaceWriterActive(workspaceDir: string): boolean {
+  const current = writerContext.getStore();
+  return Boolean(current?.active && current.workspace === fs.realpathSync.native(workspaceDir));
+}
 
 export interface NativePublicationReceipt {
   namespace: string;
@@ -154,43 +215,56 @@ async function commitDesktopTransaction(input: {
   publications?: NativeTransactionPublicationPlan[];
   signal?: AbortSignal;
 }): Promise<NativeMutationResult> {
-  const client = getDesktopNativeIde();
-  const owner = { kind: input.intent === "editor" ? "user" : input.intent === "checkpoint" || input.intent === "changeset" ? "integration" : "agent", id: input.intent };
-  const admission = await client.request<{ admissionToken: string }>("fs.writer.admit", {
-    workspaceDir: input.workspaceDir,
-    owner,
-    intent: input.intent,
-    ttlMs: 300_000,
-  }, { signal: input.signal, timeoutMs: 30_000 });
-  const lease = await client.request<{ leaseToken: string }>("fs.writer.acquire", {
-    admissionToken: admission.admissionToken,
-  }, { signal: input.signal, timeoutMs: 30_000 });
-  try {
-    await client.request("fs.transaction.begin", {
-      leaseToken: lease.leaseToken,
-      transactionId: input.transactionId,
-      mode: input.publications?.length ? "privateBackup" : "metadataOnly",
-      files: input.files,
-      publications: input.publications ?? [],
-    }, { signal: input.signal, timeoutMs: 30_000 });
-    for (const blob of input.blobs) await sendBlob(lease.leaseToken, input.transactionId, blob.ref, blob.bytes, { signal: input.signal });
-    const result = await client.requestDurable<NativeMutationResult>("fs.transaction.commit", {
-      leaseToken: lease.leaseToken,
-      transactionId: input.transactionId,
-    }, { timeoutMs: 120_000 });
-    if (result.status !== "committed") throw new NativeIdeError(`Desktop transaction requires attention: ${result.status}`, "CONFLICT");
-    return result;
-  } catch (error) {
-    if (!(error instanceof NativeIdeError && error.code === "OUTCOME_UNKNOWN")) {
-      await client.request("fs.transaction.abort", {
+  return withDesktopWorkspaceWriter(input.workspaceDir, input.intent, async () => {
+    const context = writerContext.getStore()!;
+    const client = context.client;
+    const lease = { leaseToken: context.leaseToken };
+    try {
+      input.signal?.throwIfAborted();
+      await client.requestDurable("fs.transaction.begin", {
         leaseToken: lease.leaseToken,
         transactionId: input.transactionId,
-      }, { timeoutMs: 30_000 }).catch(() => undefined);
+        mode: input.intent === "editor" ? "metadataOnly" : "privateBackup",
+        files: input.files.slice(0, 128),
+        publications: (input.publications ?? []).slice(0, 128),
+      }, { timeoutMs: 30_000 });
+      for (let offset = 128; offset < Math.max(input.files.length, input.publications?.length ?? 0); offset += 128) {
+        input.signal?.throwIfAborted();
+        await client.requestDurable("fs.transaction.appendPlans", { leaseToken: lease.leaseToken, transactionId: input.transactionId,
+          files: input.files.slice(offset, offset + 128), publications: (input.publications ?? []).slice(offset, offset + 128) });
+      }
+      for (const blob of input.blobs) await sendBlob(lease.leaseToken, input.transactionId, blob.ref, blob.bytes, { signal: input.signal });
+      const result = await client.requestDurable<NativeMutationResult>("fs.transaction.commit", {
+        leaseToken: lease.leaseToken,
+        transactionId: input.transactionId,
+      }, { timeoutMs: 120_000 });
+      if (result.status !== "committed") throw new NativeIdeError(`Desktop transaction ${input.transactionId} requires attention: ${result.status}`, "CONFLICT");
+      return result;
+    } catch (error) {
+      if (error instanceof NativeIdeError && error.code === "OUTCOME_UNKNOWN") {
+        let receipt: NativeMutationResult;
+        try { receipt = await client.request("fs.transaction.status", { workspaceDir: context.workspace, transactionId: input.transactionId }); }
+        catch {
+          await shutdownDesktopNativeIde();
+          receipt = await getDesktopNativeIde().request("fs.transaction.recover", { workspaceDir: context.workspace, transactionId: input.transactionId });
+        }
+        if (["begun", "prepared", "applying", "committing"].includes(receipt.status)) {
+          // Keep cleanup ownership until the old Core has exited. A lost receipt
+          // must not strand a live-PID writer lock after background completion.
+          await shutdownDesktopNativeIde();
+          receipt = await getDesktopNativeIde().request("fs.transaction.recover", { workspaceDir: context.workspace, transactionId: input.transactionId });
+        }
+        if (receipt.status === "committed") return receipt;
+        throw new NativeIdeError(`Publication outcome requires recovery: ${input.transactionId} (${receipt.status})`, "OUTCOME_UNKNOWN");
+      } else {
+        await client.request("fs.transaction.abort", {
+          leaseToken: lease.leaseToken,
+          transactionId: input.transactionId,
+        }, { timeoutMs: 30_000 }).catch(() => undefined);
+      }
+      throw error;
     }
-    throw error;
-  } finally {
-    await client.request("fs.writer.release", { leaseToken: lease.leaseToken }, { timeoutMs: 10_000 }).catch(() => undefined);
-  }
+  });
 }
 
 export async function withDesktopWorkspaceWriter<T>(
@@ -198,14 +272,44 @@ export async function withDesktopWorkspaceWriter<T>(
   intent: DesktopWriterIntent,
   work: () => Promise<T>
 ): Promise<T> {
-  const client = getDesktopNativeIde();
-  const owner = { kind: intent === "editor" ? "user" : intent === "checkpoint" || intent === "changeset" ? "integration" : "agent", id: intent };
-  const admission = await client.request<{ admissionToken: string }>("fs.writer.admit", { workspaceDir, owner, intent, ttlMs: 300_000 }, { timeoutMs: 30_000 });
-  const lease = await client.request<{ leaseToken: string }>("fs.writer.acquire", { admissionToken: admission.admissionToken }, { timeoutMs: 30_000 });
+  if (!desktopNativeIdeEnabled()) return work();
+  const workspace = fs.realpathSync.native(workspaceDir);
+  if (writerContext.getStore()?.active && writerContext.getStore()?.workspace === workspace) return work();
+  const external = externalAuditContext.getStore();
+  const audit = external?.active && external.workspace === workspace ? external : undefined;
+  if (!audit && activeExternalProcesses.has(workspace) && intent !== "editor" && intent !== "index") throw new NativeIdeError("Agent command audit is pending for this workspace", "BUSY");
+  const previous = writerQueues.get(workspace) ?? Promise.resolve();
+  let resolveQueue!: () => void;
+  const complete = new Promise<void>((resolve) => { resolveQueue = resolve; });
+  const queue = previous.catch(() => {}).then(() => complete);
+  writerQueues.set(workspace, queue);
+  await previous.catch(() => {});
+  const owner = audit?.owner ?? { kind: intent === "editor" ? "user" : intent === "checkpoint" || intent === "changeset" || intent === "index" ? "integration" : "agent", id: crypto.randomUUID() };
+  let client: NativeIdeClient | undefined;
+  let leaseToken: string | undefined;
+  let admissionToken: string | undefined;
+  let context: WriterContext | undefined;
   try {
-    return await work();
+    client = getDesktopNativeIde();
+    const admission = await client.requestDurable<{ admissionToken: string }>("fs.writer.admit", { workspaceDir, owner, intent: audit ? "external-audit" : intent, ...(audit ? { externalToken: audit.externalToken } : {}), ttlMs: 300_000 }, { timeoutMs: 30_000 });
+    admissionToken = admission.admissionToken;
+    const deadline = Date.now() + 30_000;
+    while (!leaseToken) {
+      try { leaseToken = (await client.requestDurable<{ leaseToken: string }>("fs.writer.acquire", { admissionToken: admission.admissionToken })).leaseToken; }
+      catch (error) {
+        if (!(error instanceof NativeIdeError) || error.code !== "BUSY" || Date.now() >= deadline) throw error;
+        if (!audit && activeExternalProcesses.has(workspace) && intent !== "editor" && intent !== "index") throw error;
+        await pause(25);
+      }
+    }
+    context = { workspace, admissionToken: admission.admissionToken, leaseToken, client, active: true };
+    return await writerContext.run(context, work);
   } finally {
-    await client.request("fs.writer.release", { leaseToken: lease.leaseToken }, { timeoutMs: 10_000 }).catch(() => undefined);
+    if (context) context.active = false;
+    if (leaseToken && client) await client.requestDurable("fs.writer.release", { leaseToken }, { timeoutMs: 10_000 }).catch(() => undefined);
+    if (admissionToken && client) await client.requestDurable("fs.writer.revoke", { admissionToken }, { timeoutMs: 10_000 }).catch(() => undefined);
+    resolveQueue();
+    if (writerQueues.get(workspace) === queue) writerQueues.delete(workspace);
   }
 }
 
@@ -216,14 +320,38 @@ export async function mutateDesktopWorkspace(
 ): Promise<NativeMutationResult> {
   if (options.signal?.aborted) throw new NativeIdeError("Operation cancelled", "ABORTED");
   const transactionId = options.transactionId || nativeMutationTransactionId("workspace");
-  const plans = operations.map(toFilePlan);
-  return commitDesktopTransaction({
-    workspaceDir,
-    intent: options.intent ?? "editor",
-    transactionId,
-    files: plans.map((entry) => entry.plan),
-    blobs: plans.flatMap((entry) => entry.blob && entry.plan.output ? [{ ref: entry.plan.output, bytes: entry.blob }] : []),
-    signal: options.signal,
+  return withDesktopWorkspaceWriter(workspaceDir, options.intent ?? "editor", async () => {
+    const context = writerContext.getStore()!;
+    const workspace = context.workspace;
+    const aliases = new Map<string, string>();
+    const prepared = [] as Array<{ plan: NativeTransactionFilePlan; blob?: Buffer }>;
+    for (const [index, operation] of operations.entries()) {
+      let relative = operation.path;
+      // Manual editor saves preserve the existing safe in-workspace symlink behavior.
+      // Agent plans never enter this resolver and remain strict no-link mutations.
+      if (operation.type === "writeFile" && (options.intent ?? "editor") === "editor") {
+        const requested = path.resolve(workspace, relative);
+        let ancestor = requested;
+        const suffix: string[] = [];
+        while (!fs.existsSync(ancestor) && ancestor !== workspace) { suffix.unshift(path.basename(ancestor)); ancestor = path.dirname(ancestor); }
+        const candidate = path.join(fs.realpathSync.native(ancestor), ...suffix);
+        const physical = path.relative(workspace, candidate);
+        if (!physical || physical === ".." || physical.startsWith(`..${path.sep}`) || path.isAbsolute(physical)) throw new NativeIdeError("Save target escapes workspace", "PATH_ESCAPE");
+        relative = physical.split(path.sep).join("/");
+        aliases.set(relative, operation.path);
+      }
+      const item = toFilePlan({ ...operation, path: relative }, index);
+      {
+        const snapshot = await context.client.request<{ exists: boolean; kind: string; sha256?: string }>("fs.writer.inspect", { admissionToken: context.admissionToken, path: relative });
+        item.plan.expected = { exists: snapshot.exists, ...(snapshot.exists ? { file: snapshot.kind === "file", directory: snapshot.kind === "directory", ...(snapshot.sha256 ? { sha256: snapshot.sha256 } : {}) } : {}), ...item.plan.expected };
+        if (operation.type === "writeFile" && operation.overwrite === false && operation.expected === undefined) item.plan.expected.exists = false;
+      }
+      prepared.push(item);
+    }
+    const result = await commitDesktopTransaction({ workspaceDir, intent: options.intent ?? "editor", transactionId,
+      files: prepared.map((entry) => entry.plan),
+      blobs: prepared.flatMap((entry) => entry.blob && entry.plan.output ? [{ ref: entry.plan.output, bytes: entry.blob }] : []), signal: options.signal });
+    return { ...result, entries: result.entries.map((entry) => ({ ...entry, path: aliases.get(entry.path) ?? entry.path })) };
   });
 }
 

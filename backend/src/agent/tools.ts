@@ -12,7 +12,7 @@ import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
 import { runSubagent } from "./subagent.js";
-import { buildFileHash, buildFileVersion, listFileMutations, recordFileMutation } from "../files/mutationRegistry.js";
+import { buildFileHash, buildFileVersion, listFileMutations, recordFileMutation, publishDesktopFileMutation } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
@@ -22,7 +22,7 @@ import { networkGrantForTool } from "./networkAccess.js";
 import { createApprovedExecutionPlan } from "../chat/executionPlans.js";
 import { requestAgentQuestion } from "../chat/agentQuestions.js";
 import { readAuthorizedAgentFile } from "./externalFileAccess.js";
-import { renameWorkspaceFile } from "./renameFile.js";
+import { renameWorkspaceFileAsync } from "./renameFile.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
 import { REPOSITORY_INSPECTION_TOOLS, executeRepositoryInspectionTool } from "./repositoryInspection.js";
 import { SUBAGENT_ROLES } from "./subagentRoles.js";
@@ -33,7 +33,7 @@ import {
   rememberFileRead, rememberFileWrite, replaceUniqueText,
 } from "./fileEditSafety.js";
 import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
-import { mutateDesktopWorkspace, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
+import { mutateDesktopWorkspace, nativeMutationTransactionId, withDesktopWorkspaceWriter, desktopWorkspaceWriterActive } from "../desktop/nativeWorkspaceMutation.js";
 
 // ---- Tool handler type ----
 
@@ -248,6 +248,7 @@ async function runWriteFile(
   context: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "toolCallId">,
   expectedVersion?: unknown
 ): Promise<string | ToolExecutionResult> {
+  if (desktopNativeIdeEnabled() && !desktopWorkspaceWriterActive(cwd)) return withDesktopWorkspaceWriter(cwd, "agent-edit", () => runWriteFile(filePath, content, cwd, context, expectedVersion));
   try {
     filePath = normalizeEditablePath(filePath);
     if ((context.runId || context.requestId) && pendingAgentProcesses({ ...context, workspaceDir: cwd }, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before modifying workspace files";
@@ -262,18 +263,13 @@ async function runWriteFile(
     // A damaged/unreadable journal must fail before mutating the working file.
     listFileMutations(cwd);
     const stat = desktopNativeIdeEnabled()
-      ? await mutateDesktopWorkspace(cwd, [{
-        type: "writeFile",
-        path: filePath,
-        content,
-        expected: preimageContent === undefined
-          ? { exists: false }
-          : { exists: true, file: true, sha256: buildFileHash(preimageContent) },
-        overwrite: preimageContent !== undefined,
-      }], { transactionId: nativeMutationTransactionId("agent-write"), intent: "agent-edit" })
-        .then((result) => ({ mtimeMs: result.entries.find((entry) => entry.path === filePath)?.mtimeMs ?? Date.now() }))
+      ? await publishDesktopFileMutation({
+        workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: context.actorName,
+        runId: context.runId, requestId: context.requestId, toolCallId: context.toolCallId,
+        preimageContent: preimageContent, postimageContent: content,
+      })
       : atomicWriteFile(cwd, filePath, content, preimageContent);
-    recordFileMutation({
+    if (!desktopNativeIdeEnabled()) recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
@@ -306,6 +302,7 @@ async function runEditFile(
   context: Pick<ToolContext, "actorName" | "runId" | "requestId" | "agentProfileId" | "toolCallId">,
   expectedVersion?: unknown
 ): Promise<string | ToolExecutionResult> {
+  if (desktopNativeIdeEnabled() && !desktopWorkspaceWriterActive(cwd)) return withDesktopWorkspaceWriter(cwd, "agent-edit", () => runEditFile(filePath, oldText, newText, cwd, context, expectedVersion));
   try {
     filePath = normalizeEditablePath(filePath);
     if ((context.runId || context.requestId) && pendingAgentProcesses({ ...context, workspaceDir: cwd }, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before modifying workspace files";
@@ -321,16 +318,13 @@ async function runEditFile(
     }
     listFileMutations(cwd);
     const stat = desktopNativeIdeEnabled()
-      ? await mutateDesktopWorkspace(cwd, [{
-        type: "writeFile",
-        path: filePath,
-        content: updatedContent,
-        expected: { exists: true, file: true, sha256: buildFileHash(content) },
-        overwrite: true,
-      }], { transactionId: nativeMutationTransactionId("agent-edit"), intent: "agent-edit" })
-        .then((result) => ({ mtimeMs: result.entries.find((entry) => entry.path === filePath)?.mtimeMs ?? Date.now() }))
+      ? await publishDesktopFileMutation({
+        workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: context.actorName,
+        runId: context.runId, requestId: context.requestId, toolCallId: context.toolCallId,
+        preimageContent: content, postimageContent: updatedContent,
+      })
       : atomicWriteFile(cwd, filePath, updatedContent, content);
-    recordFileMutation({
+    if (!desktopNativeIdeEnabled()) recordFileMutation({
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
@@ -492,7 +486,7 @@ export const TOOL_DISPATCH: Record<string, ToolHandler> = {
     ),
 
   rename_file: async (args, ctx) => {
-    const result = renameWorkspaceFile({ workspaceDir: ctx.workspaceDir, source_path: args.source_path, target_path: args.target_path, expected_version: args.expected_version }, ctx);
+    const result = await renameWorkspaceFileAsync({ workspaceDir: ctx.workspaceDir, source_path: args.source_path, target_path: args.target_path, expected_version: args.expected_version }, ctx);
     return {
       output: JSON.stringify({ source_path: result.sourcePath, path: result.path, version: result.version, renamed: result.changed }),
       ...(result.changed ? { fileUpdate: { path: result.path, previousPath: result.sourcePath, previousVersion: result.version, content: result.content } } : {}),

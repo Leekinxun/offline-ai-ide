@@ -210,3 +210,72 @@ fn shutdown_drops_scan_sessions() {
         "ABORTED"
     );
 }
+
+#[test]
+fn fresh_index_reads_obey_ignore_and_strict_content_policy() {
+    let fixture = TempDir::new().unwrap();
+    fs::write(fixture.path().join("safe.ts"), "export const safe = 1;\n").unwrap();
+    fs::write(fixture.path().join("ignored.ts"), "ignored private content").unwrap();
+    fs::write(fixture.path().join(".ignore"), "ignored.ts\n").unwrap();
+    fs::write(fixture.path().join(".env"), "PRIVATE=secret").unwrap();
+    let core = core();
+    let read = result(request(
+        &core,
+        1,
+        "index.readFiles",
+        json!({ "workspaceDir": fixture.path(), "paths": ["safe.ts", "ignored.ts", ".env", "../outside.ts"] }),
+    ));
+    assert_eq!(read["files"].as_array().unwrap().len(), 1);
+    assert_eq!(read["files"][0]["path"], "safe.ts");
+}
+
+#[cfg(unix)]
+#[test]
+fn late_internal_symlink_swap_cannot_enter_index_read_batch() {
+    use std::os::unix::fs::symlink;
+    let fixture = TempDir::new().unwrap();
+    fs::write(fixture.path().join("safe.ts"), "safe content").unwrap();
+    fs::write(fixture.path().join(".env"), "PRIVATE=secret").unwrap();
+    let core = core();
+    let scan = result(request(
+        &core,
+        1,
+        "index.scan",
+        json!({ "workspaceDir": fixture.path() }),
+    ));
+    fs::remove_file(fixture.path().join("safe.ts")).unwrap();
+    symlink(".env", fixture.path().join("safe.ts")).unwrap();
+    let read = result(request(
+        &core,
+        2,
+        "index.readBatch",
+        json!({ "sessionId": scan["sessionId"], "paths": ["safe.ts"] }),
+    ));
+    assert!(read["files"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn replacing_workspace_directory_invalidates_scan_identity() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().join("workspace");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("safe.ts"), "original").unwrap();
+    let core = core();
+    let scan = result(request(
+        &core,
+        1,
+        "index.scan",
+        json!({ "workspaceDir": root }),
+    ));
+    fs::rename(&root, fixture.path().join("previous")).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("safe.ts"), "replacement").unwrap();
+    let page = request(
+        &core,
+        2,
+        "index.page",
+        json!({ "sessionId": scan["sessionId"] }),
+    );
+    assert_eq!(page["error"]["code"], "PATH_ESCAPE");
+}

@@ -3,9 +3,10 @@ import path from "node:path";
 import {
   buildFileHash, listFileMutations, listMutationEvidenceGaps, readMutationImage, readMutationBytes,
   safeMutationRelativePath, type FileMutationRecord,
-  fileMutationRevision, isMutationReviewComplete, keepRunMutationBatch,
+  fileMutationRevision, isMutationReviewComplete, keepRunMutationBatch, keepRunMutationBatchAsync,
 } from "../files/mutationRegistry.js";
 import { safePath } from "../utils/safePath.js";
+import { withDesktopWorkspaceWriter } from "../desktop/nativeWorkspaceMutation.js";
 
 export interface RunChangeHunk {
   id: string; mutationId: string; preimageHash: string; postimageHash: string;
@@ -86,19 +87,33 @@ export function readRunChanges(workspaceDir: string, runId: string, requestedPat
   return { runId, ...(requestId ? { requestId } : {}), revision, files: selectedPath ? files.filter((file) => file.path === selectedPath) : files, ...(!files.length ? { unavailableReason: "mutation_evidence_unavailable" } : {}) };
 }
 
-export function keepAllRunChanges(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string): { kept: string[] } & RunChanges {
+function prepareKeepAllRunChanges(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string) {
   const changes = readRunChanges(workspaceDir, runId, undefined, requestId);
   if (changes.revision !== expectedRevision) throw new RunChangesKeepError("stale", changes);
   const pending = changes.files.filter((file) => file.reviewState !== "kept" && file.rollbackState !== "reverted");
   const unavailable = pending.filter((file) => file.unavailableReason || file.isTooLarge);
   if (changes.unavailableReason || unavailable.length) throw new RunChangesKeepError("unavailable", changes, unavailable.map((file) => file.path));
-  if (!pending.length) return { kept: [], ...changes };
-  const kept = keepRunMutationBatch(workspaceDir, {
+  return { changes, selection: !pending.length ? undefined : {
     runId, requestId,
     ids: pending.flatMap((file) => file.mutationIds),
     expectedFileRevisions: Object.fromEntries(changes.files.filter((file) => file.mutationIds.length).map((file) => [file.path, file.revision])),
-  });
+  } };
+}
+
+export function keepAllRunChanges(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string): { kept: string[] } & RunChanges {
+  const { changes, selection } = prepareKeepAllRunChanges(workspaceDir, runId, expectedRevision, requestId);
+  if (!selection) return { kept: [], ...changes };
+  const kept = keepRunMutationBatch(workspaceDir, selection);
   return { kept, ...readRunChanges(workspaceDir, runId, undefined, requestId) };
+}
+
+export async function keepAllRunChangesAsync(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string): Promise<{ kept: string[] } & RunChanges> {
+  return withDesktopWorkspaceWriter(workspaceDir, "rollback", async () => {
+    const { changes, selection } = prepareKeepAllRunChanges(workspaceDir, runId, expectedRevision, requestId);
+    if (!selection) return { kept: [], ...changes };
+    const kept = await keepRunMutationBatchAsync(workspaceDir, selection);
+    return { kept, ...readRunChanges(workspaceDir, runId, undefined, requestId) };
+  });
 }
 
 function buildRunFile(workspaceDir: string, filePath: string, mutations: FileMutationRecord[], includeContent: boolean): RunFileChange {

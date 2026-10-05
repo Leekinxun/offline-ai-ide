@@ -120,17 +120,58 @@ with preinstalled WebView2 is not evidence of disconnected installation on a
 clean Windows machine with WebView2 absent. Neither a protocol model fixture nor
 an empty model configuration proves a user's real inference service is ready.
 
-## Remaining Rust migration
+## Context indexing and coordinated desktop writes
 
-Repository enumeration/hashing for the context index and coordinated file
-publication are not yet migrated. TypeScript AST parsing, mutation journals and
-ChangeSet transactions remain in Node. These do not create an external Node
-installation requirement because the service runtime is bundled.
+The desktop context index uses Rust for ignore-aware repository traversal,
+strict text reads, SHA256 hashing, bounded scan sessions, pagination and live
+freshness checks. Scan sessions bind the physical workspace identity, reject
+late symlink/reparse substitutions and enforce content/response limits. Node
+keeps the language adapters, import resolution and retrieval ranking;
+TypeScript AST work runs in a worker thread. Index shards and revision markers
+are published through the Rust metadata transaction namespace. Rebuild locks
+remain owned by the supervising Node PID and async waits do not block its event
+loop.
 
-The next IDE increment should move repository enumeration/hashing into Rust
-while preserving ignore rules and context authorization. Keep TypeScript parsing
-in an independent Node process initially: the index lock recovers by owner PID.
-Then place desktop writes behind a workspace admission fence and coordinator,
-preserving hunk review/undo, version conflicts, durable recovery, shell change
-capture and metadata-only secret-file saves. Watcher events alone are not
-authoritative mutation evidence.
+Desktop editor/create/upload/copy/move/delete operations, Agent write/edit/rename,
+checkpoint restore, hunk/whole-file rollback, keep and keep-all use the Rust
+workspace writer. Agent source bytes and mutation blobs/journal share one
+transaction. Rust checks expected existence/hash/identity, streams bounded
+chunks, stages files, keeps durable WAL receipts, preserves file modes/times and
+refuses replacement of concurrently created targets. Unknown commit outcomes
+are queried/recovered by transaction ID; late cancellation cannot erase a
+completed write receipt. Recovery refuses to overwrite changed postimages.
+Agent writer admission prunes terminal receipt history to the latest 1024
+transactions; unresolved recovery records are never pruned. Committed transaction payloads are removed, including manual editor secret-file
+copies; manual save evidence remains metadata-only. Multi-file publication has
+observable intermediate states and is not an atomic filesystem snapshot.
+
+Bounded and long-running Agent commands reserve an advisory Rust writer guard
+from the pre-execution checkpoint through process-tree cleanup and native
+mutation-evidence publication. Other cooperative Agent, rollback, restore and
+ChangeSet integration writers are blocked. Human saves and index refreshes
+remain available; concurrent human saves block attribution to the command.
+Polling cannot report terminal validation success while the audit is pending.
+Guard ownership survives Rust service restart and is tied to the supervising
+Node PID, workspace identity and opaque owner token.
+
+Checkpoint creation, retention and blob garbage collection also take the native
+writer, so their existing Node schema code cannot race mutation-evidence
+publication in the shared blob store.
+
+The architectural boundary is deliberate: model configuration, approval and
+review decisions, hunk selection, checkpoint schema/retention, and ChangeSet v3
+state transitions remain in the bundled Node service. ChangeSet decision and
+recovery entry points acquire the native workspace writer, while their existing
+Git ref compare-and-swap, integration WAL and review rules are retained. This
+increment does not claim that every Agent/business-state operation is Rust code
+or introduce an external Node installation requirement.
+
+Verification for this increment covers the Rust crate suite, actual native
+index rebuild/incremental/retrieval regressions, source-mode AST worker/event-loop
+checks, file/evidence transaction receipts, keep/rollback routes, binary capture,
+explicit evidence gaps, human-save attribution conflicts, process cleanup and
+Web regressions. Windows compile/native protocol coverage is part of
+`desktop-rust.yml`. Installation acceptance is intentionally deferred for this
+increment; commits carrying `[skip-app-install]` skip the installer acceptance
+job. Earlier installation evidence above remains tied to its original source
+commits.

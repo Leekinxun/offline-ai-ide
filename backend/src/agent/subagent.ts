@@ -1,3 +1,4 @@
+import { beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
 import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js";
 import { OpenAIMessage, OpenAIToolCall, OpenAIToolDef, ToolContext } from "./types.js";
 import {
@@ -18,12 +19,12 @@ import {
 } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import { requireModelTurnAction } from "./finishReason.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
+import { createCheckpointForRuntime } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 import { createManagedWorktree, updateManagedWorktreeMetadata } from "../chat/worktrees.js";
 import { captureChangeSet } from "../chat/changeSets.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
-import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps } from "../files/mutationRegistry.js";
+import { captureCheckpointMutationsDetailedAsync, listMutationEvidenceGaps } from "../files/mutationRegistry.js";
 
 import { getAllTools, runReadFile, TOOL_DISPATCH, type ToolHandler } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
@@ -230,7 +231,7 @@ export async function runSubagent(
   await recorder?.start();
   if (recorder && profile.stepSnapshots) {
     try {
-      const checkpoint = createCheckpoint(childWorkspaceDir, {
+      const checkpoint = await createCheckpointForRuntime(childWorkspaceDir, {
         label: `Before ${agentName}`,
         conversationId: lineage?.parentConversationId,
         runId: recorder.runId,
@@ -501,6 +502,8 @@ export async function runSubagent(
         { kind: "tool_call", label: "Subagent tool execution started", toolName: tc.function.name },
         { toolCalls: (toolMetrics?.toolCalls || 0) + 1 }
       );
+      let desktopCommand: DesktopExternalProcessGuard | undefined;
+      try {
       let output: string;
       let snapshotId: string | undefined;
       let bashMutationsCaptured = false;
@@ -509,12 +512,13 @@ export async function runSubagent(
         if (tc.function.name !== "bash" || !snapshotId || bashMutationsCaptured) return;
         bashMutationsCaptured = true;
         try {
-          const capture = captureCheckpointMutationsDetailed(childWorkspaceDir, {
-            checkpointId: snapshotId,
+          const captureWork = () => captureCheckpointMutationsDetailedAsync(childWorkspaceDir, {
+            checkpointId: snapshotId!,
             runId: childRunId,
             toolCallId: tc.id,
             actor: agentName,
-          });
+          }, { preflight: () => desktopCommand?.assertUnchanged() });
+          const capture = desktopCommand ? await desktopCommand.audit(captureWork) : await captureWork();
           if (capture.skipped.length) {
             mutationEvidenceFailure = `Mutation evidence incomplete: ${capture.skipped.map((entry) => `${entry.path}:${entry.reason}`).join(", ")}`;
             mutationEvidenceBlocker ||= mutationEvidenceFailure;
@@ -554,13 +558,15 @@ export async function runSubagent(
             if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)
               && !(tc.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command))) {
               try {
-                const checkpoint = createCheckpoint(childWorkspaceDir, {
+                if (tc.function.name === "bash") desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
+                const checkpointWork = () => createCheckpointForRuntime(childWorkspaceDir, {
                   label: `Before ${agentName} · ${tc.function.name}`,
                   conversationId: lineage?.parentConversationId,
                   runId: recorder?.runId,
                   kind: "step",
                   toolCallId: tc.id,
                 });
+                const checkpoint = desktopCommand ? await desktopCommand.audit(checkpointWork) : await checkpointWork();
                 snapshotId = checkpoint.id;
               } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
@@ -649,6 +655,7 @@ export async function runSubagent(
       if (toolCallCount > profile.budget.maxToolCalls || Date.now() - startedAt >= profile.budget.maxDurationMs) {
         return finish("failed", output.startsWith("Error:") ? output : "Error: Subagent execution budget exceeded");
       }
+      } finally { await desktopCommand?.release(); }
     }
   }
 

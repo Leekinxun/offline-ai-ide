@@ -1,3 +1,4 @@
+import { beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
 import { WebSocket } from "ws";
 import { config, resolveModelEndpoint, resolveModelInputCapabilities, resolveModelSampling } from "../config.js";
 import {
@@ -42,8 +43,8 @@ import {
   resolveEffectiveAgentPolicy,
 } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
-import { captureCheckpointMutationsDetailed, listFileMutations } from "../files/mutationRegistry.js";
+import { createCheckpointForRuntime } from "../chat/checkpoints.js";
+import { captureCheckpointMutationsDetailedAsync, listFileMutations } from "../files/mutationRegistry.js";
 import { TraceStore } from "../chat/traceStore.js";
 import {
   PLAN_HANDOFF_CONFIRMATION,
@@ -1074,6 +1075,8 @@ export async function runAgentLoop(
             input: args,
           });
 
+          let desktopCommand: DesktopExternalProcessGuard | undefined;
+          try {
           let result = "";
           const executionId = String(++toolExecutionSequence);
           let factualToolOutput: string | undefined;
@@ -1135,13 +1138,15 @@ export async function runAgentLoop(
           if (shouldExecute) {
             if (needsMutationSnapshot) {
               try {
-                const checkpoint = createCheckpoint(session.workspaceDir, {
+                if (toolCall.function.name === "bash" || toolCall.function.name === "process_start") desktopCommand = await beginDesktopExternalProcess(session.workspaceDir);
+                const checkpointWork = () => createCheckpointForRuntime(session.workspaceDir, {
                   label: `Before ${toolCall.function.name}`,
                   conversationId: control?.conversationId,
                   runId: control?.runRecorder?.runId,
                   kind: "step",
                   toolCallId: toolCall.id,
                 });
+                const checkpoint = desktopCommand ? await desktopCommand.audit(checkpointWork) : await checkpointWork();
                 snapshotId = checkpoint.id;
                 displayTrace({ kind: "checkpoint", action: "Step checkpoint created", correlationId: control?.runRecorder?.runId || currentRequestId, runId: control?.runRecorder?.runId, conversationId: control?.conversationId, agentId: agentProfile.id, requestId: currentRequestId, toolCallId: toolCall.id, metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, toolName: toolCall.function.name } });
                 await control?.runRecorder?.toolState({
@@ -1245,6 +1250,7 @@ export async function runAgentLoop(
                 requestId: currentRequestId,
                 toolCallId: toolCall.id,
                 stepCheckpointId: snapshotId,
+                desktopExternalProcess: desktopCommand,
                 // The shell compatibility path is available only after this tool call
                 // has passed the ordinary mode, policy, and approval checks above.
                 compatibilityShellAuthorized: ["bash", "process_start", "process_input"].includes(toolCall.function.name),
@@ -1269,6 +1275,7 @@ export async function runAgentLoop(
                 result = execution.output;
                 fileUpdate = execution.fileUpdate;
                 processResult = execution.process;
+                if (toolCall.function.name === "process_start" && processResult) desktopCommand = undefined;
                 if (processResult) {
                   if (startedProcessVersions) processStartVersions.set(processResult.session.id, startedProcessVersions);
                   isError = Boolean(processResult.evidenceError) || (processResult.session.status !== "running" && (processResult.session.status !== "exited" || processResult.session.exitCode !== 0));
@@ -1299,13 +1306,14 @@ export async function runAgentLoop(
             !toolCall.function.name.startsWith("process_")
           ) {
             try {
-              const capture = captureCheckpointMutationsDetailed(session.workspaceDir, {
-                checkpointId: snapshotId,
-                runId: control.runRecorder.runId,
+              const captureWork = () => captureCheckpointMutationsDetailedAsync(session.workspaceDir, {
+                checkpointId: snapshotId!,
+                runId: control.runRecorder!.runId,
                 requestId: currentRequestId,
                 toolCallId: toolCall.id,
                 actor: session.username,
-              });
+              }, { preflight: () => desktopCommand?.assertUnchanged() });
+              const capture = desktopCommand ? await desktopCommand.audit(captureWork) : await captureWork();
               if (capture.skipped.length) {
                 const detail = capture.skipped.map((entry) => `${entry.path}:${entry.reason}`).join(", ");
                 result = `${result}\n\n[Mutation evidence incomplete: ${detail}]`.trim();
@@ -1447,6 +1455,7 @@ export async function runAgentLoop(
           if (await consumeSteeringTurns(currentAssistantMessage)) {
             continue outer;
           }
+          } finally { await desktopCommand?.release(); }
         }
 
         if (mode === "plan" && approvedPlanSubmitted) {

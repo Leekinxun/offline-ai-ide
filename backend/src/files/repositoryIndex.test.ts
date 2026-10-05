@@ -1,9 +1,10 @@
+import { shutdownDesktopNativeIde } from "../desktop/nativeIdeClient.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { after, type TestContext } from "node:test";
 import { findDefinitionInWorkspace } from "../utils/definitionSearch.js";
 import { recordKnownFileMutation } from "./mutationRegistry.js";
 import { RepositoryIndexStore } from "../indexing/indexStore.js";
@@ -141,3 +142,5 @@ test("incremental mutations re-resolve imports and repair reverse edges after di
   assert.equal(store.readShard(store.shardId("src/consumer.ts"))["src/consumer.ts"].imports[0].resolvedPath, undefined);
   assert.equal(store.readAllFiles().has("src/old/target.ts"), false); assert.equal(store.readAllFiles().has("src/renamed/target.ts"), true);
 });
+
+after(async () => { await shutdownDesktopNativeIde(); });

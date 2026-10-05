@@ -1,3 +1,4 @@
+import { withDesktopWorkspaceWriter } from "../desktop/nativeWorkspaceMutation.js";
 import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -723,4 +724,12 @@ export function applyChangeSetDecision(workspaceDir: string, changeSetOrId: Chan
     }
     throw error;
   }
+}
+
+/** Desktop integration/recovery share the same native admission as editor and Agent writes. */
+export async function applyChangeSetDecisionForRuntime(workspaceDir: string, changeSetOrId: ChangeSet | string, decision: ChangeSetDecision, actor?: ChangeSetDecisionActor): Promise<{ changeSet: ChangeSet; preflight: ChangeSetPreflight }> {
+  return withDesktopWorkspaceWriter(repositoryRoot(workspaceDir), "changeset", async () => applyChangeSetDecision(workspaceDir, changeSetOrId, decision, actor));
+}
+export async function recoverInterruptedChangeSetForRuntime(workspaceDir: string, id: string): Promise<ChangeSetRecoveryResult> {
+  return withDesktopWorkspaceWriter(repositoryRoot(workspaceDir), "changeset", async () => recoverInterruptedChangeSetWithOutcome(workspaceDir, id));
 }

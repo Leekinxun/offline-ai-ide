@@ -26,9 +26,10 @@ import {
   readRunRecord,
 } from "../chat/runHistory.js";
 import { findCheckpointForRun, restoreCheckpointForRuntime } from "../chat/checkpoints.js";
-import { keepFileMutations, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, MutationReviewConflictError, rollbackFileMutations, safeMutationRelativePath } from "../files/mutationRegistry.js";
-import { assertRunChangesOwner, keepAllRunChanges, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
+import { keepFileMutationsAsync, listFileMutations, listMutationEvidenceGaps, MutationJournalEvidenceError, MutationReviewConflictError, rollbackFileMutationsAsync, safeMutationRelativePath } from "../files/mutationRegistry.js";
+import { assertRunChangesOwner, keepAllRunChangesAsync, readRunChanges, RunChangesKeepError } from "../chat/runChanges.js";
 import { canWriteActiveWorkspace } from "../team/sessionBridge.js";
+import { nativeMutationErrorCode, nativeMutationHttpStatus } from "../desktop/nativeWorkspaceMutation.js";
 import {
   createManagedWorktree,
   listManagedWorktrees,
@@ -612,24 +613,25 @@ chatRouter.get("/runs/:runId/changes", (req, res) => {
   }
 });
 
-chatRouter.post("/runs/:runId/changes/keep-all", (req, res) => {
+chatRouter.post("/runs/:runId/changes/keep-all", async (req, res) => {
   if (!writable(req, res)) return;
   const body = req.body || {};
   if (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)) return res.status(400).json({ error: "expectedRevision is required" });
   if (body.requestId !== undefined && body.requestId !== "" && !isValidChatRequestId(body.requestId)) return res.status(400).json({ error: "Invalid chat request id" });
   if (body.path !== undefined || body.ids !== undefined || body.hunkIds !== undefined) return res.status(400).json({ error: "Batch review accepts a run/request summary, not a file or hunk selection" });
   try {
-    res.json(keepAllRunChanges(getSessionWorkspace(req), req.params.runId, body.expectedRevision, body.requestId || undefined));
+    res.json(await keepAllRunChangesAsync(getSessionWorkspace(req), req.params.runId, body.expectedRevision, body.requestId || undefined));
   } catch (error) {
     if (error instanceof RunChangesKeepError) return res.status(409).json({ error: error.message, currentRevision: error.changes.revision, ...(error.reason === "unavailable" ? { unavailableReason: error.changes.unavailableReason || "pending_change_evidence_unavailable", paths: error.paths } : {}) });
     if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    if (nativeMutationErrorCode(error)) return res.status(nativeMutationHttpStatus(error)).json({ error: "Native review publication failed", code: nativeMutationErrorCode(error) });
     const message = error instanceof Error ? error.message : "Failed to keep run changes";
     return res.status(message === "Run not found" ? 404 : (error as NodeJS.ErrnoException)?.code ? 409 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Change evidence is unavailable" : message });
   }
 });
 
-chatRouter.post("/runs/:runId/changes/keep", (req, res) => {
+chatRouter.post("/runs/:runId/changes/keep", async (req, res) => {
   if (!writable(req, res)) return;
   const body = req.body || {};
   if (typeof body.path !== "string" || !safeMutationRelativePath(body.path) || typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedRevision)) return res.status(400).json({ error: "path and expectedRevision are required" });
@@ -642,9 +644,12 @@ chatRouter.post("/runs/:runId/changes/keep", (req, res) => {
     const file = changes.files[0];
     if (file.revision !== body.expectedRevision) return res.status(409).json({ error: "Run changes changed; reload the review before keeping", currentRevision: file.revision });
     if (file.unavailableReason) return res.status(409).json({ error: "Change evidence is unavailable", unavailableReason: file.unavailableReason });
-    const kept = keepFileMutations(workspace, { runId: req.params.runId, requestId, path: file.path, ids: body.ids, hunkIds: body.hunkIds });
+    const kept = await keepFileMutationsAsync(workspace, { runId: req.params.runId, requestId, path: file.path, ids: body.ids, hunkIds: body.hunkIds, expectedRevision: body.expectedRevision });
     res.json({ kept, ...readRunChanges(workspace, req.params.runId, file.path, requestId) });
   } catch (error) {
+    if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    if (nativeMutationErrorCode(error)) return res.status(nativeMutationHttpStatus(error)).json({ error: "Native review publication failed", code: nativeMutationErrorCode(error) });
     const message = error instanceof Error ? error.message : "Failed to keep changes";
     res.status(message === "Run not found" || message === "Run file change not found" ? 404 : 400).json({ error: (error as NodeJS.ErrnoException)?.code ? "Change evidence is unavailable" : message });
   }
@@ -694,7 +699,14 @@ chatRouter.post("/runs/:runId/revert", async (req, res) => {
         if (selectedPath || ids || hunkIds) return res.status(400).json({ error: "Conversation undo requires the complete user turn" });
         preparedFork = forkConversation(session.workspaceDir, run.conversationId, { beforeRequestId: requestId, deferPrune: true });
       }
-      const rollback = rollbackFileMutations(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}), ...(selectedIds ? { ids: selectedIds } : {}), ...(hunkIds ? { hunkIds } : {}) });
+      const rollback = await rollbackFileMutationsAsync(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}), ...(selectedIds ? { ids: selectedIds } : {}), ...(hunkIds ? { hunkIds } : {}) }, {
+        preflight: () => {
+          if (!ids && !hunkIds && listMutationEvidenceGaps(session.workspaceDir, { runId: req.params.runId, requestId, ...(selectedPath ? { path: selectedPath } : {}) }).length) throw new MutationJournalEvidenceError(session.workspaceDir, "rollback has incomplete mutation evidence");
+          if (!body.expectedRevision) return;
+          const changes = readRunChanges(session.workspaceDir, req.params.runId, selectedPath, requestId);
+          if ((selectedPath ? changes.files[0].revision : changes.revision) !== body.expectedRevision) throw new MutationReviewConflictError();
+        },
+      });
       if (rollback.conflicts.length || rollback.unavailable.length) {
         if (preparedFork) { deleteConversation(session.workspaceDir, preparedFork.id); preparedFork = undefined; }
         return res.status(409).json({ error: rollback.applied.length ? "Rollback could not finish; inspect the applied and unavailable entries" : "Rollback conflicts detected; no files were changed", rollback });
@@ -715,6 +727,9 @@ chatRouter.post("/runs/:runId/revert", async (req, res) => {
     if (preparedFork) {
       try { deleteConversation(session.workspaceDir, preparedFork.id); } catch { /* Keep a recoverable fork if cleanup is unavailable. */ }
     }
+    if (error instanceof MutationReviewConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof MutationJournalEvidenceError) return res.status(409).json({ error: "Mutation evidence is unavailable", unavailableReason: "mutation_journal_invalid" });
+    if (nativeMutationErrorCode(error)) return res.status(nativeMutationHttpStatus(error)).json({ error: "Native rollback publication failed", code: nativeMutationErrorCode(error) });
     const message = error instanceof Error ? error.message : "Failed to revert run";
     res.status(message === "Run not found" || message === "Checkpoint not found" ? 404 : 400).json({ error: message });
   }

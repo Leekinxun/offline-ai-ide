@@ -19,7 +19,7 @@ import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./provi
 import { estimateUsageCostUsd, resolveAgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import { requireModelTurnAction } from "./finishReason.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
+import { createCheckpointForRuntime } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 import { createRunId } from "../chat/runHistory.js";
 import { AgentRunRecorder, terminalizeInterruptedRun } from "../chat/runHistory.js";
@@ -29,13 +29,15 @@ import type { ChangeSetStatus } from "../chat/changeSets.js";
 import { isProcessAlive } from "../utils/processLiveness.js";
 import { createManagedWorktree, listManagedWorktrees, updateManagedWorktreeMetadata, type ManagedWorktree } from "../chat/worktrees.js";
 import {
-  captureCheckpointMutationsDetailed,
+  captureCheckpointMutationsDetailedAsync,
   buildFileHash,
   listMutationEvidenceGaps,
   recordKnownFileMutation,
+  publishDesktopFileMutation,
 } from "../files/mutationRegistry.js";
 import { desktopNativeIdeEnabled } from "../desktop/nativeIdeClient.js";
-import { mutateDesktopWorkspace, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
+import { mutateDesktopWorkspace, nativeMutationTransactionId, withDesktopWorkspaceWriter, beginDesktopExternalProcess, type DesktopExternalProcessGuard } from "../desktop/nativeWorkspaceMutation.js";
+import { normalizeEditablePath, readEditableFile, replaceUniqueText } from "./fileEditSafety.js";
 import { OrchestrationStore } from "./orchestrationStore.js";
 import { TraceStore, type CollaborationEventReferences, type CollaborationLifecycleEventInput } from "../chat/traceStore.js";
 
@@ -74,6 +76,22 @@ async function dispatchTeammateTool(
   });
   if (!permission.allowed) return `Error: Tool denied: ${permission.reason || "permission denied"}`;
   await onAuthorized?.();
+  if (desktopNativeIdeEnabled() && (name === "write_file" || name === "edit_file")) {
+    try {
+      return await withDesktopWorkspaceWriter(cwd, "agent-edit", async () => {
+        const filePath = normalizeEditablePath(args.path as string);
+        const policy = evaluateWorkspaceWrite(filePath);
+        if (!policy.allowed) return `Error: ${policy.reason || "Write blocked by workspace policy"}`;
+        const before = readEditableFile(cwd, filePath);
+        if (name === "edit_file" && before === undefined) return "Error: File not found";
+        const after = name === "edit_file" ? replaceUniqueText(before!, args.old_text as string, args.new_text as string).content : args.content;
+        if (typeof after !== "string") return "Error: content must be a string";
+        if (before === after) return `No changes to ${filePath}`;
+        await publishDesktopFileMutation({ workspaceDir: cwd, path: filePath, source: "assistant_tool", actor: `teammate:${agentName}`, runId, toolCallId, preimageContent: before, postimageContent: after });
+        return name === "write_file" ? `Wrote ${Buffer.byteLength(after)} bytes` : "Edited";
+      });
+    } catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
+  }
   switch (name) {
     case "bash": {
       const cmd = args.command as string;
@@ -620,6 +638,8 @@ export class TeammateManager {
         try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
         if (tc.function.name === "idle") idleRequested = true;
+        let desktopCommand: DesktopExternalProcessGuard | undefined;
+        try {
         let output: string;
         let snapshotId: string | undefined;
         let mutationEvidenceFailure = "";
@@ -640,11 +660,13 @@ export class TeammateManager {
               async () => {
                 if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
                   try {
-                    const checkpoint = createCheckpoint(childWorkspaceDir, {
+                    if (tc.function.name === "bash") desktopCommand = await beginDesktopExternalProcess(childWorkspaceDir);
+                    const checkpointWork = () => createCheckpointForRuntime(childWorkspaceDir, {
                       label: `Before teammate:${name} · ${tc.function.name}`,
                       kind: "step",
                       toolCallId: tc.id,
                     });
+                    const checkpoint = desktopCommand ? await desktopCommand.audit(checkpointWork) : await checkpointWork();
                     snapshotId = checkpoint.id;
                   } catch (error) {
                     throw new Error(
@@ -668,12 +690,13 @@ export class TeammateManager {
           }
           if (tc.function.name === "bash" && snapshotId) {
             try {
-              const captured = captureCheckpointMutationsDetailed(childWorkspaceDir, {
-                checkpointId: snapshotId,
+              const captureWork = () => captureCheckpointMutationsDetailedAsync(childWorkspaceDir, {
+                checkpointId: snapshotId!,
                 runId: childRunId,
                 toolCallId: tc.id,
                 actor: `teammate:${name}`,
-              });
+              }, { preflight: () => desktopCommand?.assertUnchanged() });
+              const captured = desktopCommand ? await desktopCommand.audit(captureWork) : await captureWork();
               if (captured.skipped.length) {
                 mutationEvidenceFailure = `Mutation evidence incomplete: ${captured.skipped
                   .map((entry) => `${entry.path}:${entry.reason}`)
@@ -695,6 +718,7 @@ export class TeammateManager {
         }
         console.log(`  [${name}] ${tc.function.name}: ${output.slice(0, 120)}`);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
+        } finally { await desktopCommand?.release(); }
       }
 
       // The command receipt is committed only after every requested tool call

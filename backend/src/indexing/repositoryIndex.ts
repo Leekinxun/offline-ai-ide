@@ -1,3 +1,4 @@
+import { getDesktopNativeIde } from "../desktop/nativeIdeClient.js";
 import { gitExecutable } from "../utils/gitRuntime.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -9,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { rgPath } from "@vscode/ripgrep";
 import { getDiagnostics } from "../diagnostics/service.js";
 import { assertAuthorizedContextContent, evaluateContextPath, readAuthorizedWorkspaceFile } from "../agent/contextPolicy.js";
-import { closeNativeIndex, nativeIndexEnabled, nativeIndexPolicy, pageNativeIndex, readNativeIndexBatch, scanNativeIndex, type NativeIndexContent, type NativeIndexEntry } from "../desktop/nativeIndex.js";
+import { closeNativeIndex, nativeIndexEnabled, nativeIndexPolicy, pageNativeIndex, readNativeIndexBatch, readNativeIndexFiles, scanNativeIndex, type NativeIndexContent, type NativeIndexEntry } from "../desktop/nativeIndex.js";
 import { searchWorkspace } from "../files/workspaceSearch.js";
 import { subscribeWorkspaceMutations } from "../files/mutationRegistry.js";
 import { registerContextIndexAdapter, type ContextIndexStatus } from "../agent/contextManifestIndex.js";
@@ -258,8 +259,21 @@ function listIndexablePaths(workspaceDir: string, prefix?: string): string[] {
 }
 
 function readGitSignals(workspaceDir: string): Map<string, GitFileSignal> {
+  return parseGitSignals(git(workspaceDir, ["-c", "core.quotepath=false", "log", "-n", "50", "--format=@@%H%x09%ct%x09%an", "--name-only"]), git(workspaceDir, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "-uall"]));
+}
+
+async function readGitSignalsAsync(workspaceDir: string): Promise<Map<string, GitFileSignal>> {
+  if (!nativeIndexEnabled()) return readGitSignals(workspaceDir);
+  const run = async (args: string[]) => {
+    try { const result = await getDesktopNativeIde().request<{ stdout: string; exitCode: number }>("git.exec", { workspaceDir, args }); return result.exitCode === 0 ? result.stdout : null; }
+    catch { return null; }
+  };
+  const [log, status] = await Promise.all([run(["-c", "core.quotepath=false", "log", "-n", "50", "--format=@@%H%x09%ct%x09%an", "--name-only"]), run(["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "-uall"])]);
+  return parseGitSignals(log, status);
+}
+
+function parseGitSignals(log: string | null, status: string | null): Map<string, GitFileSignal> {
   const result = new Map<string, GitFileSignal>();
-  const log = git(workspaceDir, ["-c", "core.quotepath=false", "log", "-n", "50", "--format=@@%H%x09%ct%x09%an", "--name-only"]);
   if (log) {
     let commit: string | undefined; let committedAt: number | undefined; let author: string | undefined;
     for (const line of log.split(/\r?\n/)) {
@@ -274,7 +288,6 @@ function readGitSignals(workspaceDir: string): Map<string, GitFileSignal> {
       result.set(filePath, current);
     }
   }
-  const status = git(workspaceDir, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "-uall"]);
   for (const entry of status?.split("\0") || []) {
     const filePath = entry.slice(3).split(" -> ").at(-1)?.trim().replace(/\\/g, "/");
     if (!filePath || !evaluateContextPath(filePath).allowed) continue;
@@ -312,6 +325,18 @@ function indexOne(workspaceDir: string, filePath: string, gitSignals: Map<string
       symbols: indexed.symbols, imports: indexed.imports, references: indexed.references, git: gitSignals.get(file.path),
     };
   } catch { return null; }
+}
+
+async function readFreshIndexFile(workspaceDir: string, relative: string, signal?: AbortSignal): Promise<{ content: string }> {
+  if (!nativeIndexEnabled()) return readAuthorizedWorkspaceFile(workspaceDir, relative);
+  const policy = evaluateContextPath(relative);
+  if (!policy.allowed || policy.normalizedPath !== relative) throw new Error("Unauthorized context path");
+  const result = await readNativeIndexFiles(workspaceDir, [relative], { signal });
+  const file = result.files.find((entry) => entry.path === relative);
+  if (!file) throw new Error("Index file is no longer authorized or readable");
+  assertAuthorizedContextContent(Buffer.from(file.content));
+  if (digest(file.content) !== file.contentHash) throw new Error("Index read digest mismatch");
+  return file;
 }
 
 function nativeIndexedFile(content: NativeIndexContent, indexed: LanguageIndexResult, gitSignals: Map<string, GitFileSignal>): IndexedRepositoryFile | null {
@@ -445,6 +470,20 @@ export function findRepositoryDefinition(
   return null;
 }
 
+export async function findRepositoryDefinitionAsync(workspaceDir: string, symbol: string, currentPath?: string): Promise<{ path: string; selection: import("./types.js").RepositoryRange } | null> {
+  if (!nativeIndexEnabled()) return findRepositoryDefinition(workspaceDir, symbol, currentPath);
+  const store = new RepositoryIndexStore(workspaceDir), indexMeta = store.readMeta();
+  if (!indexMeta || publicStatus(store, indexMeta).status !== "ready") return null;
+  const matches = [...indexedFiles(store, indexMeta).values()].flatMap((file) => file.symbols.filter((entry) => entry.name === symbol.trim()).map((entry) => ({ file, symbol: entry, score: (entry.confidence === "exact" ? 100 : 50) + (currentPath && path.posix.dirname(file.path) === path.posix.dirname(currentPath.replace(/\\/g, "/")) ? 25 : 0) })));
+  matches.sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
+  for (const match of matches) {
+    try { const live = await readFreshIndexFile(store.workspaceRoot, match.file.path);
+      if (digest(live.content) === match.file.contentHash && indexMeta.ignoreFingerprint === await currentIgnoreFingerprint(store.workspaceRoot)) return { path: match.file.path, selection: match.symbol.range };
+    } catch { /* freshness and authorization fail closed */ }
+  }
+  return null;
+}
+
 export async function rebuildRepositoryIndex(workspaceDir: string): Promise<RepositoryIndexStatus> {
   const store = new RepositoryIndexStore(workspaceDir);
   const existing = activeRebuilds.get(store.partitionId);
@@ -453,9 +492,9 @@ export async function rebuildRepositoryIndex(workspaceDir: string): Promise<Repo
     for (let attempt = 0; attempt < 8; attempt += 1) {
       let marker!: RepositoryIndexMeta;
       const markerPolicyFingerprint = await currentIgnoreFingerprint(store.workspaceRoot);
-      store.withLock(() => { const previous = store.readMeta(); marker = meta(store, previous, previous?.fileCount || 0, "rebuilding", undefined, markerPolicyFingerprint); store.writeMeta(marker); });
+      await store.withLockAsync(async () => { const previous = store.readMeta(); marker = meta(store, previous, previous?.fileCount || 0, "rebuilding", undefined, markerPolicyFingerprint); await store.writeMetaAsync(marker); });
       try {
-        const gitSignals = readGitSignals(store.workspaceRoot);
+        const gitSignals = await readGitSignalsAsync(store.workspaceRoot);
         const { files, policyFingerprint: buildIgnoreFingerprint } = await indexFiles(store.workspaceRoot, gitSignals);
         if (buildIgnoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) continue;
         const known = new Set(files.keys());
@@ -466,12 +505,12 @@ export async function rebuildRepositoryIndex(workspaceDir: string): Promise<Repo
         }
         if (buildIgnoreFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) continue;
         const completed = meta(store, marker, files.size, "ready", undefined, buildIgnoreFingerprint);
-        if (!store.replaceAllIfRevision(files, completed, marker.revision)) continue;
+        if (!await store.replaceAllIfRevisionAsync(files, completed, marker.revision)) continue;
         fileCache.set(store.partitionId, { revision: completed.revision, files });
         return publicStatus(store, completed);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Repository index rebuild failed";
-        store.withLock(() => { const current = store.readMeta(); if (current?.revision === marker.revision) store.writeMeta(meta(store, current, current.fileCount, "error", message, current.ignoreFingerprint)); });
+        await store.withLockAsync(async () => { const current = store.readMeta(); if (current?.revision === marker.revision) await store.writeMetaAsync(meta(store, current, current.fileCount, "error", message, current.ignoreFingerprint)); });
         return publicStatus(store);
       }
     }
@@ -554,7 +593,7 @@ export async function invalidateRepositoryIndex(workspaceDir: string, mutations:
     nextFiles.set(filePath, resolvedFile); changes.set(filePath, resolvedFile);
   }
   if (policyFingerprint !== await currentIgnoreFingerprint(store.workspaceRoot)) return rebuildRepositoryIndex(store.workspaceRoot);
-  const updatedMeta = store.updateFiles(changes, (current, fileCount) => meta(store, current, fileCount, "ready", undefined, policyFingerprint));
+  const updatedMeta = await store.updateFilesAsync(changes, (current, fileCount) => meta(store, current, fileCount, "ready", undefined, policyFingerprint));
   const cacheFiles = updatedMeta.revision === currentMeta.revision + 1 ? nextFiles : store.readAllFiles();
   fileCache.set(store.partitionId, { revision: updatedMeta.revision, files: cacheFiles });
   return publicStatus(store);
@@ -675,7 +714,7 @@ export async function retrieveRepositoryContext(options: RetrieveRepositoryConte
   for (const entry of ranked) {
     if (!entry.path || result.length >= Math.max(1, Math.min(options.maxResults || 20, 100))) break;
     try {
-      const live = readAuthorizedWorkspaceFile(store.workspaceRoot, entry.path);
+      const live = await readFreshIndexFile(store.workspaceRoot, entry.path, options.signal);
       const liveHash = digest(live.content);
       if (liveHash !== entry.freshness.contentHash) continue;
       const snippet = excerpt(live.content, entry.range?.startLine || 1);
