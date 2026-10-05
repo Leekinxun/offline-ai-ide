@@ -218,9 +218,13 @@ export async function uploadEntriesInBatches(
       ).catch((cause) => {
         if (cause && typeof cause === "object" && "status" in cause && "error" in cause) {
           const status = (cause as { status: number }).status;
-          // Conflict and request-validation responses happen before files are written.
-          batchMayHaveUploaded = status >= 500 || status === 408 || status === 429;
-          throw (cause as { error: Error }).error;
+          const uploadError = (cause as { error: Error & { code?: string } }).error;
+          // Conflict, request-validation, and upload preflight failures happen
+          // before files are written.
+          batchMayHaveUploaded = !(
+            status >= 400 && status < 500 && status !== 408 && status !== 429
+          );
+          throw uploadError;
         }
         throw cause;
       });

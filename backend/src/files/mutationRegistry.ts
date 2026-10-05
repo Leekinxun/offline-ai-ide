@@ -40,6 +40,7 @@ const MAX_CAPTURE_FILE_BYTES = 2 * 1024 * 1024;
 const key = (workspaceDir: string, relativePath: string) => `${path.resolve(workspaceDir)}::${relativePath}`;
 const journalPath = (workspaceDir: string) => path.join(path.resolve(workspaceDir), JOURNAL_DIR, JOURNAL_FILE);
 const blobPath = (workspaceDir: string, hash: string) => path.join(path.resolve(workspaceDir), JOURNAL_DIR, "blobs", hash);
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 export function buildFileVersion(content: string): string { return crypto.createHash("sha1").update(content).digest("hex"); }
 export function buildFileHash(content: string | Buffer): string { return crypto.createHash("sha256").update(content).digest("hex"); }
 function buffersEqual(left: Buffer | undefined, right: Buffer | undefined): boolean {
@@ -125,6 +126,30 @@ export function safeMutationRelativePath(value: string): string | null {
 }
 const safeRelativePath = safeMutationRelativePath;
 
+function safePersistedMutationRelativePath(value: string): string | null {
+  const regular = safeRelativePath(value);
+  if (regular) return regular;
+  if (!isGeneratedCachePath(value)) return null;
+  return value.replace(/\\/g, "/");
+}
+
+function validRequestId(value: unknown): value is string {
+  return typeof value === "string" && REQUEST_ID_PATTERN.test(value);
+}
+
+function validCorrelationId(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim());
+}
+
+function requireCaptureCorrelation(input: { runId: string; requestId?: string; toolCallId: string }): { runId: string; requestId?: string; toolCallId: string } {
+  const runId = input.runId.trim();
+  const toolCallId = input.toolCallId.trim();
+  if (!runId) throw new Error("Invalid mutation run id");
+  if (!toolCallId) throw new Error("Invalid mutation tool call id");
+  if (input.requestId !== undefined && !validRequestId(input.requestId)) throw new Error("Invalid mutation request id");
+  return { runId, ...(input.requestId !== undefined ? { requestId: input.requestId } : {}), toolCallId };
+}
+
 /** Journal evidence must never follow a symlink, including inside the workspace. */
 function inspectJournalTarget(workspaceDir: string, relativePath: string): string {
   const workspace = path.resolve(workspaceDir);
@@ -201,18 +226,26 @@ function atomicSafeWrite(workspaceDir: string, relativePath: string, content: st
   try { fs.writeFileSync(temporary, content, { flag: "wx" }); const revalidated = inspectWorkspaceTarget(workspaceDir, relativePath); const live = revalidated.exists ? fs.readFileSync(revalidated.target) : Buffer.alloc(0); if (revalidated.exists !== expectedExists || buildFileHash(live) !== expectedHash) throw new Error("rollback target changed before commit"); fs.renameSync(temporary, inspected.target); } catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
 }
 function isMutation(value: unknown, workspaceDir: string): value is FileMutationRecord {
-  if (!value || typeof value !== "object") return false; const x = value as Partial<FileMutationRecord>;
-  if (x.requestId !== undefined && (typeof x.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(x.requestId))) return false;
-  if (x.sequence !== undefined && (!Number.isSafeInteger(x.sequence) || x.sequence < 1)) return false;
-  if (x.revertedAt !== undefined && (typeof x.revertedAt !== "number" || !Number.isFinite(x.revertedAt))) return false;
-  if (x.keptAt !== undefined && (typeof x.keptAt !== "number" || !Number.isFinite(x.keptAt))) return false;
-  if (x.preimageSize !== undefined && (!Number.isSafeInteger(x.preimageSize) || x.preimageSize < 0 || x.preimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
-  if (x.postimageSize !== undefined && (!Number.isSafeInteger(x.postimageSize) || x.postimageSize < 0 || x.postimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
-  if (x.preimageBinary !== undefined && typeof x.preimageBinary !== "boolean") return false;
-  if (x.postimageBinary !== undefined && typeof x.postimageBinary !== "boolean") return false;
-  if (x.keptHunkIds !== undefined && (!Array.isArray(x.keptHunkIds) || !x.keptHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
-  if (x.revertedHunkIds !== undefined && (!Array.isArray(x.revertedHunkIds) || !x.revertedHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
-  return typeof x.id === "string" && typeof x.path === "string" && safeRelativePath(x.path) !== null && path.resolve(x.workspaceDir || "") === workspaceDir && (x.source === "user" || x.source === "assistant_tool") && typeof x.recordedAt === "number" && typeof x.mtimeMs === "number" && typeof x.version === "string" && typeof x.preimageHash === "string" && typeof x.postimageHash === "string" && (x.operation === "create" || x.operation === "modify" || x.operation === "delete") && (x.rollbackScope === "whole-file" || x.rollbackScope === "hunks");
+  try {
+    if (!value || typeof value !== "object") return false; const x = value as Partial<FileMutationRecord>;
+    if (x.runId !== undefined && !validCorrelationId(x.runId)) return false;
+    if (x.requestId !== undefined && !validRequestId(x.requestId)) return false;
+    if (x.toolCallId !== undefined && !validCorrelationId(x.toolCallId)) return false;
+    if (x.sequence !== undefined && (!Number.isSafeInteger(x.sequence) || x.sequence < 1)) return false;
+    if (x.revertedAt !== undefined && (typeof x.revertedAt !== "number" || !Number.isFinite(x.revertedAt))) return false;
+    if (x.keptAt !== undefined && (typeof x.keptAt !== "number" || !Number.isFinite(x.keptAt))) return false;
+    if (x.preimageSize !== undefined && (!Number.isSafeInteger(x.preimageSize) || x.preimageSize < 0 || x.preimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
+    if (x.postimageSize !== undefined && (!Number.isSafeInteger(x.postimageSize) || x.postimageSize < 0 || x.postimageSize > MAX_CAPTURE_FILE_BYTES)) return false;
+    if (x.preimageBinary !== undefined && typeof x.preimageBinary !== "boolean") return false;
+    if (x.postimageBinary !== undefined && typeof x.postimageBinary !== "boolean") return false;
+    if (x.hunks !== undefined && !Array.isArray(x.hunks)) return false;
+    if (x.hunkSelections !== undefined && !Array.isArray(x.hunkSelections)) return false;
+    if (x.keptHunkIds !== undefined && (!Array.isArray(x.keptHunkIds) || !x.keptHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
+    if (x.revertedHunkIds !== undefined && (!Array.isArray(x.revertedHunkIds) || !x.revertedHunkIds.every((id) => typeof id === "string" && x.hunks?.some((hunk) => hunk.id === id)))) return false;
+    return typeof x.id === "string" && typeof x.path === "string" && safePersistedMutationRelativePath(x.path) !== null && typeof x.workspaceDir === "string" && path.resolve(x.workspaceDir) === workspaceDir && (x.source === "user" || x.source === "assistant_tool") && typeof x.recordedAt === "number" && typeof x.mtimeMs === "number" && typeof x.version === "string" && typeof x.preimageHash === "string" && typeof x.postimageHash === "string" && (x.operation === "create" || x.operation === "modify" || x.operation === "delete") && (x.rollbackScope === "whole-file" || x.rollbackScope === "hunks");
+  } catch {
+    return false;
+  }
 }
 function atomicWrite(target: string, content: string | Buffer): void { fs.mkdirSync(path.dirname(target), { recursive: true }); const temporary = `${target}.tmp-${process.pid}-${crypto.randomBytes(3).toString("hex")}`; fs.writeFileSync(temporary, content); fs.renameSync(temporary, target); }
 function storeBlob(workspaceDir: string, content: string | Buffer): string {
@@ -227,10 +260,14 @@ function workspaceRecords(workspaceDir: string): FileMutationRecord[] { const ta
 function workspaceEvidenceGaps(workspaceDir: string): MutationEvidenceGap[] { const target = path.resolve(workspaceDir); return [...mutationEvidenceGaps.values()].filter((x) => x.workspaceDir === target); }
 function evidenceGapKey(gap: Pick<MutationEvidenceGap, "workspaceDir" | "runId" | "toolCallId" | "path">): string { return `${gap.workspaceDir}::${gap.runId}::${gap.toolCallId}::${gap.path}`; }
 function isEvidenceGap(value: unknown, workspaceDir: string): value is MutationEvidenceGap {
-  if (!value || typeof value !== "object") return false;
-  const gap = value as Partial<MutationEvidenceGap>;
-  if (gap.requestId !== undefined && (typeof gap.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(gap.requestId))) return false;
-  return path.resolve(gap.workspaceDir || "") === workspaceDir && safeRelativePath(gap.path || "") !== null && typeof gap.runId === "string" && Boolean(gap.runId.trim()) && typeof gap.toolCallId === "string" && Boolean(gap.toolCallId.trim()) && ["binary", "oversized", "unreadable"].includes(String(gap.reason)) && typeof gap.recordedAt === "number" && Number.isFinite(gap.recordedAt);
+  try {
+    if (!value || typeof value !== "object") return false;
+    const gap = value as Partial<MutationEvidenceGap>;
+    if (gap.requestId !== undefined && !validRequestId(gap.requestId)) return false;
+    return typeof gap.workspaceDir === "string" && path.resolve(gap.workspaceDir) === workspaceDir && typeof gap.path === "string" && safePersistedMutationRelativePath(gap.path) !== null && validCorrelationId(gap.runId) && validCorrelationId(gap.toolCallId) && ["binary", "oversized", "unreadable"].includes(String(gap.reason)) && typeof gap.recordedAt === "number" && Number.isFinite(gap.recordedAt);
+  } catch {
+    return false;
+  }
 }
 function loadJournal(workspaceDir: string, force = false): string | undefined {
   const workspace = path.resolve(workspaceDir); if (loadedWorkspaces.has(workspace) && !force) return;
@@ -265,6 +302,7 @@ function persistJournal(workspaceDir: string): void { const workspace = path.res
 function trimHistory(): void { while (mutationHistory.size > MAX_MUTATION_ENTRIES) { const oldest = mutationHistory.keys().next().value; if (oldest) mutationHistory.delete(oldest); } }
 /** Allows a process restart or a test harness to reload a workspace journal from disk. */
 export function reloadMutationJournal(workspaceDir: string): void { loadJournal(workspaceDir, true); }
+export function assertMutationJournalReadable(workspaceDir: string): void { loadJournal(workspaceDir, true); }
 
 export function subscribeWorkspaceMutations(listener: (event: WorkspaceMutationEvent) => void): () => void {
   mutationListeners.add(listener);
@@ -286,7 +324,7 @@ export function notifyWorkspaceMutation(event: Omit<WorkspaceMutationEvent, "wor
 }
 
 export function recordKnownFileMutation(input: { workspaceDir: string; path: string; source: KnownFileMutationSource; actor?: string; mtimeMs: number; version?: string; content?: string; runId?: string; requestId?: string; toolCallId?: string; preimageContent?: string; preimageHash?: string; hunkSelections?: FileMutationRecord["hunkSelections"]; hunks?: Array<{ id: string; preimage: string; postimage: string }>; }): KnownFileMutationRecord {
-  if (input.requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId)) throw new Error("Invalid mutation request id");
+  if (input.requestId && !validRequestId(input.requestId)) throw new Error("Invalid mutation request id");
   const relativePath = safeRelativePath(input.path); if (!relativePath) throw new Error("Mutation path must be a workspace-relative file path");
   const workspaceDir = path.resolve(input.workspaceDir); loadJournal(workspaceDir, true);
   const record: KnownFileMutationRecord = { workspaceDir, path: relativePath, source: input.source, ...(input.actor ? { actor: input.actor } : {}), recordedAt: Date.now(), mtimeMs: input.mtimeMs, version: input.version || buildFileVersion(typeof input.content === "string" ? input.content : "") };
@@ -325,7 +363,7 @@ function recordCapturedFileMutation(input: {
   runId: string; requestId?: string; toolCallId: string;
   preimage?: CapturedFile; postimage?: CapturedFile;
 }): FileMutationRecord {
-  if (input.requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId)) throw new Error("Invalid mutation request id");
+  if (input.requestId && !validRequestId(input.requestId)) throw new Error("Invalid mutation request id");
   const relativePath = safeRelativePath(input.path); if (!relativePath) throw new Error("Mutation path must be a workspace-relative file path");
   const workspaceDir = path.resolve(input.workspaceDir); loadJournal(workspaceDir, true);
   const recordedAt = Date.now();
@@ -387,7 +425,7 @@ export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput
     const relativePath = safeRelativePath(input.path);
     if (path.resolve(input.workspaceDir) !== workspaceDir || !relativePath || paths.has(relativePath)) throw new Error("Mutation batch paths must be distinct files in one workspace");
     paths.add(relativePath);
-    if (input.requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId)) throw new Error("Invalid mutation request id");
+    if (input.requestId && !validRequestId(input.requestId)) throw new Error("Invalid mutation request id");
     if (input.preimageContent === undefined && input.postimageContent === undefined) throw new Error("Mutation batch requires a preimage or postimage");
     for (const content of [input.preimageContent, input.postimageContent]) {
       if (content !== undefined && (typeof content !== "string" || content.includes("\0") || Buffer.byteLength(content) > MAX_CAPTURE_FILE_BYTES)) throw new Error("Mutation batch evidence must be bounded text");
@@ -855,6 +893,7 @@ function currentWorkspaceFiles(workspaceDir: string): Map<string, CapturedFile> 
 }
 /** Compare the workspace against a checkpoint and persist exact create/modify/delete mutation records. */
 export function captureCheckpointMutationsDetailed(workspaceDir: string, input: { checkpointId: string; runId: string; requestId?: string; toolCallId: string; actor?: string }): MutationCaptureResult {
+  const correlation = requireCaptureCorrelation(input);
   const before = checkpointFiles(workspaceDir, input.checkpointId); const after = currentWorkspaceFiles(workspaceDir); const paths = new Set([...before.keys(), ...after.keys()]); const result: MutationCaptureResult = { records: [], skipped: [] };
   for (const relative of [...paths].sort()) {
     const preimage = before.get(relative); const postimage = after.get(relative);
@@ -865,16 +904,16 @@ export function captureCheckpointMutationsDetailed(workspaceDir: string, input: 
     }
     if (preimage?.hash === postimage?.hash && preimage?.reason === postimage?.reason) continue;
     if (preimage?.reason === "binary" || postimage?.reason === "binary") {
-      result.records.push(recordCapturedFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimage, postimage }));
+      result.records.push(recordCapturedFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, ...correlation, preimage, postimage }));
       continue;
     }
     const preimageContent = preimage?.content; const postimageContent = postimage?.content;
     if (preimageContent === postimageContent) continue;
-    result.records.push(recordFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, runId: input.runId, requestId: input.requestId, toolCallId: input.toolCallId, preimageContent, postimageContent }));
+    result.records.push(recordFileMutation({ workspaceDir, path: relative, source: "assistant_tool", actor: input.actor, ...correlation, preimageContent, postimageContent }));
   }
   if (result.skipped.length) {
     const workspace = path.resolve(workspaceDir); loadJournal(workspace, true); const recordedAt = Date.now();
-    for (const skipped of result.skipped) { const gap: MutationEvidenceGap = { workspaceDir: workspace, path: skipped.path, runId: input.runId, ...(input.requestId ? { requestId: input.requestId } : {}), toolCallId: input.toolCallId, reason: skipped.reason, recordedAt }; mutationEvidenceGaps.set(evidenceGapKey(gap), gap); }
+    for (const skipped of result.skipped) { const gap: MutationEvidenceGap = { workspaceDir: workspace, path: skipped.path, ...correlation, reason: skipped.reason, recordedAt }; mutationEvidenceGaps.set(evidenceGapKey(gap), gap); }
     persistJournal(workspace);
   }
   return result;

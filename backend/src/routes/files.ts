@@ -18,9 +18,12 @@ import {
 import { pushTeamSnapshot } from "../ws/team.js";
 import {
   buildFileVersion,
+  assertMutationJournalReadable,
   lookupKnownFileMutation,
+  MutationJournalEvidenceError,
   notifyWorkspaceMutation,
   recordKnownFileMutation,
+  safeMutationRelativePath,
 } from "../files/mutationRegistry.js";
 import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
@@ -184,15 +187,23 @@ function normalizeUploadPath(value: unknown): string | null {
     return null;
   }
 
-  const normalized = value
-    .replace(/\\/g, "/")
+  const slashNormalized = value.replace(/\\/g, "/");
+  if (
+    !slashNormalized ||
+    slashNormalized.includes("\0") ||
+    path.posix.isAbsolute(slashNormalized) ||
+    /^[A-Za-z]:/.test(slashNormalized)
+  ) {
+    return null;
+  }
+
+  const normalized = slashNormalized
     .split("/")
     .filter((part) => part.length > 0)
     .join("/");
 
   if (
     !normalized ||
-    path.isAbsolute(normalized) ||
     normalized.split("/").some((part) => part === "." || part === "..")
   ) {
     return null;
@@ -224,6 +235,72 @@ function joinUploadTarget(targetPath: unknown, filePath: unknown): string | null
   }
 
   return `${targetRelPath}/${fileRelPath}`;
+}
+
+const ACTIVE_UPLOAD_STORE_NAMES = new Set([
+  ".checkpoints",
+  ".history",
+  ".team",
+  ".codex",
+  ".omx",
+  ".crewforge",
+  ".git",
+]);
+
+class UploadPathError extends Error {
+  readonly code = "UPLOAD_INVALID_PATH";
+  readonly status = 400;
+  constructor(message = "Invalid upload path") {
+    super(message);
+    this.name = "UploadPathError";
+  }
+}
+
+function assertUploadTargetAllowed(relativePath: string): void {
+  if (ACTIVE_UPLOAD_STORE_NAMES.has(relativePath.split("/")[0])) {
+    throw new UploadPathError("Upload target is reserved for workspace metadata");
+  }
+}
+
+function assertUploadBatchHasNoPrefixCollisions(relativePaths: string[]): void {
+  const sorted = [...relativePaths].sort((a, b) => a.localeCompare(b));
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    if (sorted[index + 1].startsWith(`${sorted[index]}/`)) {
+      throw new UploadPathError("Upload batch contains conflicting file and child paths");
+    }
+  }
+}
+
+function assertUploadTargetWritable(workspaceDir: string, relativePath: string, fullPath: string): void {
+  let cursor = path.resolve(workspaceDir);
+  const parts = relativePath.split("/");
+  for (const [index, part] of parts.entries()) {
+    cursor = path.join(cursor, part);
+    if (!fs.existsSync(cursor)) break;
+    const stat = fs.lstatSync(cursor);
+    if (stat.isSymbolicLink()) {
+      throw new UploadPathError("Upload path crosses a symbolic link");
+    }
+    const final = index === parts.length - 1;
+    if (!final && !stat.isDirectory()) {
+      throw new UploadPathError("Upload parent is not a writable directory");
+    }
+    if (final && !stat.isFile()) {
+      throw new UploadPathError("Upload target is not a regular file");
+    }
+  }
+
+  let parent = path.dirname(fullPath);
+  while (!fs.existsSync(parent)) {
+    const next = path.dirname(parent);
+    if (next === parent) throw new UploadPathError();
+    parent = next;
+  }
+
+  const parentStat = fs.lstatSync(parent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+    throw new UploadPathError("Upload parent is not a writable directory");
+  }
 }
 
 function buildTree(dirPath: string, relPrefix = ""): FileNode[] {
@@ -931,6 +1008,8 @@ filesRouter.post("/upload", (req, res, next) => {
     ? (req.files as Express.Multer.File[])
     : [];
   const requestedPaths = getFormFieldValues(req.body.paths);
+  let writtenCount = 0;
+  let currentWritePath: string | undefined;
 
   if (files.length === 0) {
     return res.status(400).json({ detail: "files required" });
@@ -939,21 +1018,32 @@ filesRouter.post("/upload", (req, res, next) => {
   try {
     const session = (req as any).userSession as UserSession;
     const workspaceDir = getPinnedUploadWorkspace(req);
+    assertMutationJournalReadable(workspaceDir);
+    const seenPaths = new Set<string>();
     const prepared = files.map((file, index) => {
       const relPath = joinUploadTarget(
         targetPath,
         requestedPaths[index] || file.originalname
       );
       if (!relPath) {
-        throw new Error("Invalid upload path");
+        throw new UploadPathError();
       }
+      assertUploadTargetAllowed(relPath);
+      if (seenPaths.has(relPath)) {
+        throw new UploadPathError("Duplicate upload path");
+      }
+      seenPaths.add(relPath);
+      const fullPath = safePathUtil(relPath, workspaceDir);
+      assertUploadTargetWritable(workspaceDir, relPath, fullPath);
 
       return {
         relPath,
-        fullPath: safePathUtil(relPath, workspaceDir),
+        fullPath,
         content: file.buffer,
+        recordMutation: safeMutationRelativePath(relPath) !== null,
       };
     });
+    assertUploadBatchHasNoPrefixCollisions(prepared.map((file) => file.relPath));
 
     const conflicts = prepared
       .filter((file) => fs.existsSync(file.fullPath))
@@ -967,10 +1057,19 @@ filesRouter.post("/upload", (req, res, next) => {
       });
     }
 
+    assertMutationJournalReadable(workspaceDir);
+
     fs.mkdirSync(workspaceDir, { recursive: true });
     for (const file of prepared) {
+      currentWritePath = file.relPath;
       fs.mkdirSync(path.dirname(file.fullPath), { recursive: true });
-      fs.writeFileSync(file.fullPath, file.content);
+      fs.writeFileSync(file.fullPath, file.content, overwrite ? undefined : { flag: "wx" });
+      writtenCount += 1;
+
+      if (!file.recordMutation) {
+        currentWritePath = undefined;
+        continue;
+      }
 
       const stat = fs.statSync(file.fullPath);
       recordKnownFileMutation({
@@ -981,6 +1080,7 @@ filesRouter.post("/upload", (req, res, next) => {
         mtimeMs: stat.mtimeMs,
         version: buildFileVersion(file.content.toString("base64")),
       });
+      currentWritePath = undefined;
     }
 
     maybeRecordTeamActivity(req, {
@@ -998,6 +1098,25 @@ filesRouter.post("/upload", (req, res, next) => {
       overwritten: conflicts.length,
     });
   } catch (e: any) {
+    if (e instanceof MutationJournalEvidenceError) {
+      return res.status(writtenCount > 0 ? 500 : 422).json({ detail: e.message, code: e.code });
+    }
+    if (e instanceof UploadPathError) {
+      return res.status(e.status).json({ detail: e.message, code: e.code });
+    }
+    if ((e as NodeJS.ErrnoException)?.code === "EEXIST") {
+      if (writtenCount > 0) {
+        return res.status(500).json({
+          detail: "Upload partially failed after writing files",
+          code: "UPLOAD_PARTIAL_FAILURE",
+        });
+      }
+      return res.status(409).json({
+        detail: "Upload target already exists",
+        code: "UPLOAD_CONFLICT",
+        conflicts: currentWritePath ? [currentWritePath] : [],
+      });
+    }
     const status = e.message === "Path traversal denied" ? 403 : 500;
     res.status(status).json({ detail: e.message });
   }
