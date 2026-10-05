@@ -24,7 +24,9 @@ concurrency:
 
 jobs:
   windows_nsis:
-    if: github.ref == 'refs/heads/APP_RUST'
+    # Code migrations can explicitly defer installation acceptance while keeping
+    # compile/protocol/contract lanes active. Manual dispatch remains available.
+    if: github.ref == 'refs/heads/APP_RUST' && (github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip-app-install]'))
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
