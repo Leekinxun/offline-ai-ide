@@ -31,7 +31,7 @@ import {
 import { config } from "../config.js";
 import { readGitStatus, toRepositoryRelativePath } from "../files/gitStatus.js";
 import { desktopNativeIdeEnabled, NativeIdeError } from "../desktop/nativeIdeClient.js";
-import { readDesktopFile, readDesktopFileTree, readDesktopGitStatus } from "../desktop/nativeIdeServices.js";
+import { findDesktopFilePaths, readDesktopFile, readDesktopFileTree, readDesktopGitStatus } from "../desktop/nativeIdeServices.js";
 import { readDesktopWorkspaceChanges } from "../desktop/nativeWorkspaceChanges.js";
 import { mutateDesktopWorkspace, nativeMutationErrorCode, nativeMutationHttpStatus, nativeMutationTransactionId } from "../desktop/nativeWorkspaceMutation.js";
 import { CopyEntryError, copyWorkspaceEntry } from "../files/copyEntry.js";
@@ -477,6 +477,16 @@ function nativeMutationErrorResponse(res: any, error: unknown, fallback = "Deskt
   });
 }
 
+function requireExpectedTreeWorkspace(req: Request, res: any): boolean {
+  const expected = req.query.expectedWorkspaceDir;
+  if (expected === undefined) return true;
+  if (typeof expected !== "string") { res.status(400).json({ detail: "Expected workspace must be a string" }); return false; }
+  if (path.resolve(expected) !== path.resolve(getWorkspace(req))) {
+    res.status(409).json({ detail: "Workspace changed while reading file names", code: "WORKSPACE_CHANGED" }); return false;
+  }
+  return true;
+}
+
 // GET /tree
 filesRouter.get("/tree", async (req, res) => {
   const workspaceDir = getWorkspace(req);
@@ -485,10 +495,28 @@ filesRouter.get("/tree", async (req, res) => {
     return res.json([]);
   }
   if (desktopNativeIdeEnabled()) {
-    try { return res.json(await readDesktopFileTree(workspaceDir)); }
-    catch { return res.status(503).json({ detail: "Desktop file service is unavailable" }); }
+    if (!requireExpectedTreeWorkspace(req, res)) return;
+    if (req.query.path !== undefined && typeof req.query.path !== "string") return res.status(400).json({ detail: "Directory path must be a string" });
+    try { return res.json(await readDesktopFileTree(workspaceDir, req.query.path as string | undefined)); }
+    catch (error) {
+      return res.status(nativeMutationHttpStatus(error)).json({ detail: error instanceof Error ? error.message : "Desktop file service is unavailable", ...(nativeMutationErrorCode(error) ? { code: nativeMutationErrorCode(error) } : {}) });
+    }
   }
   res.json(buildTree(workspaceDir));
+});
+
+// Desktop quick-open searches metadata rather than only expanded explorer nodes.
+filesRouter.get("/paths", async (req, res) => {
+  if (!desktopNativeIdeEnabled()) return res.status(404).json({ detail: "Native file-name lookup is unavailable" });
+  if (!requireExpectedTreeWorkspace(req, res)) return;
+  const workspaceDir = getWorkspace(req);
+  if (req.query.query !== undefined && typeof req.query.query !== "string") return res.status(400).json({ detail: "File-name query must be a string" });
+  const controller = new AbortController();
+  const closed = () => { if (!res.writableEnded) controller.abort(); };
+  res.on("close", closed);
+  try { return res.json({ workspaceDir, ...await findDesktopFilePaths(workspaceDir, req.query.query as string ?? "", controller.signal) }); }
+  catch (error) { if (!controller.signal.aborted) return res.status(nativeMutationHttpStatus(error)).json({ detail: error instanceof Error ? error.message : "File-name search failed" }); }
+  finally { res.off("close", closed); }
 });
 
 // GET /git-status

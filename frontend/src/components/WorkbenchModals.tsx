@@ -5,6 +5,7 @@ import { ActionConfirmDialog, type ActionConfirmIntent } from "./ActionConfirmDi
 import { useI18n } from "../i18n";
 import type { FileNode, OpenFile, TeamRole } from "../types";
 import type {
+  WorkspacePathSearchResponse,
   WorkspaceSearchOptions,
   WorkspaceSearchResponse,
   WorkspaceSearchResult,
@@ -71,6 +72,7 @@ export interface WorkbenchModalsProps {
   onCloseCommandPalette: () => void;
   onOpenFile: (path: string) => void;
   onRunPaletteCommand: (command: any) => void;
+  onSearchPaths?: (query: string, options?: { signal?: AbortSignal }) => Promise<WorkspacePathSearchResponse>;
   canFormatDocument: boolean;
 
   // Workspace Search Panel
@@ -131,6 +133,7 @@ export const WorkbenchModals: React.FC<WorkbenchModalsProps> = ({
   onCloseCommandPalette,
   onOpenFile,
   onRunPaletteCommand,
+  onSearchPaths,
   canFormatDocument,
 
   workspaceSearchVisible,
@@ -205,6 +208,7 @@ export const WorkbenchModals: React.FC<WorkbenchModalsProps> = ({
         onClose={onCloseCommandPalette}
         onOpenFile={onOpenFile}
         onRunCommand={onRunPaletteCommand}
+        onSearchPaths={onSearchPaths}
         canFormatDocument={canFormatDocument}
       />
 

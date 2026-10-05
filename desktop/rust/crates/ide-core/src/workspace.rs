@@ -252,3 +252,99 @@ mod tests {
         );
     }
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindPathsParams {
+    pub workspace_dir: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default = "default_path_limit")]
+    pub limit: usize,
+}
+fn default_path_limit() -> usize {
+    80
+}
+#[derive(Serialize)]
+pub struct FoundPaths {
+    paths: Vec<String>,
+    truncated: bool,
+}
+
+/// File-name lookup remains independent of explorer expansion state.
+pub fn find_paths(
+    params: FindPathsParams,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<FoundPaths> {
+    use std::sync::atomic::Ordering;
+    if params.query.len() > 1024 {
+        return Err(CoreError::invalid("File-name query is too long"));
+    }
+    let workspace = Workspace::open(params.workspace_dir)?;
+    let query = params.query.trim().replace('\\', "/").to_lowercase();
+    let limit = params.limit.clamp(1, 1000);
+    let mut builder = ignore::WalkBuilder::new(workspace.root());
+    builder
+        .standard_filters(true)
+        .hidden(true)
+        .follow_links(false)
+        .max_depth(Some(64))
+        .add_custom_ignore_filename(".rgignore")
+        .sort_by_file_name(|a, b| a.cmp(b));
+    builder.filter_entry(|entry| {
+        entry.depth() == 0
+            || ![
+                "node_modules",
+                "target",
+                "dist",
+                "build",
+                "coverage",
+                "vendor",
+                "__pycache__",
+                "venv",
+            ]
+            .iter()
+            .any(|name| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(name)
+            })
+    });
+    let mut paths = Vec::new();
+    let mut visited = 0;
+    for entry in builder.build() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(CoreError::aborted());
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        visited += 1;
+        if visited > 250_000 {
+            return Ok(FoundPaths {
+                paths,
+                truncated: true,
+            });
+        }
+        let Some(relative) = workspace.relative(entry.path()) else {
+            continue;
+        };
+        if relative.to_lowercase().contains(&query) {
+            paths.push(relative);
+            if paths.len() >= limit {
+                return Ok(FoundPaths {
+                    paths,
+                    truncated: true,
+                });
+            }
+        }
+    }
+    Ok(FoundPaths {
+        paths,
+        truncated: false,
+    })
+}

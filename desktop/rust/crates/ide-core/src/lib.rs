@@ -127,8 +127,9 @@ impl Core {
     fn dispatch(&self, method: &str, params: Value, cancelled: Arc<AtomicBool>) -> Result<Value> {
         match method {
             "ping" => Ok(
-                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.read", "fs.changeVersion", "fs.mutate", "fs.writer.admit", "fs.writer.acquire", "fs.writer.inspect", "fs.writer.release", "fs.writer.revoke", "fs.writer.externalBegin", "fs.writer.externalEnd", "fs.transaction.appendPlans", "fs.transaction.begin", "fs.transaction.chunk", "fs.transaction.commit", "fs.transaction.abort", "fs.transaction.status", "fs.transaction.recover", "search", "index.scan", "index.page", "index.readBatch", "index.readFiles", "index.policy", "index.close", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
+                json!({ "protocolVersion": 1, "capabilities": ["fs.entries", "fs.findPaths", "fs.read", "fs.changeVersion", "fs.mutate", "fs.writer.admit", "fs.writer.acquire", "fs.writer.inspect", "fs.writer.release", "fs.writer.revoke", "fs.writer.externalBegin", "fs.writer.externalEnd", "fs.transaction.appendPlans", "fs.transaction.begin", "fs.transaction.chunk", "fs.transaction.commit", "fs.transaction.abort", "fs.transaction.status", "fs.transaction.recover", "search", "index.scan", "index.page", "index.readBatch", "index.readFiles", "index.policy", "index.close", "git.exec", "watch.start", "watch.stop", "pty.spawn", "pty.write", "pty.resize", "pty.kill", "rpc.cancel"] }),
             ),
+            "fs.findPaths" => serialize(workspace::find_paths(parse(params)?, cancelled)?),
             "fs.entries" => serialize(workspace::entries(parse(params)?)?),
             "fs.read" => serialize(workspace::read(parse(params)?)?),
             "fs.changeVersion" => serialize(self.change_versions.query(parse(params)?)?),

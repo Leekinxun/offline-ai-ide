@@ -33,6 +33,18 @@ export interface UploadEntriesOptions {
   onProgress?: (progress: UploadProgress) => void;
 }
 
+export interface FetchTreeOptions {
+  path?: string;
+  signal?: AbortSignal;
+  expectedWorkspaceDir?: string;
+}
+
+export interface WorkspacePathSearchResponse {
+  paths: string[];
+  truncated: boolean;
+  workspaceDir?: string;
+}
+
 const UPLOAD_BATCH_BYTES = 8 * 1024 * 1024;
 const UPLOAD_BATCH_FILES = 50;
 
@@ -333,8 +345,16 @@ export function useFileSystem(token: string) {
     [token]
   );
 
-  const fetchTree = useCallback(async (): Promise<FileNode[]> => {
-    const res = await fetch(`${API}/tree`, { headers: authHeaders() });
+  const fetchTree = useCallback(async (options: FetchTreeOptions = {}): Promise<FileNode[]> => {
+    const params = new URLSearchParams();
+    const normalizedPath = options.path?.trim();
+    if (normalizedPath) params.set("path", normalizedPath);
+    if (options.expectedWorkspaceDir) params.set("expectedWorkspaceDir", options.expectedWorkspaceDir);
+    const query = params.toString();
+    const res = await fetch(`${API}/tree${query ? `?${query}` : ""}`, {
+      headers: authHeaders(),
+      signal: options.signal,
+    });
     if (!res.ok) throw new Error("Failed to load file tree");
     return res.json();
   }, [authHeaders]);
@@ -360,6 +380,27 @@ export function useFileSystem(token: string) {
     if (!res.ok) throw new Error("Failed to load git status");
     return res.json();
   }, [authHeaders]);
+
+  const searchPaths = useCallback(
+    async (query: string, options: { signal?: AbortSignal; expectedWorkspaceDir?: string } = {}): Promise<WorkspacePathSearchResponse> => {
+      const params = new URLSearchParams({ query });
+      if (options.expectedWorkspaceDir) params.set("expectedWorkspaceDir", options.expectedWorkspaceDir);
+      const res = await fetch(`${API}/paths?${params.toString()}`, {
+        headers: authHeaders(),
+        signal: options.signal,
+      });
+      if (!res.ok) throw new Error("Failed to search workspace paths");
+      const data = await res.json();
+      return {
+        paths: Array.isArray(data.paths)
+          ? data.paths.filter((path: unknown): path is string => typeof path === "string")
+          : [],
+        truncated: data.truncated === true,
+        ...(typeof data.workspaceDir === "string" ? { workspaceDir: data.workspaceDir } : {}),
+      };
+    },
+    [authHeaders]
+  );
 
   const searchWorkspace = useCallback(
     async (options: WorkspaceSearchOptions): Promise<WorkspaceSearchResponse> => {
@@ -678,6 +719,7 @@ export function useFileSystem(token: string) {
       fetchTree,
       fetchChanges,
       fetchGitStatus,
+      searchPaths,
       searchWorkspace,
       cancelWorkspaceSearch,
       readFileWithMeta,
@@ -699,6 +741,7 @@ export function useFileSystem(token: string) {
       fetchTree,
       fetchChanges,
       fetchGitStatus,
+      searchPaths,
       searchWorkspace,
       cancelWorkspaceSearch,
       readFileWithMeta,

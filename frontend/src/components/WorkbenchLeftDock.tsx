@@ -109,6 +109,8 @@ export interface WorkbenchLeftDockProps {
 
   // File tree
   fileTree: FileNode[];
+  treeRefreshNonce: number;
+  treeError: string | null;
   onCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
   onCopyEntry: (sourcePath: string, targetDirectory: string) => Promise<CopyEntryResult>;
   onMoveEntry: (sourcePath: string, targetDirectory: string) => Promise<MoveEntryResult>;
@@ -121,6 +123,7 @@ export interface WorkbenchLeftDockProps {
     options?: { overwrite?: boolean; targetPath?: string }
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => Promise<void>;
+  onLoadDirectory?: (path: string) => Promise<boolean>;
   pickingWorkspace: boolean;
   onPickDesktopWorkspace: () => Promise<void>;
   folderOpenRequestId: number;
@@ -190,6 +193,8 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
   onLoadConversation,
 
   fileTree,
+  treeRefreshNonce,
+  treeError,
   onCreateEntry,
   onCopyEntry,
   onMoveEntry,
@@ -199,6 +204,7 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
   onDownloadEntry,
   onUploadEntries,
   onRefreshTree,
+  onLoadDirectory,
   pickingWorkspace,
   onPickDesktopWorkspace,
   folderOpenRequestId,
@@ -478,6 +484,9 @@ export const WorkbenchLeftDock: React.FC<WorkbenchLeftDockProps> = ({
           onDownloadEntry={onDownloadEntry}
           onUploadEntries={onUploadEntries}
           onRefreshTree={onRefreshTree}
+          onLoadDirectory={onLoadDirectory}
+          treeRefreshNonce={treeRefreshNonce}
+          treeError={treeError}
           workspaceDir={workspaceDir}
           workspaceLocked={isolatedWindow}
           desktopApp={desktopApp}

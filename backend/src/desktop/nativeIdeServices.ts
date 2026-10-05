@@ -6,26 +6,24 @@ import { parseGitStatusOutput, scopeGitStatusEntries, type GitStatusSnapshot } f
 import { getDesktopNativeIde, NativeIdeError, type NativeIdeEvent } from "./nativeIdeClient.js";
 
 interface NativeEntry { name: string; isDirectory: boolean; isFile: boolean; isSymbolicLink: boolean; }
-interface FileNode { name: string; path: string; type: "file" | "directory"; children?: FileNode[]; }
+interface FileNode { name: string; path: string; type: "file" | "directory"; children?: FileNode[]; childrenLoaded?: boolean; }
 
-export async function readDesktopFileTree(workspaceDir: string): Promise<FileNode[]> {
-  const client = getDesktopNativeIde();
-  let visited = 0;
-  async function visit(relative: string, depth: number): Promise<FileNode[]> {
-    if (depth > 64) throw new NativeIdeError("Workspace tree depth limit exceeded", "LIMIT_EXCEEDED");
-    const entries = await client.request<NativeEntry[]>("fs.entries", { workspaceDir, path: relative });
-    const visible = entries.filter((item) => !item.name.startsWith(".") && !item.isSymbolicLink);
-    visible.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    const result: FileNode[] = [];
-    for (const item of visible) {
-      if (++visited > 250_000) throw new NativeIdeError("Workspace tree entry limit exceeded", "LIMIT_EXCEEDED");
-      const entryPath = relative ? `${relative}/${item.name}` : item.name;
-      if (item.isDirectory) result.push({ name: item.name, path: entryPath, type: "directory", children: await visit(entryPath, depth + 1) });
-      else if (item.isFile) result.push({ name: item.name, path: entryPath, type: "file" });
-    }
-    return result;
-  }
-  return visit("", 0);
+/** Desktop explorer loads one directory at a time. Walking the entire workspace
+ * here makes selecting a monorepo wait on thousands of IPC calls and limits. */
+export async function readDesktopFileTree(workspaceDir: string, directory = ""): Promise<FileNode[]> {
+  const prefix = directory.replace(/\\/g, "/").replace(/\/+$/, "");
+  const entries = await getDesktopNativeIde().request<NativeEntry[]>("fs.entries", { workspaceDir, path: prefix });
+  const visible = entries.filter((item) => !item.name.startsWith(".") && !item.isSymbolicLink);
+  visible.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  return visible.flatMap((item): FileNode[] => {
+    const entryPath = prefix ? `${prefix}/${item.name}` : item.name;
+    if (item.isDirectory) return [{ name: item.name, path: entryPath, type: "directory", children: [], childrenLoaded: false }];
+    return item.isFile ? [{ name: item.name, path: entryPath, type: "file" }] : [];
+  });
+}
+
+export function findDesktopFilePaths(workspaceDir: string, query: string, signal?: AbortSignal): Promise<{ paths: string[]; truncated: boolean }> {
+  return getDesktopNativeIde().request("fs.findPaths", { workspaceDir, query, limit: 100 }, { signal, timeoutMs: 30_000 });
 }
 
 export function readDesktopFile(workspaceDir: string, relativePath: string): Promise<{ content: string; mtimeMs: number }> {

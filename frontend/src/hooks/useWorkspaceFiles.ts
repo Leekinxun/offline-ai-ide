@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { FileNode, OpenFile, FileSelectionRange, getLanguage } from "../types";
 import { FilePreviewMode } from "../plugins/types";
 import { useFileSystem } from "./useFileSystem";
@@ -21,6 +21,8 @@ export interface EditorHighlightTarget extends FileSelectionRange {
 
 export interface UseWorkspaceFilesOptions {
   fs: ReturnType<typeof useFileSystem>;
+  token?: string;
+  workspaceDir?: string;
   showToast: (msg: string) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
   setOpenFiles: React.Dispatch<React.SetStateAction<OpenFile[]>>;
@@ -37,8 +39,10 @@ export interface UseWorkspaceFilesReturn {
   setFileTree: React.Dispatch<React.SetStateAction<FileNode[]>>;
   treeRefreshNonce: number;
   setTreeRefreshNonce: React.Dispatch<React.SetStateAction<number>>;
+  treeLoadError: string | null;
   lastWorkspaceMtimeRef: React.MutableRefObject<number>;
-  loadTree: () => Promise<void>;
+  loadTree: () => Promise<boolean>;
+  loadDirectory: (path: string) => Promise<boolean>;
   handleCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
   handleCopyEntry: (sourcePath: string, targetDirectory: string) => Promise<{ sourcePath: string; path: string; type: FileNode["type"] }>;
   handleDeleteEntry: (path: string) => Promise<void>;
@@ -53,12 +57,65 @@ export interface UseWorkspaceFilesReturn {
   ) => Promise<{ uploaded: number; overwritten: number }>;
 }
 
+function isDesktopLazyTree(): boolean {
+  return getDesktopBridge()?.workspaceChanges === "cursor";
+}
+
+function mergeLoadedChildren(previous: FileNode[] = [], fresh: FileNode[] = []): FileNode[] {
+  const previousByPath = new Map(previous.map((node) => [node.path, node]));
+
+  return fresh.map((node) => {
+    if (node.type !== "directory") return node;
+    const previousNode = previousByPath.get(node.path);
+    const childrenLoaded = previousNode?.childrenLoaded === true;
+    if (!childrenLoaded) return node;
+    return {
+      ...node,
+      children: previousNode.children || [],
+      childrenLoaded: true,
+    };
+  });
+}
+
+export function replaceDirectoryChildren(nodes: FileNode[], path: string, children: FileNode[]): FileNode[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.path === path && node.type === "directory") {
+      changed = true;
+      return { ...node, children, childrenLoaded: true };
+    }
+    if (node.type === "directory" && node.children) {
+      const nextChildren = replaceDirectoryChildren(node.children, path, children);
+      if (nextChildren !== node.children) {
+        changed = true;
+        return { ...node, children: nextChildren };
+      }
+    }
+    return node;
+  });
+  return changed ? next : nodes;
+}
+
+export function isCurrentTreeRequest(options: {
+  aborted: boolean;
+  requestGeneration: number;
+  currentGeneration: number;
+  requestScope: string;
+  currentScope: string;
+}): boolean {
+  return !options.aborted &&
+    options.requestGeneration === options.currentGeneration &&
+    options.requestScope === options.currentScope;
+}
+
 /**
  * 工作区文件树与文件系统增删改查、移动拖拽 Hook
  */
 export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspaceFilesReturn {
   const {
     fs,
+    token = "",
+    workspaceDir = "",
     showToast,
     t,
     setOpenFiles,
@@ -72,31 +129,120 @@ export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspa
 
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
+  const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
   const lastWorkspaceMtimeRef = useRef(0);
+  const rootAbortRef = useRef<AbortController | null>(null);
+  const directoryAbortRef = useRef(new Map<string, AbortController>());
+  const generationRef = useRef(0);
+  const scopeKey = useMemo(() => `${token}\0${workspaceDir}`, [token, workspaceDir]);
+  const currentScopeKeyRef = useRef(scopeKey);
+  currentScopeKeyRef.current = scopeKey;
+
+  useEffect(() => {
+    if (!isDesktopLazyTree()) return;
+    generationRef.current += 1;
+    rootAbortRef.current?.abort();
+    rootAbortRef.current = null;
+    directoryAbortRef.current.forEach((controller) => controller.abort());
+    directoryAbortRef.current.clear();
+    setFileTree([]);
+    setTreeLoadError(null);
+  }, [scopeKey]);
 
   const loadTree = useCallback(async () => {
-    try {
-      const tree = await fs.fetchTree();
-      setFileTree(tree);
-      const visiblePaths = collectVisiblePaths(tree);
-      setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
-      setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setPreviewModes((prev) => {
-        const next: Record<string, FilePreviewMode> = {};
-        for (const [path, mode] of Object.entries(prev)) {
-          if (visiblePaths.has(path)) {
-            next[path] = mode;
+    const desktopLazy = isDesktopLazyTree();
+    if (!desktopLazy) {
+      try {
+        const tree = await fs.fetchTree();
+        setFileTree(tree);
+        const visiblePaths = collectVisiblePaths(tree);
+        setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
+        setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
+        setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
+        setPreviewModes((prev) => {
+          const next: Record<string, FilePreviewMode> = {};
+          for (const [path, mode] of Object.entries(prev)) {
+            if (visiblePaths.has(path)) {
+              next[path] = mode;
+            }
           }
-        }
-        return next;
-      });
-      if (getDesktopBridge()?.workspaceChanges !== "cursor") lastWorkspaceMtimeRef.current = Date.now();
-      setTreeRefreshNonce((prev) => prev + 1);
-    } catch {
-      showToast(t("app.failedToLoadFileTree"));
+          return next;
+        });
+        lastWorkspaceMtimeRef.current = Date.now();
+        setTreeRefreshNonce((prev) => prev + 1);
+        return true;
+      } catch {
+        showToast(t("app.failedToLoadFileTree"));
+        return false;
+      }
     }
-  }, [fs, setActiveFilePath, setDiffViewerPath, setOpenFiles, setPreviewModes, showToast, t]);
+
+    rootAbortRef.current?.abort();
+    const controller = new AbortController();
+    rootAbortRef.current = controller;
+    const requestGeneration = generationRef.current;
+    const requestScope = scopeKey;
+    try {
+      const tree = await fs.fetchTree({ signal: controller.signal, expectedWorkspaceDir: workspaceDir });
+      if (!isCurrentTreeRequest({
+        aborted: controller.signal.aborted,
+        requestGeneration,
+        currentGeneration: generationRef.current,
+        requestScope,
+        currentScope: currentScopeKeyRef.current,
+      })) {
+        return false;
+      }
+      setTreeLoadError(null);
+      setFileTree((previous) => mergeLoadedChildren(previous, tree));
+      setTreeRefreshNonce((prev) => prev + 1);
+      return true;
+    } catch {
+      if (!controller.signal.aborted && requestGeneration === generationRef.current) {
+        const message = t("app.failedToLoadFileTree");
+        setTreeLoadError(message);
+        showToast(message);
+      }
+      return false;
+    } finally {
+      if (rootAbortRef.current === controller) rootAbortRef.current = null;
+    }
+  }, [fs, scopeKey, setActiveFilePath, setDiffViewerPath, setOpenFiles, setPreviewModes, showToast, t]);
+
+  const loadDirectory = useCallback(async (path: string) => {
+    if (!isDesktopLazyTree()) return true;
+    const requestGeneration = generationRef.current;
+    const requestScope = scopeKey;
+    directoryAbortRef.current.get(path)?.abort();
+    const controller = new AbortController();
+    directoryAbortRef.current.set(path, controller);
+    try {
+      const children = await fs.fetchTree({ path, signal: controller.signal, expectedWorkspaceDir: workspaceDir });
+      if (!isCurrentTreeRequest({
+        aborted: controller.signal.aborted,
+        requestGeneration,
+        currentGeneration: generationRef.current,
+        requestScope,
+        currentScope: currentScopeKeyRef.current,
+      })) {
+        return false;
+      }
+      setTreeLoadError(null);
+      setFileTree((previous) => replaceDirectoryChildren(previous, path, children));
+      return true;
+    } catch {
+      if (!controller.signal.aborted && requestGeneration === generationRef.current) {
+        const message = t("app.failedToLoadFileTree");
+        setTreeLoadError(message);
+        showToast(message);
+      }
+      return false;
+    } finally {
+      if (directoryAbortRef.current.get(path) === controller) {
+        directoryAbortRef.current.delete(path);
+      }
+    }
+  }, [fs, scopeKey, showToast, t]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -236,8 +382,10 @@ export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspa
     setFileTree,
     treeRefreshNonce,
     setTreeRefreshNonce,
+    treeLoadError,
     lastWorkspaceMtimeRef,
     loadTree,
+    loadDirectory,
     handleCreateEntry,
     handleCopyEntry,
     handleDeleteEntry,

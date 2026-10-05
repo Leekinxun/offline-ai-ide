@@ -50,6 +50,9 @@ interface SidebarProps {
     options?: UploadEntriesOptions
   ) => Promise<{ uploaded: number; overwritten: number }>;
   onRefreshTree: () => void;
+  onLoadDirectory?: (path: string) => Promise<boolean>;
+  treeRefreshNonce?: number;
+  treeError?: string | null;
   workspaceDir: string;
   workspaceLocked?: boolean;
   desktopApp: boolean;
@@ -225,6 +228,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDownloadEntry,
   onUploadEntries,
   onRefreshTree,
+  onLoadDirectory,
+  treeRefreshNonce = 0,
+  treeError,
   workspaceDir,
   workspaceLocked = false,
   desktopApp,
@@ -1366,6 +1372,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onMoveEntry={(sourcePath, targetDirectory) => {
               void handleMoveEntry(sourcePath, targetDirectory);
             }}
+            onLoadDirectory={onLoadDirectory}
+            treeRefreshNonce={treeRefreshNonce}
           />
         ) : (
           <div className="sidebar-tree-empty">
@@ -1373,14 +1381,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <strong>
               {treeQuery && contentSearchState === "loading"
                 ? t("sidebar.searchingContents")
-                : treeQuery
+                : treeError
+                  ? treeError
+                  : treeQuery
                   ? t("sidebar.noMatches")
                   : t("sidebar.emptyWorkspace")}
             </strong>
             <span>
               {treeQuery && contentSearchState === "loading"
                 ? t("sidebar.searchingContentsHint")
-                : treeQuery
+                : treeError
+                  ? ""
+                  : treeQuery
                   ? t("sidebar.noMatchesHint")
                   : t("sidebar.emptyWorkspaceHint")}
             </span>

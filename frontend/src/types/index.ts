@@ -3,6 +3,7 @@ export interface FileNode {
   path: string;
   type: "file" | "directory";
   children?: FileNode[];
+  childrenLoaded?: boolean;
 }
 
 export interface OpenFile {

@@ -19,9 +19,11 @@ interface FileTreeProps {
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   onDropFiles: (targetPath: string, files: FileList) => void;
   onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
+  onLoadDirectory?: (path: string) => Promise<boolean>;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery?: string;
+  treeRefreshNonce?: number;
   depth?: number;
   rovingPath?: string;
   onRovingPathChange?: (path: string) => void;
@@ -39,9 +41,11 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onContextMenu,
   onDropFiles,
   onMoveEntry,
+  onLoadDirectory,
   claims,
   presence,
   filterQuery = "",
+  treeRefreshNonce = 0,
   depth = 0,
   rovingPath,
   onRovingPathChange,
@@ -73,9 +77,11 @@ export const FileTree: React.FC<FileTreeProps> = ({
           onContextMenu={onContextMenu}
           onDropFiles={onDropFiles}
           onMoveEntry={onMoveEntry}
+          onLoadDirectory={onLoadDirectory}
           claims={claims}
           presence={presence}
           filterQuery={filterQuery}
+          treeRefreshNonce={treeRefreshNonce}
           depth={depth}
           position={index + 1}
           setSize={nodes.length}
@@ -100,9 +106,11 @@ interface FileTreeItemProps {
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
   onDropFiles: (targetPath: string, files: FileList) => void;
   onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
+  onLoadDirectory?: (path: string) => Promise<boolean>;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery: string;
+  treeRefreshNonce: number;
   depth: number;
   position: number;
   setSize: number;
@@ -123,9 +131,11 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   onContextMenu,
   onDropFiles,
   onMoveEntry,
+  onLoadDirectory,
   claims,
   presence,
   filterQuery,
+  treeRefreshNonce,
   depth,
   position,
   setSize,
@@ -136,6 +146,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const loadRequestRef = useRef<string | null>(null);
 
   const activateNode = useCallback((event?: React.MouseEvent) => {
     onRovingPathChange(node.path);
@@ -157,7 +168,9 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
 
   const isActive = node.path === activeFilePath;
   const isFilterActive = Boolean(filterQuery.trim());
-  const isExpanded = isFilterActive || expanded;
+  const canLazyLoad = node.type === "directory" && Boolean(onLoadDirectory);
+  const containsActiveFile = canLazyLoad && Boolean(activeFilePath?.startsWith(`${node.path}/`));
+  const isExpanded = isFilterActive || expanded || containsActiveFile;
   const isSelected = selectedPaths.has(node.path);
   const claim = claims?.find((entry) => entry.path === node.path);
   const viewers = presence?.filter((entry) => entry.activeFilePath === node.path) || [];
@@ -194,6 +207,20 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
     event.preventDefault();
     activateNode();
   };
+
+  useEffect(() => {
+    if (!canLazyLoad || !isExpanded || isFilterActive) return;
+    const shouldLoad = node.childrenLoaded !== true || treeRefreshNonce > 0;
+    if (!shouldLoad) return;
+    const requestKey = `${node.path}\0${treeRefreshNonce}`;
+    if (loadRequestRef.current === requestKey) return;
+    loadRequestRef.current = requestKey;
+    void onLoadDirectory?.(node.path).then((loaded) => {
+      if (!loaded && loadRequestRef.current === requestKey) {
+        loadRequestRef.current = null;
+      }
+    });
+  }, [canLazyLoad, isExpanded, isFilterActive, node.childrenLoaded, node.path, onLoadDirectory, treeRefreshNonce]);
 
   return (
     <div data-tree-node={node.path}>
@@ -327,9 +354,11 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onContextMenu={onContextMenu}
             onDropFiles={onDropFiles}
             onMoveEntry={onMoveEntry}
+            onLoadDirectory={onLoadDirectory}
             claims={claims}
             presence={presence}
             filterQuery={filterQuery}
+            treeRefreshNonce={treeRefreshNonce}
             depth={depth + 1}
             rovingPath={rovingPath}
             onRovingPathChange={onRovingPathChange}

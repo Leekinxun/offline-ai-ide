@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Bot, Bug, CircleAlert, Command, FileCode2, GitBranch, History, Search, Settings, ShieldCheck, Sparkles, TerminalSquare, TestTube2, Users, WandSparkles, X, Plus } from "lucide-react";
 import { FileNode } from "../types";
+import type { WorkspacePathSearchResponse } from "../hooks/useFileSystem";
 import { useI18n } from "../i18n";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import "./CommandPalette.css";
@@ -14,6 +15,7 @@ interface CommandPaletteProps {
   onClose: () => void;
   onOpenFile: (path: string) => void;
   onRunCommand: (command: string) => void;
+  onSearchPaths?: (query: string, options?: { signal?: AbortSignal }) => Promise<WorkspacePathSearchResponse>;
   canFormatDocument: boolean;
 }
 
@@ -24,6 +26,7 @@ interface PaletteItem {
   shortcut?: string;
   icon: React.ReactNode;
   action: () => void;
+  disabled?: boolean;
 }
 
 function flattenFiles(nodes: FileNode[], result: FileNode[] = []): FileNode[] {
@@ -41,31 +44,71 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose,
   onOpenFile,
   onRunCommand,
+  onSearchPaths,
   canFormatDocument,
 }) => {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [remotePaths, setRemotePaths] = useState<string[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<"idle" | "loading" | "limited" | "error">("idle");
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalDialogFocus<HTMLDivElement>({ open: visible, onClose, initialFocusRef: inputRef });
 
   useEffect(() => {
     if (!visible) return;
     setQuery("");
+    setRemotePaths([]);
+    setRemoteStatus("idle");
     setSelectedIndex(0);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [visible, mode]);
+
+  useEffect(() => {
+    if (!visible || mode !== "files" || !onSearchPaths) {
+      setRemotePaths([]);
+      setRemoteStatus("idle");
+      return;
+    }
+    const normalized = query.trim();
+    if (!normalized) {
+      setRemotePaths([]);
+      setRemoteStatus("idle");
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    setRemotePaths([]);
+    setRemoteStatus("loading");
+    const timer = window.setTimeout(() => {
+      void onSearchPaths(normalized, { signal: controller.signal })
+        .then((result) => {
+          if (!current || controller.signal.aborted) return;
+          setRemotePaths(result.paths);
+          setRemoteStatus(result.truncated ? "limited" : "idle");
+        })
+        .catch(() => {
+          if (!current || controller.signal.aborted) return;
+          setRemotePaths([]);
+          setRemoteStatus("error");
+        });
+    }, 120);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mode, onSearchPaths, query, visible]);
 
   const items = useMemo<PaletteItem[]>(() => {
     const normalized = query.trim().toLowerCase();
     const files = flattenFiles(tree);
 
     if (mode === "files") {
-      return files
+      const localItems = files
         .filter((file) =>
           !normalized || `${file.name} ${file.path}`.toLowerCase().includes(normalized)
         )
-        .slice(0, 80)
         .map((file) => ({
           id: `file:${file.path}`,
           label: file.name,
@@ -73,6 +116,43 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           icon: <FileCode2 size={16} />,
           action: () => onOpenFile(file.path),
         }));
+      const seen = new Set(localItems.map((item) => item.description || item.label));
+      const remoteItems = remotePaths
+        .filter((path) => !seen.has(path))
+        .map((path) => ({
+          id: `file:${path}`,
+          label: path.split("/").pop() || path,
+          description: path,
+          icon: <FileCode2 size={16} />,
+          action: () => onOpenFile(path),
+        }));
+      const result: PaletteItem[] = [...localItems, ...remoteItems].slice(0, 80);
+      if (remoteStatus === "loading") {
+        result.push({
+          id: "files:loading",
+          label: t("command.searchingFiles"),
+          icon: <Search size={16} />,
+          action: () => {},
+          disabled: true,
+        });
+      } else if (remoteStatus === "limited") {
+        result.push({
+          id: "files:limited",
+          label: t("command.fileSearchLimited"),
+          icon: <CircleAlert size={16} />,
+          action: () => {},
+          disabled: true,
+        });
+      } else if (remoteStatus === "error") {
+        result.push({
+          id: "files:error",
+          label: t("command.fileSearchFailed"),
+          icon: <CircleAlert size={16} />,
+          action: () => {},
+          disabled: true,
+        });
+      }
+      return result;
     }
 
     const commands: PaletteItem[] = [
@@ -210,7 +290,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     return commands.filter((item) =>
       `${item.label} ${item.description || ""} ${item.shortcut || ""}`.toLowerCase().includes(normalized)
     );
-  }, [canFormatDocument, mode, onOpenFile, onRunCommand, query, t, tree]);
+  }, [canFormatDocument, mode, onOpenFile, onRunCommand, query, remotePaths, remoteStatus, t, tree]);
 
   const resultsRef = useRef<HTMLDivElement>(null);
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -244,6 +324,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       setSelectedIndex((current) => (current - 1 + items.length) % Math.max(items.length, 1));
     } else if (event.key === "Enter" && items[selectedIndex]) {
       event.preventDefault();
+      if (items[selectedIndex].disabled) return;
       items[selectedIndex].action();
       onClose();
     }
@@ -303,8 +384,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   type="button"
                   key={item.id}
                   className={`command-palette-item${isSelected ? " active" : ""}`}
+                  disabled={item.disabled}
                   onMouseMove={(e) => handleItemMouseMove(e, index)}
                   onClick={() => {
+                    if (item.disabled) return;
                     item.action();
                     onClose();
                   }}

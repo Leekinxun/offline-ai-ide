@@ -567,8 +567,10 @@ function AuthenticatedApp({
     fileTree,
     treeRefreshNonce,
     setTreeRefreshNonce,
+    treeLoadError,
     lastWorkspaceMtimeRef,
     loadTree,
+    loadDirectory,
     handleCreateEntry,
     handleCopyEntry,
     handleDeleteEntry,
@@ -579,6 +581,8 @@ function AuthenticatedApp({
     handleUploadEntries,
   } = useWorkspaceFiles({
     fs,
+    token,
+    workspaceDir,
     showToast,
     t,
     setOpenFiles,
@@ -589,6 +593,10 @@ function AuthenticatedApp({
     setEditorHighlightTarget,
     removeDeletedEntriesFromState,
   });
+
+  const refreshTree = useCallback(async () => {
+    await loadTree();
+  }, [loadTree]);
 
   useEffect(() => {
     setReferenceResult(null);
@@ -628,6 +636,20 @@ function AuthenticatedApp({
     setCommandPaletteVisible(true);
   }, []);
 
+  const searchPathsInCurrentWorkspace = useCallback(
+    async (query: string, options?: { signal?: AbortSignal }) => {
+      const result = await fs.searchPaths(query, {
+        ...options,
+        expectedWorkspaceDir: workspaceDir,
+      });
+      if (result.workspaceDir && result.workspaceDir !== workspaceDir) {
+        return { paths: [], truncated: false };
+      }
+      return result;
+    },
+    [fs, workspaceDir]
+  );
+
 
 
 
@@ -640,10 +662,6 @@ function AuthenticatedApp({
 
 
 
-  useEffect(() => {
-    loadTree();
-  }, [loadTree]);
-
   // Reset state when workspace changes
   useEffect(() => {
     setOpenFiles([]);
@@ -655,7 +673,7 @@ function AuthenticatedApp({
     setEditorNavigationTarget(null);
     setEditorHighlightTarget(null);
     setWebPreviewVisible(false);
-    loadTree();
+    void loadTree();
   }, [loadTree, workspaceDir]);
 
   const handleWorkspaceRestored = useCallback(async () => {
@@ -714,7 +732,7 @@ function AuthenticatedApp({
     editorRef,
     selectionInfo,
     fs,
-    loadTree,
+    loadTree: refreshTree,
     focusChat,
     showToast,
     t,
@@ -942,10 +960,12 @@ function AuthenticatedApp({
         }
 
         if (result.changed) {
-          lastWorkspaceMtimeRef.current = result.latestMtime;
+          if (!desktopApp) lastWorkspaceMtimeRef.current = result.latestMtime;
           const currentActivePath = activeFilePath;
           const currentOpenFiles = openFiles;
-          await loadTree();
+          const refreshed = await loadTree();
+          if (desktopApp && !refreshed) return;
+          if (desktopApp) lastWorkspaceMtimeRef.current = result.latestMtime;
 
           if (currentActivePath) {
             try {
@@ -1251,13 +1271,13 @@ function AuthenticatedApp({
       const ok = await onChangeWorkspace(path);
       if (ok) {
         showToast(t("app.workspaceChanged"));
-        void loadTree();
+        if (!desktopApp) void loadTree();
       } else {
         showToast(t("app.failedToChangeWorkspace"));
       }
       return ok;
     },
-    [loadTree, onChangeWorkspace, showToast, t]
+    [desktopApp, loadTree, onChangeWorkspace, showToast, t]
   );
 
   const handlePickDesktopWorkspace = useCallback(async (confirmed = false) => {
@@ -1619,6 +1639,8 @@ function AuthenticatedApp({
             }}
             onLoadConversation={loadChatConversation}
             fileTree={fileTree}
+            treeRefreshNonce={treeRefreshNonce}
+            treeError={treeLoadError}
             onCreateEntry={handleCreateEntry}
             onCopyEntry={handleCopyEntry}
             onMoveEntry={handleMoveEntry}
@@ -1627,7 +1649,8 @@ function AuthenticatedApp({
             onRenameEntry={handleRenameEntry}
             onDownloadEntry={handleDownloadEntry}
             onUploadEntries={handleUploadEntries}
-            onRefreshTree={loadTree}
+            onRefreshTree={refreshTree}
+            onLoadDirectory={desktopApp ? loadDirectory : undefined}
             pickingWorkspace={pickingWorkspace}
             onPickDesktopWorkspace={handlePickDesktopWorkspace}
             folderOpenRequestId={folderOpenRequestId}
@@ -2068,6 +2091,7 @@ function AuthenticatedApp({
         onCloseCommandPalette={() => setCommandPaletteVisible(false)}
         onOpenFile={openFile}
         onRunPaletteCommand={runPaletteCommand}
+        onSearchPaths={desktopApp ? searchPathsInCurrentWorkspace : undefined}
         canFormatDocument={Boolean(activeFile?.language === "python" && !readOnlyWorkspace)}
         workspaceSearchVisible={workspaceSearchVisible}
         workspaceSearchScope={workspaceSearchScope}

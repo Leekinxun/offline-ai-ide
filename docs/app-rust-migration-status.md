@@ -175,3 +175,24 @@ Web regressions. Windows compile/native protocol coverage is part of
 increment; commits carrying `[skip-app-install]` skip the installer acceptance
 job. Earlier installation evidence above remains tied to its original source
 commits.
+
+## Desktop explorer workspace switching
+
+The native explorer now reads one directory per request and loads descendants
+when expanded. It no longer traverses an entire large workspace before the
+initial tree appears or fails the whole tree at the former 250,000-entry cap.
+Desktop workspace changes clear the previous tree, abort pending loads and
+ignore results from earlier workspace/request generations. Native change
+cursors advance only after a successful refresh, keeping failed loads retryable.
+
+Quick Open and file references use a separate bounded Rust metadata path search,
+so unexpanded source folders remain searchable. File-tree and name queries can
+fence their expected workspace against the authenticated session selection.
+Web and legacy desktop keep their original full-tree flow.
+
+Validation includes reversed responses, scope mismatch, failed refresh retry,
+lazy branch replacement, native HTTP root switching and one IPC call per
+directory. macOS application verification covered switching from a small
+workspace to a workspace exceeding the former tree limit, expanding a folder,
+and retaining existing model preferences. Windows-target compile and Clippy
+checks pass; this fix does not add an installer acceptance run.

@@ -13,6 +13,7 @@ import {
 import type { ContextReference, FileNode, SelectionInfo } from "../types";
 import { useI18n } from "../i18n";
 import { addContextReference, findReferenceMention, referenceCandidates } from "../utils/contextReferences";
+import { getDesktopBridge } from "../desktop/bridge";
 import "./ContextReferencePicker.css";
 
 interface Props {
@@ -90,6 +91,8 @@ export const ContextReferencePicker = forwardRef<ContextReferencePickerHandle, P
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [symbols, setSymbols] = useState<ContextReference[]>([]);
   const [symbolStatus, setSymbolStatus] = useState("");
+  const [remoteFileReferences, setRemoteFileReferences] = useState<ContextReference[]>([]);
+  const [fileStatus, setFileStatus] = useState("");
   const listId = useRef(`reference-picker-${Math.random().toString(36).slice(2)}`).current;
 
   // 暴露给外部（例如底栏 @ 按钮）手动打开选择器
@@ -105,10 +108,21 @@ export const ContextReferencePicker = forwardRef<ContextReferencePickerHandle, P
   const query = mention?.query || "";
   const open = manualOpen || Boolean(mention && dismissed !== `${mention.start}:${query}`);
   const symbolQuery = query.startsWith("symbol:") ? query.slice(7) : null;
-  const candidates = useMemo(
-    () => (symbolQuery === null ? referenceCandidates(files, query) : symbols),
-    [files, query, symbolQuery, symbols]
-  );
+  const localFileCandidates = useMemo(() => referenceCandidates(files, query), [files, query]);
+  const fileCandidates = useMemo(() => {
+    if (symbolQuery !== null) return [];
+    const seen = new Set(localFileCandidates.map((reference) => `${reference.kind}:${reference.path || ""}`));
+    return [
+      ...localFileCandidates,
+      ...remoteFileReferences.filter((reference) => {
+        const key = `${reference.kind}:${reference.path || ""}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    ];
+  }, [localFileCandidates, remoteFileReferences, symbolQuery]);
+  const candidates = symbolQuery === null ? fileCandidates : symbols;
 
   useEffect(() => {
     setSymbols([]);
@@ -148,6 +162,53 @@ export const ContextReferencePicker = forwardRef<ContextReferencePickerHandle, P
       controller.abort();
     };
   }, [open, symbolQuery, t, token, workspaceDir]);
+
+  useEffect(() => {
+    setRemoteFileReferences([]);
+    if (
+      !open ||
+      symbolQuery !== null ||
+      getDesktopBridge()?.workspaceChanges !== "cursor"
+    ) {
+      setFileStatus("");
+      return;
+    }
+    const normalized = query.trim();
+    if (!normalized) {
+      setFileStatus("");
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    setFileStatus(t("contextReference.fileSearching"));
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ query: normalized, expectedWorkspaceDir: workspaceDir });
+      void fetch(`/api/files/paths?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.detail || t("contextReference.fileFailed"));
+          if (!current || (typeof payload.workspaceDir === "string" && payload.workspaceDir !== workspaceDir)) return;
+          const paths: string[] = Array.isArray(payload.paths)
+            ? payload.paths.filter((path: unknown): path is string => typeof path === "string")
+            : [];
+          setRemoteFileReferences(paths.map((path) => ({ kind: "file", path } as ContextReference)));
+          setFileStatus(payload.truncated ? t("contextReference.fileLimited") : "");
+        })
+        .catch((error) => {
+          if (current && !controller.signal.aborted) {
+            setFileStatus(error instanceof Error ? error.message : t("contextReference.fileFailed"));
+          }
+        });
+    }, 180);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query, symbolQuery, t, token, workspaceDir]);
 
   // 将候选分组：工作区上下文、符号、文件与目录
   const { options, categorizedGroups } = useMemo(() => {
@@ -354,7 +415,8 @@ export const ContextReferencePicker = forwardRef<ContextReferencePickerHandle, P
 
           <div className="context-reference-menu-body">
             {symbolStatus && <div className="context-reference-empty" role="status">{symbolStatus}</div>}
-            {!options.length && !symbolStatus && (
+            {!symbolStatus && fileStatus && <div className="context-reference-empty" role="status">{fileStatus}</div>}
+            {!options.length && !symbolStatus && !fileStatus && (
               <div className="context-reference-empty">{t("contextReference.empty")}</div>
             )}
 
