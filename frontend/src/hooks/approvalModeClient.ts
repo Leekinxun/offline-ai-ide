@@ -44,8 +44,11 @@ export class ApprovalModeClient {
   private active = true;
   private reader: AbortController | null = null;
   private writer: AbortController | null = null;
+  private request: typeof fetch;
 
-  constructor(readonly scope: ApprovalModeScope, private request: typeof fetch = fetch) {}
+  constructor(readonly scope: ApprovalModeScope, request?: typeof fetch) {
+    this.request = request ?? globalThis.fetch.bind(globalThis);
+  }
 
   getSnapshot = (): ApprovalModeState => this.state;
   subscribe = (listener: () => void): (() => void) => {

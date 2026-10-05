@@ -28,6 +28,24 @@ test("default mode is unknown until a scoped authenticated server read confirms 
   assert.equal(reads[0].options.method, undefined);
 });
 
+test("default browser fetch is called with the Window receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async function (this: unknown) {
+    calls++;
+    assert.equal(this, globalThis);
+    return response(snapshot());
+  }) as typeof fetch;
+  try {
+    const client = new ApprovalModeClient(scope);
+    assert.equal(await client.refresh(), true);
+    assert.equal(client.getSnapshot().verified, true);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("explicit risk acknowledgement enables access; closing uses a confirmed revision and no extra acknowledgement", async () => {
   let server = snapshot();
   const writes: unknown[] = [];

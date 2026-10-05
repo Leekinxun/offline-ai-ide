@@ -160,6 +160,31 @@ async function click(selector, requireHit = false) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
 }
+async function stableViewportLayout(selector) {
+  return until(() => call(async (query) => {
+    const node = document.querySelector(query);
+    if (!node) return null;
+    const snapshot = () => {
+      const rect = node.getBoundingClientRect();
+      return {
+        viewport: innerHeight,
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        overflow: getComputedStyle(node).overflowY,
+        stop: Boolean(document.querySelector('.chat-panel .chat-composer-stop-btn')),
+      };
+    };
+    const first = snapshot();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const second = snapshot();
+    const stable = Math.abs(first.top - second.top) < 0.5 && Math.abs(first.bottom - second.bottom) < 0.5;
+    const inside = second.height > 0 && second.top >= 0 && second.bottom <= second.viewport;
+    return stable && inside ? second : null;
+  }, selector), "Stable viewport layout for " + selector);
+}
 async function key(key, code, windowsVirtualKeyCode, modifiers = 0) {
   const event = { key, code, windowsVirtualKeyCode, modifiers };
   await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...event }, pageSession);
@@ -436,12 +461,7 @@ try {
     await scenario('approval_short_viewport_real_mouse_permission', async () => {
       await until(() => call(() => Boolean(document.querySelector('.chat-panel .tool-approval-card.risk-high'))), 'Task approval restored');
       await click('.chat-panel .task-state-action button', true);
-      const layout = await call(() => {
-        const stack = document.querySelector('.chat-panel .tool-approval-stack');
-        const rect = stack.getBoundingClientRect();
-        return { viewport: innerHeight, height: rect.height, top: rect.top, bottom: rect.bottom, scrollHeight: stack.scrollHeight, clientHeight: stack.clientHeight, overflow: getComputedStyle(stack).overflowY,
-          stop: Boolean(document.querySelector('.chat-panel .chat-composer-stop-btn')) };
-      });
+      const layout = await stableViewportLayout('.chat-panel .tool-approval-stack');
       assert.equal(layout.viewport, 600);
       assert.ok(layout.height > 0 && layout.top >= 0 && layout.bottom <= layout.viewport, 'Approval stack is outside the viewport: ' + JSON.stringify(layout));
       if (layout.scrollHeight > layout.clientHeight) {
