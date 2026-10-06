@@ -44,7 +44,7 @@ test("Agent process polling returns real exit/output and records untracked effec
   const records = listFileMutations(f.root, { toolCallId: "process-start" });
   assert.deepEqual(records, []);
   assert.equal(fs.readFileSync(path.join(f.root, "generated.txt"), "utf8"), "delayed");
-  const effects = listExternalToolEffects(f.root, { runId: f.context.runId!, expectedExecutions: [{ toolCallId: "process-start", requestId: f.context.requestId }] });
+  const effects = listExternalToolEffects(f.root, { runId: f.context.runId!, expectedExecutions: [{ toolCallId: start.process.toolCallId!, requestId: f.context.requestId }] });
   assert.equal(effects.length, 1);
   assert.equal(effects[0].rollbackCoverage, "untracked");
   assert.ok(effects[0].finishedAt);

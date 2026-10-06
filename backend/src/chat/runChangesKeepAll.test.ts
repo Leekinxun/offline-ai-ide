@@ -108,7 +108,7 @@ test("any missing, corrupt, binary, oversized or incomplete pending evidence ref
     const valid = f.add("a-valid.ts", "before", "after");
     if (kind === "gap") {
       const checkpoint = createCheckpoint(f.root, { kind: "step", runId: "run", toolCallId: "gap-step" });
-      fs.writeFileSync(path.join(f.root, "z-invalid.bin"), Buffer.from([0, 1, 2]));
+      fs.writeFileSync(path.join(f.root, "z-invalid.bin"), Buffer.alloc(2 * 1024 * 1024 + 1, 1));
       captureCheckpointMutationsDetailed(f.root, { checkpointId: checkpoint.id, runId: "run", requestId: "turn", toolCallId: "gap-step" });
     } else {
       const invalid = f.add("z-invalid.ts", "before-invalid", kind === "binary" ? "\0binary" : kind === "oversized" ? "x".repeat(2 * 1024 * 1024 + 1) : "after-invalid");

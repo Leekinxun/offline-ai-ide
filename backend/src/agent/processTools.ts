@@ -103,7 +103,9 @@ export async function executeProcessTool(name: string, args: Record<string, unkn
       const capability = await probeWindowsNativeSandbox();
       if (!capability.available) throw new Error(capability.reason || "Set up the Windows sandbox in desktop settings");
     }
-    const toolCallId = context.toolCallId || `process-${randomUUID()}`;
+    const toolCallId = context.externalToolAudit
+      ? context.toolCallId || `process-${randomUUID()}`
+      : `${context.toolCallId || "process"}-${randomUUID()}`;
     const audit = context.externalToolAudit || await beginExternalToolEffects(context.workspaceDir, { runId: owner.runId!, requestId: context.requestId, toolCallId, toolName: "process_start" });
     const binding: Binding = { owner, command, audit, toolCallId, requestId: context.requestId, actor: context.actorName, auditing: false, audited: false };
     let id = "";
