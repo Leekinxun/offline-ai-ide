@@ -6,7 +6,7 @@ import { useRunChanges } from "../hooks/useRunChanges";
 import { getEditorThemeName } from "../editor/themeNames";
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { getLanguage } from "../types";
-import { binaryEvidenceForFile, bulkReviewPolicy, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
+import { binaryEvidenceForFile, bulkReviewPolicy, hasExternalToolEffects, isExternalOnlyReview, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
 import "./RunChangesReview.css";
 
 const DiffEditor = lazy(() => import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor })));
@@ -119,10 +119,11 @@ export function RunChangesReview({ token, workspaceDir, runId, requestId, theme 
       <span>{t(bulk.unavailable ? "review.keepAllUnavailable" : "review.keepAllHint")}</span>
     </div>}
     <p className="run-review-description">{t("review.appliedHint")}</p>
+    {hasExternalToolEffects(review.changes) && <p className="run-review-external-effects" role="note">{t("review.externalToolEffects")}</p>}
     {running && <p className="run-review-notice" role="status">{t("review.runningHint")}</p>}
     {review.error && <div className="run-review-error" role="alert">{review.error}</div>}
     {review.loading && !review.changes && <div className="run-review-notice">{t("review.loading")}</div>}
-    {!review.loading && !review.changes?.files.length && <div className="run-review-notice">{review.changes?.unavailableReason ? t("review.evidenceUnavailable") : t("review.empty")}</div>}
+    {!review.loading && !review.changes?.files.length && <div className="run-review-notice">{isExternalOnlyReview(review.changes) ? t("review.emptyTrackedEdits") : review.changes?.unavailableReason ? t("review.evidenceUnavailable") : t("review.empty")}</div>}
     <div className="run-review-files" role="group" aria-label={t("review.files")}>
       {review.changes?.files.map((entry) => <button key={entry.path} type="button"
         className={review.selectedPath === entry.path ? "selected" : ""} aria-pressed={review.selectedPath === entry.path}

@@ -33,7 +33,6 @@ import {
   readRunRecord,
   RESUME_PROMPT,
 } from "../chat/runHistory.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
 import { ToolApprovalSession, type ToolApprovalDecision } from "../agent/toolApproval.js";
 import { getFullAccessGrant } from "../chat/fullAccess.js";
 import { sessionManager } from "../auth/sessionManager.js";
@@ -1058,6 +1057,9 @@ async function processConversationQueue(
   let assistantMessages: PersistedChatMessage[] = [];
   const executionContractKind = initialTurn.executionPlan ? "approved_plan" as const : "direct_code" as const;
   try {
+    // Start turns without mandatory workspace snapshots, following upstream's
+    // removal of ghost snapshots (openai/codex#19481). Our file tools journal
+    // their edits; unknown command effects use small execution receipts.
     if (initialTurn.mode === "code") {
       if (initialTurn.executionPlan) {
         updateExecutionPlanStatus(
@@ -1067,27 +1069,6 @@ async function processConversationQueue(
           recorder.runId
         );
       }
-      const checkpoint = createCheckpoint(session.workspaceDir, {
-        label: `Before agent task · ${initialTurn.message.slice(0, 72)}`,
-        conversationId: initialTurn.conversationId,
-        runId: recorder.runId,
-        kind: "run",
-      });
-      new TraceStore(session.workspaceDir).append({
-        kind: "checkpoint",
-        action: "Run checkpoint created",
-        correlationId: recorder.runId,
-        runId: recorder.runId,
-        conversationId: initialTurn.conversationId,
-        metadata: { checkpointId: checkpoint.id, kind: checkpoint.kind, fileCount: checkpoint.fileCount },
-      });
-      await recorder.event({
-        kind: "tool_result",
-        label: "Workspace checkpoint created",
-        requestId: initialTurn.requestId,
-        toolName: "workspace_checkpoint",
-        detail: `${checkpoint.id} · ${checkpoint.fileCount} files`,
-      });
     }
     const readWorkspace = session.workspaceDir;
     const approvalSession = { ...session, workspaceDir: readWorkspace };

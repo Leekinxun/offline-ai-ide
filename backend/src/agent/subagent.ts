@@ -18,12 +18,12 @@ import {
 } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import { requireModelTurnAction } from "./finishReason.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 import { createManagedWorktree, updateManagedWorktreeMetadata } from "../chat/worktrees.js";
 import { captureChangeSet } from "../chat/changeSets.js";
 import { TraceStore, type CollaborationEventReferences } from "../chat/traceStore.js";
-import { captureCheckpointMutationsDetailed, listMutationEvidenceGaps } from "../files/mutationRegistry.js";
+import { listMutationEvidenceGaps } from "../files/mutationRegistry.js";
+import { beginExternalToolEffects, type ExternalToolAudit } from "../chat/externalToolEffects.js";
 
 import { getAllTools, runReadFile, TOOL_DISPATCH, type ToolHandler } from "./tools.js";
 import { TodoManager } from "./todoManager.js";
@@ -40,6 +40,10 @@ import {
 export interface SubagentToolRuntime {
   tools: readonly OpenAIToolDef[];
   context: Parameters<ToolHandler>[1];
+}
+
+function needsExternalToolEffects(name: string, args: Record<string, unknown>): boolean {
+  return name.startsWith("mcp_") || (name === "bash" && !(args.allow_network !== true && planReadOnlyShell(args.command)));
 }
 
 async function dispatchSubTool(
@@ -230,28 +234,6 @@ export async function runSubagent(
     };
   }
   await recorder?.start();
-  if (recorder && profile.stepSnapshots) {
-    try {
-      const checkpoint = createCheckpoint(childWorkspaceDir, {
-        label: `Before ${agentName}`,
-        conversationId: lineage?.parentConversationId,
-        runId: recorder.runId,
-        kind: "run",
-      });
-      await recorder.event({
-        kind: "tool_result",
-        label: "Subagent workspace checkpoint created",
-        detail: checkpoint.id,
-      });
-    } catch (error) {
-      await recorder.event({
-        kind: "error",
-        label: "Subagent workspace checkpoint unavailable",
-        isError: true,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
   let recorderFinished = false;
   let mutationEvidenceBlocker = "";
   const finish = async (
@@ -504,35 +486,8 @@ export async function runSubagent(
         { toolCalls: (toolMetrics?.toolCalls || 0) + 1 }
       );
       let output: string;
-      let snapshotId: string | undefined;
-      let bashMutationsCaptured = false;
-      let mutationEvidenceFailure = "";
-      const captureBashMutations = async (): Promise<void> => {
-        if (tc.function.name !== "bash" || !snapshotId || bashMutationsCaptured) return;
-        bashMutationsCaptured = true;
-        try {
-          const capture = captureCheckpointMutationsDetailed(childWorkspaceDir, {
-            checkpointId: snapshotId,
-            runId: childRunId,
-            toolCallId: tc.id,
-            actor: agentName,
-          });
-          if (capture.skipped.length) {
-            mutationEvidenceFailure = `Mutation evidence incomplete: ${capture.skipped.map((entry) => `${entry.path}:${entry.reason}`).join(", ")}`;
-            mutationEvidenceBlocker ||= mutationEvidenceFailure;
-          }
-        } catch (error) {
-          mutationEvidenceFailure = `Mutation journal unavailable: ${error instanceof Error ? error.message : String(error)}`;
-          mutationEvidenceBlocker ||= mutationEvidenceFailure;
-          await recorder?.event({
-            kind: "error",
-            label: "Subagent bash mutation capture failed",
-            toolName: tc.function.name,
-            isError: true,
-            detail: error instanceof Error ? error.message : String(error),
-          });
-        }
-      };
+      let externalToolAudit: ExternalToolAudit | undefined;
+      let externalToolAudited = false;
       try {
         if (toolCallCount++ >= profile.budget.maxToolCalls) {
           throw new Error(`Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`);
@@ -553,28 +508,13 @@ export async function runSubagent(
           authorize,
           tc.id,
           async () => {
-            if (["bash", "write_file", "edit_file", "rename_file"].includes(tc.function.name)
-              && !(tc.function.name === "bash" && args.allow_network !== true && planReadOnlyShell(args.command))) {
-              try {
-                const checkpoint = createCheckpoint(childWorkspaceDir, {
-                  label: `Before ${agentName} · ${tc.function.name}`,
-                  conversationId: lineage?.parentConversationId,
-                  runId: recorder?.runId,
-                  kind: "step",
-                  toolCallId: tc.id,
-                });
-                snapshotId = checkpoint.id;
-              } catch (error) {
-                const detail = error instanceof Error ? error.message : String(error);
-                await recorder?.event({
-                  kind: "error",
-                  label: "Subagent step snapshot unavailable",
-                  toolName: tc.function.name,
-                  isError: true,
-                  detail,
-                });
-                throw new Error(`Required mutation checkpoint unavailable: ${detail}`);
-              }
+            if (needsExternalToolEffects(tc.function.name, args)) {
+              externalToolAudit = await beginExternalToolEffects(childWorkspaceDir, {
+                runId: childRunId,
+                requestId: lineage?.parentRequestId || agentName,
+                toolCallId: tc.id,
+                toolName: tc.function.name,
+              }, workspaceDir);
             }
             await runAgentHooks("beforeToolExecute", {
               agentId: profile.id,
@@ -590,7 +530,7 @@ export async function runSubagent(
               requestId: lineage?.parentRequestId || agentName,
               name: tc.function.name,
               status: "running",
-              ...(snapshotId ? { snapshotId } : {}),
+              ...(externalToolAudit ? { rollbackCoverage: "untracked" as const } : {}),
             });
             if (Date.now() - startedAt >= profile.budget.maxDurationMs) {
               throw new Error(`Subagent duration budget exceeded (${profile.budget.maxDurationMs}ms)`);
@@ -602,15 +542,21 @@ export async function runSubagent(
         );
       } catch (error) {
         if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-          await captureBashMutations();
+          if (externalToolAudit && !externalToolAudited) {
+            externalToolAudited = true;
+            try { await externalToolAudit.finish(); } catch { /* metadata failure must not replace abort status */ }
+          }
           await finish("stopped", "");
           signal?.throwIfAborted();
           throw error;
         }
         output = `Error: ${error instanceof Error ? error.message : String(error)}`;
       }
-      await captureBashMutations();
-      if (mutationEvidenceFailure) output = `Error: ${mutationEvidenceFailure}${output ? `\nTool output:\n${output}` : ""}`;
+      if (externalToolAudit && !externalToolAudited) {
+        externalToolAudited = true;
+        try { await externalToolAudit.finish(); } catch { /* metadata failure must not replace tool output */ }
+        output += "\n\n[External tool file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]";
+      }
       const isError = output.startsWith("Error:");
       const denied = output.startsWith("Error: Tool denied:");
       await recorder?.toolState({
@@ -620,7 +566,7 @@ export async function runSubagent(
         status: denied ? "denied" : isError ? "failed" : "completed",
         resultSummary: output.slice(0, 2000),
         ...(isError ? { error: output.slice(0, 2000) } : {}),
-        ...(snapshotId ? { snapshotId } : {}),
+        ...(externalToolAudit ? { rollbackCoverage: "untracked" as const } : {}),
       });
       await recorder?.event(
         {

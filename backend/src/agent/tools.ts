@@ -13,7 +13,7 @@ import { MessageBus } from "./messageBus.js";
 import { TeammateManager } from "./teammateManager.js";
 import { beginCompletionAttempt, runRepositoryCompletionGate } from "../extensions/policy/completionGate.js";
 import { runSubagent } from "./subagent.js";
-import { buildFileVersion, listFileMutations, recordFileMutation } from "../files/mutationRegistry.js";
+import { buildFileVersion, prepareFileMutationBatch } from "../files/mutationRegistry.js";
 import { readMemory, writeMemory } from "./memory.js";
 import { loadWorkspaceSkill } from "./skills.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
@@ -264,6 +264,7 @@ async function runWriteFile(
     filePath = normalizeEditablePath(filePath);
     if ((context.runId || context.requestId) && pendingAgentProcesses({ ...context, workspaceDir: cwd }, true).some((process) => process.session.status === "running")) return "Error: Poll or stop the active Agent process before modifying workspace files";
     if (typeof content !== "string") return "Error: content must be a string";
+    if (content.includes("\0")) throw new Error("Text file writes cannot contain NUL bytes. Use escaped text (repr or hex) for binary headers, or an approved command tool to generate binary artifacts.");
     const policy = evaluateWorkspaceWrite(filePath);
     if (!policy.allowed) return `Error: Write blocked by workspace policy: ${policy.reason}`;
     const preimageContent = readEditableFile(cwd, filePath);
@@ -271,21 +272,22 @@ async function runWriteFile(
     if (preimageContent === content) {
       return `No changes to ${filePath}`;
     }
-    // A damaged/unreadable journal must fail before mutating the working file.
-    listFileMutations(cwd);
-    const stat = atomicWriteFile(cwd, filePath, content, preimageContent);
-    recordFileMutation({
+    const batch = prepareFileMutationBatch([{
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
       actor: context.actorName,
-      mtimeMs: stat.mtimeMs,
       runId: context.runId,
       requestId: context.requestId,
       toolCallId: context.toolCallId,
       preimageContent,
       postimageContent: content,
-    });
+    }], { hunks: true });
+    try {
+      atomicWriteFile(cwd, filePath, content, preimageContent, { commit: (stat) => batch.commit({ mtimeMs: stat.mtimeMs }) });
+    } finally {
+      batch.cancel();
+    }
     rememberFileWrite(cwd, filePath, content, context, true);
     return {
       output: `Wrote ${Buffer.byteLength(content, "utf8")} bytes to ${filePath}\nversion: ${buildFileVersion(content)}`,
@@ -320,20 +322,23 @@ async function runEditFile(
     if (updatedContent === content) {
       return `No changes to ${filePath}`;
     }
-    listFileMutations(cwd);
-    const stat = atomicWriteFile(cwd, filePath, updatedContent, content);
-    recordFileMutation({
+    if (updatedContent.includes("\0")) throw new Error("Text file writes cannot contain NUL bytes. Use escaped text (repr or hex) for binary headers, or an approved command tool to generate binary artifacts.");
+    const batch = prepareFileMutationBatch([{
       workspaceDir: cwd,
       path: filePath,
       source: "assistant_tool",
       actor: context.actorName,
-      mtimeMs: stat.mtimeMs,
       runId: context.runId,
       requestId: context.requestId,
       toolCallId: context.toolCallId,
       preimageContent: content,
       postimageContent: updatedContent,
-    });
+    }], { hunks: true });
+    try {
+      atomicWriteFile(cwd, filePath, updatedContent, content, { commit: (stat) => batch.commit({ mtimeMs: stat.mtimeMs }) });
+    } finally {
+      batch.cancel();
+    }
     rememberFileWrite(cwd, filePath, updatedContent, context, false);
     return {
       output: `Edited ${filePath}\nversion: ${buildFileVersion(updatedContent)}`,

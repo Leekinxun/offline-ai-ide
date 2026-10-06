@@ -29,6 +29,27 @@ test("validation discovery chooses bounded relevant task kinds, respects an appr
   assert.deepEqual(discoverValidationCommands(root, ["nested/app.ts"]), ["cd nested && npm run check"]);
 });
 
+test("inspected command artifacts are validated without being attributed as recorded edits", (t) => {
+  const root = fixture(t);
+  fs.writeFileSync(path.join(root, "summary.md"), "broken\0summary");
+  const validation = new ValidationFeedback(root, ["npm test"]);
+  validation.observeArtifact("summary.md");
+  validation.observeArtifact(".env");
+  validation.observeCommand({ command: "npm test", toolCallId: "initial-check", output: "passed", isError: false, denied: false, changedFiles: [] });
+  const damaged = validation.assess([]);
+  assert.equal(damaged.report.status, "failed");
+  assert.deepEqual(damaged.report.changedFiles, []);
+  assert.deepEqual(damaged.report.observedArtifacts, ["summary.md"]);
+  assert.deepEqual(damaged.report.artifactErrors, [{ path: "summary.md", reason: "nul_text" }]);
+  fs.writeFileSync(path.join(root, "summary.md"), "repaired summary");
+  assert.equal(validation.assess([]).report.verification[0].reason, "stale");
+  validation.observeCommand({ command: "npm test", toolCallId: "fresh-check", output: "passed", isError: false, denied: false, changedFiles: [] });
+  const repaired = validation.assess([]).report;
+  assert.equal(repaired.status, "passed");
+  assert.deepEqual(repaired.changedFiles, []);
+  assert.equal(repaired.verification[0].toolCallId, "fresh-check");
+});
+
 test("validation discovery prefers conventional checks over unrelated alphabetically earlier scripts", (t) => {
   const root = fixture(t, { "approval-check": "node approval.cjs", check: "node check.cjs" });
   assert.deepEqual(discoverValidationCommands(root, ["app.ts"]), ["npm run check"]);

@@ -409,10 +409,11 @@ export interface FileMutationBatchInput {
   mtimeMs?: number; runId?: string; requestId?: string; toolCallId?: string;
   preimageContent?: string; postimageContent?: string;
 }
+export interface FileMutationBatchCommitOptions { mtimeMs?: number | Readonly<Record<string, number>>; }
 
 /** Prepare bounded whole-file evidence before a multi-path operation changes disk. */
-export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean } = {}): {
-  commit: () => FileMutationRecord[];
+export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean; hunks?: boolean } = {}): {
+  commit: (commitOptions?: FileMutationBatchCommitOptions) => FileMutationRecord[];
   cancel: () => void;
 } {
   if (!inputs.length || inputs.length > 64) throw new Error("Mutation batches require 1 to 64 file records");
@@ -430,6 +431,9 @@ export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput
     for (const content of [input.preimageContent, input.postimageContent]) {
       if (content !== undefined && (typeof content !== "string" || content.includes("\0") || Buffer.byteLength(content) > MAX_CAPTURE_FILE_BYTES)) throw new Error("Mutation batch evidence must be bounded text");
     }
+    const hunks = options.hunks && input.preimageContent !== undefined && input.postimageContent !== undefined
+      ? generateTextHunks(relativePath, input.preimageContent, input.postimageContent)
+      : [];
     const recordedAt = Date.now();
     return {
       workspaceDir, path: relativePath, source: input.source, ...(input.actor ? { actor: input.actor } : {}),
@@ -442,15 +446,16 @@ export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput
       preimageHash: buildFileHash(input.preimageContent ?? ""), postimageHash: buildFileHash(input.postimageContent ?? ""),
       ...(input.preimageContent !== undefined ? { preimageContent: input.preimageContent, preimageBlob: storeBlob(workspaceDir, input.preimageContent) } : {}),
       ...(input.postimageContent !== undefined ? { postimageBlob: storeBlob(workspaceDir, input.postimageContent) } : {}),
-      rollbackScope: "whole-file",
+      rollbackScope: hunks.length ? "hunks" : "whole-file",
+      ...(hunks.length ? { hunks } : {}),
     };
   });
   const target = inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
   const temporary = `${target}.batch-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
   const skipped = workspaceEvidenceGaps(workspaceDir).sort((a, b) => a.recordedAt - b.recordedAt).slice(-MAX_MUTATION_ENTRIES);
-  const journal: MutationJournal = { schemaVersion: 1, records: [...previousRecords, ...records].slice(-MAX_MUTATION_ENTRIES), ...(skipped.length ? { skipped } : {}) };
+  const buildJournal = (): MutationJournal => ({ schemaVersion: 1, records: [...previousRecords, ...records].slice(-MAX_MUTATION_ENTRIES), ...(skipped.length ? { skipped } : {}) });
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2), { encoding: "utf8", flag: "wx" }); }
+  try { fs.writeFileSync(temporary, JSON.stringify(buildJournal(), null, 2), { encoding: "utf8", flag: "wx" }); }
   catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
   let settled = false;
   const cancel = () => {
@@ -458,10 +463,21 @@ export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput
   };
   return {
     cancel,
-    commit: () => {
+    commit: (commitOptions: FileMutationBatchCommitOptions = {}) => {
       if (settled) throw new Error("Mutation batch has already settled");
       // A concurrent journal writer must not be overwritten by our prepared batch.
       if (loadJournal(workspaceDir, true) !== originalJournal) throw new Error("Mutation journal changed before committing the operation");
+      if (commitOptions.mtimeMs !== undefined) {
+        const mtimeByPath = typeof commitOptions.mtimeMs === "number" ? undefined : commitOptions.mtimeMs;
+        for (const record of records) {
+          const mtimeMs = mtimeByPath ? mtimeByPath[record.path] : commitOptions.mtimeMs;
+          if (mtimeMs !== undefined) {
+            if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) throw new Error("Mutation batch mtime must be finite");
+            record.mtimeMs = mtimeMs;
+          }
+        }
+        fs.writeFileSync(temporary, JSON.stringify(buildJournal(), null, 2), { encoding: "utf8" });
+      }
       inspectJournalTarget(workspaceDir, `${JOURNAL_DIR}/${JOURNAL_FILE}`);
       fs.renameSync(temporary, target);
       settled = true;
@@ -481,7 +497,7 @@ export function prepareFileMutationBatch(inputs: readonly FileMutationBatchInput
 }
 
 /** Commit related whole-file mutations together, without a partially persisted journal. */
-export function recordFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean } = {}): FileMutationRecord[] {
+export function recordFileMutationBatch(inputs: readonly FileMutationBatchInput[], options: { notify?: boolean; hunks?: boolean } = {}): FileMutationRecord[] {
   const prepared = prepareFileMutationBatch(inputs, options);
   try { return prepared.commit(); } finally { prepared.cancel(); }
 }

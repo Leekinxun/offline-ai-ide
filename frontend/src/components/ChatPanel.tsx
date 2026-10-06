@@ -75,6 +75,8 @@ import { assistantToolStatus } from "../utils/assistantActivity";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import { ApprovalModeControl } from "./ApprovalModeControl";
 import { runFailureNotice, type RunFailureNotice } from "../utils/runFailureNotice";
+import { useRunChanges } from "../hooks/useRunChanges";
+import { chatChangesEmptyState, shouldLoadChatRunEffects } from "./chatChangesSurface";
 
 type ChatConfirmAction =
   | { kind: "delete"; conversation: ConversationSummary }
@@ -584,6 +586,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const evidenceCount = (currentRunSummary?.changedFiles.length || 0) + (currentRunSummary?.completionEvidence?.ledger.verification.length || 0) + (currentRunSummary?.reviewFindings?.length || 0);
   const hasRecoveryAction = runState?.status === "failed" || runState?.status === "stopped";
   const failureNotice = runFailureNotice(runState, currentRunSummary);
+  const runEffectsRunId = runState?.runId;
+  const shouldReadRunEffects = shouldLoadChatRunEffects({
+    changesOpen,
+    isStreaming,
+    changedFileCount: currentRunSummary?.changedFiles.length || 0,
+    runId: runEffectsRunId,
+  });
+  const runEffectsReview = useRunChanges({
+    token,
+    workspaceDir,
+    runId: shouldReadRunEffects ? runEffectsRunId : undefined,
+  });
+  const changesEmptyState = chatChangesEmptyState({
+    shouldReadRunEffects,
+    loading: runEffectsReview.loading,
+    error: runEffectsReview.error,
+    changes: runEffectsReview.changes,
+  });
   const taskActionKind = approvalTaskAction(pendingApprovals.length > 0, isStreaming, hasRecoveryAction);
   const taskAction = taskActionKind === "approval" ? t("chat.approval.view") : taskActionKind === "stop" ? t("chat.stop") : taskActionKind === "resume" ? t("workbench.resumeRun") : currentRunSummary?.changedFiles.length ? t("chat.changes") : t("chat.focusComposer");
   const handleTaskAction = () => {
@@ -673,8 +693,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <div className="chat-changes-empty-icon-wrap">
                   <GitCompare size={36} />
                 </div>
-                <strong>当前任务暂无代码变更</strong>
-                <p>当 AI 助手执行代码修改、重构或生成文件后，将在此集中展示文件差异对比与改动清单。</p>
+                {changesEmptyState === "loading" ? (
+                  <>
+                    <strong>{t("review.loading")}</strong>
+                    <p>{t("chat.commandEffectsChecking")}</p>
+                  </>
+                ) : changesEmptyState === "error" ? (
+                  <>
+                    <strong>{t("review.evidenceUnavailable")}</strong>
+                    <p className="chat-changes-command-effects-note">{runEffectsReview.error}</p>
+                  </>
+                ) : changesEmptyState === "externalOnly" ? (
+                  <>
+                    <strong>{t("chat.commandEffectsOnlyTitle")}</strong>
+                    <p className="chat-changes-command-effects-note">{t("chat.commandEffectsOnlyHint")}</p>
+                  </>
+                ) : (
+                  <>
+                    <strong>当前任务暂无代码变更</strong>
+                    <p>当 AI 助手执行代码修改、重构或生成文件后，将在此集中展示文件差异对比与改动清单。</p>
+                  </>
+                )}
                 <button
                   type="button"
                   className="chat-changes-return-action"

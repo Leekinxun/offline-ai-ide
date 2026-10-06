@@ -134,7 +134,7 @@ export function readEditableFile(workspaceDir: string, filePath: string): string
 }
 
 /** Keep the old file intact until a complete replacement is ready. */
-export function atomicWriteFile(workspaceDir: string, filePath: string, content: string, preimage: string | undefined): fs.Stats {
+export function atomicWriteFile(workspaceDir: string, filePath: string, content: string, preimage: string | undefined, options: { commit?: (stat: fs.Stats) => void } = {}): fs.Stats {
   if (content.includes("\0")) throw new Error("Text file writes cannot contain NUL bytes. Use escaped text (repr or hex) for binary headers, or an approved command tool to generate binary artifacts.");
   const initial = inspectTarget(workspaceDir, filePath);
   if (initial.content !== preimage) throw new Error(`File changed before writing: ${filePath}`);
@@ -142,10 +142,59 @@ export function atomicWriteFile(workspaceDir: string, filePath: string, content:
   const parent = fs.realpathSync.native(path.dirname(initial.target));
   inspectTarget(workspaceDir, filePath);
   const temporary = path.join(parent, `.${path.basename(initial.target)}.agent-${crypto.randomUUID()}.tmp`);
+  const backup = options.commit && initial.stat ? path.join(parent, `.${path.basename(initial.target)}.agent-backup-${crypto.randomUUID()}.tmp`) : undefined;
   let descriptor: number | undefined;
+  let backupCreated = false;
+  let wroteTarget = false;
+  let stat: fs.Stats | undefined;
+  let writtenIdentity: Pick<fs.Stats, "dev" | "ino"> | undefined;
+  const sameIdentity = (left: Pick<fs.Stats, "dev" | "ino">, right: Pick<fs.Stats, "dev" | "ino">): boolean => left.dev === right.dev && left.ino === right.ino;
+  const validateBackup = (): boolean => {
+    if (!backup || !initial.stat || !fs.existsSync(backup)) return false;
+    const backupStat = fs.lstatSync(backup);
+    return backupStat.isFile()
+      && !backupStat.isSymbolicLink()
+      && sameIdentity(backupStat, initial.stat)
+      && fs.readFileSync(backup, "utf8") === preimage;
+  };
+  const restoreAfterCommitFailure = (cause: unknown): never => {
+    const recoveryPath = backup ? path.relative(fs.realpathSync.native(workspaceDir), backup).replace(/\\/g, "/") : undefined;
+    try {
+      if (preimage === undefined) {
+        if (fs.realpathSync.native(path.dirname(initial.target)) !== parent) throw new Error("File parent changed before recovery");
+        const currentStat = fs.lstatSync(initial.target);
+        if (writtenIdentity && currentStat.isFile() && !currentStat.isSymbolicLink() && sameIdentity(currentStat, writtenIdentity)) {
+          fs.unlinkSync(initial.target);
+          throw cause;
+        }
+      } else {
+        const current = inspectTarget(workspaceDir, filePath);
+        if (backup && writtenIdentity && current.stat && sameIdentity(current.stat, writtenIdentity) && current.content === content && validateBackup()) {
+          fs.renameSync(backup, current.target);
+          backupCreated = false;
+          throw cause;
+        }
+      }
+    } catch (error) {
+      if (error === cause) throw cause;
+      throw new Error(
+        recoveryPath
+          ? `File write journal commit failed; recovery data is retained at ${recoveryPath}. Inspect the file before retrying.`
+          : "File write journal commit failed after the file changed; inspect the file before retrying.",
+        { cause }
+      );
+    }
+    throw new Error(
+      recoveryPath
+        ? `File write journal commit failed; recovery data is retained at ${recoveryPath}. Inspect the file before retrying.`
+        : "File write journal commit failed after a concurrent file change; inspect the file before retrying.",
+      { cause }
+    );
+  };
   try {
     descriptor = fs.openSync(temporary, "wx", initial.stat ? initial.stat.mode & 0o777 : 0o666);
     fs.writeFileSync(descriptor, content, "utf8");
+    const temporaryStat = fs.fstatSync(descriptor);
     const current = inspectTarget(workspaceDir, filePath);
     if (current.content !== preimage || fs.realpathSync.native(path.dirname(current.target)) !== parent) {
       throw new Error(`File changed before committing the edit: ${filePath}`);
@@ -154,16 +203,35 @@ export function atomicWriteFile(workspaceDir: string, filePath: string, content:
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
     descriptor = undefined;
+    if (backup) {
+      fs.linkSync(current.target, backup);
+      backupCreated = true;
+      if (!validateBackup()) throw new Error(`File changed before preparing recovery: ${filePath}`);
+    }
     if (preimage === undefined) {
       // Unlike rename, link fails if another writer created the destination.
       fs.linkSync(temporary, current.target);
     } else {
       fs.renameSync(temporary, current.target);
     }
-    return fs.statSync(current.target);
+    wroteTarget = true;
+    writtenIdentity = { dev: temporaryStat.dev, ino: temporaryStat.ino };
+    try {
+      stat = fs.statSync(current.target);
+      if (!sameIdentity(stat, writtenIdentity)) throw new Error(`File changed after writing: ${filePath}`);
+      options.commit?.(stat);
+    }
+    catch (error) { restoreAfterCommitFailure(error); }
+    if (backupCreated && backup) {
+      try { fs.unlinkSync(backup); } catch { /* the journal has the durable preimage */ }
+      backupCreated = false;
+    }
+    if (!stat) throw new Error(`File status unavailable after writing: ${filePath}`);
+    return stat;
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
     fs.rmSync(temporary, { force: true });
+    if (!wroteTarget && backupCreated && backup) fs.rmSync(backup, { force: true });
   }
 }
 

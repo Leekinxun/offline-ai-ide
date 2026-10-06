@@ -19,7 +19,6 @@ import { bindConfiguredFallbacks, buildProviderExecutionContract } from "./provi
 import { estimateUsageCostUsd, resolveAgentProfile } from "./agentProfiles.js";
 import { runAgentHooks } from "./agentHooks.js";
 import { requireModelTurnAction } from "./finishReason.js";
-import { createCheckpoint } from "../chat/checkpoints.js";
 import { estimateMessageTokens } from "./context.js";
 import { createRunId } from "../chat/runHistory.js";
 import { AgentRunRecorder, terminalizeInterruptedRun } from "../chat/runHistory.js";
@@ -29,12 +28,14 @@ import type { ChangeSetStatus } from "../chat/changeSets.js";
 import { isProcessAlive } from "../utils/processLiveness.js";
 import { createManagedWorktree, listManagedWorktrees, updateManagedWorktreeMetadata, type ManagedWorktree } from "../chat/worktrees.js";
 import {
-  captureCheckpointMutationsDetailed,
   listMutationEvidenceGaps,
-  recordKnownFileMutation,
+  prepareFileMutationBatch,
 } from "../files/mutationRegistry.js";
 import { OrchestrationStore } from "./orchestrationStore.js";
 import { TraceStore, type CollaborationEventReferences, type CollaborationLifecycleEventInput } from "../chat/traceStore.js";
+import { planReadOnlyShell } from "./readOnlyShell.js";
+import { atomicWriteFile, normalizeEditablePath, readEditableFile, replaceUniqueText } from "./fileEditSafety.js";
+import { beginExternalToolEffects, type ExternalToolAudit } from "../chat/externalToolEffects.js";
 
 const TEAMMATE_TOOLS: OpenAIToolDef[] = [
   { type: "function", function: { name: "bash", description: "Run command.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
@@ -85,12 +86,25 @@ async function dispatchTeammateTool(
         if (!decision.allowed) return `Error: ${decision.reason || "Write blocked by workspace policy"}`;
       }
       try {
-        const full = safePath(args.path as string, cwd);
-        const previous = fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : "";
-        fs.mkdirSync(path.dirname(full), { recursive: true });
+        const relativePath = normalizeEditablePath(args.path as string);
         const content = args.content as string;
-        fs.writeFileSync(full, content, "utf-8");
-        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: previous, runId, toolCallId });
+        const previous = readEditableFile(cwd, relativePath);
+        if (previous === content) return `No changes to ${relativePath}`;
+        const batch = prepareFileMutationBatch([{
+          workspaceDir: cwd,
+          path: relativePath,
+          source: "assistant_tool",
+          actor: `teammate:${agentName}`,
+          runId,
+          toolCallId,
+          preimageContent: previous,
+          postimageContent: content,
+        }], { hunks: true });
+        try {
+          atomicWriteFile(cwd, relativePath, content, previous, { commit: (stat) => batch.commit({ mtimeMs: stat.mtimeMs }) });
+        } finally {
+          batch.cancel();
+        }
         return `Wrote ${(args.content as string).length} bytes`;
       } catch (e: any) { return `Error: ${e.message}`; }
     case "edit_file":
@@ -99,12 +113,27 @@ async function dispatchTeammateTool(
         if (!decision.allowed) return `Error: ${decision.reason || "Edit blocked by workspace policy"}`;
       }
       try {
-        const full = safePath(args.path as string, cwd);
-        const c = fs.readFileSync(full, "utf-8");
-        if (!c.includes(args.old_text as string)) return "Error: Text not found";
-        const content = c.replace(args.old_text as string, args.new_text as string);
-        fs.writeFileSync(full, content, "utf-8");
-        recordKnownFileMutation({ workspaceDir: cwd, path: args.path as string, source: "assistant_tool", actor: `teammate:${agentName}`, mtimeMs: fs.statSync(full).mtimeMs, content, preimageContent: c, runId, toolCallId });
+        const relativePath = normalizeEditablePath(args.path as string);
+        const previous = readEditableFile(cwd, relativePath);
+        if (previous === undefined) return `Error: File not found: ${relativePath}`;
+        const replacement = replaceUniqueText(previous, args.old_text as string, args.new_text as string);
+        const content = replacement.content;
+        if (content === previous) return `No changes to ${relativePath}`;
+        const batch = prepareFileMutationBatch([{
+          workspaceDir: cwd,
+          path: relativePath,
+          source: "assistant_tool",
+          actor: `teammate:${agentName}`,
+          runId,
+          toolCallId,
+          preimageContent: previous,
+          postimageContent: content,
+        }], { hunks: true });
+        try {
+          atomicWriteFile(cwd, relativePath, content, previous, { commit: (stat) => batch.commit({ mtimeMs: stat.mtimeMs }) });
+        } finally {
+          batch.cancel();
+        }
         return "Edited";
       } catch (e: any) { return `Error: ${e.message}`; }
     case "send_message":
@@ -414,7 +443,7 @@ export class TeammateManager {
       this.audit({ action: "spawn_failed", outcome: "failed", reasonCode: "run_start_failed", ...childReferences });
       throw error;
     }
-    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal, parentModelName).catch(() => {
+    this.runTeammateLoop(name, role, prompt, control, authorize, childWorkspace.path, childWorkspace.runId, signal, parentModelName, recorder).catch(() => {
       try { this.finalizeManagedWorktree(name, "failure"); } catch { /* report once below */ }
       try { this.setStatus(name, "failed", "Execution failed", control.generation); } catch { /* report once below */ }
       console.error(`[teammate:${name}] Critical collaboration lifecycle handling failed`);
@@ -437,7 +466,8 @@ export class TeammateManager {
     childWorkspaceDir: string,
     childRunId: string,
     signal?: AbortSignal,
-    parentModelName = config.modelName
+    parentModelName = config.modelName,
+    recorder?: AgentRunRecorder
   ): Promise<void> {
     this.setStatus(name, "working", prompt ? prompt.slice(0, 180) : "Continuing assigned work", control.generation);
     const sysPrompt = `You are '${name}', role: ${role}, team: ${this.config.team_name}, at ${childWorkspaceDir}. This is your isolated managed worktree; never access the parent workspace. Use idle when done with current work.`;
@@ -596,8 +626,8 @@ export class TeammateManager {
 
         if (tc.function.name === "idle") idleRequested = true;
         let output: string;
-        let snapshotId: string | undefined;
-        let mutationEvidenceFailure = "";
+        let externalToolAudit: ExternalToolAudit | undefined;
+        let externalToolAudited = false;
         if (toolCalls >= profile.budget.maxToolCalls) {
           output = `Error: Agent tool-call budget exceeded (${profile.budget.maxToolCalls})`;
         } else {
@@ -613,20 +643,20 @@ export class TeammateManager {
               authorize,
               tc.id,
               async () => {
-                if (["bash", "write_file", "edit_file"].includes(tc.function.name)) {
-                  try {
-                    const checkpoint = createCheckpoint(childWorkspaceDir, {
-                      label: `Before teammate:${name} · ${tc.function.name}`,
-                      kind: "step",
-                      toolCallId: tc.id,
-                    });
-                    snapshotId = checkpoint.id;
-                  } catch (error) {
-                    throw new Error(
-                      `Required mutation checkpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
-                      { cause: error }
-                    );
-                  }
+                if (tc.function.name === "bash" && !planReadOnlyShell(args.command)) {
+                  externalToolAudit = await beginExternalToolEffects(childWorkspaceDir, {
+                    runId: childRunId,
+                    requestId: `teammate:${name}`,
+                    toolCallId: tc.id,
+                    toolName: tc.function.name,
+                  }, this.workspaceDir);
+                  await recorder?.toolState({
+                    toolCallId: tc.id,
+                    requestId: `teammate:${name}`,
+                    name: tc.function.name,
+                    status: "running",
+                    rollbackCoverage: "untracked",
+                  });
                 }
                 await runAgentHooks("beforeToolExecute", {
                   agentId: `teammate:${name}`,
@@ -641,24 +671,20 @@ export class TeammateManager {
           } catch (error) {
             output = `Error: ${error instanceof Error ? error.message : String(error)}`;
           }
-          if (tc.function.name === "bash" && snapshotId) {
-            try {
-              const captured = captureCheckpointMutationsDetailed(childWorkspaceDir, {
-                checkpointId: snapshotId,
-                runId: childRunId,
-                toolCallId: tc.id,
-                actor: `teammate:${name}`,
-              });
-              if (captured.skipped.length) {
-                mutationEvidenceFailure = `Mutation evidence incomplete: ${captured.skipped
-                  .map((entry) => `${entry.path}:${entry.reason}`)
-                  .join(", ")}`;
-              }
-            } catch (error) {
-              mutationEvidenceFailure = `Mutation evidence capture failed: ${error instanceof Error ? error.message : String(error)}`;
-            }
+          if (externalToolAudit && !externalToolAudited) {
+            externalToolAudited = true;
+            try { await externalToolAudit.finish(); } catch { /* metadata failure must not replace tool output */ }
+            output += "\n\n[Command file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]";
+            await recorder?.toolState({
+              toolCallId: tc.id,
+              requestId: `teammate:${name}`,
+              name: tc.function.name,
+              status: output.startsWith("Error:") ? "failed" : "completed",
+              resultSummary: output.slice(0, 2000),
+              ...(output.startsWith("Error:") ? { error: output.slice(0, 2000) } : {}),
+              rollbackCoverage: "untracked",
+            });
           }
-          if (mutationEvidenceFailure) output = `Error: ${mutationEvidenceFailure}${output ? `\nTool output:\n${output}` : ""}`;
           await runAgentHooks("afterToolExecute", {
             agentId: `teammate:${name}`,
             toolCallId: tc.id,

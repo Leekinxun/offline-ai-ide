@@ -8,9 +8,11 @@ import { classifyToolApproval } from "./toolApproval.js";
 import { evaluateModeCapability } from "./modeCapabilities.js";
 import { subagentAllowsTool } from "./subagentRoles.js";
 import { getAllTools, TOOL_DISPATCH } from "./tools.js";
-import { buildFileHash, listFileMutations, listMutationEvidenceGaps, recordKnownFileMutation, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { listFileMutations, listMutationEvidenceGaps, recordKnownFileMutation, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { listCheckpoints } from "../chat/checkpoints.js";
 import type { ToolContext } from "./types.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { listExternalToolEffects } from "../chat/externalToolEffects.js";
 
 function fixture(t: test.TestContext, script: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-process-tools-"));
@@ -29,7 +31,7 @@ async function terminal(context: ToolContext, id: string) {
   }
 }
 
-test("Agent process polling returns real exit/output and journals delayed writes once under the starting tool", async (t) => {
+test("Agent process polling returns real exit/output and records untracked effects once under the starting tool", async (t) => {
   const f = fixture(t, 'setTimeout(() => { require("node:fs").writeFileSync("generated.txt", "delayed"); console.log("done"); }, 100);');
   const start = await executeProcessTool("process_start", { command: "node task.cjs" }, f.context);
   assert.equal(start.process.session.status, "running");
@@ -40,13 +42,20 @@ test("Agent process polling returns real exit/output and journals delayed writes
   assert.match(done.process.output, /done/);
   assert.equal(done.process.evidenceError, undefined);
   const records = listFileMutations(f.root, { toolCallId: "process-start" });
-  assert.deepEqual(records.map((record) => record.path), ["generated.txt"]);
+  assert.deepEqual(records, []);
+  assert.equal(fs.readFileSync(path.join(f.root, "generated.txt"), "utf8"), "delayed");
+  const effects = listExternalToolEffects(f.root, { runId: f.context.runId!, expectedExecutions: [{ toolCallId: "process-start", requestId: f.context.requestId }] });
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].rollbackCoverage, "untracked");
+  assert.ok(effects[0].finishedAt);
+  assert.equal(done.process.workspaceEffects?.rollbackCoverage, "untracked");
   await executeProcessTool("process_poll", { session_id: start.process.session.id }, f.context);
-  assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 1);
+  assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 0);
+  assert.equal(listExternalToolEffects(f.root, { runId: f.context.runId! }).length, 1);
   assert.equal(pendingAgentProcesses(f.context).length, 0);
 });
 
-test("a completed Agent process records a binary artifact without an evidence error", async (t) => {
+test("a completed Agent process preserves binary artifacts and reports untracked rollback coverage", async (t) => {
   const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128]);
   const f = fixture(t, `setTimeout(() => { require('node:fs').writeFileSync('image.png', Buffer.from(${JSON.stringify([...bytes])})); console.log('artifact ready'); }, 50);`);
   const start = await executeProcessTool("process_start", { command: "node task.cjs" }, f.context);
@@ -55,16 +64,14 @@ test("a completed Agent process records a binary artifact without an evidence er
   assert.equal(done.process.evidenceError, undefined);
   assert.equal(pendingAgentProcesses(f.context).length, 0);
   const records = listFileMutations(f.root, { toolCallId: "process-start" });
-  assert.equal(records.length, 1);
-  assert.equal(records[0].path, "image.png");
-  assert.equal(records[0].postimageHash, buildFileHash(bytes));
-  assert.equal(records[0].rollbackScope, "whole-file");
-  assert.equal(records[0].rollbackUnavailableReason, undefined);
+  assert.deepEqual(records, []);
+  assert.deepEqual(fs.readFileSync(path.join(f.root, "image.png")), bytes);
+  assert.equal(done.process.workspaceEffects?.rollbackCoverage, "untracked");
   assert.deepEqual(listMutationEvidenceGaps(f.root), []);
   await executeProcessTool("process_poll", { session_id: start.process.session.id }, f.context);
-  assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 1);
-  assert.deepEqual(rollbackFileMutations(f.root, { toolCallId: "process-start" }).applied, [records[0].id]);
-  assert.equal(fs.existsSync(path.join(f.root, "image.png")), false);
+  assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 0);
+  assert.deepEqual(rollbackFileMutations(f.root, { toolCallId: "process-start" }).applied, []);
+  assert.deepEqual(fs.readFileSync(path.join(f.root, "image.png")), bytes);
 });
 
 test("process tools enforce owner/run, active-write exclusion, input approval and read-only/child boundaries", async (t) => {
@@ -105,15 +112,17 @@ test("process start obeys command hard policy and approved plan command scope; s
   await assert.rejects(executeProcessTool("process_start", { command: "node task.cjs" }, { ...f.context, executionPlan }), /outside the approved/);
 });
 
-test("concurrent user edits produce an attribution conflict instead of being journaled as process changes", async (t) => {
+test("concurrent user edits remain separate from untracked process effects", async (t) => {
   const f = fixture(t, "setTimeout(() => console.log('finished'), 150);");
   const start = await executeProcessTool("process_start", { command: "node task.cjs" }, f.context);
   fs.writeFileSync(path.join(f.root, "user.txt"), "user change");
   recordKnownFileMutation({ workspaceDir: f.root, path: "user.txt", source: "user", actor: "tester", content: "user change", mtimeMs: fs.statSync(path.join(f.root, "user.txt")).mtimeMs });
   const done = await terminal(f.context, start.process.session.id);
-  assert.match(done.process.evidenceError || "", /Concurrent workspace edits/);
+  assert.equal(done.process.evidenceError, undefined);
+  assert.equal(done.process.workspaceEffects?.rollbackCoverage, "untracked");
+  assert.equal(fs.readFileSync(path.join(f.root, "user.txt"), "utf8"), "user change");
   assert.equal(listFileMutations(f.root, { toolCallId: "process-start" }).length, 0);
-  assert.equal(pendingAgentProcesses(f.context)[0].evidenceError, done.process.evidenceError);
+  assert.deepEqual(pendingAgentProcesses(f.context), []);
 });
 
 test("process stop is idempotent and timeout remains a terminal failure", async (t) => {
@@ -125,3 +134,23 @@ test("process stop is idempotent and timeout remains a terminal failure", async 
   await executeProcessTool("process_stop", { session_id: started.process.session.id }, f.context);
   assert.equal((await terminal(f.context, started.process.session.id)).process.session.status, "cancelled");
 });
+
+for (const limit of ["file-count", "total-bytes"] as const) {
+  test(`Agent processes run beyond the old workspace checkpoint ${limit} limit`, async (t) => {
+    const f = fixture(t, "require('node:fs').writeFileSync('generated.txt', 'created'); console.log('verified');");
+    const filler = path.join(f.root, "fixtures");
+    fs.mkdirSync(filler);
+    const count = limit === "file-count" ? 20_001 : 65;
+    const bytes = limit === "file-count" ? "" : Buffer.alloc(1024 * 1024, "x");
+    for (let i = 0; i < count; i++) fs.writeFileSync(path.join(filler, `${i}.txt`), bytes);
+    const started = await executeProcessTool("process_start", { command: "node task.cjs" }, f.context);
+    const done = await terminal(f.context, started.process.session.id);
+    assert.equal(done.process.session.exitCode, 0, done.process.output);
+    assert.match(done.process.output, /verified/);
+    assert.equal(done.process.evidenceError, undefined);
+    assert.equal(done.process.workspaceEffects?.rollbackCoverage, "untracked");
+    assert.equal(fs.readFileSync(path.join(f.root, "generated.txt"), "utf8"), "created");
+    assert.deepEqual(listCheckpoints(f.root), []);
+    assert.equal(listExternalToolEffects(f.root, { runId: f.context.runId! }).length, 1);
+  });
+}

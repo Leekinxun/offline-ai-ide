@@ -294,6 +294,8 @@ export interface ToolContext {
   sessionToken?: string;
   sessionOwner?: string;
   stepCheckpointId?: string;
+  /** Trusted execution receipt transferred to process supervision; never tool input. */
+  externalToolAudit?: import("../chat/externalToolEffects.js").ExternalToolAudit;
   /** Effective filesystem ceiling resolved from admin/profile/workspace policy. */
   filesystemSandbox?: import("../extensions/policy/types.js").SandboxGrant;
   /** Trusted server-provided read-only roots; never accepted from tool input. */

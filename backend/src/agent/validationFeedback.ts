@@ -24,6 +24,9 @@ export interface RuntimeValidationReport {
   schemaVersion: 1;
   status: "passed" | "failed" | "unverified" | "not_required";
   reason: string;
+  changeCoverage?: "tracked_edits_only";
+  /** Explicitly inspected artifacts; these paths are not attributed file edits. */
+  observedArtifacts?: string[];
   changedFiles: string[];
   versions: Record<string, string>;
   verification: Array<{
@@ -117,10 +120,11 @@ function attemptedLocalVerification(command: string): boolean {
 }
 
 export class ResumeValidationScopeError extends Error {}
-export function resolveResumedValidation(workspaceDir: string, conversationId: string, resumedFromRunId?: string, owner?: string): { changedFiles: string[]; commands: string[]; error?: string } {
+export function resolveResumedValidation(workspaceDir: string, conversationId: string, resumedFromRunId?: string, owner?: string): { changedFiles: string[]; commands: string[]; externalEffectsUntracked?: boolean; error?: string } {
   const changedFiles = new Set<string>();
   const commands = new Set<string>();
   const seen = new Set<string>();
+  let externalEffectsUntracked = false;
   let current = resumedFromRunId;
   try {
     while (current) {
@@ -128,6 +132,7 @@ export function resolveResumedValidation(workspaceDir: string, conversationId: s
       seen.add(current);
       const source = readRunRecord(workspaceDir, current);
       if (source.conversationId !== conversationId || source.mode !== "code" || source.parentRunId) throw new ResumeValidationScopeError("Resume validation source does not belong to this primary Code conversation");
+      externalEffectsUntracked ||= source.toolExecutions.some((tool) => tool.rollbackCoverage === "untracked");
       if (owner && listProcessSessions({ workspaceDir, owner, runId: current }).some((session) => session.taskId === "agent:command" && (session.status === "running" || session.status === "interrupted"))) throw new Error("Previous Agent process was interrupted before reliable mutation capture; inspect its workspace changes before claiming validation");
       const evidence = source.completionEvidence;
       if (!evidence) throw new Error("Previous run completion evidence is missing or invalid");
@@ -146,10 +151,10 @@ export function resolveResumedValidation(workspaceDir: string, conversationId: s
       }
       current = source.resumedFromRunId;
     }
-    return { changedFiles: [...changedFiles], commands: [...commands] };
+    return { changedFiles: [...changedFiles], commands: [...commands], ...(externalEffectsUntracked ? { externalEffectsUntracked } : {}) };
   } catch (error) {
     if (error instanceof ResumeValidationScopeError) throw error;
-    return { changedFiles: [...changedFiles], commands: [...commands], error: `Previous run verification evidence cannot be trusted: ${redactSecrets(error instanceof Error ? error.message : String(error))}` };
+    return { changedFiles: [...changedFiles], commands: [...commands], ...(externalEffectsUntracked ? { externalEffectsUntracked } : {}), error: `Previous run verification evidence cannot be trusted: ${redactSecrets(error instanceof Error ? error.message : String(error))}` };
   }
 }
 
@@ -328,6 +333,7 @@ export class ValidationFeedback {
   readonly maxRepairAttempts = 2;
   private repairAttempts = 0;
   private observations: CommandObservation[] = [];
+  private observedArtifacts = new Set<string>();
   private baseline: DiagnosticsResult;
   private editorBaseline = new Map<string, EditorDiagnosticSnapshot>();
   private notifiedEditorVersions = new Set<string>();
@@ -338,6 +344,15 @@ export class ValidationFeedback {
     if (editorOwner) for (const snapshot of getEditorDiagnosticFeedback({ workspaceDir, owner: editorOwner })) {
       if (snapshot.baselineEligible) this.editorBaseline.set(snapshot.path, snapshot);
     }
+  }
+
+  observeArtifact(file: string): void {
+    const relative = normalizeContextPath(file);
+    if (relative && evaluateContextPath(relative).allowed && this.observedArtifacts.size < 200) this.observedArtifacts.add(relative);
+  }
+
+  fileVersions(changedFiles: readonly string[]): Record<string, string> {
+    return validationFileVersions(this.workspaceDir, [...changedFiles, ...this.observedArtifacts]);
   }
 
   observeCommand(input: { command: string; toolCallId: string; output: string; isError: boolean; denied: boolean; changedFiles: readonly string[]; versions?: Record<string, string> }): void {
@@ -357,13 +372,13 @@ export class ValidationFeedback {
     this.observations.push({
       command: input.command.trim(), toolCallId: input.toolCallId,
       status: reason === "denied" || reason === "cancelled" ? "cancelled" : reason === "no_tests" || reason === "masked_exit" ? "pending" : reason === "timed_out" ? "timed_out" : reason === "failed" ? "failed" : "passed",
-      denied: input.denied, verificationAttempt, versions: input.versions || validationFileVersions(this.workspaceDir, input.changedFiles), output: safeOutput.slice(-4_000),
+      denied: input.denied, verificationAttempt, versions: input.versions || this.fileVersions(input.changedFiles), output: safeOutput.slice(-4_000),
       reason, outputDigest: contextDigest(safeOutput), inputFingerprint: verificationAttempt ? validationInputFingerprint(this.workspaceDir, input.command) : "",
     });
   }
 
   assess(changedFiles: readonly string[], allowRetry = true): { report: RuntimeValidationReport; feedback?: string } {
-    const files = [...new Set(changedFiles)].sort();
+    const files = [...new Set([...changedFiles, ...this.observedArtifacts])].sort();
     const versions = validationFileVersions(this.workspaceDir, files);
     const artifacts = validationTextArtifacts(this.workspaceDir, files, versions);
     let commands: string[] = [];
@@ -408,7 +423,7 @@ export class ValidationFeedback {
       : verification.some((item) => item.reason === "no_tests") ? "A verification runner found no tests. Changes remain unverified; repeating the same check without changing its inputs cannot verify them."
       : failed ? "A relevant check failed or a fresh diagnostic introduced a new error."
       : "Required checks have not passed for the current changed-file versions.";
-    const report: RuntimeValidationReport = { schemaVersion: 1, status, reason, changedFiles: files, versions, verification, diagnostics, repairAttempts: this.repairAttempts, ...(artifacts.errors.length ? { artifactErrors: artifacts.errors } : {}), ...(editorErrors.length ? { editorDiagnostics: { provenance: "editor_advisory" as const, advisory: true as const, errors: editorErrors } } : {}) };
+    const report: RuntimeValidationReport = { schemaVersion: 1, status, reason, changedFiles: [...new Set(changedFiles)].sort(), versions, verification, diagnostics, repairAttempts: this.repairAttempts, ...(this.observedArtifacts.size ? { observedArtifacts: [...this.observedArtifacts].sort() } : {}), ...(artifacts.errors.length ? { artifactErrors: artifacts.errors } : {}), ...(editorErrors.length ? { editorDiagnostics: { provenance: "editor_advisory" as const, advisory: true as const, errors: editorErrors } } : {}) };
     const retryCommands = commands.filter((_command, index) => !["passed", "no_tests", "unavailable", "denied", "cancelled", "masked_exit"].includes(verification[index].reason));
     const feedbackKey = contextDigest(JSON.stringify({ versions, checks: retryCommands.map((command) => {
       const index = commands.indexOf(command);

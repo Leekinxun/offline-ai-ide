@@ -14,6 +14,7 @@ import { TEAMMATE_CAPABILITY } from "./types.js";
 import { AgentRunRecorder, readRunRecord } from "../chat/runHistory.js";
 import { TraceStore } from "../chat/traceStore.js";
 import { config } from "../config.js";
+import { listExternalToolEffects } from "../chat/externalToolEffects.js";
 
 function initializeGitWorkspace(workspaceDir: string): void {
   execFileSync("git", ["init", "-q", workspaceDir]);
@@ -315,7 +316,7 @@ test("authorized teammate bash can use a compatibility-shell pipe", async (t) =>
   removeManagedWorktree(workspaceDir, changeSet.worktreeId);
 });
 
-test("write-capable teammate fails before mutation when its required checkpoint cannot be created", async (t) => {
+test("write-capable teammate fails before mutation when its mutation journal cannot be prepared", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-checkpoint-fail-"));
   initializeGitWorkspace(workspaceDir);
   await fs.writeFile(path.join(workspaceDir, ".checkpoints"), "tracked blocker\n");
@@ -328,7 +329,7 @@ test("write-capable teammate fails before mutation when its required checkpoint 
     completion += 1;
     if (completion === 2) {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
-      assert.match(body.messages.find((message) => message.role === "tool")?.content || "", /Required mutation checkpoint unavailable/);
+      assert.match(body.messages.find((message) => message.role === "tool")?.content || "", /Mutation journal evidence|unsafe persisted source|not a directory|ENOTDIR/i);
     }
     return Response.json({ choices: [{ message: completion === 1
       ? { role: "assistant", content: null, tool_calls: [{ id: "blocked-teammate-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "blocked.txt", content: "must not exist\n" }) } }] }
@@ -348,7 +349,7 @@ test("write-capable teammate fails before mutation when its required checkpoint 
   removeManagedWorktree(workspaceDir, child.id);
 });
 
-test("teammate oversized mutation evidence gaps fail hook, member/run state, and worktree consistently", async (t) => {
+test("teammate oversized bash effects record untracked receipt without checkpoint mutation capture", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-oversized-gap-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
@@ -368,17 +369,94 @@ test("teammate oversized mutation evidence gaps fail hook, member/run state, and
   assert.match(await manager.spawn("gap", "implementation", "make oversized evidence", async () => ({ allowed: true }), undefined, {
     parentRunId: "parent-gap", parentConversationId: "conversation-gap", parentRequestId: "request-gap", parentToolCallId: "spawn-gap",
   }), /Spawned/);
-  for (let attempt = 0; attempt < 100 && manager.listDetails()[0]?.status !== "failed"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let attempt = 0; attempt < 100 && listManagedWorktrees(workspaceDir)[0]?.status !== "ready_for_review"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   const member = manager.listDetails()[0];
   const worktree = listManagedWorktrees(workspaceDir)[0];
-  assert.match(hookError, /mutation evidence incomplete.*evidence\.bin:oversized/is);
+  assert.equal(hookError, "");
   assert.equal(member.status, "failed");
-  assert.equal(readRunRecord(workspaceDir, member.childRunId!).status, "failed");
+  const run = readRunRecord(workspaceDir, member.childRunId!);
+  assert.equal(run.status, "failed");
+  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "teammate-gap")?.status, "completed");
   assert.equal(worktree.status, "needs_attention");
   assert.deepEqual(listChangeSets(workspaceDir), []);
-  assert.doesNotMatch(bus.readInbox("lead").map((message) => message.content).join("\n"), /ready for review/i);
+  assert.equal(await fs.stat(path.join(worktree.path, "evidence.bin")).then((stat) => stat.size), 2097153);
+  assert.doesNotMatch(bus.readInbox("lead").map((message) => message.content).join("\n"), /mutation evidence/i);
+  const effects = listExternalToolEffects(workspaceDir, { runId: member.childRunId!, requestId: "teammate:gap", expectedToolCallIds: ["teammate-gap"] });
+  assert.equal(effects[0]?.rollbackCoverage, "untracked");
   await fs.rm(path.join(worktree.path, "evidence.bin"), { force: true });
   await fs.rm(path.join(worktree.path, ".checkpoints"), { recursive: true, force: true });
+  updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");
+  removeManagedWorktree(workspaceDir, worktree.id);
+});
+
+test("teammate bash runs when its physical workspace already exceeds checkpoint total-size limits", { timeout: 30_000 }, async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-large-workspace-"));
+  initializeGitWorkspace(workspaceDir);
+  await fs.writeFile(path.join(workspaceDir, "source.txt"), "parent\n");
+  execFileSync("git", ["-C", workspaceDir, "add", "source.txt"]);
+  execFileSync("git", ["-C", workspaceDir, "commit", "-qm", "source"]);
+  const originalFetch = globalThis.fetch;
+  let completion = 0;
+  let filled = false;
+  let toolOutput = "";
+  const fillChildWorkspace = async () => {
+    const worktree = listManagedWorktrees(workspaceDir)[0];
+    if (!worktree || filled) return;
+    filled = true;
+    await fs.writeFile(path.join(worktree.path, ".gitignore"), "payloads/\n");
+    const payloadDir = path.join(worktree.path, "payloads");
+    await fs.mkdir(payloadDir, { recursive: true });
+    const seed = path.join(payloadDir, "payload-0.bin");
+    await fs.writeFile(seed, Buffer.alloc(2 * 1024 * 1024, 65));
+    for (let index = 1; index < 33; index += 1) await fs.link(seed, path.join(payloadDir, `payload-${index}.bin`));
+  };
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
+    completion += 1;
+    if (completion === 1) await fillChildWorkspace();
+    if (completion === 2) {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      toolOutput = body.messages.find((message) => message.role === "tool")?.content || "";
+    }
+    return Response.json({ choices: [{ message: completion === 1
+      ? { role: "assistant", content: null, tool_calls: [{ id: "teammate-large-workspace", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "find payloads -type f -print0 | xargs -0 wc -c | awk 'END{print $1}' > bytes.txt; printf 'BYTES='; cat bytes.txt" }) } }] }
+      : { role: "assistant", content: "large workspace handled" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+  };
+  t.after(async () => { globalThis.fetch = originalFetch; await fs.rm(workspaceDir, { recursive: true, force: true }); });
+  const bus = new MessageBus(workspaceDir);
+  const manager = new TeammateManager(workspaceDir, bus, new TaskManager(workspaceDir));
+
+  assert.match(await manager.spawn("large", "implementation", "measure large workspace", async () => ({ allowed: true }), undefined, {
+    parentRunId: "parent-large-workspace", parentConversationId: "conversation-large-workspace", parentRequestId: "request-large-workspace", parentToolCallId: "spawn-large-workspace",
+  }), /Spawned/);
+  for (let attempt = 0; attempt < 100 && listManagedWorktrees(workspaceDir)[0]?.status !== "ready_for_review"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  const member = manager.listDetails()[0];
+  const worktree = listManagedWorktrees(workspaceDir)[0];
+  const run = readRunRecord(workspaceDir, member.childRunId!);
+  const effects = listExternalToolEffects(workspaceDir, { runId: member.childRunId!, requestId: "teammate:large", expectedToolCallIds: ["teammate-large-workspace"] });
+
+  assert.equal(filled, true);
+  assert.match(toolOutput, /BYTES=69206016/);
+  assert.equal(member.status, "idle");
+  assert.equal(worktree.status, "ready_for_review");
+  assert.equal(await fs.readFile(path.join(worktree.path, "bytes.txt"), "utf8"), "69206016\n");
+  assert.equal(await fs.stat(path.join(worktree.path, "payloads", "payload-32.bin")).then((stat) => stat.size), 2 * 1024 * 1024);
+  assert.equal(await fs.readFile(path.join(workspaceDir, "source.txt"), "utf8"), "parent\n");
+  assert.equal(await fs.stat(path.join(worktree.path, ".checkpoints", "index.json")).then(() => true).catch(() => false), false);
+  assert.equal(await fs.stat(path.join(workspaceDir, ".checkpoints", "index.json")).then(() => true).catch(() => false), false);
+  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "teammate-large-workspace")?.status, "completed");
+  assert.match(run.toolExecutions.find((tool) => tool.toolCallId === "teammate-large-workspace")?.resultSummary || "", /BYTES=69206016/);
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].rollbackCoverage, "untracked");
+  assert.ok(effects[0].finishedAt);
+  assert.equal(effects[0].runId, member.childRunId);
+  assert.equal(effects[0].observationComplete, false);
+  assert.doesNotMatch(bus.readInbox("lead").map((message) => message.content).join("\n"), /checkpoint/i);
+
+  applyChangeSetDecision(workspaceDir, listChangeSets(workspaceDir)[0], "reject");
+  await fs.rm(path.join(worktree.path, "bytes.txt"), { force: true });
+  await fs.rm(path.join(worktree.path, ".gitignore"), { force: true });
+  await fs.rm(path.join(worktree.path, "payloads"), { recursive: true, force: true });
   updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");
   removeManagedWorktree(workspaceDir, worktree.id);
 });
@@ -422,13 +500,14 @@ test("bounded teammate binary mutation evidence reaches ready review with binary
   assert.match(patch, /evidence\.bin/);
   assert.match(notification, /ready for review/i);
   assert.doesNotMatch(notification, /mutation evidence/i);
+  assert.equal(listExternalToolEffects(workspaceDir, { runId: member.childRunId!, requestId: "teammate:binary", expectedToolCallIds: ["teammate-binary"] })[0]?.rollbackCoverage, "untracked");
   await fs.rm(path.join(worktree.path, "evidence.bin"), { force: true });
   await fs.rm(path.join(worktree.path, ".checkpoints"), { recursive: true, force: true });
   updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");
   removeManagedWorktree(workspaceDir, worktree.id);
 });
 
-test("teammate mutation-journal failure remains observable and fails member and run", async (t) => {
+test("teammate bash ignores broken mutation journal and records untracked external effects", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-teammate-journal-fail-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
@@ -451,15 +530,16 @@ test("teammate mutation-journal failure remains observable and fails member and 
   assert.match(await manager.spawn("journal", "implementation", "corrupt journal", async () => ({ allowed: true }), undefined, {
     parentRunId: "parent-journal", parentConversationId: "conversation-journal", parentRequestId: "request-journal", parentToolCallId: "spawn-journal",
   }), /Spawned/);
-  for (let attempt = 0; attempt < 100 && !["failed", "shutdown"].includes(manager.listDetails()[0]?.status || ""); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let attempt = 0; attempt < 100 && listManagedWorktrees(workspaceDir)[0]?.status !== "ready_for_review"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   const member = manager.listDetails()[0];
   const worktree = listManagedWorktrees(workspaceDir)[0];
-  assert.match(hookError, /mutation evidence capture failed.*journal evidence.*(?:invalid|unreadable)/i);
-  assert.equal(member.status, "failed");
-  assert.equal(readRunRecord(workspaceDir, member.childRunId!).status, "failed");
-  assert.equal(worktree.status, "needs_attention");
-  assert.deepEqual(listChangeSets(workspaceDir), []);
-  assert.match(bus.readInbox("lead").map((message) => message.content).join("\n"), /ChangeSet capture failed.*journal evidence.*(?:invalid|unreadable)/i);
+  assert.equal(hookError, "");
+  assert.equal(member.status, "idle");
+  assert.equal(readRunRecord(workspaceDir, member.childRunId!).status, "completed");
+  assert.equal(worktree.status, "ready_for_review");
+  assert.equal(listChangeSets(workspaceDir)[0]?.status, "ready_for_review");
+  assert.match(bus.readInbox("lead").map((message) => message.content).join("\n"), /ready for review/i);
+  assert.equal(listExternalToolEffects(workspaceDir, { runId: member.childRunId!, requestId: "teammate:journal", expectedToolCallIds: ["teammate-journal-fail"] })[0]?.rollbackCoverage, "untracked");
   await fs.rm(path.join(worktree.path, ".checkpoints"), { recursive: true, force: true });
   await fs.rm(path.join(worktree.path, "journal-failure.txt"), { force: true });
   updateManagedWorktreeMetadata(workspaceDir, worktree.id, "rejected", "rejected");

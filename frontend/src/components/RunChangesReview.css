@@ -6,6 +6,7 @@
 .run-review-bulk > .run-review-keep-all { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
 .run-review-bulk > span { min-width: 0; flex: 1 1 140px; color: var(--ink-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .run-review-description, .run-review-notice { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.run-review-external-effects { margin: 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--line-subtle)); border-radius: 5px; background: color-mix(in srgb, var(--warning) 8%, transparent); color: var(--ink); font-size: 11px; line-height: 1.5; }
 .run-review-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); padding: 8px; border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); border-radius: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-review-error small { display: block; margin-top: 4px; }
 .run-review button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line-subtle); background: var(--surface-quiet); color: var(--ink); border-radius: 5px; min-height: 28px; padding: 4px 7px; font: inherit; cursor: pointer; }

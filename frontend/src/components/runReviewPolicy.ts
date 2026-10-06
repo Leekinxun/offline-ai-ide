@@ -1,3 +1,5 @@
+import type { ExternalToolEffects } from "../types";
+
 export interface ReviewHunk {
   id: string; mutationId: string; preimageHash: string; postimageHash: string;
   reverted: boolean; kept: boolean; preimage?: string; postimage?: string; truncated?: boolean;
@@ -16,7 +18,12 @@ export interface ReviewFile {
   reviewState: "pending" | "partially_kept" | "kept"; unavailableReason?: string;
   originalSize?: number; modifiedSize?: number;
 }
-export interface ReviewChanges { runId: string; requestId?: string; revision: string; files: ReviewFile[]; unavailableReason?: string; }
+export type ReviewExternalToolEffects = ExternalToolEffects;
+export interface ReviewChanges {
+  runId: string; requestId?: string; revision: string; files: ReviewFile[];
+  externalToolEffects?: ReviewExternalToolEffects[];
+  unavailableReason?: string;
+}
 export interface RunReviewComment { path: string; revision: string; startLine: number; endLine: number; text: string; side?: "original" | "modified"; }
 
 const HASH_64_HEX = /^[a-f0-9]{64}$/i;
@@ -52,6 +59,14 @@ export function bulkReviewPolicy(changes: ReviewChanges | null, state: { readOnl
   return { count: pending.length, unavailable, allowed: Boolean(changes && pending.length && !unavailable && !state.readOnly && !state.busy && !state.loading) };
 }
 
+export function hasExternalToolEffects(changes: ReviewChanges | null | undefined): boolean {
+  return Boolean(changes?.externalToolEffects?.length);
+}
+
+export function isExternalOnlyReview(changes: ReviewChanges | null | undefined): boolean {
+  return Boolean(changes && changes.files.length === 0 && changes.externalToolEffects?.length && !changes.unavailableReason);
+}
+
 export function runChangesUrl(runId: string, requestId?: string, path?: string): string {
   const query = new URLSearchParams();
   if (requestId) query.set("requestId", requestId);
@@ -65,6 +80,21 @@ export function parseReviewChanges(value: unknown, runId: string, requestId?: st
   if ((payload.requestId || undefined) !== (requestId || undefined)) throw new Error("Change evidence does not belong to this request");
   for (const file of payload.files) {
     if (!file || typeof file.path !== "string" || typeof file.revision !== "string" || !Array.isArray(file.mutationIds) || !Array.isArray(file.hunks)) throw new Error("Change evidence is incomplete");
+  }
+  if (payload.externalToolEffects !== undefined) {
+    if (!Array.isArray(payload.externalToolEffects)) throw new Error("External command evidence is incomplete");
+    for (const effect of payload.externalToolEffects) {
+      if (!effect || typeof effect !== "object") throw new Error("External command evidence is incomplete");
+      const entry = effect as Partial<ReviewExternalToolEffects>;
+      const startedAt = entry.startedAt;
+      if (entry.schemaVersion !== 1 || entry.runId !== runId || typeof entry.toolName !== "string" || typeof startedAt !== "number" || !Number.isSafeInteger(startedAt) || startedAt < 0 || entry.rollbackCoverage !== "untracked" || !Array.isArray(entry.observedPaths) || typeof entry.observationComplete !== "boolean") {
+        throw new Error("External command evidence is incomplete");
+      }
+      if (entry.toolCallId !== undefined && typeof entry.toolCallId !== "string") throw new Error("External command evidence is incomplete");
+      if (entry.finishedAt !== undefined && (!Number.isSafeInteger(entry.finishedAt) || entry.finishedAt < startedAt)) throw new Error("External command evidence is incomplete");
+      if (!entry.observedPaths.every((relative) => typeof relative === "string")) throw new Error("External command evidence is incomplete");
+      if ((entry.requestId || undefined) !== (requestId || undefined) && requestId !== undefined) throw new Error("External command evidence does not belong to this request");
+    }
   }
   return payload as ReviewChanges;
 }

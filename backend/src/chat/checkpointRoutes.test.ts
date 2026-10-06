@@ -10,6 +10,7 @@ import { checkpointsRouter } from "../routes/checkpoints.js";
 import { chatRouter } from "../routes/chat.js";
 import { buildFileHash, captureCheckpointMutationsDetailed, recordFileMutation } from "../files/mutationRegistry.js";
 import { createCheckpoint } from "./checkpoints.js";
+import { beginExternalToolEffects } from "./externalToolEffects.js";
 import { AgentRunRecorder } from "./runHistory.js";
 import { appendConversationMessage, createConversationId, listConversationSummaries, readConversationMessages } from "./history.js";
 import { applyChangeSetDecision, captureChangeSet, computeChangeSetTransitionIntegrity, ChangeSetIntegrationCrashError, getChangeSet, setChangeSetIntegrationHookForTests, type ChangeSet } from "./changeSets.js";
@@ -85,6 +86,52 @@ test("turn undo restores only its files and forks context at the exact request b
     assert.equal(fs.readFileSync(path.join(workspace, "human.txt"), "utf8"), "keep me");
     assert.deepEqual(readConversationMessages(workspace, result.conversation.id).map((message) => message.content), ["first", "first result"]);
     assert.equal(readConversationMessages(workspace, conversationId).length, 4);
+  });
+});
+
+test("external command receipts block broad undo while exact file rollback still works", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-undo-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const run = new AgentRunRecorder(workspace, "run-external-undo", "conversation", "code");
+  await run.start();
+  await run.toolState({ toolCallId: "shell-1", requestId: "turn", name: "bash", status: "running", rollbackCoverage: "untracked" });
+  await run.finish("completed");
+  await beginExternalToolEffects(workspace, {
+    runId: run.runId,
+    requestId: "turn",
+    toolCallId: "shell-1",
+    toolName: "bash",
+  });
+  fs.writeFileSync(path.join(workspace, "code.ts"), "B");
+  recordFileMutation({ workspaceDir: workspace, path: "code.ts", source: "assistant_tool", runId: run.runId, requestId: "turn", preimageContent: "A", postimageContent: "B" });
+
+  await withChatApi(workspace, async (baseUrl) => {
+    const evidence = await (await fetch(`${baseUrl}/runs/${run.runId}/changes?requestId=turn`)).json() as { revision: string; externalToolEffects?: unknown[]; files: Array<{ path: string; revision: string }> };
+    assert.equal(evidence.externalToolEffects?.length, 1);
+    const broad = await fetch(`${baseUrl}/runs/${run.runId}/revert`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: "turn", expectedRevision: evidence.revision }) });
+    assert.equal(broad.status, 409);
+    assert.equal((await broad.json() as { code?: string }).code, "external_tool_rollback_unavailable");
+    assert.equal(fs.readFileSync(path.join(workspace, "code.ts"), "utf8"), "B");
+
+    const selected = await fetch(`${baseUrl}/runs/${run.runId}/revert`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: "turn", path: "code.ts", expectedRevision: evidence.files[0].revision }) });
+    assert.equal(selected.status, 200, JSON.stringify(await selected.json()));
+    assert.equal(fs.readFileSync(path.join(workspace, "code.ts"), "utf8"), "A");
+  });
+});
+
+test("missing expected external command receipts fail closed", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-missing-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const run = new AgentRunRecorder(workspace, "run-external-missing", "conversation", "code");
+  await run.start();
+  await run.toolState({ toolCallId: "shell-missing", requestId: "turn", name: "bash", status: "failed", rollbackCoverage: "untracked" });
+  await run.finish("failed");
+  recordFileMutation({ workspaceDir: workspace, path: "code.ts", source: "assistant_tool", runId: run.runId, requestId: "turn", preimageContent: "A", postimageContent: "B" });
+
+  await withChatApi(workspace, async (baseUrl) => {
+    const evidence = await fetch(`${baseUrl}/runs/${run.runId}/changes?requestId=turn`);
+    assert.equal(evidence.status, 409);
+    assert.equal((await evidence.json() as { code?: string }).code, "external_tool_rollback_unavailable");
   });
 });
 

@@ -10,6 +10,7 @@ import { runSubagent } from "./subagent.js";
 import { listChangeSets, readChangeSetPatch } from "../chat/changeSets.js";
 import { listManagedWorktrees } from "../chat/worktrees.js";
 import { listFileMutations } from "../files/mutationRegistry.js";
+import { listExternalToolEffects } from "../chat/externalToolEffects.js";
 import { registerAgentHooks } from "./agentHooks.js";
 import { TraceStore } from "../chat/traceStore.js";
 import { createPermissionAuthorizer, type PermissionAuthorizer } from "./permissionService.js";
@@ -133,7 +134,7 @@ test("write-capable child writes only its managed worktree and emits a ChangeSet
   assert.ok(changes[0].changedFiles.includes("note.txt"));
 });
 
-test("write-capable child fails before mutation when its required checkpoint cannot be created", async (t) => {
+test("write-capable child fails before mutation when its mutation journal cannot be prepared", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-checkpoint-fail-"));
   initializeGitWorkspace(workspaceDir);
   await fs.writeFile(path.join(workspaceDir, ".checkpoints"), "tracked blocker\n");
@@ -147,7 +148,7 @@ test("write-capable child fails before mutation when its required checkpoint can
     completion += 1;
     if (completion === 2) {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
-      assert.match(body.messages.find((message) => message.role === "tool")?.content || "", /Required mutation checkpoint unavailable/);
+      assert.match(body.messages.find((message) => message.role === "tool")?.content || "", /Mutation journal evidence|ENOTDIR|not a directory/i);
     }
     return Response.json({ choices: [{ message: completion === 1
       ? { role: "assistant", content: null, tool_calls: [{ id: "blocked-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "blocked.txt", content: "must not exist\n" }) } }] }
@@ -160,7 +161,7 @@ test("write-capable child fails before mutation when its required checkpoint can
   const child = listManagedWorktrees(workspaceDir)[0];
   assert.equal(await fs.stat(path.join(child.path, "blocked.txt")).then(() => true).catch(() => false), false);
   assert.equal(child.status, "needs_attention");
-  assert.equal(completion, 2);
+  assert.ok(completion >= 2);
 });
 
 test("child allocation failure fails closed before a bash-capable child can run", async (t) => {
@@ -283,7 +284,7 @@ test("empty child run returns no_changes and does not create a review gate", asy
   assert.equal(listManagedWorktrees(workspaceDir).every((entry) => entry.status === "integrated" && entry.reviewState === "approved"), true);
 });
 
-test("failed child bash records partial file mutations with child attribution", async (t) => {
+test("failed child bash records untracked external effects with child attribution", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-partial-bash-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
@@ -301,13 +302,16 @@ test("failed child bash records partial file mutations with child attribution", 
   await runSubagent("partial bash", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, async () => ({ allowed: true }));
   const child = listManagedWorktrees(workspaceDir)[0];
   const mutations = listFileMutations(child.path, { toolCallId: "bash-partial" });
-  assert.equal(mutations.length, 1);
-  assert.equal(mutations[0].path, "partial.txt");
-  assert.equal(mutations[0].operation, "create");
-  assert.equal(mutations[0].runId, child.runId);
+  assert.equal(mutations.length, 0);
+  assert.equal(await fs.readFile(path.join(child.path, "partial.txt"), "utf8"), "");
+  const effects = listExternalToolEffects(workspaceDir, { runId: child.runId!, requestId: "subagent:Code", expectedToolCallIds: ["bash-partial"] });
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].toolName, "bash");
+  assert.equal(effects[0].rollbackCoverage, "untracked");
+  assert.equal(effects[0].observationComplete, false);
 });
 
-test("child oversized mutation evidence gaps fail tool lifecycle, hooks, run result, and worktree consistently", async (t) => {
+test("child oversized bash effects record untracked receipt without checkpoint mutation capture", async (t) => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-oversized-gap-"));
   initializeGitWorkspace(workspaceDir);
   const originalFetch = globalThis.fetch;
@@ -329,13 +333,70 @@ test("child oversized mutation evidence gaps fail tool lifecycle, hooks, run res
   });
   const child = listManagedWorktrees(workspaceDir)[0];
   const run = readRunRecord(workspaceDir, child.runId!);
-  assert.match(output, /^Error: .*mutation evidence/i);
-  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "bash-gap")?.status, "failed");
-  assert.match(hookError, /mutation evidence incomplete.*evidence\.bin:oversized/is);
+  assert.match(output, /ChangeSet capture failed: Change set capture requires successful git inspection/);
+  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "bash-gap")?.status, "completed");
+  assert.equal(hookError, "");
   assert.equal(run.status, "failed");
   assert.equal(child.status, "needs_attention");
   assert.deepEqual(listChangeSets(workspaceDir), []);
-  assert.doesNotMatch(output, /ready for review/i);
+  assert.equal(await fs.stat(path.join(child.path, "evidence.bin")).then((stat) => stat.size), 2097153);
+  const effects = listExternalToolEffects(workspaceDir, { runId: child.runId!, requestId: "request-gap", expectedToolCallIds: ["bash-gap"] });
+  assert.equal(effects[0]?.rollbackCoverage, "untracked");
+});
+
+test("child bash runs when its physical workspace already exceeds checkpoint file-count limits", { timeout: 30_000 }, async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "crewforge-subagent-many-files-"));
+  initializeGitWorkspace(workspaceDir);
+  await fs.writeFile(path.join(workspaceDir, "source.txt"), "parent\n");
+  execFileSync("git", ["-C", workspaceDir, "add", "source.txt"]);
+  execFileSync("git", ["-C", workspaceDir, "commit", "-qm", "source"]);
+  const originalFetch = globalThis.fetch;
+  let completion = 0;
+  let filled = false;
+  let toolOutput = "";
+  clearModelCapabilityCache();
+  const fillChildWorkspace = () => {
+    const child = listManagedWorktrees(workspaceDir)[0];
+    if (!child || filled) return;
+    filled = true;
+    execFileSync(process.execPath, ["-e", "const fs=require('fs'); fs.writeFileSync('.gitignore', 'fanout/\\n'); fs.mkdirSync('fanout', { recursive: true }); for (let i = 0; i < 20001; i += 1) fs.closeSync(fs.openSync(`fanout/file_${i}.txt`, 'wx'));"], { cwd: child.path });
+  };
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "test-model", max_output_tokens: 1024 }] });
+    completion += 1;
+    if (completion === 1) fillChildWorkspace();
+    if (completion === 2) {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      toolOutput = body.messages.find((message) => message.role === "tool")?.content || "";
+    }
+    return Response.json({ choices: [{ message: completion === 1
+      ? { role: "assistant", content: null, tool_calls: [{ id: "bash-many-files", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "find fanout -type f | wc -l | tr -d ' ' > counted.txt; printf 'FILES='; cat counted.txt" }) } }] }
+      : { role: "assistant", content: "many files handled" }, finish_reason: completion === 1 ? "tool_calls" : "stop" }], usage: {} });
+  };
+  t.after(async () => { globalThis.fetch = originalFetch; clearModelCapabilityCache(); await fs.rm(workspaceDir, { recursive: true, force: true }); });
+
+  const output = await runSubagent("count many files", "Code", workspaceDir, "http://provider.test/v1", "test-model", undefined, async () => ({ allowed: true }), undefined, {
+    parentRunId: "parent-many-files", parentConversationId: "conversation-many-files", parentRequestId: "request-many-files", parentToolCallId: "task-many-files",
+  });
+  const child = listManagedWorktrees(workspaceDir)[0];
+  const run = readRunRecord(workspaceDir, child.runId!);
+  const effects = listExternalToolEffects(workspaceDir, { runId: child.runId!, requestId: "request-many-files", expectedToolCallIds: ["bash-many-files"] });
+
+  assert.match(output, /ChangeSet [a-f0-9]+ \(ready_for_review\)$/);
+  assert.equal(filled, true);
+  assert.match(toolOutput, /FILES=20001/);
+  assert.equal(await fs.readFile(path.join(child.path, "counted.txt"), "utf8"), "20001\n");
+  assert.equal(await fs.stat(path.join(child.path, "fanout", "file_20000.txt")).then(() => true).catch(() => false), true);
+  assert.equal(await fs.readFile(path.join(workspaceDir, "source.txt"), "utf8"), "parent\n");
+  assert.equal(await fs.stat(path.join(child.path, ".checkpoints", "index.json")).then(() => true).catch(() => false), false);
+  assert.equal(await fs.stat(path.join(workspaceDir, ".checkpoints", "index.json")).then(() => true).catch(() => false), false);
+  assert.equal(run.toolExecutions.find((tool) => tool.toolCallId === "bash-many-files")?.status, "completed");
+  assert.match(run.toolExecutions.find((tool) => tool.toolCallId === "bash-many-files")?.resultSummary || "", /FILES=20001/);
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].rollbackCoverage, "untracked");
+  assert.ok(effects[0].finishedAt);
+  assert.equal(effects[0].runId, child.runId);
+  assert.equal(effects[0].observationComplete, false);
 });
 
 test("bounded child binary mutation evidence reaches ready review with binary patch", async (t) => {
@@ -360,9 +421,9 @@ test("bounded child binary mutation evidence reaches ready review with binary pa
   });
   const child = listManagedWorktrees(workspaceDir)[0];
   const run = readRunRecord(workspaceDir, child.runId!);
-  const mutations = listFileMutations(child.path, { toolCallId: "bash-binary" });
   const changeSet = listChangeSets(workspaceDir)[0];
   const patch = readChangeSetPatch(workspaceDir, changeSet.id).toString("utf8");
+  const effects = listExternalToolEffects(workspaceDir, { runId: child.runId!, requestId: "request-binary", expectedToolCallIds: ["bash-binary"] });
 
   assert.match(output, /ChangeSet [a-f0-9]+ \(ready_for_review\)$/);
   assert.equal(hookError, "");
@@ -374,10 +435,9 @@ test("bounded child binary mutation evidence reaches ready review with binary pa
   assert.equal(changeSet.patchManifest?.length, 1);
   assert.match(patch, /GIT binary patch/);
   assert.match(patch, /evidence\.bin/);
-  assert.equal(mutations.length, 1);
-  assert.equal(mutations[0].path, "evidence.bin");
-  assert.equal(mutations[0].postimageBinary, true);
-  assert.equal(mutations[0].rollbackUnavailableReason, undefined);
+  assert.equal(listFileMutations(child.path, { toolCallId: "bash-binary" }).length, 0);
+  assert.equal(effects[0]?.rollbackCoverage, "untracked");
+  assert.equal(effects[0]?.toolName, "bash");
 });
 
 async function subagentFullAccessFixture(t: test.TestContext) {

@@ -7,6 +7,7 @@ import { AgentRunRecorder } from "./runHistory.js";
 import { keepAllRunChanges, readRunChanges, RunChangesKeepError } from "./runChanges.js";
 import { buildFileHash, captureCheckpointMutationsDetailed, keepFileMutations, recordFileMutation, reloadMutationJournal, rollbackFileMutations } from "../files/mutationRegistry.js";
 import { createCheckpoint } from "./checkpoints.js";
+import { beginExternalToolEffects, ExternalToolEffectsEvidenceError, listExternalToolEffects } from "./externalToolEffects.js";
 
 async function fixture(t: test.TestContext): Promise<string> {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-run-changes-"));
@@ -83,6 +84,67 @@ test("run changes use fixed journal images after later disk edits and across rol
   assert.equal(reverted.files[0].modified, before.files[0].modified);
   assert.equal(reverted.files[0].rollbackState, "reverted");
   assert.notEqual(reverted.revision, before.revision);
+});
+
+test("external tool receipts are listed separately and included in run-change revision", async (t) => {
+  const workspace = await fixture(t);
+  const recorder = new AgentRunRecorder(workspace, "external-run", "conversation", "code");
+  await recorder.start();
+  recordFileMutation({ workspaceDir: workspace, path: "other.txt", source: "assistant_tool", runId: "external-run", requestId: "turn", preimageContent: "X", postimageContent: "Y" });
+  const before = readRunChanges(workspace, "external-run", undefined, "turn");
+  await recorder.toolState({ toolCallId: "shell-1", requestId: "turn", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.finish("completed");
+  const audit = await beginExternalToolEffects(workspace, { runId: "external-run", requestId: "turn", toolCallId: "shell-1", toolName: "bash" });
+  await audit.finish();
+
+  const after = readRunChanges(workspace, "external-run", undefined, "turn");
+  assert.equal(after.externalToolEffects?.[0]?.toolCallId, "shell-1");
+  assert.equal(after.externalToolEffects?.[0]?.rollbackCoverage, "untracked");
+  assert.notEqual(after.revision, before.revision);
+  assert.deepEqual(listExternalToolEffects(workspace, { runId: "external-run", requestId: "turn", expectedExecutions: [{ toolCallId: "shell-1", requestId: "turn" }] }).map((receipt) => receipt.toolCallId), ["shell-1"]);
+});
+
+test("external-only command receipts do not imply missing mutation evidence", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-only-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const recorder = new AgentRunRecorder(workspace, "external-only-run", "conversation", "code");
+  await recorder.start();
+  await recorder.toolState({ toolCallId: "shell-only", requestId: "turn", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.finish("completed");
+  await beginExternalToolEffects(workspace, { runId: recorder.runId, requestId: "turn", toolCallId: "shell-only", toolName: "bash" });
+
+  const changes = readRunChanges(workspace, recorder.runId, undefined, "turn");
+  assert.deepEqual(changes.files, []);
+  assert.equal(changes.externalToolEffects?.length, 1);
+  assert.equal(changes.unavailableReason, undefined);
+});
+
+test("same external tool id reused across requests requires the scoped receipt", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-external-reused-tool-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const recorder = new AgentRunRecorder(workspace, "external-reused-tool-run", "conversation", "code");
+  await recorder.start();
+  await recorder.toolState({ toolCallId: "shell-reused", requestId: "turn-one", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.toolState({ toolCallId: "shell-reused", requestId: "turn-two", name: "bash", status: "completed", rollbackCoverage: "untracked" });
+  await recorder.finish("completed");
+  await beginExternalToolEffects(workspace, { runId: recorder.runId, requestId: "turn-one", toolCallId: "shell-reused", toolName: "bash" });
+
+  assert.throws(
+    () => readRunChanges(workspace, recorder.runId, undefined, "turn-two"),
+    ExternalToolEffectsEvidenceError,
+  );
+});
+
+test("external tool receipts fail closed when expected evidence is missing or malformed", async (t) => {
+  const workspace = await fixture(t);
+  const recorder = new AgentRunRecorder(workspace, "external-missing-run", "conversation", "code");
+  await recorder.start();
+  await recorder.toolState({ toolCallId: "missing-tool", requestId: "turn", name: "bash", status: "failed", rollbackCoverage: "untracked" });
+  await recorder.finish("failed");
+  assert.throws(
+    () => readRunChanges(workspace, recorder.runId, undefined, "turn"),
+    ExternalToolEffectsEvidenceError,
+  );
 });
 
 test("run changes reject unowned runs and unsafe or unrelated file selections", async (t) => {

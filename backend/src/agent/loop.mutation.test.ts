@@ -11,9 +11,13 @@ import { TaskManager } from "./taskManager.js";
 import { TeammateManager } from "./teammateManager.js";
 import type { UserSession } from "../auth/sessionManager.js";
 import { AgentRunRecorder } from "../chat/runHistory.js";
-import { listFileMutations, listMutationEvidenceGaps, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { buildFileVersion, listFileMutations, listMutationEvidenceGaps, rollbackFileMutations } from "../files/mutationRegistry.js";
+import { listCheckpoints } from "../chat/checkpoints.js";
+import { executeProcessTool, stopAgentProcesses } from "./processTools.js";
+import type { ToolContext } from "./types.js";
 import { collectAuthoritativeChangeEvidence, deriveCompletionEvidence } from "../chat/completionEvidence.js";
 import type { ExecutionPlan } from "../chat/executionPlans.js";
+import { listExternalToolEffects } from "../chat/externalToolEffects.js";
 
 function sessionFor(workspaceDir: string): UserSession {
   const taskManager = new TaskManager(workspaceDir);
@@ -52,7 +56,7 @@ async function runSingleTool(
   }
 }
 
-test("primary shell changes are captured from the step checkpoint as create, modify, and delete", async (t) => {
+test("primary shell changes execute without snapshots and declare untracked effects", async (t) => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-shell-mutations-"));
   t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(workspaceDir, "changed.txt"), "before");
@@ -62,13 +66,16 @@ test("primary shell changes are captured from the step checkpoint as create, mod
     arguments: { command: "sed -i '' s/before/after/ changed.txt; touch created.txt; mv deleted.txt moved.txt" },
   });
   const records = listFileMutations(workspaceDir, { runId: "run-primary", toolCallId: "bash-call" });
-  assert.deepEqual(records.map((record) => [record.path, record.operation, record.preimageContent]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))), [
-    ["changed.txt", "modify", "before"],
-    ["created.txt", "create", undefined],
-    ["deleted.txt", "delete", "remove-me"],
-    ["moved.txt", "create", undefined],
-  ]);
-  assert.ok(records.every((record) => record.actor === "primary-user"));
+  assert.deepEqual(records, []);
+  assert.equal(fs.readFileSync(path.join(workspaceDir, "changed.txt"), "utf8"), "after");
+  assert.ok(fs.existsSync(path.join(workspaceDir, "created.txt")));
+  assert.equal(fs.existsSync(path.join(workspaceDir, "deleted.txt")), false);
+  assert.equal(fs.readFileSync(path.join(workspaceDir, "moved.txt"), "utf8"), "remove-me");
+  const effects = listExternalToolEffects(workspaceDir, { runId: "run-primary", expectedExecutions: [{ toolCallId: "bash-call", requestId: "request-primary" }] });
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].rollbackCoverage, "untracked");
+  assert.ok(effects[0].finishedAt);
+  assert.deepEqual(listCheckpoints(workspaceDir), []);
 });
 
 test("approved SQLite creation preserves successful execution and completion evidence", async (t) => {
@@ -96,8 +103,10 @@ test("approved SQLite creation preserves successful execution and completion evi
   assert.equal(independentlyRead.status, 0, independentlyRead.stderr);
   assert.equal(independentlyRead.stdout.trim(), "generated");
   const authoritative = collectAuthoritativeChangeEvidence(workspaceDir, "run-primary");
-  assert.deepEqual(authoritative.changedFiles, ["issues.sqlite"]);
+  assert.deepEqual(authoritative.changedFiles, []);
   assert.deepEqual(authoritative.mutationEvidenceGaps, []);
+  assert.equal(persisted.at(-1)?.runtimeValidation?.changeCoverage, "tracked_edits_only");
+  assert.equal(listExternalToolEffects(workspaceDir, { runId: "run-primary" })[0]?.rollbackCoverage, "untracked");
   const completion = deriveCompletionEvidence({
     plan: executionPlan, messages: persisted, changedFiles: authoritative.changedFiles,
     blockers: { changeEvidence: authoritative.mutationEvidenceGaps.length > 0 },
@@ -122,7 +131,7 @@ test("an inline Python read reaches ordinary approval and executes quoted method
   assert.deepEqual(listMutationEvidenceGaps(workspaceDir), []);
 });
 
-test("a failing SQLite command still reports its real exit failure and journals its artifact", async (t) => {
+test("a failing SQLite command retains its real exit failure and marks its artifact untracked", async (t) => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-sqlite-failure-"));
   t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
   const persisted = await runSingleTool(workspaceDir, {
@@ -134,13 +143,15 @@ test("a failing SQLite command still reports its real exit failure and journals 
   assert.match(tool?.result || "", /Process exited with code 7/);
   assert.doesNotMatch(tool?.result || "", /Mutation evidence incomplete/);
   const records = listFileMutations(workspaceDir, { toolCallId: "sqlite-fail" });
-  assert.deepEqual(records.map((record) => [record.path, record.operation]), [["partial.sqlite", "create"]]);
+  assert.deepEqual(records, []);
+  assert.ok(fs.existsSync(path.join(workspaceDir, "partial.sqlite")));
+  assert.equal(listExternalToolEffects(workspaceDir, { runId: "run-primary" })[0]?.rollbackCoverage, "untracked");
   const rollback = rollbackFileMutations(workspaceDir, { toolCallId: "sqlite-fail" });
-  assert.deepEqual(rollback.applied, [records[0].id], JSON.stringify(rollback));
-  assert.equal(fs.existsSync(path.join(workspaceDir, "partial.sqlite")), false);
+  assert.deepEqual(rollback.applied, [], JSON.stringify(rollback));
+  assert.ok(fs.existsSync(path.join(workspaceDir, "partial.sqlite")));
 });
 
-test("a failed primary shell tool journals partial side effects and supports rollback", async (t) => {
+test("a failed primary shell tool preserves partial effects without claiming automatic rollback", async (t) => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-failed-shell-mutations-"));
   t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(workspaceDir, "partial.txt"), "before");
@@ -155,16 +166,13 @@ test("a failed primary shell tool journals partial side effects and supports rol
     runId: "run-primary",
     toolCallId: "failed-bash-call",
   });
-  assert.deepEqual(records.map((record) => ({
-    path: record.path,
-    operation: record.operation,
-    preimageContent: record.preimageContent,
-  })), [{ path: "partial.txt", operation: "modify", preimageContent: "before" }]);
+  assert.deepEqual(records, []);
   assert.deepEqual(
     rollbackFileMutations(workspaceDir, { runId: "run-primary", toolCallId: "failed-bash-call" }).applied,
-    [records[0].id]
+    []
   );
-  assert.equal(fs.readFileSync(path.join(workspaceDir, "partial.txt"), "utf8"), "before");
+  assert.equal(fs.readFileSync(path.join(workspaceDir, "partial.txt"), "utf8"), "partial");
+  assert.ok(listExternalToolEffects(workspaceDir, { runId: "run-primary" })[0]?.finishedAt);
 });
 
 test("a denied primary tool never creates a mutation journal entry", async (t) => {
@@ -177,12 +185,95 @@ test("a denied primary tool never creates a mutation journal entry", async (t) =
   assert.equal(listFileMutations(workspaceDir, { runId: "run-primary", toolCallId: "denied-write" }).length, 0);
 });
 
-test("a mutating primary tool fails before execution when its checkpoint cannot be created", async (t) => {
+test("a journaled file tool fails before execution when its mutation storage is invalid", async (t) => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-checkpoint-required-"));
   t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(workspaceDir, ".checkpoints"), "blocks checkpoint directory");
   const persisted = await runSingleTool(workspaceDir, { id: "write-without-baseline", name: "write_file", arguments: { path: "should-not-exist.txt", content: "unsafe" } });
   assert.equal(fs.existsSync(path.join(workspaceDir, "should-not-exist.txt")), false);
   assert.equal(persisted[0]?.toolCalls?.[0]?.isError, true);
-  assert.match(persisted[0]?.toolCalls?.[0]?.result || "", /required mutation checkpoint unavailable/i);
+  assert.match(persisted[0]?.toolCalls?.[0]?.result || "", /mutation journal|not a directory|ENOTDIR/i);
+});
+
+test("an external command is refused before execution when its intent receipt cannot be persisted", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-required-tool-receipt-"));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspaceDir, ".history"));
+  fs.writeFileSync(path.join(workspaceDir, ".history", "external-tools"), "blocks receipt directory");
+  const messages = await runSingleTool(workspaceDir, {
+    id: "blocked-receipt", name: "bash", arguments: { command: "printf unsafe > should-not-exist.txt" },
+  });
+  const tool = messages.flatMap((message) => message.toolCalls || []).find((entry) => entry.toolCallId === "blocked-receipt");
+  assert.equal(tool?.isError, true);
+  assert.match(tool?.result || "", /execution evidence unavailable/);
+  assert.equal(fs.existsSync(path.join(workspaceDir, "should-not-exist.txt")), false);
+});
+
+for (const limit of ["file-count", "total-bytes"] as const) {
+  test(`file edits roll back and commands execute beyond the old workspace checkpoint ${limit} limit`, async (t) => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), `crewforge-large-file-tools-${limit}-`));
+    t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+    const count = limit === "file-count" ? 20_001 : 65;
+    const content = limit === "file-count" ? "" : Buffer.alloc(1024 * 1024, "x");
+    const filler = path.join(workspaceDir, "fixtures");
+    fs.mkdirSync(filler);
+    for (let i = 0; i < count; i++) fs.writeFileSync(path.join(filler, `${i}.txt`), content);
+    fs.writeFileSync(path.join(workspaceDir, "editable.txt"), "before\n");
+    const calls = [
+      { id: "large-write", name: "write_file", arguments: { path: "created.txt", content: "created\n" } },
+      { id: "large-edit", name: "edit_file", arguments: { path: "editable.txt", old_text: "before", new_text: "after", expected_version: buildFileVersion("before\n") } },
+      { id: "large-rename", name: "rename_file", arguments: { source_path: "editable.txt", target_path: "renamed.txt", expected_version: buildFileVersion("after\n") } },
+    ];
+    for (const call of calls) {
+      const messages = await runSingleTool(workspaceDir, call);
+      const tool = messages.flatMap((message) => message.toolCalls || []).find((entry) => entry.toolCallId === call.id);
+      assert.equal(tool?.isError, false, tool?.result);
+      assert.ok(listFileMutations(workspaceDir, { toolCallId: call.id }).length > 0);
+    }
+    assert.equal(fs.readFileSync(path.join(workspaceDir, "renamed.txt"), "utf8"), "after\n");
+    assert.deepEqual(listCheckpoints(workspaceDir), []);
+    const rollback = rollbackFileMutations(workspaceDir, { runId: "run-primary" });
+    assert.equal(rollback.conflicts.length, 0, JSON.stringify(rollback));
+    assert.equal(rollback.applied.length, 4, JSON.stringify(rollback));
+    assert.equal(fs.readFileSync(path.join(workspaceDir, "editable.txt"), "utf8"), "before\n");
+    assert.equal(fs.existsSync(path.join(workspaceDir, "created.txt")), false);
+    assert.equal(fs.existsSync(path.join(workspaceDir, "renamed.txt")), false);
+    assert.equal(fs.readdirSync(filler).length, count);
+    const commandMessages = await runSingleTool(workspaceDir, {
+      id: "large-shell", name: "bash", arguments: { command: "printf command > external.txt" },
+    });
+    const commandTool = commandMessages.flatMap((message) => message.toolCalls || []).find((entry) => entry.toolCallId === "large-shell");
+    assert.equal(commandTool?.isError, false, commandTool?.result);
+    assert.equal(fs.readFileSync(path.join(workspaceDir, "external.txt"), "utf8"), "command");
+    assert.equal(commandMessages.at(-1)?.runtimeValidation?.changeCoverage, "tracked_edits_only");
+    assert.equal(listExternalToolEffects(workspaceDir, { runId: "run-primary" })[0]?.rollbackCoverage, "untracked");
+    assert.deepEqual(listCheckpoints(workspaceDir), []);
+  });
+}
+
+test("journaled rename remains blocked while a workspace Agent process is running", async (t) => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-rename-process-guard-"));
+  fs.writeFileSync(path.join(workspaceDir, "task.cjs"), "setInterval(() => {}, 1000);");
+  fs.writeFileSync(path.join(workspaceDir, "original.txt"), "before");
+  const context = {
+    workspaceDir, mode: "code", actorName: "primary-user", sessionOwner: "primary-user",
+    sessionToken: "mutation-token", runId: "run-primary", requestId: "request-primary",
+    toolCallId: "process-start", compatibilityShellAuthorized: true,
+  } as ToolContext;
+  t.after(async () => {
+    await stopAgentProcesses(context);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  await executeProcessTool("process_start", { command: "node task.cjs" }, context);
+  const messages = await runSingleTool(workspaceDir, {
+    id: "rename-during-process", name: "rename_file",
+    arguments: { source_path: "original.txt", target_path: "moved.txt", expected_version: buildFileVersion("before") },
+  });
+  const tool = messages.flatMap((message) => message.toolCalls || []).find((entry) => entry.toolCallId === "rename-during-process");
+  assert.equal(tool?.isError, true);
+  assert.match(tool?.result || "", /workspace Agent process is still running/);
+  assert.equal(fs.readFileSync(path.join(workspaceDir, "original.txt"), "utf8"), "before");
+  assert.equal(fs.existsSync(path.join(workspaceDir, "moved.txt")), false);
+  assert.deepEqual(listFileMutations(workspaceDir, { toolCallId: "rename-during-process" }), []);
 });

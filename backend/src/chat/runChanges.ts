@@ -6,6 +6,8 @@ import {
   fileMutationRevision, isMutationReviewComplete, keepRunMutationBatch,
 } from "../files/mutationRegistry.js";
 import { safePath } from "../utils/safePath.js";
+import { listExternalToolEffects, type ExternalToolEffects } from "./externalToolEffects.js";
+import { readRunRecord } from "./runHistory.js";
 
 export interface RunChangeHunk {
   id: string; mutationId: string; preimageHash: string; postimageHash: string;
@@ -23,7 +25,9 @@ export interface RunFileChange {
   unavailableReason?: string; statisticsUnavailableReason?: string;
 }
 export interface RunChanges {
-  runId: string; requestId?: string; revision: string; files: RunFileChange[]; unavailableReason?: string;
+  runId: string; requestId?: string; revision: string; files: RunFileChange[];
+  externalToolEffects?: ExternalToolEffects[];
+  unavailableReason?: string;
 }
 
 export class RunChangesKeepError extends Error {
@@ -55,6 +59,7 @@ export function readRunChanges(workspaceDir: string, runId: string, requestedPat
   assertRunChangesOwner(workspaceDir, runId);
   if (requestId === "") requestId = undefined;
   if (requestId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(requestId)) throw new Error("Invalid chat request id");
+  const externalToolEffects = listExternalToolEffects(workspaceDir, { runId, requestId, expectedExecutions: expectedExternalToolEffectExecutions(workspaceDir, runId, requestId) });
   const selectedPath = requestedPath === undefined ? undefined : safeMutationRelativePath(requestedPath);
   if (requestedPath !== undefined && !selectedPath) throw new Error("Invalid change path");
   const records = listFileMutations(workspaceDir, { runId, requestId }).reverse();
@@ -81,9 +86,43 @@ export function readRunChanges(workspaceDir: string, runId: string, requestedPat
     }
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  const revision = buildFileHash(JSON.stringify([runId, requestId, files.map((file) => [file.path, file.revision, file.unavailableReason])]));
+  const revision = buildFileHash(JSON.stringify([
+    runId,
+    requestId,
+    files.map((file) => [file.path, file.revision, file.unavailableReason]),
+    externalToolEffects.map((effect) => [
+      effect.toolCallId,
+      effect.requestId,
+      effect.toolName,
+      effect.startedAt,
+      effect.finishedAt,
+      effect.rollbackCoverage,
+      effect.observationComplete,
+      effect.observedPaths,
+    ]),
+  ]));
   if (selectedPath && !files.some((file) => file.path === selectedPath)) throw new Error("Run file change not found");
-  return { runId, ...(requestId ? { requestId } : {}), revision, files: selectedPath ? files.filter((file) => file.path === selectedPath) : files, ...(!files.length ? { unavailableReason: "mutation_evidence_unavailable" } : {}) };
+  return {
+    runId,
+    ...(requestId ? { requestId } : {}),
+    revision,
+    files: selectedPath ? files.filter((file) => file.path === selectedPath) : files,
+    ...(externalToolEffects.length ? { externalToolEffects } : {}),
+    ...(!files.length && !externalToolEffects.length ? { unavailableReason: "mutation_evidence_unavailable" } : {}),
+  };
+}
+
+export interface ExpectedExternalToolExecution { toolCallId: string; requestId?: string; }
+
+export function expectedExternalToolEffectExecutions(workspaceDir: string, runId: string, requestId?: string): ExpectedExternalToolExecution[] {
+  const run = readRunRecord(workspaceDir, runId);
+  const executions = new Map<string, ExpectedExternalToolExecution>();
+  for (const tool of run.toolExecutions) {
+    if ((requestId !== undefined && tool.requestId !== requestId) || tool.rollbackCoverage !== "untracked") continue;
+    const execution = { toolCallId: tool.toolCallId, ...(tool.requestId !== undefined ? { requestId: tool.requestId } : {}) };
+    executions.set(`${execution.requestId ?? ""}\0${execution.toolCallId}`, execution);
+  }
+  return [...executions.values()];
 }
 
 export function keepAllRunChanges(workspaceDir: string, runId: string, expectedRevision: string, requestId?: string): { kept: string[] } & RunChanges {

@@ -156,7 +156,7 @@ async function replay(f: ReturnType<typeof fixture>, turns: OpenAIMessage[]) {
   } finally { globalThis.fetch = priorFetch; }
 }
 
-test("real SQLite delivery repairs NUL text through approval, rereads it, verifies fresh versions, and supports binary review", async (t) => {
+test("real SQLite delivery repairs NUL text through approval and verifies inspected artifacts with untracked command coverage", async (t) => {
   const f = fixture(t);
   const run = await replay(f, [...initialTurns(),
     tool("repair-summary", "bash", { command: "python3 -B repair.py" }),
@@ -177,7 +177,7 @@ test("real SQLite delivery repairs NUL text through approval, rereads it, verifi
     .find((content) => typeof content === "string" && content.startsWith("Runtime validation feedback"));
   assert.equal(typeof feedbackText, "string");
   assert.match(feedbackText as string, /Runtime validation feedback.*NUL/s);
-  assert.match(feedbackText as string, /"status":"passed"/);
+  assert.match(feedbackText as string, /"reason":"stale"/);
   const inspected = tools.find((item) => item.toolCallId === "inspect-database");
   assert.equal(inspected?.isError, false);
   const metadata = JSON.parse(inspected!.result!);
@@ -202,6 +202,9 @@ test("real SQLite delivery repairs NUL text through approval, rereads it, verifi
   assert.equal(validation?.status, "passed", JSON.stringify(validation));
   assert.equal(validation?.repairAttempts, 1);
   assert.equal(validation?.verification[0].toolCallId, "full-check");
+  assert.equal(validation?.changeCoverage, "tracked_edits_only");
+  assert.deepEqual(validation?.observedArtifacts, ["summary.md"]);
+  assert.deepEqual(validation?.changedFiles, []);
   assert.equal(run.persisted.at(-1)?.runtimeValidation?.status, "passed");
   const authoritative = completion.collectAuthoritativeChangeEvidence(f.workspaceDir, run.recorder.runId);
   assert.deepEqual(authoritative.mutationEvidenceGaps, []);
@@ -209,20 +212,12 @@ test("real SQLite delivery repairs NUL text through approval, rereads it, verifi
   const evidence = completion.deriveCompletionEvidence({ messages: run.result, changedFiles: authoritative.changedFiles });
   assert.equal(evidence.outcome, "completed", JSON.stringify(evidence));
   const records = mutations.listFileMutations(f.workspaceDir, { runId: run.recorder.runId });
-  const database = records.find((record) => record.path === "delivery.sqlite");
-  assert.ok(database?.postimageBinary);
-  assert.deepEqual(mutations.readMutationBytes(f.workspaceDir, database, "postimage"), bytes);
-  const review = runChanges.readRunChanges(f.workspaceDir, run.recorder.runId, "delivery.sqlite");
-  const binaryReview = review.files.find((file) => file.path === "delivery.sqlite");
-  assert.equal(binaryReview?.isBinary, true);
-  assert.equal(binaryReview?.modifiedHash, metadata.sha256);
-  assert.equal(binaryReview?.modifiedSize, bytes.length);
-  assert.equal(binaryReview?.modified, undefined);
-  assert.equal(binaryReview?.reviewState, "pending");
+  assert.deepEqual(records, []);
+  const review = runChanges.readRunChanges(f.workspaceDir, run.recorder.runId);
+  assert.deepEqual(review.files, []);
+  assert.ok(review.externalToolEffects?.some((effect) => effect.toolCallId === "produce" && effect.rollbackCoverage === "untracked"));
   const kept = runChanges.keepAllRunChanges(f.workspaceDir, run.recorder.runId, review.revision);
-  assert.ok(kept.kept.includes(database.id));
-  assert.equal(kept.files.find((file) => file.path === "delivery.sqlite")?.reviewState, "kept");
-  assert.ok(mutations.listFileMutations(f.workspaceDir, { path: "delivery.sqlite" })[0].keptAt);
+  assert.deepEqual(kept.kept, []);
   assert.deepEqual(fs.readFileSync(path.join(f.workspaceDir, "delivery.sqlite")), bytes);
   const query = spawnSync("python3", ["-B", "-c", "import json,pathlib,sqlite3,sys; db=sqlite3.connect(pathlib.Path(sys.argv[1]).resolve().as_uri()+'?mode=ro',uri=True); print(json.dumps(db.execute('select label,status from events order by id').fetchall(),ensure_ascii=False)); db.close()", path.join(f.workspaceDir, "delivery.sqlite")], { encoding: "utf8" });
   assert.equal(query.status, 0, query.stderr);
@@ -239,11 +234,12 @@ test("unrepaired NUL summary cannot report completed even when full database che
   const validation = run.result.at(-1)?.runtimeValidation;
   assert.equal(validation?.status, "failed", JSON.stringify(validation));
   assert.deepEqual(validation?.artifactErrors, [{ path: "summary.md", reason: "nul_text" }]);
-  assert.equal(validation?.verification[0].status, "passed");
+  assert.equal(validation?.verification[0].status, "pending");
+  assert.equal(validation?.verification[0].reason, "stale");
   assert.equal(validation?.repairAttempts, 1);
   assert.equal(run.bodies.length, 6, "Unchanged damage receives one bounded repair opportunity");
   assert.equal(fs.readFileSync(path.join(f.workspaceDir, "summary.md")).includes(0), true);
   const authoritative = completion.collectAuthoritativeChangeEvidence(f.workspaceDir, run.recorder.runId);
   assert.deepEqual(authoritative.mutationEvidenceGaps, []);
-  assert.equal(completion.deriveCompletionEvidence({ messages: run.result, changedFiles: authoritative.changedFiles }).outcome, "validation_failed");
+  assert.equal(completion.deriveCompletionEvidence({ messages: run.result, changedFiles: authoritative.changedFiles }).outcome, "needs_attention");
 });

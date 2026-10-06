@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { recordFileMutation, rollbackFileMutations } from "../files/mutationRegistry.js";
 import {
   createCheckpoint,
   findCheckpointForRun,
@@ -131,6 +132,49 @@ test("schema-v2 checkpoints deduplicate unchanged blobs and verify their content
   fs.unlinkSync(path.join(workspace, ".checkpoints", "blobs", secondManifest.changes[0].sha256));
   assert.equal(verifyCheckpointBlobs(workspace, second.id).missing.length > 0, true);
   assert.deepEqual(pruneCheckpointBlobs(workspace), []);
+});
+
+test("checkpoint creation and blob pruning preserve file journal rollback without a run snapshot", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-journal-blob-retention-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const records = [
+    recordFileMutation({ workspaceDir: workspace, path: "edited.txt", source: "assistant_tool", runId: "file-only-run", toolCallId: "edit-one", preimageContent: "before", postimageContent: "middle" }),
+    recordFileMutation({ workspaceDir: workspace, path: "edited.txt", source: "assistant_tool", runId: "file-only-run", toolCallId: "edit-two", preimageContent: "middle", postimageContent: "after" }),
+  ];
+  fs.writeFileSync(path.join(workspace, "edited.txt"), "after");
+  updateCheckpointRetention(workspace, { maxCheckpoints: 4 });
+  for (let i = 0; i < 6; i++) createCheckpoint(workspace, { kind: "manual" });
+  assert.deepEqual(pruneCheckpointBlobs(workspace, { dryRun: false }), []);
+  for (const record of records) {
+    for (const hash of [record.preimageBlob, record.postimageBlob]) {
+      assert.ok(hash);
+      assert.ok(fs.existsSync(path.join(workspace, ".checkpoints", "blobs", hash)));
+    }
+  }
+  const rollback = rollbackFileMutations(workspace, { runId: "file-only-run" });
+  assert.equal(rollback.applied.length, 2, JSON.stringify(rollback));
+  assert.deepEqual(rollback.unavailable, []);
+  assert.deepEqual(rollback.conflicts, []);
+  assert.equal(fs.readFileSync(path.join(workspace, "edited.txt"), "utf8"), "before");
+});
+
+test("blob pruning refuses invalid mutation references before deleting unreferenced content", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-invalid-journal-pruning-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, "source.txt"), "source");
+  createCheckpoint(workspace);
+  const orphan = path.join(workspace, ".checkpoints", "blobs", "a".repeat(64));
+  fs.writeFileSync(orphan, "preserve until references can be read");
+  const journal = path.join(workspace, ".checkpoints", "mutations.json");
+  for (const source of [
+    "{invalid-json",
+    JSON.stringify({ schemaVersion: 999, records: [] }),
+    JSON.stringify({ schemaVersion: 1, records: [{ preimageBlob: "invalid" }] }),
+  ]) {
+    fs.writeFileSync(journal, source);
+    assert.throws(() => pruneCheckpointBlobs(workspace, { dryRun: false }), /Checkpoint persistence is invalid/);
+    assert.ok(fs.existsSync(orphan));
+  }
 });
 
 test("legacy files snapshots remain listable and restorable", (t) => {
