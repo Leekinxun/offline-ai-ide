@@ -14,6 +14,8 @@ export interface DesktopBridge {
   setPreferences(patch: DesktopPreferences): Promise<DesktopPreferences>;
   openExternal(url: string): Promise<boolean>;
   onZoomCommand(callback: (command: DesktopZoomCommand) => void): () => void;
+  switchServer?(): Promise<boolean>;
+  getServerUrl?(): Promise<string>;
 }
 
 declare global {

@@ -1328,6 +1328,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span className="settings-card-meta">CrownForge {desktop.version}</span>
                       </div>
                       <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>
+                      {typeof desktop.switchServer === "function" && (
+                        <div className="settings-field" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "12px 0", padding: "10px 12px", background: "rgba(255, 255, 255, 0.04)", borderRadius: "6px" }}>
+                          <div>
+                            <span style={{ fontWeight: 500 }}>{t("settings.desktopSwitchServer")}</span>
+                            <p className="settings-help-text" style={{ margin: "2px 0 0 0" }}>{t("settings.desktopServerModeDesc")}</p>
+                          </div>
+                          <button className="dialog-btn" type="button" onClick={() => void desktop.switchServer?.()}>
+                            <Server size={14} /> {t("settings.desktopSwitchServer")}
+                          </button>
+                        </div>
+                      )}
                       {desktop.platform === "win32" && (
                         <>
                           <div className="settings-form">

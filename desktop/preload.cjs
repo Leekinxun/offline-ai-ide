@@ -21,6 +21,8 @@ if (trustedPage()) {
     getPreferences: () => ipcRenderer.invoke("crownforge:preferences:get"),
     setPreferences: (patch) => ipcRenderer.invoke("crownforge:preferences:set", patch),
     openExternal: (url) => ipcRenderer.invoke("crownforge:external:open", url),
+    switchServer: () => ipcRenderer.invoke("crownforge:server:open-dialog"),
+    getServerUrl: () => ipcRenderer.invoke("crownforge:server:get-current"),
     onZoomCommand(callback) {
       if (typeof callback !== "function") throw new TypeError("Zoom callback must be a function");
       const listener = (_event, command) => {
@@ -33,3 +35,22 @@ if (trustedPage()) {
     version: argument("version") || "",
   });
 }
+
+function isServerConnectPage() {
+  try {
+    const url = new URL(window.location.href);
+    return process.isMainFrame && url.protocol === "file:" && url.pathname.endsWith("server-connect.html");
+  } catch {
+    return false;
+  }
+}
+
+if (isServerConnectPage()) {
+  contextBridge.exposeInMainWorld("crownforgeServer", {
+    getConfig: () => ipcRenderer.invoke("crownforge:server:get"),
+    testConnection: (url) => ipcRenderer.invoke("crownforge:server:test", url),
+    saveAndConnect: (url) => ipcRenderer.invoke("crownforge:server:save", url),
+    cancel: () => ipcRenderer.invoke("crownforge:server:cancel"),
+  });
+}
+

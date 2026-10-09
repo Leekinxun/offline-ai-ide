@@ -10,31 +10,43 @@ const origin = "http://127.0.0.1:43210";
 
 function load(url, isMainFrame = true) {
   let bridge;
+  let serverBridge;
   const calls = [];
   const ipcRenderer = new EventEmitter();
   ipcRenderer.invoke = (...args) => { calls.push(args); return Promise.resolve({ theme: "dark" }); };
   vm.runInNewContext(source, {
     require: (name) => {
       assert.equal(name, "electron");
-      return { ipcRenderer, contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, "crownforgeDesktop"); bridge = api; } } };
+      return { ipcRenderer, contextBridge: { exposeInMainWorld: (name, api) => {
+        if (name === "crownforgeDesktop") bridge = api;
+        if (name === "crownforgeServer") serverBridge = api;
+      } } };
     },
     process: { platform: "darwin", isMainFrame, argv: [`--crownforge-desktop-origin=${origin}`, "--crownforge-desktop-version=1.2.0"] },
     window: { location: { href: url } },
     URL,
   });
-  return { bridge, calls, ipcRenderer };
+  return { bridge, serverBridge, calls, ipcRenderer };
 }
 
 test("sandboxed preload exposes a bounded API only in IDE and Vibe main pages", async () => {
   for (const url of [`${origin}/`, `${origin}/?vibe=1`, `${origin}/login`]) {
     const { bridge, calls } = load(url);
-    assert.deepEqual(Object.keys(bridge).sort(), ["getPreferences", "onZoomCommand", "openExternal", "platform", "setPreferences", "version"]);
+    assert.deepEqual(Object.keys(bridge).sort(), ["getPreferences", "getServerUrl", "onZoomCommand", "openExternal", "platform", "setPreferences", "switchServer", "version"]);
     assert.equal(bridge.platform, "darwin");
     assert.equal(bridge.version, "1.2.0");
     await bridge.getPreferences();
     await bridge.setPreferences({ theme: "dark" });
     await bridge.openExternal("https://example.com/");
-    assert.deepEqual(calls, [["crownforge:preferences:get"], ["crownforge:preferences:set", { theme: "dark" }], ["crownforge:external:open", "https://example.com/"]]);
+    await bridge.switchServer();
+    await bridge.getServerUrl();
+    assert.deepEqual(calls, [
+      ["crownforge:preferences:get"],
+      ["crownforge:preferences:set", { theme: "dark" }],
+      ["crownforge:external:open", "https://example.com/"],
+      ["crownforge:server:open-dialog"],
+      ["crownforge:server:get-current"],
+    ]);
   }
   for (const url of ["about:blank", `${origin}/preview/id/ticket/`, `${origin}/mobile`, `${origin}/api/config`, "https://example.com/", "http://127.0.0.1:43211/", "http://user@127.0.0.1:43210/"]) {
     assert.equal(load(url).bridge, undefined, url);
@@ -56,4 +68,24 @@ test("zoom listener hides IPC events, validates commands and is removed on unsub
   assert.equal(ipcRenderer.listenerCount("crownforge:zoom"), 0);
   assert.deepEqual(commands, [["in"]]);
   assert.throws(() => bridge.onZoomCommand(null), /Zoom callback/);
+});
+
+test("server-connect page receives server bridge while hiding desktop IDE bridge", async () => {
+  const { bridge, serverBridge, calls } = load("file:///app/desktop/server-connect.html");
+  assert.equal(bridge, undefined);
+  assert.ok(serverBridge);
+  assert.deepEqual(Object.keys(serverBridge).sort(), ["cancel", "getConfig", "saveAndConnect", "testConnection"]);
+  await serverBridge.getConfig();
+  await serverBridge.testConnection("http://127.0.0.1:3000");
+  await serverBridge.saveAndConnect("http://127.0.0.1:3000");
+  await serverBridge.cancel();
+  assert.deepEqual(calls, [
+    ["crownforge:server:get"],
+    ["crownforge:server:test", "http://127.0.0.1:3000"],
+    ["crownforge:server:save", "http://127.0.0.1:3000"],
+    ["crownforge:server:cancel"],
+  ]);
+
+  // Non-server-connect file URL receives nothing
+  assert.equal(load("file:///app/desktop/other.html").serverBridge, undefined);
 });

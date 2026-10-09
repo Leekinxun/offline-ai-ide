@@ -37,8 +37,20 @@ function externalUrl(value, backendUrl) {
   return null;
 }
 
-function createApplicationMenu(platform, onZoom) {
+function createApplicationMenu(platform, onZoom, onServerConfig) {
   const zoomItem = (label, command) => ({ label, click: (_item, window) => onZoom(command, window) });
+  const serverMenu = typeof onServerConfig === "function" ? [
+    {
+      label: "Server",
+      submenu: [
+        {
+          label: "Switch Server...",
+          accelerator: "CmdOrCtrl+Shift+S",
+          click: (_item, window) => onServerConfig(window),
+        },
+      ],
+    },
+  ] : [];
   return [
     ...(platform === "darwin" ? [{ role: "appMenu" }] : []),
     { role: "fileMenu" },
@@ -52,6 +64,7 @@ function createApplicationMenu(platform, onZoom) {
         { type: "separator" }, { role: "togglefullscreen" },
       ],
     },
+    ...serverMenu,
     { role: "windowMenu" },
   ];
 }

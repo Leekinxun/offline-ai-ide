@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createPreferencesStore } = require("./preferences.cjs");
 const { isTrustedUiUrl, isTrustedSender, externalUrl, createApplicationMenu } = require("./bridge-policy.cjs");
+const { readServerConfig, writeServerConfig, testServerConnection } = require("./server-config.cjs");
 
 if (process.platform === "win32") {
   app.disableHardwareAcceleration();
@@ -238,17 +239,85 @@ function registerDesktopBridge(preferences) {
     authorize(event);
     return openExternal(url);
   });
+  ipcMain.handle("crownforge:server:get-current", (event) => {
+    authorize(event);
+    return backendUrl || "";
+  });
+  ipcMain.handle("crownforge:server:open-dialog", (event) => {
+    authorize(event);
+    showServerConnectPage(mainWindow);
+    return true;
+  });
 }
 
-function installApplicationMenu() {
-  const template = createApplicationMenu(process.platform, (command, focusedWindow) => {
-    const window = focusedWindow || BrowserWindow.getFocusedWindow();
-    if (!window || window.isDestroyed()) return;
-    const contents = window.webContents;
-    if (registeredContents.has(contents) && !contents.isDestroyed() && isTrustedUiUrl(contents.getURL(), backendUrl)) {
-      contents.send("crownforge:zoom", command);
+function registerServerConfigHandlers(dataDir) {
+  const authorizeConfig = (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error("Unauthorized server config request");
+    }
+  };
+  ipcMain.handle("crownforge:server:get", (event) => {
+    authorizeConfig(event);
+    const current = readServerConfig(dataDir);
+    return {
+      serverUrl: current ? current.serverUrl : (backendUrl || ""),
+      source: current ? current.source : null,
+    };
+  });
+  ipcMain.handle("crownforge:server:test", async (event, url) => {
+    authorizeConfig(event);
+    return testServerConnection(url);
+  });
+  ipcMain.handle("crownforge:server:save", async (event, url) => {
+    authorizeConfig(event);
+    try {
+      const saved = writeServerConfig(dataDir, url);
+      backendUrl = saved.serverUrl;
+      await loadServerIntoWindow(mainWindow, backendUrl);
+      return { ok: true, serverUrl: backendUrl };
+    } catch (err) {
+      return { error: err.message || String(err) };
     }
   });
+  ipcMain.handle("crownforge:server:cancel", (event) => {
+    authorizeConfig(event);
+    if (backendUrl) {
+      void loadServerIntoWindow(mainWindow, backendUrl);
+    }
+  });
+}
+
+function showServerConnectPage(window) {
+  if (!window || window.isDestroyed()) return;
+  const connectPath = path.join(__dirname, "server-connect.html");
+  window.loadFile(connectPath);
+  window.show();
+  window.focus();
+}
+
+async function loadServerIntoWindow(window, url) {
+  if (!window || window.isDestroyed()) return;
+  installBootstrapRequestHeaders();
+  window.webContents.setZoomFactor(1);
+  void window.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  await window.loadURL(url);
+  window.show();
+  window.focus();
+}
+
+function installApplicationMenu(onServerConfig) {
+  const template = createApplicationMenu(
+    process.platform,
+    (command, focusedWindow) => {
+      const window = focusedWindow || BrowserWindow.getFocusedWindow();
+      if (!window || window.isDestroyed()) return;
+      const contents = window.webContents;
+      if (registeredContents.has(contents) && !contents.isDestroyed() && isTrustedUiUrl(contents.getURL(), backendUrl)) {
+        contents.send("crownforge:zoom", command);
+      }
+    },
+    onServerConfig
+  );
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
@@ -271,7 +340,7 @@ function guardWindow(window) {
     return { action: "deny" };
   });
   const guardNavigation = (event, url) => {
-    if (url === "about:blank" || isTrustedUiUrl(url, backendUrl)) return;
+    if (url === "about:blank" || (typeof url === "string" && url.startsWith("file://") && url.endsWith("server-connect.html")) || isTrustedUiUrl(url, backendUrl)) return;
     event.preventDefault();
     void openExternal(url);
   };
@@ -324,10 +393,9 @@ if (isPrimaryInstance) {
   app.whenReady().then(async () => {
     try {
       const data = ensureDesktopData();
-      backendUrl = await startBackend(data);
-      installBootstrapRequestHeaders();
+      registerServerConfigHandlers(data.dataDir);
       registerDesktopBridge(createPreferencesStore(path.join(data.dataDir, "preferences.json")));
-      installApplicationMenu();
+      installApplicationMenu((targetWindow) => showServerConnectPage(targetWindow || mainWindow));
       mainWindow = new BrowserWindow({
         width: 1440,
         height: 900,
@@ -338,13 +406,34 @@ if (isPrimaryInstance) {
         webPreferences: desktopWebPreferences(),
       });
       guardWindow(mainWindow);
-      await mainWindow.loadURL(backendUrl);
-      mainWindow.show();
-      mainWindow.focus();
       mainWindow.on("closed", () => {
         mainWindow = undefined;
         app.quit();
       });
+
+      // Priority 1: Check server.json / CROWNFORGE_SERVER_URL / --server
+      const serverConfig = readServerConfig(data.dataDir);
+      if (serverConfig && serverConfig.serverUrl) {
+        backendUrl = serverConfig.serverUrl;
+        await loadServerIntoWindow(mainWindow, backendUrl);
+        return;
+      }
+
+      // Priority 2: If client-only mode is forced or local backend is absent, show connect page
+      const hasLocalBackend = fs.existsSync(bundledPath(path.join("backend", "bootstrap.cjs")));
+      if (process.env.CROWNFORGE_CLIENT_ONLY === "1" || !hasLocalBackend) {
+        showServerConnectPage(mainWindow);
+        return;
+      }
+
+      // Priority 3: Attempt local backend, and gracefully fall back to server connect page on failure
+      try {
+        backendUrl = await startBackend(data);
+        await loadServerIntoWindow(mainWindow, backendUrl);
+      } catch (backendError) {
+        console.warn("本地服务启动失败，转入服务器连接模式:", backendError.message);
+        showServerConnectPage(mainWindow);
+      }
     } catch (error) {
       dialog.showErrorBox("CrownForge 启动失败", error.message || String(error));
       app.quit();

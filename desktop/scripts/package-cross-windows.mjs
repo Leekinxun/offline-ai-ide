@@ -113,7 +113,7 @@ const config = {
   asar: true,
   npmRebuild: false,
   directories: { output: outputDir },
-  files: ["main.cjs", "preload.cjs", "preferences.cjs", "bridge-policy.cjs", "package.json"],
+  files: ["main.cjs", "preload.cjs", "preferences.cjs", "bridge-policy.cjs", "server-config.cjs", "server-connect.html", "preload-server-connect.cjs", "package.json"],
   extraResources: [
     { from: backendStage, to: "backend", filter: ["dist/**/*", "vendor/codex/**/*", "bootstrap.cjs", "package.json", "package-lock.json"] },
     { from: path.join(backendStage, "node_modules"), to: "backend/node_modules", filter: ["**/*"] },
