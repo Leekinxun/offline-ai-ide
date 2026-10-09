@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImage, FileText, FileType2, Paperclip, RotateCcw, X } from "lucide-react";
 import type { ChatAttachmentRef } from "../types";
 import { useI18n } from "../i18n";
+import { createClientId } from "../utils/clientId";
 import "./ChatAttachmentPicker.css";
 
 export interface ChatDraftAttachment {
@@ -141,7 +142,7 @@ export function useChatAttachmentDraft(token: string): ChatAttachmentDraftContro
         totalBytes += file.size;
       }
       return {
-        localId: crypto.randomUUID(),
+        localId: createClientId(),
         name: file.name,
         mimeType: file.type,
         size: file.size,
@@ -195,7 +196,7 @@ export function useChatAttachmentDraft(token: string): ChatAttachmentDraftContro
         totalBytes += ref.size;
       }
       restored.push({
-        localId: crypto.randomUUID(),
+        localId: createClientId(),
         name: ref.name,
         mimeType: ref.mimeType,
         size: ref.size,

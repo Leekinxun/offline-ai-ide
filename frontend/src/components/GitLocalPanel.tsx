@@ -4,6 +4,7 @@ import type { GitOperation } from "../types";
 import type { ChangeSet } from "../hooks/useCheckpoints";
 import type { useGitDelivery } from "../hooks/useGitDelivery";
 import { useI18n } from "../i18n";
+import { createClientId } from "../utils/clientId";
 import { isChangeSetIntegrable } from "./changeSetRecoveryPolicy";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 
@@ -46,7 +47,7 @@ export const GitLocalPanel: React.FC<GitLocalPanelProps> = ({ controller, change
         ? { action, branch: branchName.trim(), baseSha: headSha, expectedRefSha: null } as const
         : { action, branch: branchName.trim(), changeSetId: selectedReadyChangeSet!.id, expectedRefSha: headSha, ...(subject.trim() ? { subject: subject.trim() } : {}) } as const;
       const operation = await controller.prepare({
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createClientId(),
         input,
         provenance: {
           ...(conversationId ? { conversationId } : {}),

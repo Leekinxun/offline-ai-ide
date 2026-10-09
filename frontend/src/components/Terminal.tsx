@@ -5,6 +5,7 @@ import { Plus, RotateCw, TerminalSquare, Trash2, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./Terminal.css";
 import { useI18n } from "../i18n";
+import { createClientId } from "../utils/clientId";
 import { PanelHeader, PanelState } from "./PanelChrome";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import { TerminalSessionController, readTerminalTabs, saveTerminalTabs, type TerminalTab } from "./terminalSessionController";
@@ -229,7 +230,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     if (current) return current.map((tab) => ({ ...tab }));
     const navigation = (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type || "navigate";
     const saved = readTerminalTabs(sessionStorage, workspaceDir, navigation);
-    const initial = saved.length ? saved : [{ id: crypto.randomUUID(), title: t("terminal.tabTitle", { index: 1 }) }];
+    const initial = saved.length ? saved : [{ id: createClientId(), title: t("terminal.tabTitle", { index: 1 }) }];
     terminalTabsInDocument.set(workspaceDir, initial);
     return initial;
   });

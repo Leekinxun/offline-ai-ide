@@ -8,6 +8,7 @@ import { OperationApprovalDialog, type ApprovalIntent } from "./OperationApprova
 import { SafeExternalLink } from "./SafeExternalLink";
 import { WorkbenchSelect } from "./WorkbenchSelect";
 import { changeSetPatchContentSha256, changeSetReviewRevision, isCurrentChangeSet } from "../hooks/changeSetContract";
+import { createClientId } from "../utils/clientId";
 
 type ProviderController = ReturnType<typeof useProviderDelivery>;
 interface ProviderDeliveryPanelProps { controller: ProviderController; gitOperations: GitOperation[]; changeSets: ChangeSet[]; readOnly: boolean; onFollowUpCreated?: (result: { taskId: number; followUpRunId: string }) => Promise<void> | void; onOpenFollowUpRun?: (runId: string) => Promise<void> | void; onShowOfflineBundles?: () => void; }
@@ -69,7 +70,7 @@ export const ProviderDeliveryPanel: React.FC<ProviderDeliveryPanelProps> = ({ co
   const reviewFollowUp = (item: DeliveryFeedback) => {
     setFeedbackApproval(item);
     const sourceLabel = item.source.kind === "ci_check" ? item.source.name : `${item.source.author || t("delivery.unknownAuthor")} · ${item.source.path || t("delivery.reviewComment")}`;
-    setApproval({ id: crypto.randomUUID(), kind: "follow_up", title: t("delivery.approveFollowUp"), description: t("delivery.followUpApprovalHint"), impact: [{ label: t("delivery.source"), value: sourceLabel }, { label: t("delivery.revision"), value: (item.revision || item.headSha).slice(0, 12), warning: item.stale }, { label: t("delivery.changeSet"), value: item.changeSetId?.slice(0, 12) || "—" }], warnings: item.stale ? [t("delivery.followUpStale")] : [], confirmLabel: t("delivery.createFollowUp") });
+    setApproval({ id: createClientId(), kind: "follow_up", title: t("delivery.approveFollowUp"), description: t("delivery.followUpApprovalHint"), impact: [{ label: t("delivery.source"), value: sourceLabel }, { label: t("delivery.revision"), value: (item.revision || item.headSha).slice(0, 12), warning: item.stale }, { label: t("delivery.changeSet"), value: item.changeSetId?.slice(0, 12) || "—" }], warnings: item.stale ? [t("delivery.followUpStale")] : [], confirmLabel: t("delivery.createFollowUp") });
   };
   const approve = async (intent: ApprovalIntent) => {
     if (intent.kind === "provider") {

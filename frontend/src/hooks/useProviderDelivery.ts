@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeliveryFeedback, ProviderCapability, ProviderConfigSummary, ProviderDelivery, ProviderDeliveryOperation, ProviderDeliveryPrepareInput } from "../types";
+import { createClientId } from "../utils/clientId";
 
 const API = "/api/delivery";
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -91,7 +92,7 @@ export function useProviderDelivery(token: string, workspaceDir: string, enabled
     const pending = publicationKeysRef.current.get(requestDigest);
     const knownOperation = pending?.operationId ? operations.find((operation) => operation.id === pending.operationId) : undefined;
     const reusablePending = !knownOperation || ["awaiting_approval", "approved", "in_flight", "ambiguous"].includes(knownOperation.status);
-    const idempotencyKey = pending && reusablePending ? pending.key : `${input.providerConfigId}:${crypto.randomUUID()}`;
+    const idempotencyKey = pending && reusablePending ? pending.key : `${input.providerConfigId}:${createClientId()}`;
     publicationKeysRef.current.set(requestDigest, { key: idempotencyKey, operationId: pending?.operationId });
     try {
       const response = await fetch(`${API}/operations`, { method: "POST", headers: { ...auth(token), "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) });

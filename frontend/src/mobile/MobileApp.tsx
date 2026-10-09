@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { useModalDialogFocus } from "../components/useModalDialogFocus";
+import { createClientId } from "../utils/clientId";
 import {
   formatEventTime,
   formatWhen,
@@ -635,7 +636,7 @@ function MobileDashboard({
     try {
       const result = await mobileApi.sendCommand(
         {
-          commandId: crypto.randomUUID(),
+          commandId: createClientId(),
           action,
           taskId: options.taskId,
           runId: options.runId,
@@ -687,7 +688,7 @@ function MobileDashboard({
     try {
       const result = await mobileApi.sendCommand(
         {
-          commandId: crypto.randomUUID(),
+          commandId: createClientId(),
           action: "start",
           message: text,
           ...(existing
