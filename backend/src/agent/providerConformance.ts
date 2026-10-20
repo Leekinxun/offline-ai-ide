@@ -54,7 +54,28 @@ export function validateProviderResponse(value: OpenAIResponse, structuredOutput
   if (choice.finish_reason === "tool_calls" && (!Array.isArray(calls) || calls.length === 0)) throw malformed("tool_calls finish reason requires tool calls");
   if (calls) for (const call of calls) if (!call?.id || call.type !== "function" || !call.function?.name || typeof call.function.arguments !== "string") throw malformed("Provider response contains a malformed tool call");
   if (structuredOutput && message.content !== null) { try { JSON.parse(message.content); } catch { throw malformed("Provider structured output is not valid JSON"); } }
-  if (value.usage) for (const [key, amount] of Object.entries(value.usage)) if (amount !== undefined && (!Number.isSafeInteger(amount) || amount < 0)) throw malformed(`Provider usage ${key} is invalid`);
+  if (value.usage !== undefined && value.usage !== null) {
+    if (!isObject(value.usage)) throw malformed("Provider usage must be an object");
+    for (const key of ["prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"]) {
+      const amount = value.usage[key];
+      if (amount !== undefined && !isTokenCount(amount)) throw malformed(`Provider usage ${key} is invalid`);
+    }
+    const detailFields = {
+      prompt_tokens_details: ["cached_tokens", "audio_tokens"],
+      completion_tokens_details: ["audio_tokens", "reasoning_tokens", "accepted_prediction_tokens", "rejected_prediction_tokens"],
+    };
+    for (const [key, fields] of Object.entries(detailFields)) {
+      const details = value.usage[key];
+      if (details === undefined || details === null) continue;
+      if (!isObject(details)) throw malformed(`Provider usage ${key} must be an object`);
+      for (const field of fields) {
+        const amount = details[field];
+        if (amount !== undefined && amount !== null && !isTokenCount(amount)) throw malformed(`Provider usage ${key}.${field} is invalid`);
+      }
+    }
+  }
   return value;
 }
+function isObject(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function isTokenCount(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
 function malformed(message: string): ProviderRequestError { return new ProviderRequestError({ code: "response_parse", message, retryable: false, recoverable: true }); }

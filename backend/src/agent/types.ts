@@ -42,13 +42,34 @@ export interface OpenAIChoice {
   finish_reason?: "stop" | "tool_calls" | "length" | null;
 }
 
+export interface OpenAIPromptTokenDetails {
+  cached_tokens?: number | null;
+  audio_tokens?: number | null;
+  [extension: string]: unknown;
+}
+
+export interface OpenAICompletionTokenDetails {
+  audio_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  accepted_prediction_tokens?: number | null;
+  rejected_prediction_tokens?: number | null;
+  [extension: string]: unknown;
+}
+
+export interface OpenAIUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+  prompt_tokens_details?: OpenAIPromptTokenDetails | null;
+  completion_tokens_details?: OpenAICompletionTokenDetails | null;
+  [extension: string]: unknown;
+}
+
 export interface OpenAIResponse {
   choices: OpenAIChoice[];
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
+  usage?: OpenAIUsage | null;
 }
 
 export interface FileSelectionRange {
