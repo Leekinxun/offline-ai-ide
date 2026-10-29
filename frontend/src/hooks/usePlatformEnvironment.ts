@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { getDesktopBridge } from "../desktop/bridge";
 
 export type OperatingSystem = "windows" | "linux" | "macos" | "unknown";
 export type PlatformHost = "desktop" | "web";
@@ -44,6 +45,9 @@ function detectOS(): OperatingSystem {
  * 检测是否处于 Electron 桌面端原生容器
  */
 function detectIsDesktop(isDesktopProp?: boolean): boolean {
+  // The server's desktop flag describes its execution capabilities. A remote
+  // desktop client still uses native window conventions against a web server.
+  if (getDesktopBridge()) return true;
   if (typeof isDesktopProp === "boolean") {
     return isDesktopProp;
   }

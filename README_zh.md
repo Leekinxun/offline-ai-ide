@@ -14,7 +14,7 @@ CrownForge 是一个可私有化部署的 Web AI 编程工作台，集代码编�
 
 [English](README.md)
 
-**桌面 App 下载：**Windows 10/11 x64、Windows 7 SP1 x64 与 macOS 13+（Apple 芯片或 Intel）的安装包发布后，可在 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) 下载。请同时下载对应的 `.sha256` 文件校验安装包；设置方法和平台限制见[桌面版指南](docs/desktop-app.md)。
+**桌面 App 下载：**客户端连接 CrownForge 服务器，与浏览器共用同一套前端。Windows 10/11 x64、Windows 7 SP1 x64 与 macOS 13+（Apple 芯片或 Intel）的安装包发布后，可在 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) 下载。请同时下载对应的 `.sha256` 文件校验安装包；设置方法和平台限制见[桌面版指南](docs/desktop-app.md)。
 
 ![Login](docs/screenshots/login.png)
 ![IDE](docs/screenshots/ide.png)
@@ -338,7 +338,7 @@ Linux 镜像内置 `bubblewrap`。已批准的 Agent shell 进程通过 `bwrap -
 
 ### 桌面 App
 
-桌面版可在每台电脑独立运行，提供 Windows 10/11 x64、macOS 13+（Intel/Apple 芯片）以及单独的 Windows 7 SP1 x64 旧版构建。已发布安装包及对应 SHA-256 文件见 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases)；构建命令、首次登录和平台功能边界见[桌面版指南](docs/desktop-app.md)。Windows 7 构建使用已停止维护的 Electron 22，正式发布前必须在 Windows 7 实机完成验收。
+桌面客户端连接已有的 CrownForge 服务器，加载与浏览器相同的前端，并使用服务器账号登录。在连接页配置 HTTP/HTTPS 根地址，断线后恢复服务器状态；关闭客户端不会停止服务器上的 Agent 任务。项目文件、终端、模型/MCP 和执行工具均在服务器。旧本地桌面版的数据会保留，但不会自动迁移。构建目标包括 Windows 10/11 x64、macOS 13+（Intel/Apple 芯片）及单独的 Windows 7 SP1 x64 旧版包。已发布安装包及对应 SHA-256 文件见 [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases)；连接、构建、迁移与平台边界见[桌面版指南](docs/desktop-app.md)。Windows 7 构建使用已停止维护的 Electron 22，正式发布前仍需实机验收。
 
 ### 本地开发
 

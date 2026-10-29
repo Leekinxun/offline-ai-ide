@@ -12,7 +12,58 @@ permissions:
   contents: read
 
 jobs:
+  shared_workbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - name: Install shared server and frontend dependencies
+        run: npm ci --prefix backend && npm ci --prefix frontend
+      - name: Prepare isolated server contract data
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'crownforge-remote-contract-'));
+          const workspace = path.join(directory, 'workspace');
+          const plugins = path.join(directory, 'plugins');
+          fs.mkdirSync(workspace);
+          fs.mkdirSync(plugins);
+          const users = path.join(directory, 'users.json');
+          const settings = path.join(directory, 'app-settings.json');
+          fs.writeFileSync(users, JSON.stringify({ allowedRoots: [directory], users: [{ username: 'fixture', password: 'fixture-password', defaultWorkspace: workspace, isAdmin: true }] }));
+          fs.writeFileSync(settings, '{}');
+          const values = { USERS_CONFIG: users, APP_SETTINGS_CONFIG: settings, WORKSPACE_DIR: workspace, TEAM_STORE_ROOT: directory, PLUGINS_DIR: plugins };
+          fs.appendFileSync(process.env.GITHUB_ENV, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+          NODE
+      - name: Test server run ownership and shared workbench policies
+        working-directory: backend
+        run: >-
+          node --import tsx --test
+          src/chat/backgroundRuns.test.ts src/chat/runCoordinator.test.ts
+          ../scripts/authTokenStorage.test.ts ../scripts/editorTabs.test.ts
+          ../scripts/inlineAssistant.test.ts ../scripts/contextReferences.test.ts
+          ../scripts/editorChangeReview.test.ts ../scripts/runReviewPolicy.test.ts
+          ../scripts/terminalSessionController.test.ts ../scripts/workbenchComposer.test.ts
+          ../scripts/desktopUiPreferences.test.ts ../scripts/inlineAssistantLifecycle.test.ts
+      - name: Typecheck shared backend
+        run: npm run build --prefix backend
+      - name: Typecheck and build shared frontend
+        run: npm run build --prefix frontend
+      - name: Check frontend bundle budget
+        run: node scripts/frontend-bundle-budget.mjs
+      - name: Check UI contracts
+        run: bash scripts/ui-contract.sh
+
   package:
+    needs: shared_workbench
     strategy:
       fail-fast: false
       matrix:
@@ -32,83 +83,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            backend/package-lock.json
-            frontend/package-lock.json
-            desktop/package-lock.json
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: backend
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-      - name: Install desktop build tools
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop client build tools
         run: npm ci
         working-directory: desktop
-      - name: Prepare isolated contract data
+      - name: Test desktop client and package boundaries
         shell: bash
-        run: |
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import os from 'node:os';
-          import path from 'node:path';
-          import { rgPath } from './backend/node_modules/@vscode/ripgrep/lib/index.js';
-          const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'crownforge-desktop-contract-'));
-          const workspace = path.join(directory, 'workspace');
-          const plugins = path.join(directory, 'plugins');
-          fs.mkdirSync(workspace);
-          fs.mkdirSync(plugins);
-          const users = path.join(directory, 'users.json');
-          const settings = path.join(directory, 'app-settings.json');
-          fs.writeFileSync(users, JSON.stringify({ allowedRoots: [directory], users: [{ username: 'fixture', password: 'fixture-password', defaultWorkspace: workspace, isAdmin: true }] }));
-          fs.writeFileSync(settings, '{}');
-          const values = { USERS_CONFIG: users, APP_SETTINGS_CONFIG: settings, WORKSPACE_DIR: workspace, TEAM_STORE_ROOT: directory, PLUGINS_DIR: plugins };
-          fs.appendFileSync(process.env.GITHUB_ENV, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
-          fs.appendFileSync(process.env.GITHUB_PATH, `${path.dirname(rgPath)}\n`);
-          NODE
-      - name: Test desktop host contracts
-        shell: bash
-        run: node --test desktop/*.test.cjs
-      - name: Test desktop boundaries and run recovery
-        shell: bash
-        working-directory: backend
-        run: |
-          desktop_contract_node=node
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            # Seatbelt permits system runtimes, not the runner's user tool cache.
-            sudo mkdir -p /usr/local/bin
-            sudo cp "$(command -v node)" /usr/local/bin/crownforge-desktop-contract-node
-            desktop_contract_node=/usr/local/bin/crownforge-desktop-contract-node
-          fi
-          "$desktop_contract_node" --import tsx --test --test-concurrency=1 \
-            src/config.desktop.test.ts src/config.fixtureLoopback.test.ts \
-            src/auth/desktopFolderPicker.test.ts src/auth/authRoutes.test.ts \
-            src/auth/sessionNamespace.test.ts src/agent/toolPolicy.test.ts \
-            src/chat/approvalGrants.test.ts src/chat/backgroundRuns.test.ts \
-            src/utils/nodeRuntime.test.ts src/run/processSessions.test.ts \
-            src/run/processSessionRoutes.test.ts
-      - name: Test shared editor and terminal policies
-        shell: bash
-        working-directory: backend
-        run: >-
-          node --import tsx --test
-          ../scripts/authTokenStorage.test.ts ../scripts/editorTabs.test.ts
-          ../scripts/inlineAssistant.test.ts ../scripts/contextReferences.test.ts
-          ../scripts/editorChangeReview.test.ts ../scripts/runReviewPolicy.test.ts
-          ../scripts/terminalSessionController.test.ts ../scripts/workbenchComposer.test.ts
-          ../scripts/desktopUiPreferences.test.ts ../scripts/inlineAssistantLifecycle.test.ts
-      - name: Typecheck backend
-        run: npm run build
-        working-directory: backend
-      - name: Typecheck and build frontend
-        run: npm run build
-        working-directory: frontend
-      - name: Check frontend bundle budget
-        run: node scripts/frontend-bundle-budget.mjs
-      - name: Check UI contracts
-        shell: bash
-        run: bash scripts/ui-contract.sh
-      - name: Build desktop package
+        run: node --test desktop/*.test.cjs scripts/remote-desktop-package.test.mjs
+      - name: Build remote desktop client
         run: npm run package:${{ matrix.target }}
         working-directory: desktop
       - uses: actions/upload-artifact@v4

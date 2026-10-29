@@ -1,353 +1,236 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell, webContents } = require("electron");
-const { spawn } = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
 const path = require("node:path");
+const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const { createPreferencesStore } = require("./preferences.cjs");
+const { normalizeServerUrl, serverId, serverPartition, createConnectionStore, RETRY_DELAYS } = require("./connection.cjs");
 const { isTrustedUiUrl, isTrustedSender, externalUrl, createApplicationMenu } = require("./bridge-policy.cjs");
 
-if (process.platform === "win32") {
-  app.disableHardwareAcceleration();
-}
+// This remote-client profile differs from a local Codex-style host: only the
+// server owns workspaces, model credentials, processes and Agent run lifetime.
+function createDesktopRuntime(electron, options = {}) {
+  const { app, BrowserWindow, ipcMain, Menu, session, shell } = electron;
+  const timers = options.timers || { setTimeout, clearTimeout };
+  const connectionPage = pathToFileURL(path.join(__dirname, "connection.html")).href;
+  const connectionStore = options.connectionStore || createConnectionStore(path.join(app.getPath("userData"), "connection.json"));
+  const preferenceStores = new Map();
+  const configuredSessions = new Set();
+  const registeredContents = new Set();
+  const windows = new Set();
+  let connectionWindow;
+  let mainWindow;
+  let serverUrl = connectionStore.get().serverUrl;
+  let state = { serverUrl, status: "disconnected", message: "", retryAt: null, attempt: 0 };
+  let retryTimer;
+  let generation = 0;
+  let quitting = false;
 
-if (process.env.CREWFORGE_DESKTOP_DATA_DIR) {
-  const userData = path.resolve(process.env.CREWFORGE_DESKTOP_DATA_DIR);
-  fs.mkdirSync(userData, { recursive: true });
-  app.setPath("userData", userData);
-}
-
-const isPrimaryInstance = app.requestSingleInstanceLock();
-let backend;
-let backendUrl;
-let desktopBootstrapToken;
-let mainWindow;
-let quitting = false;
-let folderPickerOpen = false;
-const registeredContents = new Set();
-
-if (!isPrimaryInstance) app.quit();
-
-function bundledPath(name) {
-  return path.join(app.isPackaged ? process.resourcesPath : path.resolve(__dirname, ".."), name);
-}
-
-function ensureDesktopData() {
-  const dataDir = app.getPath("userData");
-  const workspaceDir = path.join(dataDir, "workspace");
-  const pluginsDir = path.join(dataDir, "plugins");
-  const usersPath = path.join(dataDir, "users.json");
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  if (!fs.existsSync(pluginsDir)) {
-    const bundledPlugins = bundledPath("plugins");
-    if (fs.existsSync(bundledPlugins)) fs.cpSync(bundledPlugins, pluginsDir, { recursive: true });
-    else fs.mkdirSync(pluginsDir, { recursive: true });
+  const snapshot = () => ({ ...state });
+  function publish(patch) {
+    state = { ...state, ...patch };
+    if (connectionWindow && !connectionWindow.isDestroyed()) connectionWindow.webContents.send("crownforge:connection:state", snapshot());
   }
-
-  let initialPassword;
-  if (!fs.existsSync(usersPath)) {
-    initialPassword = crypto.randomBytes(18).toString("base64url");
-    const users = {
-      allowedRoots: [app.getPath("home"), workspaceDir],
-      pendingRegistrations: [],
-      users: [{
-        username: "admin",
-        password: initialPassword,
-        defaultWorkspace: workspaceDir,
-        isAdmin: true,
-      }],
-    };
-    try {
-      fs.writeFileSync(usersPath, `${JSON.stringify(users, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      initialPassword = undefined;
+  function cancelRetry() {
+    if (retryTimer !== undefined) timers.clearTimeout(retryTimer);
+    retryTimer = undefined;
+  }
+  function authorizeConnection(event) {
+    const contents = connectionWindow?.webContents;
+    if (!contents || contents.isDestroyed() || event?.sender !== contents || event.senderFrame !== contents.mainFrame ||
+        event.senderFrame?.url !== connectionPage || contents.getURL() !== connectionPage) throw new Error("Unauthorized connection request");
+  }
+  function preferencesFor(origin) {
+    if (!preferenceStores.has(origin)) {
+      preferenceStores.set(origin, (options.createPreferencesStore || createPreferencesStore)(path.join(app.getPath("userData"), "servers", serverId(origin), "preferences.json")));
     }
+    return preferenceStores.get(origin);
   }
-  return { dataDir, workspaceDir, pluginsDir, usersPath, initialPassword };
-}
-
-function startBackend(data) {
-  return new Promise((resolve, reject) => {
-    const bootstrapPath = bundledPath(path.join("backend", "bootstrap.cjs"));
-    const staticDir = bundledPath(app.isPackaged ? "frontend" : path.join("frontend", "dist"));
-    desktopBootstrapToken = crypto.randomBytes(32).toString("base64url");
-    const env = {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      CREWFORGE_DESKTOP: "1",
-      CROWNFORGE_DESKTOP_RUNTIME: "electron",
-      CROWNFORGE_DESKTOP_BOOTSTRAP_TOKEN: desktopBootstrapToken,
-      NODE_ENV: "production",
-      HOST: "127.0.0.1",
-      PORT: "0",
-      WORKSPACE_DIR: data.workspaceDir,
-      USERS_CONFIG: data.usersPath,
-      APP_SETTINGS_CONFIG: path.join(data.dataDir, "app-settings.json"),
-      TEAM_STORE_ROOT: data.dataDir,
-      PLUGINS_DIR: data.pluginsDir,
-      STATIC_DIR: staticDir,
-      VLLM_API_URL: process.env.VLLM_API_URL || "http://127.0.0.1:8000/v1",
+  function authorizeRemote(event) {
+    if (!isTrustedSender(event, serverUrl, registeredContents)) throw new Error("Unauthorized desktop request");
+  }
+  function webPreferences(origin) {
+    return {
+      sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false,
+      webviewTag: false, partition: serverPartition(origin), preload: path.join(__dirname, "preload.cjs"),
+      additionalArguments: [`--crownforge-desktop-origin=${origin}`, `--crownforge-desktop-version=${app.getVersion()}`],
     };
-    const child = spawn(process.execPath, [bootstrapPath], {
-      cwd: data.dataDir,
-      env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      windowsHide: true,
-    });
-    backend = child;
-    let settled = false;
-    let startupFailed = false;
-    const timeout = setTimeout(() => fail(new Error("本地服务启动超时")), 30000);
-    const fail = (error) => {
-      if (settled) return;
-      settled = true;
-      startupFailed = true;
-      clearTimeout(timeout);
-      child.kill();
-      reject(error);
-    };
-    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
-    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
-    child.on("error", fail);
-    child.on("exit", (code) => {
-      if (!settled) fail(new Error(`本地服务提前退出（代码 ${code ?? "unknown"}）`));
-      else if (!quitting && !startupFailed) {
-        dialog.showErrorBox("CrownForge", "本地服务已停止，请重新启动应用。");
-        app.quit();
-      }
-    });
-    child.on("message", (message) => {
-      if (message && message.type === "ready" && /^http:\/\/127\.0\.0\.1:\d+$/.test(message.url || "")) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(message.url);
-      } else if (message && message.type === "error") {
-        fail(new Error(`本地服务启动失败（${message.phase || "startup"}: ${message.code || "unknown"}）`));
-      } else if (message && message.type === "desktop-pick-folder") {
-        void handleFolderPickerRequest(child, message);
-      }
-    });
-  });
-}
-
-/** Keep bootstrap authority in the host. Neither preload nor renderer gets a token getter. */
-function installBootstrapRequestHeaders() {
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
-    const headers = { ...details.requestHeaders };
-    // Remove any spoofed value, and strip authority on redirects/other destinations.
-    for (const key of Object.keys(headers)) if (key.toLowerCase() === "x-crownforge-desktop-bootstrap") delete headers[key];
-    try {
-      const url = new URL(details.url);
-      const contents = details.webContents || (Number.isSafeInteger(details.webContentsId) ? webContents.fromId(details.webContentsId) : undefined);
-      const frame = details.frame;
-      const trusted = desktopBootstrapToken && details.method === "GET" && url.origin === backendUrl &&
-        url.pathname === "/api/auth/me" && !url.search && !url.hash && !url.username && !url.password &&
-        contents && registeredContents.has(contents) && !contents.isDestroyed() && frame && frame === contents.mainFrame &&
-        isTrustedUiUrl(frame.url, backendUrl) && isTrustedUiUrl(contents.getURL(), backendUrl) &&
-        (details.initiatorOrigin === undefined || details.initiatorOrigin === backendUrl);
-      if (trusted) headers["X-CrownForge-Desktop-Bootstrap"] = desktopBootstrapToken;
-    } catch { /* Malformed/untrusted requests never receive host authority. */ }
-    callback({ requestHeaders: headers });
-  });
-}
-
-function sendFolderPickerResult(child, requestId, result) {
-  if (!child.connected || !requestId) return;
-  child.send({ type: "desktop-pick-folder-result", requestId, ...result });
-}
-
-function normalizeDefaultPath(defaultPath) {
-  if (typeof defaultPath !== "string" || !defaultPath.trim()) return undefined;
-  return path.resolve(defaultPath);
-}
-
-async function handleFolderPickerRequest(child, message) {
-  const requestId = typeof message.requestId === "string" ? message.requestId : "";
-  if (!requestId) return;
-  if (child !== backend) {
-    sendFolderPickerResult(child, requestId, { path: null, error: "INVALID_BACKEND_PROCESS" });
-    return;
   }
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    sendFolderPickerResult(child, requestId, { path: null, error: "MAIN_WINDOW_UNAVAILABLE" });
-    return;
+  async function openExternal(url, origin = serverUrl) {
+    const checked = externalUrl(url, origin);
+    if (!checked) return false;
+    try { await shell.openExternal(checked); return true; } catch { return false; }
   }
-  if (folderPickerOpen) {
-    sendFolderPickerResult(child, requestId, { path: null, error: "FOLDER_PICKER_BUSY" });
-    return;
+  function configureSession(origin) {
+    const partition = serverPartition(origin);
+    if (configuredSessions.has(partition)) return;
+    const target = session.fromPartition(partition);
+    target.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    target.setPermissionCheckHandler(() => false);
+    configuredSessions.add(partition);
   }
-
-  const properties = ["openDirectory"];
-  if (process.platform === "darwin") properties.push("createDirectory");
-
-  folderPickerOpen = true;
-  try {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties,
-      defaultPath: normalizeDefaultPath(message.defaultPath),
-    });
-    const selectedPath = result.canceled ? null : result.filePaths[0] || null;
-    sendFolderPickerResult(child, requestId, { path: selectedPath });
-  } catch (error) {
-    sendFolderPickerResult(child, requestId, {
-      path: null,
-      error: error && error.message ? error.message : String(error),
-    });
-  } finally {
-    folderPickerOpen = false;
-  }
-}
-
-function desktopWebPreferences() {
-  return {
-    sandbox: true,
-    contextIsolation: true,
-    nodeIntegration: false,
-    nodeIntegrationInSubFrames: false,
-    webviewTag: false,
-    preload: path.join(__dirname, "preload.cjs"),
-    additionalArguments: [`--crownforge-desktop-origin=${backendUrl}`, `--crownforge-desktop-version=${app.getVersion()}`],
-  };
-}
-
-async function openExternal(url) {
-  const checked = externalUrl(url, backendUrl);
-  if (!checked) return false;
-  try {
-    await shell.openExternal(checked);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function registerDesktopBridge(preferences) {
-  const authorize = (event) => {
-    if (!isTrustedSender(event, backendUrl, registeredContents)) throw new Error("Unauthorized desktop request");
-  };
-  ipcMain.handle("crownforge:preferences:get", (event) => {
-    authorize(event);
-    return preferences.get();
-  });
-  ipcMain.handle("crownforge:preferences:set", (event, patch) => {
-    authorize(event);
-    return preferences.set(patch);
-  });
-  ipcMain.handle("crownforge:external:open", (event, url) => {
-    authorize(event);
-    return openExternal(url);
-  });
-}
-
-function installApplicationMenu() {
-  const template = createApplicationMenu(process.platform, (command, focusedWindow) => {
-    const window = focusedWindow || BrowserWindow.getFocusedWindow();
-    if (!window || window.isDestroyed()) return;
+  function guardWindow(window, origin) {
     const contents = window.webContents;
-    if (registeredContents.has(contents) && !contents.isDestroyed() && isTrustedUiUrl(contents.getURL(), backendUrl)) {
-      contents.send("crownforge:zoom", command);
+    windows.add(window);
+    registeredContents.add(contents);
+    contents.once("destroyed", () => { registeredContents.delete(contents); windows.delete(window); });
+    contents.setZoomFactor(1);
+    void contents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+    contents.on("will-attach-webview", (event) => event.preventDefault());
+    contents.setWindowOpenHandler(({ url }) => {
+      if (url === "about:blank" || isTrustedUiUrl(url, origin)) {
+        return { action: "allow", overrideBrowserWindowOptions: { webPreferences: webPreferences(origin) } };
+      }
+      void openExternal(url, origin);
+      return { action: "deny" };
+    });
+    const guardNavigation = (event, url) => {
+      if (url === "about:blank" || isTrustedUiUrl(url, origin)) return;
+      event.preventDefault(); void openExternal(url, origin);
+    };
+    contents.on("will-navigate", guardNavigation);
+    contents.on("will-redirect", (event, url) => {
+      if (isTrustedUiUrl(url, origin)) return;
+      event.preventDefault();
+      if (window === mainWindow && state.status === "connecting") {
+        cancelRetry();
+        openConnectionSettings();
+        publish({ status: "error", retryAt: null, message: "服务器跳转到了其他地址。请填写最终的服务器根地址后重新连接。" });
+      } else { void openExternal(url, origin); }
+    });
+    contents.on("did-create-window", (child) => guardWindow(child, origin));
+  }
+  function openConnectionSettings() {
+    if (quitting) return;
+    if (connectionWindow && !connectionWindow.isDestroyed()) {
+      connectionWindow.show(); connectionWindow.focus(); return;
     }
-  });
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
-
-function guardWindow(window) {
-  const contents = window.webContents;
-  registeredContents.add(contents);
-  contents.once("destroyed", () => registeredContents.delete(contents));
-  contents.setZoomFactor(1);
-  void contents.setVisualZoomLevelLimits(1, 1).catch(() => {});
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === "about:blank" || isTrustedUiUrl(url, backendUrl)) {
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          webPreferences: desktopWebPreferences(),
-        },
-      };
+    const window = new BrowserWindow({
+      width: 660, height: 630, minWidth: 480, minHeight: 550, title: "CrownForge · 连接服务器",
+      autoHideMenuBar: false, backgroundColor: "#10161f", show: true,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false,
+        webviewTag: false, partition: "crownforge-connection", preload: path.join(__dirname, "connection-preload.cjs"),
+        additionalArguments: [`--crownforge-connection-page=${connectionPage}`] },
+    });
+    connectionWindow = window;
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    const guard = (event, url) => { if (url !== connectionPage) event.preventDefault(); };
+    window.webContents.on("will-navigate", guard);
+    window.webContents.on("will-redirect", guard);
+    window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    window.on("closed", () => {
+      if (connectionWindow === window) connectionWindow = undefined;
+      if (!mainWindow || mainWindow.isDestroyed() || state.status !== "connected") app.quit();
+    });
+    void window.loadURL(connectionPage).catch(() => app.quit());
+  }
+  function loaded(window, origin) {
+    if (quitting || window !== mainWindow || origin !== serverUrl || !isTrustedUiUrl(window.webContents.getURL(), origin)) return;
+    cancelRetry();
+    publish({ status: "connected", message: "已连接服务器", retryAt: null, attempt: 0 });
+    window.show(); window.focus(); connectionWindow?.hide();
+  }
+  function loadFailed(window, origin, error) {
+    if (quitting || window !== mainWindow || origin !== serverUrl || retryTimer !== undefined || state.status === "error") return;
+    const delay = RETRY_DELAYS[state.attempt];
+    const description = String(error?.code || error?.message || "无法连接服务器").slice(0, 180);
+    openConnectionSettings();
+    if (delay === undefined) {
+      publish({ status: "error", message: `无法连接服务器，请检查地址、网络或证书后重试。${description}`, retryAt: null });
+      return;
     }
-    void openExternal(url);
-    return { action: "deny" };
-  });
-  const guardNavigation = (event, url) => {
-    if (url === "about:blank" || isTrustedUiUrl(url, backendUrl)) return;
-    event.preventDefault();
-    void openExternal(url);
-  };
-  window.webContents.on("will-navigate", guardNavigation);
-  window.webContents.on("will-redirect", guardNavigation);
-  window.webContents.on("did-create-window", (childWindow) => guardWindow(childWindow));
-}
-
-async function showInitialPassword(password) {
-  if (!password) return;
-  const choice = dialog.showMessageBoxSync({
-    type: "info",
-    title: "CrownForge 首次启动",
-    message: "已创建本机管理员账号 admin",
-    detail: `初始密码：${password}\n\n请保存密码。登录后可以在设置中修改。`,
-    buttons: ["复制密码并继续", "继续"],
-    defaultId: 0,
-    noLink: true,
-  });
-  if (choice === 0) {
+    const retryGeneration = generation;
+    publish({ status: "retrying", message: `连接中断，正在等待重试。${description}`, retryAt: Date.now() + delay, attempt: state.attempt + 1 });
+    retryTimer = timers.setTimeout(() => {
+      retryTimer = undefined;
+      if (!quitting && retryGeneration === generation && window === mainWindow) void loadRemote(window, origin);
+    }, delay);
+    retryTimer?.unref?.();
+  }
+  async function loadRemote(window, origin) {
+    const loadGeneration = generation;
+    publish({ status: "connecting", retryAt: null, message: "正在连接服务器…" });
     try {
-      await Promise.resolve(clipboard.writeText(password));
-    } catch {
-      dialog.showMessageBoxSync({
-        type: "warning",
-        title: "复制失败",
-        message: "无法复制初始密码，请手动保存",
-        detail: `初始密码：${password}`,
-        buttons: ["继续"],
-      });
+      await window.loadURL(`${origin}/`);
+      if (loadGeneration === generation && state.status !== "error") loaded(window, origin);
+    } catch (error) {
+      if (loadGeneration === generation && error?.code !== "ERR_ABORTED") loadFailed(window, origin, error);
     }
   }
-}
-
-app.on("second-instance", () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
-});
-
-app.on("before-quit", () => {
-  quitting = true;
-  if (!backend || backend.killed) return;
-  if (backend.connected) backend.send({ type: "shutdown" });
-  const forceStop = setTimeout(() => backend?.kill(), 3000);
-  forceStop.unref?.();
-});
-
-if (isPrimaryInstance) {
-  app.whenReady().then(async () => {
-    try {
-      const data = ensureDesktopData();
-      backendUrl = await startBackend(data);
-      installBootstrapRequestHeaders();
-      registerDesktopBridge(createPreferencesStore(path.join(data.dataDir, "preferences.json")));
-      installApplicationMenu();
-      mainWindow = new BrowserWindow({
-        width: 1440,
-        height: 900,
-        minWidth: 900,
-        minHeight: 640,
-        title: "CrownForge",
-        show: true,
-        webPreferences: desktopWebPreferences(),
+  async function connect(value) {
+    const origin = normalizeServerUrl(value);
+    connectionStore.set(origin);
+    cancelRetry(); generation += 1;
+    if (origin !== serverUrl || !mainWindow || mainWindow.isDestroyed()) {
+      mainWindow = undefined;
+      for (const window of [...windows]) if (!window.isDestroyed()) window.destroy();
+      serverUrl = origin;
+      configureSession(origin);
+      const window = new BrowserWindow({
+        width: 1440, height: 900, minWidth: 900, minHeight: 640, title: "CrownForge", show: false,
+        webPreferences: webPreferences(origin),
       });
-      guardWindow(mainWindow);
-      await mainWindow.loadURL(backendUrl);
-      mainWindow.show();
-      mainWindow.focus();
-      mainWindow.on("closed", () => {
-        mainWindow = undefined;
-        app.quit();
+      mainWindow = window; guardWindow(window, origin);
+      window.webContents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
+        if (isMainFrame && code !== -3) loadFailed(window, origin, { message: description });
       });
-    } catch (error) {
-      dialog.showErrorBox("CrownForge 启动失败", error.message || String(error));
-      app.quit();
+      window.on("closed", () => { if (mainWindow === window) { mainWindow = undefined; app.quit(); } });
     }
-  });
+    publish({ serverUrl: origin, attempt: 0, status: "connecting", message: "正在连接服务器…", retryAt: null });
+    void loadRemote(mainWindow, origin);
+    return snapshot();
+  }
+  function registerBridge() {
+    ipcMain.handle("crownforge:connection:get", (event) => { authorizeConnection(event); return snapshot(); });
+    ipcMain.handle("crownforge:connection:connect", (event, value) => { authorizeConnection(event); return connect(value); });
+    ipcMain.handle("crownforge:connection:retry", (event) => {
+      authorizeConnection(event);
+      if (!serverUrl) throw new Error("请先填写服务器地址。");
+      return connect(serverUrl);
+    });
+    ipcMain.handle("crownforge:connection:settings", (event) => { authorizeRemote(event); openConnectionSettings(); });
+    ipcMain.handle("crownforge:preferences:get", (event) => { authorizeRemote(event); return preferencesFor(serverUrl).get(); });
+    ipcMain.handle("crownforge:preferences:set", (event, patch) => { authorizeRemote(event); return preferencesFor(serverUrl).set(patch); });
+    ipcMain.handle("crownforge:external:open", (event, value) => { authorizeRemote(event); return openExternal(value); });
+  }
+  function installMenu() {
+    const template = createApplicationMenu(process.platform, (command, focused) => {
+      const window = focused || BrowserWindow.getFocusedWindow();
+      const contents = window?.webContents;
+      if (contents && registeredContents.has(contents) && !contents.isDestroyed() && isTrustedUiUrl(contents.getURL(), serverUrl)) contents.send("crownforge:zoom", command);
+    });
+    template.splice(process.platform === "darwin" ? 1 : 0, 0, {
+      label: "服务器", submenu: [{ label: "连接服务器…", accelerator: "CmdOrCtrl+Shift+S", click: openConnectionSettings }],
+    });
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  }
+  function start() {
+    registerBridge(); installMenu(); openConnectionSettings();
+    if (serverUrl) void connect(serverUrl).catch(() => {
+      publish({ status: "error", message: "无法读取或保存服务器连接，请检查客户端数据目录权限后重试。", retryAt: null });
+    });
+  }
+  function shutdown() { quitting = true; generation += 1; cancelRetry(); }
+  return { start, shutdown, snapshot, connect, openConnectionSettings, webPreferences, guardWindow, registerBridge, installMenu,
+    getMainWindow: () => mainWindow, getConnectionWindow: () => connectionWindow };
 }
+
+function startDesktop(electron) {
+  const { app, dialog } = electron;
+  if (process.platform === "win32") app.disableHardwareAcceleration();
+  if (process.env.CREWFORGE_DESKTOP_DATA_DIR) {
+    const directory = path.resolve(process.env.CREWFORGE_DESKTOP_DATA_DIR);
+    fs.mkdirSync(directory, { recursive: true }); app.setPath("userData", directory);
+  }
+  if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  let runtime;
+  app.on("second-instance", () => runtime?.openConnectionSettings());
+  app.on("before-quit", () => runtime?.shutdown());
+  app.on("window-all-closed", () => app.quit());
+  app.whenReady().then(() => {
+    runtime = createDesktopRuntime(electron); runtime.start();
+  }).catch((error) => { dialog.showErrorBox("CrownForge 启动失败", error.message || String(error)); app.quit(); });
+}
+
+module.exports = { createDesktopRuntime, startDesktop };
+// Electron loads the application entry through its own bootstrap. In newer
+// releases it need not be Node's require.main; process.type is its public role.
+if (process.type === "browser") startDesktop(require("electron"));

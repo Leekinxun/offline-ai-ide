@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AUTH_TOKEN_KEY, ISOLATED_AUTH_TOKEN_KEY, fetchCurrentAuthSession, persistVerifiedAuthToken, createWindowAuthSession, persistWindowWorkspace, WINDOW_WORKSPACE_KEY } from "../frontend/src/hooks/authSession.js";
+import { AUTH_TOKEN_KEY, ISOLATED_AUTH_TOKEN_KEY, AuthSessionError, fetchCurrentAuthSession, persistVerifiedAuthToken, createWindowAuthSession, persistWindowWorkspace, WINDOW_WORKSPACE_KEY } from "../frontend/src/hooks/authSession.js";
 
 function storage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
@@ -45,6 +45,63 @@ test("an expired isolated token never retries as the desktop administrator", asy
 test("web authentication remains rejected when anonymous retry is unauthorized", async () => {
   const fetcher = (async () => Response.json({ error: "Unauthorized" }, { status: 401 })) as typeof fetch;
   await assert.rejects(fetchCurrentAuthSession("expired", false, fetcher), /Invalid token/);
+});
+
+test("transport failures and server outages preserve the distinction from an expired credential", async () => {
+  for (const fetcher of [
+    async () => { throw new TypeError("Failed to fetch"); },
+    async () => Response.json({ error: "Unavailable" }, { status: 503 }),
+  ]) {
+    await assert.rejects(fetchCurrentAuthSession("saved-login", false, fetcher as typeof fetch), (error: unknown) => {
+      assert.ok(error instanceof AuthSessionError);
+      assert.equal(error.kind, "unavailable");
+      return true;
+    });
+  }
+  await assert.rejects(fetchCurrentAuthSession("expired", false, (async () => Response.json({}, { status: 401 })) as typeof fetch), (error: unknown) => {
+    assert.ok(error instanceof AuthSessionError);
+    assert.equal(error.kind, "unauthorized");
+    return true;
+  });
+});
+
+test("a server outage never retries a saved credential as anonymous", async () => {
+  let requests = 0;
+  await assert.rejects(fetchCurrentAuthSession("saved-login", false, (async (_url, init) => {
+    requests++;
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer saved-login");
+    return Response.json({}, { status: 503 });
+  }) as typeof fetch));
+  assert.equal(requests, 1);
+});
+
+test("authentication times out when headers arrive but the JSON body never completes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let signal: AbortSignal | null | undefined;
+  let stream: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } });
+  t.after(() => { stream.close(); t.mock.timers.reset(); });
+  const pending = fetchCurrentAuthSession("saved-login", false, (async (_url, init) => {
+    signal = init?.signal;
+    return new Response(body, { headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch);
+  await Promise.resolve();
+  t.mock.timers.tick(10_000);
+  await assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof AuthSessionError);
+    assert.equal(error.kind, "unavailable");
+    return true;
+  });
+  assert.equal(signal?.aborted, true);
+});
+
+test("window-session creation reports a temporary outage without invalidating the parent login", async () => {
+  const parent = { username: "alice", token: "saved-login", workspaceDir: "/workspace", isAdmin: false, isolated: false, desktop: false };
+  await assert.rejects(createWindowAuthSession(parent, "saved-login", storage(), (async () => Response.json({}, { status: 503 })) as typeof fetch), (error: unknown) => {
+    assert.ok(error instanceof AuthSessionError);
+    assert.equal(error.kind, "unavailable");
+    return true;
+  });
 });
 
 

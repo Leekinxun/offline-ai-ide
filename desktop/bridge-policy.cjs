@@ -29,7 +29,7 @@ function isLoopbackHost(hostname) {
 function externalUrl(value, backendUrl) {
   const url = parseUrl(value);
   if (!url) return null;
-  if (url.origin === backendUrl && url.protocol === "http:" &&
+  if (url.origin === backendUrl && ["http:", "https:"].includes(url.protocol) &&
     /^\/preview\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/[a-f0-9]{64}\/$/.test(url.pathname) && !url.search && !url.hash) {
     return url.href;
   }

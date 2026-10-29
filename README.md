@@ -14,7 +14,7 @@ CrownForge is a self-hosted, web-based AI coding workspace featuring a code edit
 
 [中文文档](README_zh.md)
 
-**Desktop app downloads:** Installers for Windows 10/11 x64, Windows 7 SP1 x64, and macOS 13+ (Apple silicon or Intel) will appear on [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) when published. Download the matching `.sha256` file to verify your installer. See the [desktop guide](docs/desktop-app.md) for setup and current platform limits.
+**Desktop app downloads:** The remote client connects to your CrownForge server and uses the same frontend as the browser. Installers for Windows 10/11 x64, Windows 7 SP1 x64, and macOS 13+ (Apple silicon or Intel) will appear on [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) when published. Download the matching `.sha256` file to verify your installer. See the [desktop guide](docs/desktop-app.md) for setup and current platform limits.
 
 ![Login](docs/screenshots/login.png)
 ![IDE](docs/screenshots/ide.png)
@@ -452,7 +452,7 @@ it only after validating the target image with the supplied canaries.
 
 ### Desktop app
 
-The desktop edition runs locally on each computer. Build targets cover Windows 10/11 x64, macOS 13+ on Intel and Apple silicon, and a separate legacy Windows 7 SP1 x64 package. See [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) for published installers and matching SHA-256 files, and the [desktop guide](docs/desktop-app.md) for build commands, first-run login, and platform limitations. The Windows 7 package uses unsupported Electron 22 and requires acceptance testing on Windows 7 hardware before a stable release.
+The desktop client connects to an existing CrownForge server, loads the same frontend as the browser, and signs in with your server account. Configure an HTTP/HTTPS root URL in the connection screen. Network reconnection restores server state; closing the client does not stop server-owned Agent runs. Projects, terminals, model/MCP access, and execution tools remain on the server. Earlier local desktop data is preserved but is not automatically migrated. Build targets cover Windows 10/11 x64, macOS 13+ on Intel and Apple silicon, and a separate legacy Windows 7 SP1 x64 package. See [GitHub Releases](https://github.com/Leekinxun/offline-ai-ide/releases) for published installers and matching SHA-256 files, and the [desktop guide](docs/desktop-app.md) for connection, build, migration, and platform limits. The Windows 7 package uses unsupported Electron 22 and requires target-OS acceptance before a stable release.
 
 ### Local Development
 

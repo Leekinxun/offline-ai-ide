@@ -21,6 +21,7 @@ if (trustedPage()) {
     getPreferences: () => ipcRenderer.invoke("crownforge:preferences:get"),
     setPreferences: (patch) => ipcRenderer.invoke("crownforge:preferences:set", patch),
     openExternal: (url) => ipcRenderer.invoke("crownforge:external:open", url),
+    openConnectionSettings: () => ipcRenderer.invoke("crownforge:connection:settings"),
     onZoomCommand(callback) {
       if (typeof callback !== "function") throw new TypeError("Zoom callback must be a function");
       const listener = (_event, command) => {
@@ -31,5 +32,7 @@ if (trustedPage()) {
     },
     platform: process.platform,
     version: argument("version") || "",
+    connectionMode: "remote",
+    serverUrl: argument("origin") || "",
   });
 }

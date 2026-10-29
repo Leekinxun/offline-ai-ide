@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { BrandMark } from "./BrandMark";
+import { DesktopServerConnection } from "./DesktopServerConnection";
 import { useI18n } from "../i18n";
 import { PRODUCT_NAME, PRODUCT_VERSION } from "../brand";
 import { ArrowLeft, Moon, ShieldCheck, Sun } from "lucide-react";
@@ -108,7 +109,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <span className="login-stage-eyebrow"><i />{isZh ? "离线运行 · 数据不出内网" : "Offline runtime · Private by default"}</span>
           <h1>{isZh ? <>安静、可控的<br />Agent 工作台</> : <>A quiet, controlled<br />agent workbench</>}</h1>
           <p>{isZh
-            ? "把编辑器当作画布，把任务当作主线。接入任意 OpenAI 兼容模型，在本地完成读写、审阅与协作。"
+            ? "把编辑器当作画布，把任务当作主线。接入任意 OpenAI 兼容模型，在自有服务器上完成读写、审阅与协作。"
             : "Treat the editor as the canvas and the task as the through-line. Work with any OpenAI-compatible model on your own infrastructure."}</p>
         </div>
         <div className="login-workbench-preview" aria-hidden="true">
@@ -130,6 +131,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       <section className="login-auth-stage">
         <form className="login-card" onSubmit={handleSubmit}>
+          <DesktopServerConnection />
           <div className="login-mode-tabs" role="tablist" aria-label={t("login.accountAccess")}>
             <button
               type="button"

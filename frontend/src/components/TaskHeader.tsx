@@ -54,20 +54,20 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
   completionEvidence,
 }) => {
   const { t } = useI18n();
-  const statusLabel = isStreaming
-    ? activeToolName
-      ? t("chat.runCurrentTool", { tool: activeToolName })
-      : t("chat.runPreparing")
-    : !connected
-      ? t("status.serverDisconnected")
+  const statusLabel = !connected
+    ? t("status.serverReconnecting")
+    : isStreaming
+      ? activeToolName
+        ? t("chat.runCurrentTool", { tool: activeToolName })
+        : t("chat.runPreparing")
       : aiHealth?.status === "ready"
         ? t("status.aiOnline")
         : t("status.serverConnected");
 
-  const dotState = isStreaming
-    ? " running"
-    : !connected
-      ? ""
+  const dotState = !connected
+    ? ""
+    : isStreaming
+      ? " running"
       : aiHealth?.status === "ready"
         ? " connected"
         : " warning";

@@ -45,6 +45,7 @@ import { WorkbenchSelect } from "./WorkbenchSelect";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import { ZOOM_PRESET_OPTIONS } from "../hooks/useGlobalZoom";
 import { getDesktopBridge } from "../desktop/bridge";
+import { DesktopServerConnection } from "./DesktopServerConnection";
 
 export type SettingsTabId =
   | "general"
@@ -304,7 +305,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const { locale, locales, setLocale, t } = useI18n();
   const desktop = getDesktopBridge();
-  const desktopPlatform = desktop?.platform;
+  const desktopPlatform = desktop?.connectionMode === "remote" ? undefined : desktop?.platform;
   const adminSettings = useAdminSettings(token);
   const [activeTab, setActiveTab] = useState<SettingsTabId>(() => initialTab || "general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1327,8 +1328,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div className="settings-card-title"><Cpu size={16} /><span>{t("settings.desktopApp")}</span></div>
                         <span className="settings-card-meta">CrownForge {desktop.version}</span>
                       </div>
-                      <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>
-                      {desktop.platform === "win32" && (
+                      {desktop.connectionMode === "remote" ? <DesktopServerConnection /> : <p className="settings-help-text">{t("settings.desktopLocalTools")}</p>}
+                      {desktopPlatform === "win32" && (
                         <>
                           <div className="settings-form">
                             <label className="settings-field settings-field-wide">

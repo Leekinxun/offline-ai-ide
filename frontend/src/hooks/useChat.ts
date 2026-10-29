@@ -503,12 +503,13 @@ export function useChat(
   }, [refreshConversations, token]);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}`);
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       setConnected(true);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       // A run may have continued after the browser socket disconnected. Attach
@@ -933,9 +934,19 @@ export function useChat(
 
   useEffect(() => {
     connect();
-    return () => {
+    const reconnectOnline = () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      connect();
+    };
+    window.addEventListener("online", reconnectOnline);
+    return () => {
+      window.removeEventListener("online", reconnectOnline);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      const ws = wsRef.current;
+      // Closing a view detaches it. Its late close event must not create a new
+      // connection after logout, workspace changes, or component unmount.
+      wsRef.current = null;
+      ws?.close();
     };
   }, [connect]);
 

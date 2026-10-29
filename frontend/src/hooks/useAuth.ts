@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { AUTH_TOKEN_KEY, ISOLATED_AUTH_TOKEN_KEY, fetchCurrentAuthSession, persistVerifiedAuthToken, createWindowAuthSession, persistWindowWorkspace, WINDOW_WORKSPACE_KEY } from "./authSession";
+import { AUTH_TOKEN_KEY, ISOLATED_AUTH_TOKEN_KEY, AuthSessionError, fetchCurrentAuthSession, persistVerifiedAuthToken, createWindowAuthSession, persistWindowWorkspace, WINDOW_WORKSPACE_KEY } from "./authSession";
 
 const TOKEN_KEY = AUTH_TOKEN_KEY;
 const ISOLATED_TOKEN_KEY = ISOLATED_AUTH_TOKEN_KEY;
@@ -34,10 +34,14 @@ function initializeSession() {
     initialSessionPromise = (async () => {
       const parent = await fetchCurrentAuthSession(initialAuth.token, initialAuth.isolated);
       const loginToken = parent.token || initialAuth.token;
-      if (!loginToken) throw new Error("Invalid token");
+      if (!loginToken) throw new AuthSessionError("unauthorized", "Invalid token");
       const data = await createWindowAuthSession(parent, loginToken, sessionStorage);
       return { loginToken, data };
     })();
+    const pending = initialSessionPromise;
+    void pending.catch(() => {
+      if (initialSessionPromise === pending) initialSessionPromise = null;
+    });
   }
   return initialSessionPromise;
 }
@@ -58,6 +62,9 @@ export function useAuth() {
   const [token, setToken] = useState<string | null>(initialAuth.token);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [connectionUnavailable, setConnectionUnavailable] = useState(false);
+  const [authAttempt, setAuthAttempt] = useState(0);
+  const retryConnection = useCallback(() => setAuthAttempt((attempt) => attempt + 1), []);
 
   const loginTokenRef = useRef<string | null>(initialAuth.token);
   const isolatedRef = useRef(initialAuth.isolated);
@@ -67,8 +74,10 @@ export function useAuth() {
   useEffect(() => {
     let cancelled = false;
     const version = authVersionRef.current;
+    setLoading(true);
     initializeSession().then(({ loginToken, data }) => {
       if (cancelled || version !== authVersionRef.current) return;
+      setConnectionUnavailable(false);
       persistVerifiedAuthToken(loginToken, initialAuth.token, initialAuth.isolated || data.isolated, localStorage, sessionStorage);
       if (!data.isolated) persistWindowWorkspace(data.username, data.workspaceDir, sessionStorage);
       loginTokenRef.current = loginToken;
@@ -78,8 +87,14 @@ export function useAuth() {
         username: data.username, workspaceDir: data.workspaceDir,
         isAdmin: Boolean(data.isAdmin), isolated: Boolean(data.isolated), desktop: Boolean(data.desktop),
       });
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (cancelled || version !== authVersionRef.current) return;
+      // A transport failure is not proof that a saved credential expired.
+      if (!(error instanceof AuthSessionError) || error.kind === "unavailable") {
+        setConnectionUnavailable(true);
+        return;
+      }
+      setConnectionUnavailable(false);
       if (initialAuth.token) {
         if (sessionStorage.getItem(ISOLATED_TOKEN_KEY) === initialAuth.token) sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
         else if (localStorage.getItem(TOKEN_KEY) === initialAuth.token) localStorage.removeItem(TOKEN_KEY);
@@ -91,7 +106,15 @@ export function useAuth() {
       if (!cancelled && version === authVersionRef.current) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [authAttempt]);
+
+  useEffect(() => {
+    if (!connectionUnavailable || loading) return;
+    const timer = setTimeout(retryConnection, 3_000);
+    const retryOnline = () => retryConnection();
+    window.addEventListener("online", retryOnline);
+    return () => { clearTimeout(timer); window.removeEventListener("online", retryOnline); };
+  }, [connectionUnavailable, loading, retryConnection]);
 
   const login = useCallback(async (username: string, password: string): Promise<string | null> => {
     const version = ++authVersionRef.current;
@@ -114,6 +137,7 @@ export function useAuth() {
       localStorage.setItem(TOKEN_KEY, parent.token);
       persistWindowWorkspace(data.username, data.workspaceDir, sessionStorage);
       sessionStorage.removeItem(ISOLATED_TOKEN_KEY);
+      setConnectionUnavailable(false);
       setLoading(false);
       setToken(data.token || null);
       setUser({
@@ -165,6 +189,7 @@ export function useAuth() {
       sessionStorage.removeItem(WINDOW_WORKSPACE_KEY);
     }
     loginTokenRef.current = null;
+    setConnectionUnavailable(false);
     setLoading(false);
     setToken(null);
     setUser(null);
@@ -221,5 +246,5 @@ export function useAuth() {
     }
   }, [token, user?.desktop, user?.isolated]);
 
-  return { token, user, loading, login, register, logout, changeWorkspace, pickDesktopWorkspace };
+  return { token, user, loading, connectionUnavailable, retryConnection, login, register, logout, changeWorkspace, pickDesktopWorkspace };
 }

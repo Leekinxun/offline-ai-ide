@@ -1,46 +1,80 @@
-# CrownForge desktop app · v1.1.1 preview
+# CrownForge remote desktop client · v1.1.1 preview
 
-The desktop edition packages the existing frontend and Node backend together. On
-each computer, Electron starts the backend on a random `127.0.0.1` port and opens
-the local UI. The backend, workspace, settings, users, and installed plugins are
-local to that computer. An AI model endpoint is still required for AI features;
-configure it in Settings after the workbench opens.
+The browser and desktop client connect to the same CrownForge server and load
+that server's frontend. Projects, Git, terminals, Agent runs, model access, MCP,
+accounts, and conversation history belong to the server. The desktop app provides
+a native window, server connection settings, and bounded native UI integrations.
+It does not start a local backend or create a local administrator account.
 
-## Synced Web features
+This is an intentional product difference from Codex's local execution model:
+CrownForge's desktop client controls server-side work. Server execution,
+approvals, sandboxing, and explicit task cancellation retain their existing
+contracts.
 
-The desktop package builds the current shared frontend and backend. Version
-1.1.1 includes the latest workbench docks, adjustable panels, unified selection
-menus, settings layout, and global interface zoom. Editor tabs support path
-copying and grouped closing; Markdown preview, split editing, and two-file
-comparison retain linked scrolling.
+## Connect and sign in
 
-The AI task view and editor collaboration panel share the composer draft.
-Inline AI proposals apply to the selected editor content with version checks.
-Use `@` to attach files, directories, symbols, selected text, Problems, or terminal
-context, and inspect context sources from the context indicator. Agent changes
-can be reviewed by hunk, file, or whole run, with keep-all controls and turn undo.
+1. Deploy the normal Web server and confirm that its address works in a browser.
+2. Start the desktop app and enter the same root URL, for example
+   `https://ide.example.com` or `http://192.168.1.20:9798`.
+3. Sign in on the server's ordinary login page with your server account.
 
-The terminal supports up to eight named tabs and bounded reconnection to the
-same running process after a transport interruption or page reload. Long Agent
-runs preserve goals and corrections through context compaction, and show
-server-recorded execution facts and verification evidence. Closing the app also
-stops its backend: PTY recovery does not survive that restart. Interrupted Agent
-runs can be continued from their saved record after reopening the app, but
-continuation requires the user to choose **Resume**; startup does not automatically
-restart commands or AI requests.
+Use a complete HTTP or HTTPS root URL. Credentials in URLs, query strings,
+fragments, and subpaths such as `/crownforge` or `/login` are rejected. The shared
+frontend uses absolute API and WebSocket routes, so a reverse proxy must serve
+CrownForge at the selected origin's root and forward WebSocket upgrades.
+Internal HTTP endpoints are supported. HTTPS uses the operating system/Electron
+certificate validation; invalid or untrusted certificates are not bypassed.
+Install your organization's CA through its normal trust policy when needed.
 
-The top-bar Web Preview can start supported static or Vite targets, inspect
-elements, return feedback to the Agent, and navigate to source candidates. It
-uses the local backend and a sandboxed frame. External preview links open through
-the desktop host's validated link handling. Preview links are temporary; create
-a fresh link when an old one expires. Vite execution and previewing a project's
-configuration retain their approval boundaries.
+The app remembers the last selected server. Use the application menu's server
+connection entry, or the workbench connection settings, to change it. If an
+initial page load fails, the connection screen remains available with retry and
+address controls. Load retries use a bounded backoff; an already loaded workbench
+uses the shared frontend's WebSocket reconnection and run subscription logic.
+Connecting or reconnecting does not submit the task again.
 
-Desktop appearance preferences use the per-user native preference store so
-changing the local backend port does not reset them after an app restart. The
-interface zoom controls and keyboard shortcuts share the same setting.
+Each server origin has its own persistent Electron session partition. Cookies,
+login tokens, and server frontend storage are separated across origins; browser
+and desktop logins are separate client sessions even when they use the same
+server account. The connection configuration stores the server URL, not a server
+password. Remote pages have no Node integration or unrestricted local file or
+command bridge.
 
-## Targets
+## Task and connection lifecycle
+
+| Event | Behavior |
+| --- | --- |
+| Network interruption or page reload | The workbench reconnects and subscribes to the existing conversation/run; it restores server state. |
+| Close the desktop client or browser | The client disconnects. Server-owned Agent runs continue while the server is running. |
+| Reopen the client | Connect and sign in if required, then reopen the conversation to see its current state. |
+| Explicit Stop in the workbench | The authenticated request stops the selected run under the normal server rules. |
+| Server process stops or restarts | This interrupts server execution. Existing durable history/recovery rules apply; the client cannot keep a stopped server running or automatically restart commands. |
+
+An Agent waiting for approval or a question remains waiting until an authorized
+client responds. Terminal reconnection and retention follow the server's terminal
+policy; closing a client is not a guarantee of indefinite PTY retention.
+
+## Data, workspaces, and tools
+
+The desktop user-data directory holds connection settings, native preferences,
+and per-server browser sessions. Project files, server users/settings, plugins,
+Git credentials, model credentials, and execution tools remain on the server.
+Choosing a workspace means choosing a directory on the server. Upload/download
+are the explicit way to exchange local files with it.
+
+Client computers do not need Git, Python, Node.js/npm, ripgrep, PTY bindings,
+Agent sandbox helpers, or model runtimes installed. Install the tools and
+project dependencies required by your workflows on the server. An offline
+installation works when the client can reach the server and all configured
+server dependencies are available on the permitted internal network.
+
+Earlier desktop previews started a local backend and stored projects and
+accounts in the desktop user-data directory. This client does not delete or
+automatically migrate that data. Back up the old data and transfer the intended
+projects and configuration to your server deliberately; local administrator
+credentials are not imported as server credentials.
+
+## Targets and build
 
 | Package command | Target | Runtime |
 | --- | --- | --- |
@@ -49,240 +83,67 @@ interface zoom controls and keyboard shortcuts share the same setting.
 | `npm run package:mac-arm64` | macOS 13+ Apple silicon | Electron 44 |
 | `npm run package:mac-x64` | macOS 13+ Intel | Electron 44 |
 
-Windows 7 requires a separate installer because Electron 22 is the final
-version that runs there. Its Chromium and Node versions are no longer supported
-upstream. The legacy package also pins ripgrep 13, built before Rust changed
-the default Windows target to require Windows 10. The Windows 7 package must be tested on a real Windows 7 SP1 x64
-machine before a stable release; building it on a current Windows host alone does not
-prove Windows 7 compatibility. See [Electron's platform notice](https://www.electronjs.org/blog/windows-7-to-8-1-deprecation-notice).
-
-## Build
-
-Use Node.js 22.12 or later to run the packaging tools. Build macOS packages on
-a Mac with the matching CPU architecture, and build both Windows packages on a
-current Windows x64 computer (the CI runner uses Windows Server 2022). Do not
-run the build tools on Windows 7. This ensures `node-pty` and ripgrep are
-installed and rebuilt for the correct platform. The package script builds the frontend and backend,
-installs only backend production dependencies into a temporary staging folder,
-rebuilds native dependencies against the selected Electron version, then creates
-an installer and a ZIP archive under `desktop-dist/<target>/`.
-
-Before packaging, the CI workflow checks the desktop host, local-session and
-loopback boundaries, interrupted-run recovery, and shared editor/terminal
-policies with isolated temporary user data. It also runs frontend and backend
-type/build checks, UI contracts, and the frontend bundle budget. These gates
-prepare a preview package; they do not replace the target-system checks below.
-
-The Windows 7 build downloads Microsoft's archived ripgrep 13 binary at build
-time and verifies its SHA-256 hash before packaging. The installed app itself
-does not download that binary.
-
-For a provisional Windows package on a Mac, `npm run package:win-x64-cross` and
-`npm run package:win7-x64-cross` create NSIS installers and ZIP archives in
-`desktop-dist/*-cross/`. This path installs Windows ripgrep binaries but omits
-the native `node-pty` module, so the terminal uses its limited `cmd.exe` pipe
-fallback. These artifacts have only static package checks; build them again on
-Windows and test them on the target OS before a stable release.
-
-```bash
-cd backend && npm ci
-cd ../frontend && npm ci
-cd ../desktop && npm ci
-npm run package:mac-arm64   # or another target from the table
-```
-
-Early 1.1.0 preview installers were cross-built on macOS. The current workflow
-builds Windows packages on a Windows runner; each target OS still needs its own
-installation checks.
-The current installers are not signed or notarized; a stable release also needs
-platform signing and malware scanning.
-
-## First launch and local data
-
-On first launch the app creates a local `admin` account with a random password.
-The desktop host uses a local session to enter the workbench without a separate password login on
-normal launches. Web login remains separate. The app stores
-`users.json`, `app-settings.json`, `preferences.json`, `workspace/`, and `plugins/` under Electron's
-per-user CrownForge data directory. It never copies the repository's development
-credentials or settings into an installer. Bundled example plugins are copied to
-the per-user plugin directory only when that directory is first created.
-
-On Windows desktop, uploaded chat attachments are stored under the per-user
-data directory's `attachments/` folder, partitioned by workspace. Existing
-workspace `.history/attachments` blobs are left in place and are not
-automatically read or migrated. Keep the user data directory private to the
-current OS account, including when setting `CREWFORGE_DESKTOP_DATA_DIR`.
-
-Use **Open Folder** in the file explorer or welcome screen to choose any local
-project directory with the operating system's folder picker, including a
-different drive or volume. The selected directory becomes that user's workspace
-and is restored after restarting. If the directory is temporarily unavailable
-at login, that session opens the built-in workspace; a later login restores the
-project once the directory is available again. Existing
-Web sessions keep their configured workspace boundaries. A malformed `users.json`
-blocks startup instead of enabling a default password.
-
-The application listens only on loopback and chooses a free port on each launch.
-The local API is unavailable to other computers. The desktop host establishes a
-new local session when it restarts; stored browser tokens are not portable
-credentials. Mobile remote control remains a Web deployment feature: the
-desktop listener stays on loopback and the mobile-pairing entry is hidden.
-
-## Platform capabilities
-
-The editor, file operations, chat, and local service use the same code as the
-Web edition. The integrated terminal prefers `node-pty`; on Windows it falls
-back to `cmd.exe` pipes if a native PTY cannot start. In that fallback, terminal
-resize and some interactive console programs are limited. Git operations require
-Git on `PATH`. Python tools require a local Python installation and the project's
-Python dependencies. Python debugging additionally requires `debugpy` in the
-configured interpreter. Project npm tasks and Vite previews require local Node.js,
-npm, and the project's installed dependencies; the bundled Electron backend
-does not install these project tools or packages for you.
-
-On Windows 10/11, Agent commands default to **PowerShell in a Windows native
-sandbox**. WSL, Linux Node.js, bubblewrap, and NTFS case-sensitivity changes are
-not prerequisites for this default environment. Desktop builds from this source include a
-pinned, integrity-checked execution runtime derived from the upstream Codex
-Windows sandbox. It is used only for command execution and sandbox setup: no
-Codex account, Codex model, or model request is needed. Your projects still need
-their usual local tools, such as Git, Node.js/npm, Python, and installed project
-dependencies. Previously published preview packages need to be rebuilt and
-released before they contain this execution adapter.
-
-Open **Settings → General → Desktop app**. The default execution environment is
-**Windows native · PowerShell**, with the recommended sandbox mode. Click
-**Set up Windows sandbox** and complete the Windows administrator prompt when
-shown. The App verifies completion before enabling commands. Checking readiness
-does not perform setup or request administrator access, and an unsuccessful or
-cancelled setup leaves execution blocked. Initialization and changes to the
-execution environment require a local, signed-in App administrator. Running
-Agent process sessions must stop before these settings can change.
-
-The recommended native sandbox follows Codex's Windows permission boundary:
-commands can read ordinary local files that the Windows account can access,
-write only to authorized workspace paths, and block external network access by
-default. App
-credentials and settings, sandbox state, and protected workspace secrets such as
-`.env` and `.ssh` remain unreadable. Workspace control files are not writable,
-and a project's `.codex/config.toml` cannot expand App-granted permissions.
-This read boundary is broader than the isolated filesystem view used by WSL.
-
-Native networking is **external isolation**, not a full network-deny guarantee.
-Acceptance of the pinned Codex `0.160.0` runtime on Windows Server 2022 observed
-external TCP 443 denied while localhost TCP remained reachable, even with all
-firewall profiles enabled and Codex's offline and loopback block rules present.
-The App exposes `networkIsolation: "external"`, `loopbackIsolation: false`, and
-`weakerNetworkIsolation: true`; it does not promise isolation from local services.
-This is the tested boundary on that Windows version, not proof of identical
-behavior on every Windows build. Choose WSL2 when strict network denial is
-required.
-
-Choose WSL when a task needs narrow filesystem read grants or explicitly
-required POSIX CPU, memory, or open-file hard limits. Native execution enforces
-wall-clock deadlines; it does not claim those POSIX limits.
-
-The pinned native bridge has an observed background-handle limitation: a guest
-PowerShell root can exit while background descendants continue to hold inherited
-I/O handles, leaving the App's command session open. A printed completion marker
-or the disappearance of the guest root is not a final CLI exit receipt. Native
-acceptance explicitly verifies this pending state, then terminates only its
-verified fixture-owned background processes and waits for the actual CLI exit
-code. Keep App-managed long-running work in the foreground and use
-`process_start`; its stop, timeout, and backend-loss checks cover still-active
-foreground payload trees. Do not assume that independently backgrounded work
-will complete the App session or be cleaned up after the guest root exits.
-
-The compatibility (unelevated) mode remains visible to describe the upstream
-choice, but it cannot enforce the App's current sensitive-file protection policy.
-It therefore reports **unavailable** rather than enabling unrestricted execution.
-Use the recommended native mode or WSL2. Execution settings are stored separately
-in the App's private `agent-execution.json`; they do not overwrite other App
-settings. A failed native probe never silently falls back to an unrestricted
-PowerShell process.
-
-### Optional WSL2 environment
-
-Select **WSL2 · Linux Bash** in the same desktop settings when a project needs
-Linux tools. This optional environment still requires a WSL2 Linux distribution
-with Bash, bubblewrap, Node.js 18 or later at `/usr/bin/node`, and a regular,
-non-root default user. The App uses the system's default WSL distribution unless
-the trusted backend environment sets `CROWNFORGE_WSL_DISTRO` to another installed
-distribution. Windows file tools retain the same workspace while command paths
-are mapped to Linux.
-
-Only the WSL adapter requires a **case-sensitive NTFS workspace**. Prepare a new,
-empty directory before copying a Linux project into it:
-
-```powershell
-fsutil.exe file setCaseSensitiveInfo "C:\path\project" enable
-```
-
-Follow [Microsoft's case-sensitivity guidance](https://learn.microsoft.com/en-us/windows/wsl/case-sensitivity)
-before migrating an existing populated directory. The App checks these flags and
-does not change them. WSL UNC filesystem workspaces have not yet been validated
-for this adapter. A ready WSL service does not establish that the current
-workspace passes its separate path and case-sensitivity checks. No unrestricted
-fallback is provided when Linux isolation cannot be established.
-
-Windows 7 cannot use WSL2 or the current native sandbox runtime, so Agent shell
-commands remain unavailable there. File tools, the manual terminal, and Web
-preview retain their existing Windows behavior. The manual terminal uses its
-native terminal path independently of the Agent execution environment.
-
-### Windows execution acceptance
-
-Build the backend and prepare the pinned Windows runtime:
-
-```powershell
-npm --prefix backend run build
-node desktop/scripts/prepare-codex-runtime.mjs x64
-node scripts/windows-native-sandbox-smoke.mjs --allow-setup
-```
-
-Use this smoke test on a disposable administrator Windows machine or runner.
-`--allow-setup` explicitly authorizes real sandbox initialization; without it,
-only an already-configured fixture can proceed, and missing readiness is a
-failure. The test does not approve human UAC dialogs automatically. It uses
-independent temporary users/App settings, plugins, team storage, workspace, and
-sandbox state, and makes no model requests. It validates a nonempty ordinary
-case-insensitive NTFS workspace, actual PowerShell output and both direct-shell
-and external-program exit codes,
-read-only queries, secret/case-alias protection, ordinary outside reads with
-outside writes denied, mandatory external network denial despite malicious workspace
-configuration, explicit characterization of the localhost limitation, stdin/EOF,
-and child/grandchild cleanup after stop, timeout, and a
-real backend crash. It separately characterizes the native bridge's held-I/O
-behavior: the guest root is gone, background descendants remain active, and the
-App session is pending. It reports `backgroundHandlesHoldSessionOpen=true`,
-explicitly cleans only verified fixture-owned background PIDs, and then requires
-the actual CLI to finish with exit code zero. It does not report guest-root
-termination or background survival as automatic App completion or cleanup. PID exit and stopped heartbeat evidence are required for the explicit
-stop, timeout, crash, and fixture cleanup checks;
-unstarted or skipped payloads cannot count as success. Its report is saved to
-`.artifacts/windows-native-sandbox-smoke/report.json`, including failures.
-The **Windows native sandbox acceptance** workflow runs this test on an
-administrator `windows-2022` runner and uploads its report on failure as well.
-This verifies native execution, not installer acceptance on every Windows build.
-
-For the optional WSL adapter, run `node scripts/windows-wsl-smoke.mjs` after
-preparing WSL2. That test only changes case sensitivity in its own disposable
-directories; its report is `.artifacts/windows-wsl-smoke/report.json`.
-`node scripts/wsl-helper-linux-smoke.mjs` separately tests the Linux helper in a
-disposable Docker fixture and does not establish native Windows, WSL transport,
-or DrvFS acceptance. Prepare that image with:
+Use Node.js 22.12 or later to run the build tools. macOS packages require macOS;
+Windows native packages require Windows. The client has no native server modules,
+so the build host's CPU architecture does not need to match the target. macOS can
+also create Windows packages with `package:win-x64-cross` and
+`package:win7-x64-cross`; these outputs still require target-OS acceptance.
 
 ```sh
-docker build -f scripts/fixtures/wsl-helper-linux.Dockerfile -t crewforge-wsl-helper-test:local scripts/fixtures
+cd desktop
+npm ci
+npm test
+npm run package:mac-arm64
+# Optional unpacked application for a local smoke check:
+npm run package:mac-arm64 -- --dir
 ```
 
-Before target-system acceptance, install the matching package and check
-first-run account creation, direct workbench entry, file open/save, Inline AI,
-context references, hunk/file/run review, chat with a configured model,
-multi-terminal operation, preferences after restart, explicit interrupted-run
-continuation, preview and external links, Git operations (when Git is installed),
-and uninstall. On Windows also check the terminal fallback. Repeat on Windows 7
-SP1 x64, Windows 10, Windows 11, and both macOS architectures; verify that the
-backend stops after the window closes. A successful build or automated local
-fixture check does not establish installation and runtime acceptance on every
-target OS.
+Only the client shell and connection screen are packaged. There is no bundled
+copy of the workbench frontend, backend, plugins, local accounts, ripgrep, PTY
+module, or Agent execution runtime. The packaging script checks the actual
+`app.asar` contents and rejects unexpected resources. Normal package commands
+produce an installer and ZIP under `desktop-dist/<target>/`, with a matching
+`.sha256` file for each artifact. A `--dir` build creates only an unpacked app.
+
+On macOS, run `shasum -a 256 -c <installer>.sha256`. On Windows, use
+`certutil -hashfile <installer>.exe SHA256` and compare it with the checksum from
+the same release. Installers remain unsigned and macOS builds are not notarized.
+
+Windows 7 uses Electron 22, the final Electron line for that OS; its Chromium
+and Node runtimes are no longer security-maintained. Keeping the legacy build
+target does not establish current server-frontend compatibility or installation
+acceptance. See [Electron's platform notice](https://www.electronjs.org/blog/windows-7-to-8-1-deprecation-notice).
+
+## Verification and release boundary
+
+The packaging workflow separately checks the shared server/frontend and the
+remote client. Platform packaging jobs install only desktop build dependencies;
+they do not prepare local server tools or execution sandboxes. Automated client
+and package tests cover URL/IPC boundaries, server-specific state, reconnect
+behavior, required shell resources, and rejection of server data in packages.
+
+Before release, test each target OS with a real server: first connection, normal
+and rejected login, server switching, network loss and recovery, expired login,
+TLS failures, editor and upload/download operations, isolated windows, preview
+links, native preferences, and uninstall. Start an Agent run, close the client,
+confirm server-side progress from the browser, then reopen and recover the same
+run without duplicating it. Also verify the distinct server-restart behavior.
+Source tests and successful builds do not replace these platform installation
+and runtime acceptance results.
+
+For a repeatable local smoke check, install the backend/frontend development
+dependencies and build the shared frontend, then run from the repository root:
+
+```sh
+node scripts/remote-desktop-smoke.mjs
+# Or exercise an unpacked macOS client:
+node scripts/remote-desktop-smoke.mjs --app desktop-dist/mac-arm64/mac-arm64/CrownForge.app
+```
+
+The script starts its own disposable server, scripted loopback model, and desktop
+profile. It checks server selection, normal login, WebSocket recovery, completion
+after client exit, temporary authentication failure, and persistent login on
+relaunch. Screenshots and a JSON report are written to
+`.artifacts/remote-desktop-smoke/`. It does not use existing user profiles or a
+paid model. The previous `scripts/desktop-smoke.mjs` command forwards to this
+remote-client check.

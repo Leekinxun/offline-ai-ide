@@ -1,12 +1,13 @@
 {
   "name": "crownforge-desktop",
   "productName": "CrownForge",
-  "description": "CrownForge AI coding workbench desktop application",
+  "description": "CrownForge remote desktop client for the shared server workbench",
   "version": "1.1.1",
   "private": true,
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
+    "test": "node --test *.test.cjs ../scripts/remote-desktop-package.test.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "package:mac-arm64": "node scripts/package.mjs mac-arm64",
     "package:mac-x64": "node scripts/package.mjs mac-x64",

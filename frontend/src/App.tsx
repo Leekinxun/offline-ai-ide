@@ -8,6 +8,7 @@ import { Terminal } from "./components/Terminal";
 import { LoginPage } from "./components/LoginPage";
 import { LandingPage } from "./components/LandingPage";
 import { BrandMark } from "./components/BrandMark";
+import { DesktopServerConnection } from "./components/DesktopServerConnection";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityRail } from "./components/ActivityRail";
 import { WorkbenchLeftDock } from "./components/WorkbenchLeftDock";
@@ -166,6 +167,22 @@ function DesktopApp() {
   }, [auth.logout]);
   const handleLogout = useCallback(() => endSession(false), [endSession]);
   const handleSessionExpired = useCallback(() => endSession(true), [endSession]);
+
+  if (auth.connectionUnavailable) {
+    return (
+      <div className="login-page">
+        <main className="login-card" style={{ maxWidth: 480, padding: 32 }}>
+          <BrandMark size={48} title={PRODUCT_NAME} />
+          <h1 style={{ fontSize: 22 }}>{t("login.connectionUnavailable")}</h1>
+          <p role="status" aria-live="polite">{t("login.connectionPreserved")}</p>
+          <DesktopServerConnection />
+          <button type="button" className="dialog-btn" disabled={auth.loading} onClick={auth.retryConnection}>
+            {t(auth.loading ? "login.connectionRetrying" : "login.connectionRetry")}
+          </button>
+        </main>
+      </div>
+    );
+  }
 
   // Show loading while validating token
   if (auth.loading && auth.token) {

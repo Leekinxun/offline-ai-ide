@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <title>CrownForge · 连接服务器</title>
+  <link rel="stylesheet" href="connection.css">
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">♜</span><span>CrownForge</span><span class="badge">桌面客户端</span></div>
+    <div class="eyebrow">YOUR WORKSPACE, CONNECTED</div>
+    <h1>连接你的编程工作台</h1>
+    <p class="lead">连接已有的 CrownForge 服务器，使用与浏览器一致的项目、会话和 AI 工具。</p>
+    <form id="connection-form">
+      <label for="server-url">服务器地址</label>
+      <input id="server-url" name="serverUrl" type="url" placeholder="https://ide.example.com" autocomplete="url" spellcheck="false" required aria-describedby="address-hint">
+      <p id="address-hint" class="hint">支持 HTTPS 或内网 HTTP，请填写服务器根地址。</p>
+      <div id="connection-status" class="status" role="status" aria-live="polite"><span id="status-dot" class="dot"></span><span id="status-text">填写服务器地址后连接</span></div>
+      <div id="form-error" class="error" role="alert" hidden></div>
+      <div class="actions"><button id="connect-button" type="submit">连接服务器 <span aria-hidden="true">→</span></button><button id="retry-button" type="button" class="secondary" hidden>立即重试</button></div>
+    </form>
+    <div class="server-note"><span aria-hidden="true">↗</span><p>在服务器页面登录你的账号。项目文件、终端和 AI 任务均在服务器运行，关闭客户端后任务仍会继续。</p></div>
+    <footer><span>网页与桌面，共用同一个工作空间</span><span id="server-origin"></span></footer>
+  </main>
+  <script src="connection.js"></script>
+</body>
+</html>

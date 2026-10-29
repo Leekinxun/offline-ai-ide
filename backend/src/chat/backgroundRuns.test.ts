@@ -28,10 +28,10 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   while (!predicate()) { if (Date.now() > end) throw new Error("Timed out waiting for background run event"); await new Promise((resolve) => setTimeout(resolve, 10)); }
 }
 
-async function socketServer(session: UserSession) {
+async function socketServer(session: UserSession, validateSession = () => true) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => server.once("listening", resolve));
-  server.on("connection", (socket) => handleChatWs(socket, session, { validateSession: () => true }));
+  server.on("connection", (socket) => handleChatWs(socket, session, { validateSession }));
   const address = server.address(); assert(address && typeof address !== "string");
   const clients: WebSocket[] = [];
   const connect = async () => {
@@ -40,8 +40,124 @@ async function socketServer(session: UserSession) {
     await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
     return { socket, frames, send: (message: unknown) => socket.send(JSON.stringify(message)) };
   };
-  return { connect, close: async () => { for (const client of clients) client.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); } };
+  return { connect, connectedCount: () => server.clients.size,
+    close: async () => { for (const client of clients) client.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); } };
 }
+
+test("server Agent work finishes once with no connected clients and a new client hydrates the persisted result", async (t) => {
+  for (const disconnect of ["close", "terminate"] as const) {
+    await t.test(disconnect, async (t) => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-remote-client-run-"));
+      const otherWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "crewforge-remote-client-other-"));
+      const conversationId = "remote-task";
+      const requestId = "remote-request";
+      const content = "SERVER_OWNED_WORK_SURVIVES_CLIENT_EXIT";
+      fs.writeFileSync(path.join(workspace, "source.txt"), content);
+      await appendConversationMessage(workspace, conversationId, { role: "user", content: "Existing task", timestamp: Date.now() });
+      const session = sessionFor(workspace);
+      let authorized = true;
+      const original = { models: config.models, profiles: config.agentProfiles, fallbacks: config.modelFallbacks, fetch: globalThis.fetch };
+      config.models = [{ modelName: "remote-client-fixture", apiUrl: "https://remote-client-fixture.invalid/v1", apiKey: "" }];
+      config.agentProfiles = {}; config.modelFallbacks = [];
+      let releaseModel: (() => void) | undefined;
+      let providerSignal: AbortSignal | null | undefined;
+      const modelBodies: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        assert.ok(url.startsWith("https://remote-client-fixture.invalid/v1/"), "the regression must never call a real model");
+        if (url.endsWith("/models")) return Response.json({ data: [{ id: "remote-client-fixture", max_output_tokens: 1024 }] });
+        modelBodies.push(JSON.parse(String(init?.body)));
+        if (modelBodies.length === 1) {
+          providerSignal = init?.signal;
+          return new Promise<Response>((resolve) => {
+            releaseModel = () => resolve(Response.json({ choices: [{ finish_reason: "tool_calls", message: {
+              role: "assistant", content: null, tool_calls: [{ id: "read-after-client-exit", type: "function",
+                function: { name: "read_file", arguments: JSON.stringify({ path: "source.txt" }) } }],
+            } }] }));
+            init?.signal?.addEventListener("abort", releaseModel, { once: true });
+          });
+        }
+        assert.equal(modelBodies.length, 2, "reconnection must not start another model turn");
+        return Response.json({ choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] });
+      };
+      const server = await socketServer(session, () => authorized);
+      const foreign = await socketServer(sessionFor(otherWorkspace));
+      const otherOwner = await socketServer({ ...session, username: "other-user", token: "other-owner" });
+      t.after(async () => {
+        for (const run of listActiveRuns(workspace)) getActiveRunContext(workspace, run.conversationId)?.forceStop();
+        releaseModel?.();
+        await waitUntil(() => !listActiveRuns(workspace).length);
+        await server.close(); await foreign.close(); await otherOwner.close();
+        globalThis.fetch = original.fetch; config.models = original.models;
+        config.agentProfiles = original.profiles; config.modelFallbacks = original.fallbacks;
+        fs.rmSync(workspace, { recursive: true, force: true });
+        fs.rmSync(otherWorkspace, { recursive: true, force: true });
+      });
+
+      const first = await server.connect();
+      first.send({ conversationId, requestId, message: "Read source.txt and report its contents", mode: "ask", modelName: "remote-client-fixture" });
+      await waitUntil(() => Boolean(releaseModel) && first.frames.some((frame) => frame.type === "request_accepted"));
+      const accepted = first.frames.find((frame) => frame.type === "request_accepted");
+      const active = getActiveRunContext(workspace, conversationId)!;
+      assert.equal(accepted.runId, active.runId);
+      const runId = active.runId;
+      if (disconnect === "close") first.socket.close(1000, "client exited");
+      else first.socket.terminate();
+      await waitUntil(() => server.connectedCount() === 0);
+      assert.equal(active.controlState.stopped, false);
+      assert.equal(providerSignal?.aborted, false);
+
+      // Neither an expired subscriber, another workspace nor another owner can
+      // cancel or re-execute the server-owned task while its original view is gone.
+      authorized = false;
+      const expired = await server.connect();
+      expired.send({ type: "subscribe_run", conversationId });
+      await waitUntil(() => expired.frames.some((frame) => frame.type === "error" && /Session expired/.test(frame.content)));
+      await waitUntil(() => server.connectedCount() === 0);
+      assert.equal(expired.frames.some((frame) => frame.type === "conversation_snapshot"), false);
+      authorized = true;
+      const foreignClient = await foreign.connect();
+      foreignClient.send({ type: "subscribe_run", conversationId });
+      await waitUntil(() => foreignClient.frames.some((frame) => frame.type === "error" && /Conversation not found/.test(frame.content)));
+      assert.equal(foreignClient.frames.some((frame) => frame.type === "conversation_snapshot"), false);
+      const unauthorizedOwner = await otherOwner.connect();
+      unauthorizedOwner.send({ type: "stop", conversationId, runId, requestId });
+      await waitUntil(() => unauthorizedOwner.frames.some((frame) => frame.type === "error" && /permission/.test(frame.content)));
+      assert.equal(active.controlState.stopped, false);
+      assert.equal(providerSignal?.aborted, false);
+      foreignClient.socket.terminate(); unauthorizedOwner.socket.terminate();
+      await waitUntil(() => foreign.connectedCount() === 0 && otherOwner.connectedCount() === 0);
+
+      releaseModel!();
+      await waitUntil(() => !getActiveRunContext(workspace, conversationId));
+      const record = readRunRecord(workspace, runId);
+      assert.equal(record.status, "completed", JSON.stringify(record));
+      assert.equal(record.metrics.toolCalls, 1);
+      assert.equal(record.metrics.toolErrors, 0);
+      const saved = readConversationMessages(workspace, conversationId);
+      const tool = saved.flatMap((message) => message.toolCalls || []).find((step) => step.toolCallId === "read-after-client-exit");
+      assert.equal(tool?.isError, false);
+      assert.ok(tool?.result?.includes(content));
+      assert.equal(saved.at(-1)?.content, content);
+      assert.ok(fs.readFileSync(path.join(workspace, ".history", `${conversationId}.jsonl`), "utf8").includes(content));
+
+      const reconnected = await server.connect();
+      for (let count = 1; count <= 2; count++) {
+        reconnected.send({ type: "subscribe_run", conversationId });
+        await waitUntil(() => reconnected.frames.filter((frame) => frame.type === "conversation_snapshot").length === count);
+      }
+      const restored = reconnected.frames.find((frame) => frame.type === "conversation_snapshot");
+      assert.equal(restored.runId, runId);
+      assert.equal(restored.run.status, "completed");
+      assert.equal(restored.messages.at(-1).content, content);
+      assert.deepEqual(restored.activeRequestIds, []);
+      assert.deepEqual(restored.pendingApprovals, []);
+      assert.equal(modelBodies.length, 2);
+      assert.equal(listRunRecords(workspace).length, 1);
+      assert.equal(saved.filter((message) => message.requestId === requestId && message.role === "user").length, 1);
+    });
+  }
+});
 
 function persistOrphanedRuns(workspace: string, runs: Array<{
   runId: string; conversationId: string; mode: "ask" | "code"; parentRunId?: string; executionPlanId?: string;
