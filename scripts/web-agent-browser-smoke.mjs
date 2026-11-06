@@ -12,20 +12,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "backend/package.json"));
 const { WebSocket } = require("ws");
 const args = process.argv.slice(2);
-const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false, approval: false };
+const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false, approval: false, explorer: false, highlighting: false, production: false };
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (key === "--launch") options.launch = true;
   else if (key === "--review") options.review = true;
   else if (key === "--rename") options.rename = true;
   else if (key === "--approval") options.approval = true;
+  else if (key === "--explorer") options.explorer = true;
+  else if (key === "--highlighting") options.highlighting = true;
+  else if (key === "--production") options.production = true;
   else if (["--url", "--cdp", "--workspace", "--artifacts"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
   else if (key === "--help") {
-    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename|--approval] [--artifacts /tmp/review-screenshots]");
+    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename|--approval|--explorer|--highlighting] [--production] [--artifacts /tmp/review-screenshots]");
     process.exit(0);
   } else throw new Error("Unknown or incomplete option: " + key);
 }
-assert.ok([options.rename, options.review, options.approval].filter(Boolean).length <= 1, 'Choose one fixture scenario per run');
+assert.ok([options.rename, options.review, options.approval, options.explorer, options.highlighting].filter(Boolean).length <= 1, 'Choose one fixture scenario per run');
+assert.ok(!options.production || options.explorer || options.review || options.highlighting, 'Production QA supports Explorer, review or highlighting scenarios without dev-only Monaco inspection');
+assert.ok(!options.highlighting || options.production, '--highlighting requires --production to exercise the built Diffs canvas');
 function localUrl(value, protocols = ["http:", "https:"]) {
   const url = new URL(value);
   assert.ok(protocols.includes(url.protocol) && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname), "Only loopback fixture/CDP endpoints are allowed");
@@ -51,6 +56,32 @@ async function scenario(name, action, fatal = false) {
   const started = Date.now();
   try { await action(); results.push({ scenario: name, status: "pass", durationMs: Date.now() - started }); }
   catch (error) {
+    if (cdp && pageSession) {
+      await screenshot('failure-' + name).catch(() => {});
+      if (name.startsWith('diffs_native_highlighting')) {
+        console.log(JSON.stringify({ scenario: name, errors: browserErrors, canvas: await call(() => {
+          const region = document.querySelector('.git-diff-dialog .pierre-diff');
+          const root = region?.querySelector('diffs-container')?.shadowRoot;
+          return { label: region?.getAttribute('aria-label'), columns: [...(root?.querySelectorAll('code') || [])].map((column) => ({
+            attributes: [...column.attributes].map((attribute) => [attribute.name, attribute.value]),
+            hasContent: Boolean(column.querySelector('[data-content]')), lines: column.querySelectorAll('[data-line]').length,
+            tokens: [...column.querySelectorAll('span[style]')].slice(0, 6).map((token) => ({ style: token.getAttribute('style'), color: token.style.color, computed: getComputedStyle(token).color })),
+          })) };
+        }).catch(() => null) }));
+      }
+      if (name === 'ui_login_and_offline_fixture_gate' || name.startsWith('trees_')) {
+        console.log(JSON.stringify({ scenario: name, page: await call(() => ({
+          text: document.body.innerText.slice(-1200),
+          tree: globalThis.__smokeQueryAll?.('[role="treeitem"]').slice(0, 18).map((node) => ({
+            path: node.getAttribute('data-item-path'), selected: node.getAttribute('aria-selected'),
+            tabindex: node.getAttribute('tabindex'), rect: node.getBoundingClientRect().toJSON(),
+          })),
+          lastClick: globalThis.__smokeDiagnostics?.lastClick,
+          active: document.activeElement?.outerHTML?.slice(0, 300),
+          tabs: [...document.querySelectorAll('.tab')].map((node) => node.getAttribute('title')),
+        })).catch(() => null) }));
+      }
+    }
     const diagnostics = name.startsWith("inline_") && cdp && pageSession ? await call(() => ({
       inline: document.querySelector(".inline-assistant")?.textContent?.slice(0, 1500),
       value: document.querySelector(".inline-assistant textarea")?.value,
@@ -73,7 +104,7 @@ async function scenario(name, action, fatal = false) {
       menuOpen: Boolean(document.querySelector('.context-reference-menu')),
       options: [...document.querySelectorAll('.context-reference-menu [role="option"]')].map((node) => node.textContent.trim()),
       chips: [...document.querySelectorAll('.context-reference-picker .context-reference-chip')].map((node) => node.textContent.trim()),
-      fileEntries: [...document.querySelectorAll('[data-tree-path]')].map((node) => node.getAttribute('data-tree-path')).slice(0, 30),
+      fileEntries: globalThis.__smokeQueryAll('[data-item-path]').map((node) => node.getAttribute('data-item-path')).slice(0, 30),
     })).catch(() => undefined) : name.startsWith("approval_") && cdp && pageSession ? await call(() => ({
       approvals: [...document.querySelectorAll('.tool-approval-stack')].map((node) => ({ text: node.textContent.slice(0, 1200), rect: node.getBoundingClientRect().toJSON(), scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })),
       navigation: [...document.querySelectorAll('.task-state-action button, .editor-assistant-compact-summary button')].map((node) => ({ text: node.textContent, rect: node.getBoundingClientRect().toJSON(), disabled: node.disabled })),
@@ -111,6 +142,7 @@ const ownSessions = new Set();
 const executionContexts = new Map();
 const pendingRequests = new Map();
 const responses = [];
+const browserErrors = [];
 const ownedPreviews = new Set();
 const ownedProcesses = new Set();
 
@@ -141,24 +173,35 @@ async function evaluate(expression, session = pageSession, contextId) {
   return result.result?.value;
 }
 const call = (fn, ...values) => evaluate("(" + fn.toString() + ")(" + values.map((value) => JSON.stringify(value)).join(",") + ")");
-async function click(selector, requireHit = false) {
-  const point = await until(() => call(async (query) => {
-    const element = document.querySelector(query);
+async function click(selector, requireHit = false, button = "left") {
+  const point = await until(() => call(async (query, requireHit) => {
+    const element = globalThis.__smokeQuery(query);
     if (!element || element.disabled) return null;
     element.scrollIntoView({ block: "center", inline: "center" });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const rect = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    // Tree rows also contain app-owned select/download decoration regions.
+    // Exercise the filename action when a test asks to activate the row.
+    const target = element.matches('[role="treeitem"]')
+      ? element.querySelector('[data-item-section="content"]') || element : element;
+    const rect = target.getBoundingClientRect();
+    let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    const hitTarget = hit === element || element.contains(hit);
+    if (requireHit && !hitTarget) return null;
     return rect.width && rect.height ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
-      hitTarget: hit === element || element.contains(hit), hit: hit?.outerHTML.slice(0, 350) } : null;
-  }, selector), "Clickable " + selector);
+      hitTarget, hit: hit?.outerHTML.slice(0, 350) } : null;
+  }, selector, requireHit), "Clickable " + selector);
   if (requireHit) assert.equal(point.hitTarget, true, 'Button is covered: ' + point.hit);
   await call((query, point) => {
     globalThis.__smokeDiagnostics = globalThis.__smokeDiagnostics || {};
     globalThis.__smokeDiagnostics.lastClick = { query, point, time: Date.now() };
   }, selector, point).catch(() => {});
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: point.x, y: point.y }, pageSession);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button, clickCount: 1, x: point.x, y: point.y }, pageSession);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button, clickCount: 1, x: point.x, y: point.y }, pageSession);
 }
 async function stableViewportLayout(selector) {
   return until(() => call(async (query) => {
@@ -196,11 +239,18 @@ async function fill(selector, text) {
   // node and use Chromium input events, rather than assigning a React value.
   await until(() => call((query) => {
     const element = document.querySelector(query); if (!element || element.disabled) return false;
-    element.focus(); return document.activeElement === element;
+    element.focus(); element.select(); return document.activeElement === element;
   }, selector), "Focused " + selector);
-  await key("a", "KeyA", 65, primaryModifier); await key("Backspace", "Backspace", 8);
+  await key("Backspace", "Backspace", 8);
   if (text) await cdp.send("Input.insertText", { text }, pageSession);
   await until(() => call((query, expected) => document.querySelector(query)?.value === expected, selector, text), "Input text in " + selector);
+}
+async function setTheme(theme) {
+  if (await call(() => document.documentElement.dataset.theme) === theme) return;
+  await click('.titlebar-user-menu > summary');
+  await click('.titlebar-user-popover > button:first-of-type');
+  await until(() => call((expected) => document.documentElement.dataset.theme === expected, theme), 'App theme ' + theme);
+  if (await call(() => document.querySelector('.titlebar-user-menu')?.open)) await click('.titlebar-user-menu > summary');
 }
 async function markExplicitFixtureModelOption() {
   await call(() => {
@@ -213,9 +263,12 @@ async function markExplicitFixtureModelOption() {
   });
 }
 async function openFilesWorkbench() {
-  if (await call(() => Boolean(document.querySelector('.main-layout.workbench-view-files') && document.querySelector('[data-tree-path="calculator.ts"]')))) return;
-  await click('button[aria-label="Explorer"]', true);
-  await until(() => call(() => Boolean(document.querySelector('.main-layout.workbench-view-files') && document.querySelector('[data-tree-path="calculator.ts"]'))), 'Files workbench');
+  await until(() => call(() => Boolean(document.querySelector('button[aria-label="Explorer"]'))), 'Explorer control');
+  const open = await call(() => Boolean(document.querySelector('.main-layout.workbench-view-files')
+    && document.querySelector('button[aria-label="Explorer"]')?.getAttribute('aria-pressed') === 'true'));
+  // An open tree can still be fetching data. Toggling it while loading closes it.
+  if (!open) await click('button[aria-label="Explorer"]', true);
+  await until(() => call(() => Boolean(document.querySelector('.main-layout.workbench-view-files') && globalThis.__smokeQuery('[data-item-path="calculator.ts"]'))), 'Files workbench');
 }
 async function markVisibleEditorAssistantComposer() {
   await until(() => call(() => {
@@ -278,6 +331,10 @@ async function connect() {
   ownSessions.add(pageSession);
   cdp.listeners.add((event) => {
     if (!ownSessions.has(event.sessionId)) return;
+    if (event.method === "Runtime.exceptionThrown") browserErrors.push(safeError(event.params.exceptionDetails.exception?.description || event.params.exceptionDetails.text));
+    if (event.method === "Runtime.consoleAPICalled" && event.params.type === "error") {
+      browserErrors.push(safeError(event.params.args.map((argument) => argument.value ?? argument.description ?? "").join(" ")));
+    }
     if (event.method === "Target.attachedToTarget") {
       ownSessions.add(event.params.sessionId);
       void cdp.send("Runtime.enable", {}, event.params.sessionId).catch(() => {});
@@ -304,6 +361,14 @@ async function connect() {
   await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, pageSession);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, pageSession);
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+    globalThis.__smokeQueryAll = function queryAll(selector, root = document) {
+      const result = [...root.querySelectorAll(selector)];
+      for (const host of root.querySelectorAll('*')) {
+        if (host.shadowRoot) result.push(...queryAll(selector, host.shadowRoot));
+      }
+      return result;
+    };
+    globalThis.__smokeQuery = selector => globalThis.__smokeQueryAll(selector)[0] || null;
     localStorage.setItem("app-locale","en");
     globalThis.__smokeAllowed=false;globalThis.__smokeBlocked=[];globalThis.__smokeInlineStates=[];globalThis.__smokeProgress=[];globalThis.__smokeApprovalEvents=[];globalThis.__smokeSentFrames=[];globalThis.__smokeDiagnostics={};
     const nativeSend=WebSocket.prototype.send;
@@ -322,8 +387,16 @@ async function connect() {
       return nativeSend.call(this,data)};
     const nativeFetch=window.fetch;
     window.fetch=function(input,init){const url=new URL(typeof input==="string"?input:input.url,location.href);const method=(init?.method||"GET").toUpperCase();
-      if(url.pathname.startsWith("/api/files")&&!["GET","HEAD"].includes(method)){globalThis.__smokeBlocked.push("Unexpected file write");return Promise.reject(new Error("Smoke forbids file writes"))}
-      return nativeFetch.apply(this,arguments)};
+      const explorerWrite = globalThis.__smokeExplorerWrites && method === 'POST' && ['/api/files/rename','/api/files/move','/api/files/upload'].includes(url.pathname);
+      if(url.pathname.startsWith("/api/files")&&!["GET","HEAD"].includes(method)&&!explorerWrite){globalThis.__smokeBlocked.push("Unexpected file write");return Promise.reject(new Error("Smoke forbids file writes"))}
+      const response = nativeFetch.apply(this,arguments);
+      if(globalThis.__smokeRenameReadDelay && url.pathname === '/api/files/read') {
+        const path = url.searchParams.get('path') || '';
+        if(path.startsWith('interview/')) return response.then(async value => {
+          await new Promise(resolve => setTimeout(resolve, 500)); return value;
+        });
+      }
+      return response};
     addEventListener("DOMContentLoaded",()=>new MutationObserver(()=>{const panel=document.querySelector('[data-testid="inline-assistant"]');if(panel)globalThis.__smokeInlineStates.push({busy:panel.getAttribute("aria-busy")==="true",disabled:panel.querySelector(".inline-assistant-accept")?.disabled});
       if(globalThis.__smokeReviewAllowed){const phase=document.querySelector('.editor-assistant-panel .assistant-activity')?.dataset.phase;const reasoningNode=document.querySelector('.editor-assistant-panel [data-assistant-reasoning]');const reasoning=reasoningNode?.textContent;const reasoningVisible=Boolean(reasoningNode?.getBoundingClientRect().height);const tool=document.querySelector('.editor-assistant-panel [data-assistant-tool-call-id]')?.textContent;const previous=globalThis.__smokeProgress.at(-1);if(previous?.phase!==phase||previous?.reasoning!==reasoning||previous?.reasoningVisible!==reasoningVisible||previous?.tool!==tool)globalThis.__smokeProgress.push({phase,reasoning,reasoningVisible,tool});}
     }).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-busy","data-phase","data-status"]}));
@@ -368,17 +441,21 @@ try {
     diskBefore = fs.readFileSync(path.join(safeWorkspace, "calculator.ts"), "utf8");
     assert.match(diskBefore, /export function add\(a: number, b: number\)/);
     await openFilesWorkbench();
-    await click('[data-tree-path="calculator.ts"]');
+    await click('[data-item-path="calculator.ts"]');
     await until(() => call(() => Boolean(document.querySelector(".monaco-editor textarea"))), "Monaco editor");
-    await until(() => call(async () => {
-      const url = performance.getEntriesByType("resource").map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
-      if (!url) return false;
-      const monaco = await import(url);
-      const instance = monaco.editor.getEditors().find((editor) => editor.getModel()?.uri.path.endsWith("/calculator.ts"));
-      if (!instance) return false;
-      globalThis.__smokeEditor = instance; return true;
-    }), "Loaded calculator Monaco model");
-    assert.equal(await modelValue(), diskBefore);
+    if (!options.production) {
+      await until(() => call(async () => {
+        const url = performance.getEntriesByType("resource").map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
+        if (!url) return false;
+        const monaco = await import(url);
+        const instance = monaco.editor.getEditors().find((editor) => editor.getModel()?.uri.path.endsWith("/calculator.ts"));
+        if (!instance) return false;
+        globalThis.__smokeEditor = instance; return true;
+      }), "Loaded calculator Monaco model");
+      assert.equal(await modelValue(), diskBefore);
+    } else {
+      await until(() => call(() => document.querySelector('.monaco-editor .view-lines')?.textContent.replace(/\u00a0/g, ' ').includes('return a - b;')), 'Production editor renders fixture code');
+    }
   }, true);
   if (options.approval) {
     let trackedBefore, pendingShell;
@@ -490,6 +567,183 @@ try {
       assert.equal(status.status, 0); assert.equal(status.stdout.trim(), 'M approval-note.md');
       await screenshot('approval-completed-600px');
     }, true);
+  } else if (options.highlighting) {
+    const samples = [
+      { language: 'cpp', path: 'highlighting-fixture.cpp',
+        original: '#include <string>\n\nint greeting_count() {\n  const std::string message = "original cpp";\n  return 1;\n}\n',
+        modified: '#include <string>\n\nint greeting_count() {\n  const std::string message = "modified cpp";\n  return 42;\n}\n' },
+      { language: 'emacs-lisp', path: 'highlighting-fixture.el',
+        original: '(defun fixture-greeting (name)\n  "Original Emacs Lisp fixture."\n  (message "hello %s" name)\n  (+ 1 2))\n',
+        modified: '(defun fixture-greeting (name)\n  "Modified Emacs Lisp fixture."\n  (message "welcome %s" name)\n  (+ 40 2))\n' },
+    ];
+    const errorStart = browserErrors.length;
+    await scenario('diffs_native_highlighting_fixture', async () => {
+      // safeWorkspace already passed the authenticated disposable-fixture gate.
+      for (const sample of samples) {
+        assert.equal(fs.existsSync(path.join(safeWorkspace, sample.path)), false, 'Highlighting requires fresh dedicated fixture files');
+        fs.writeFileSync(path.join(safeWorkspace, sample.path), sample.original);
+      }
+      for (const args of [['add', '--', ...samples.map((sample) => sample.path)],
+        ['-c', 'commit.gpgsign=false', 'commit', '-m', 'Disposable highlighting baseline', '--', ...samples.map((sample) => sample.path)]]) {
+        const result = spawnSync('git', args, { cwd: safeWorkspace, encoding: 'utf8' });
+        assert.equal(result.status, 0, result.stderr || 'Could not prepare fixture Git diff');
+      }
+      for (const sample of samples) fs.writeFileSync(path.join(safeWorkspace, sample.path), sample.modified);
+      await setTheme('dark');
+      await click('button[data-drawer-trigger="git"]', true);
+      await until(() => call(() => Boolean(document.querySelector('.git-entry-diff'))), 'Git Changes fixture files');
+    }, true);
+    for (const sample of samples) {
+      await scenario('diffs_native_highlighting_' + sample.language, async () => {
+        await until(() => call((filePath) => {
+          const button = [...document.querySelectorAll('.git-entry-diff')].find((node) => node.querySelector('code')?.textContent === filePath);
+          button?.setAttribute('data-smoke-highlight-file', 'true'); return Boolean(button);
+        }, sample.path), 'Git diff entry for ' + sample.path);
+        await click('[data-smoke-highlight-file]', true);
+        const canvas = await until(() => call((filePath) => {
+          const region = document.querySelector('.git-diff-dialog .pierre-diff');
+          if (region?.getAttribute('aria-label') !== filePath) return null;
+          const root = region.querySelector('diffs-container')?.shadowRoot;
+          if (!root || root.querySelector('[data-error-wrapper]')) return null;
+          const read = (side) => {
+            const column = root.querySelector(`code[data-${side}] [data-content]`);
+            if (!column) return null;
+            const tokens = [...column.querySelectorAll('span[style]')].filter((node) => node.textContent.trim()
+              && (node.style.color || node.style.getPropertyValue('--diffs-token-light') || node.style.getPropertyValue('--diffs-token-dark')));
+            const colors = [...new Set(tokens.map((node) => getComputedStyle(node).color))];
+            return { text: [...column.querySelectorAll('[data-line]')].map((node) => node.textContent.replace(/\r?\n$/, '')).join('\n'), colors, tokens: tokens.length };
+          };
+          const deletions = read('deletions'), additions = read('additions');
+          return deletions?.colors.length >= 2 && additions?.colors.length >= 2 ? { deletions, additions } : null;
+        }, sample.path), 'Syntax-highlighted native ' + sample.language + ' diff', 30_000);
+        assert.equal(canvas.deletions.text, sample.original.trimEnd(), 'Original code changed in the Diffs canvas');
+        assert.equal(canvas.additions.text, sample.modified.trimEnd(), 'Modified code changed in the Diffs canvas');
+        const grammarAssets = await call((language) => performance.getEntriesByType('resource').map((entry) => new URL(entry.name).pathname)
+          .filter((name) => new RegExp('/assets/' + language + '-[^/]+\\.js$').test(name)), sample.language);
+        assert.ok(grammarAssets.length, 'The production native grammar module was not requested: ' + sample.language);
+        assert.equal(await call(() => performance.getEntriesByType('resource').some((entry) => entry.name.includes('crewforge-shiki-data'))), false, 'Removed grammar chunking plugin still loaded');
+        assert.equal(fs.readFileSync(path.join(safeWorkspace, sample.path), 'utf8'), sample.modified);
+        await screenshot('diffs-native-' + sample.language);
+        console.log(JSON.stringify({ highlighting: { language: sample.language, grammarAssets,
+          originalTokenColors: canvas.deletions.colors.length, modifiedTokenColors: canvas.additions.colors.length } }));
+        await key('Escape', 'Escape', 27);
+        await until(() => call(() => !document.querySelector('.git-diff-dialog')), 'Highlighting dialog closed');
+        await call(() => document.querySelector('[data-smoke-highlight-file]')?.removeAttribute('data-smoke-highlight-file'));
+      }, true);
+    }
+    await scenario('diffs_native_highlighting_no_errors', async () => {
+      assert.deepEqual(browserErrors.slice(errorStart), [], 'Browser reported an error while loading native grammars');
+    });
+  } else if (options.explorer) {
+    const row = (path) => `[data-item-path=${JSON.stringify(path)}]`;
+    const focusPath = () => call(() => {
+      const host = document.querySelector('file-tree-container');
+      return host?.shadowRoot?.activeElement?.getAttribute('data-item-path');
+    });
+    await scenario('trees_keyboard_and_independent_selection', async () => {
+      await until(() => call(() => Boolean(document.querySelector('file-tree-container')?.shadowRoot?.querySelector('[role="tree"]'))), 'Native Trees shadow tree');
+      assert.equal(await call(() => Boolean(globalThis.__smokeQuery('[data-item-path="interview/q1 sample/"]'))), false, 'Directories must start collapsed');
+      await call(() => globalThis.__smokeQuery('[data-item-path="interview/"]').focus());
+      await key('ArrowRight', 'ArrowRight', 39);
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="interview/q1 sample/"]'))), 'Expand with keyboard');
+      await key('ArrowRight', 'ArrowRight', 39);
+      assert.equal(await focusPath(), 'interview/q1 sample/');
+      await key('ArrowLeft', 'ArrowLeft', 37);
+      assert.equal(await focusPath(), 'interview/');
+      await key('ArrowLeft', 'ArrowLeft', 37);
+      await until(() => call(() => !globalThis.__smokeQuery('[data-item-path="interview/q1 sample/"]')), 'Collapse with keyboard');
+      await key('End', 'End', 35);
+      const last = await focusPath();
+      await key('Home', 'Home', 36);
+      assert.notEqual(await focusPath(), last);
+      assert.equal(await call(() => globalThis.__smokeQueryAll('[role="treeitem"][tabindex="0"]').length), 1, 'Exactly one roving tab stop');
+      await call(() => globalThis.__smokeQuery('[data-item-path="README.md"]').focus());
+      await key(' ', 'Space', 32, primaryModifier);
+      await until(() => call(() => document.querySelector('.sidebar-selection-text')?.textContent === '1 selected'), 'Keyboard multi selection');
+      assert.equal(await call(() => document.querySelector('.tab[aria-selected="true"]')?.getAttribute('title')), 'calculator.ts', 'Selecting must not open another file');
+      await click('.sidebar-selection-actions button:last-child');
+      await click('.sidebar button[aria-label="Toggle multi-select"]');
+      await click(row('README.md'), true);
+      await until(() => call(() => document.querySelector('.sidebar-selection-text')?.textContent === '1 selected'), 'Click multi selection');
+      await click('.sidebar-selection-actions button:last-child');
+      await click('.sidebar button[aria-label="Toggle multi-select"]');
+    });
+    await scenario('trees_context_rename_preserves_open_buffer', async () => {
+      // The authenticated workspace was verified above to be this owned temp fixture.
+      fs.mkdirSync(path.join(safeWorkspace, 'explorer-empty'));
+      fs.writeFileSync(path.join(safeWorkspace, 'explorer-note.txt'), 'Explorer fixture note\n');
+      await call(() => { globalThis.__smokeExplorerWrites = true; });
+      await click('.sidebar button[aria-label="Refresh"]');
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="explorer-empty/"]') && globalThis.__smokeQuery('[data-item-path="explorer-note.txt"]'))), 'Empty folder and new file');
+      await click(row('explorer-note.txt'), true);
+      await click(row('explorer-note.txt'), true, 'right');
+      await until(() => call(() => {
+        const rename = [...document.querySelectorAll('.context-menu-item')].find((node) => node.textContent.trim() === 'Rename');
+        rename?.setAttribute('data-smoke-rename', 'true'); return Boolean(rename);
+      }), 'Path-based context menu');
+      await click('[data-smoke-rename]', true);
+      await fill('.dialog-input', 'explorer-renamed.txt');
+      await click('.dialog-actions .primary', true);
+      await until(() => fs.existsSync(path.join(safeWorkspace, 'explorer-renamed.txt')), 'Rename persisted');
+      assert.equal(fs.existsSync(path.join(safeWorkspace, 'explorer-note.txt')), false);
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, 'explorer-renamed.txt'), 'utf8'), 'Explorer fixture note\n');
+      await until(() => call(() => Boolean(document.querySelector('.tab[title="explorer-renamed.txt"][aria-selected="true"]'))), 'Open tab follows rename');
+    });
+    await scenario('trees_external_upload_and_internal_move', async () => {
+      await call(() => {
+        const destination = globalThis.__smokeQuery('[data-item-path="explorer-empty/"]');
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(new File(['Uploaded fixture bytes\n'], 'explorer-upload.txt', { type: 'text/plain' }));
+        destination.dispatchEvent(new DragEvent('dragover', { bubbles: true, composed: true, cancelable: true, dataTransfer }));
+        destination.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, dataTransfer }));
+      });
+      await until(() => fs.existsSync(path.join(safeWorkspace, 'explorer-empty/explorer-upload.txt')), 'Dropped file uploaded');
+      assert.equal(fs.readFileSync(path.join(safeWorkspace, 'explorer-empty/explorer-upload.txt'), 'utf8'), 'Uploaded fixture bytes\n');
+      await call(() => {
+        const source = globalThis.__smokeQuery('[data-item-path="explorer-renamed.txt"]');
+        const destination = globalThis.__smokeQuery('[data-item-path="explorer-empty/"]');
+        const dataTransfer = new DataTransfer();
+        source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, composed: true, cancelable: true, dataTransfer }));
+        if (!dataTransfer.getData('application/x-crewforge-file-path')) throw new Error('Missing application drag identity');
+        destination.dispatchEvent(new DragEvent('dragover', { bubbles: true, composed: true, cancelable: true, dataTransfer }));
+        destination.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, dataTransfer }));
+      });
+      await until(() => fs.existsSync(path.join(safeWorkspace, 'explorer-empty/explorer-renamed.txt')), 'Drop move persisted');
+      assert.equal(fs.existsSync(path.join(safeWorkspace, 'explorer-renamed.txt')), false);
+      await until(() => call(() => Boolean(document.querySelector('.tab[title="explorer-empty/explorer-renamed.txt"][aria-selected="true"]'))), 'Open tab follows move');
+    });
+    await scenario('trees_content_search_and_theme', async () => {
+      await click('.sidebar button[aria-label="Search file names and contents..."]');
+      await fill('.sidebar-compact-search-input', 'Uploaded fixture bytes');
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="explorer-empty/explorer-upload.txt"]'))), 'Full-text match expands ancestors');
+      await screenshot('trees-content-search');
+      await fill('.sidebar-compact-search-input', '');
+      for (const theme of ['light', 'dark']) {
+        await setTheme(theme);
+        await screenshot('trees-' + theme);
+      }
+    });
+    await scenario('trees_large_directory_keeps_dom_bounded', async () => {
+      const directory = path.join(safeWorkspace, 'explorer-large');
+      fs.mkdirSync(directory);
+      for (let index = 0; index < 1200; index += 1) {
+        fs.writeFileSync(path.join(directory, `file-${String(index).padStart(4, '0')}.txt`), 'Virtual tree fixture\n');
+      }
+      await click('.sidebar button[aria-label="Refresh"]');
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="explorer-large/"]'))), 'Large directory loaded');
+      await click(row('explorer-large/'), true);
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="explorer-large/file-0000.txt"]'))), 'Large directory expanded');
+      assert.ok(await call(() => globalThis.__smokeQueryAll('[role="treeitem"]').length < 100), 'Tree mounted all 1200 rows');
+      await call(() => {
+        const scroll = document.querySelector('file-tree-container').shadowRoot.querySelector('[data-file-tree-virtualized-scroll]');
+        scroll.scrollTop = scroll.scrollHeight;
+      });
+      await until(() => call(() => Boolean(globalThis.__smokeQuery('[data-item-path="explorer-large/file-1199.txt"]'))), 'Virtualized last file becomes available');
+      await click(row('explorer-large/file-1199.txt'), true);
+      await until(() => call(() => Boolean(document.querySelector('.tab[title="explorer-large/file-1199.txt"][aria-selected="true"]'))), 'Virtualized file opens');
+      assert.ok(await call(() => globalThis.__smokeQueryAll('[role="treeitem"]').length < 100));
+      await screenshot('trees-large-directory');
+    });
   } else if (options.rename) {
     const sources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);
     const targets = sources.map((source) => source.replace('题目.md', 'TASK.md'));
@@ -497,9 +751,9 @@ try {
     await scenario('rename_fixture_run', async () => {
       before = sources.map((source) => fs.readFileSync(path.join(safeWorkspace, source), 'utf8'));
       assert.ok(targets.every((target) => !fs.existsSync(path.join(safeWorkspace, target))), 'Rename requires a fresh fixture');
-      await click('[data-tree-path="interview"]');
-      await click('[data-tree-path="interview/q1 sample"]');
-      await click('[data-tree-path="interview/q1 sample/题目.md"]');
+      await click('[data-item-path="interview/"]');
+      await click('[data-item-path="interview/q1 sample/"]');
+      await click('[data-item-path="interview/q1 sample/题目.md"]');
       await until(() => call(async (source) => {
         const url = performance.getEntriesByType('resource').map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
         const monaco = await import(url); const editor = monaco.editor.getEditors().find((item) => item.getModel()?.uri.path.endsWith(source));
@@ -507,10 +761,15 @@ try {
         const model = editor.getModel(); editor.setPosition({ lineNumber: model.getLineCount(), column: model.getLineMaxColumn(model.getLineCount()) });
         editor.trigger('keyboard', 'type', { text: 'Unsaved reviewer note.\n' }); return true;
       }, sources[0]), 'Open source buffer');
+      await click('[data-item-path="interview/q2 sample/"]');
+      await click('[data-item-path="interview/q2 sample/题目.md"]');
+      await until(() => call((source) => Boolean(document.querySelector(`.tab[title="${source}"]`)), sources[1]), 'Open clean rename source');
+      await click('.tab[title="interview/q1 sample/题目.md"]');
       await click('.editor-assistant-composer .model-selector button');
       await markExplicitFixtureModelOption();
       await click('[data-smoke-local-model]');
-      await call(() => { globalThis.__smokeRenameAllowed = true; });
+      // Hold metadata behind the tree refresh to exercise pending clean sources.
+      await call(() => { globalThis.__smokeRenameAllowed = true; globalThis.__smokeRenameReadDelay = true; });
       await fill('.editor-assistant-composer textarea', 'FIXTURE_RENAME: rename all interview files');
       await click('.editor-assistant-send-btn');
       await until(() => call(() => document.querySelector('.tool-approval-card')?.textContent.includes('bash')), 'Screenshot command approval');
@@ -541,13 +800,25 @@ try {
         return monaco.editor.getEditors().find((item) => item.getModel()?.uri.path.endsWith(target))?.getModel().getValue();
       }, targets[0]);
       assert.equal(content, before[0] + 'Unsaved reviewer note.\n');
-      await until(() => call((target) => Boolean(document.querySelector(`[data-tree-path="${target}"]`)), targets[0]), 'Explorer shows the renamed file');
-      assert.equal(await call((source) => Boolean(document.querySelector(`[data-tree-path="${source}"]`)), sources[0]), false, 'Explorer still shows the old filename');
+      await until(() => call((target) => Boolean(globalThis.__smokeQuery(`[data-item-path="${target}"]`)), targets[0]), 'Explorer shows the renamed file');
+      assert.equal(await call((source) => Boolean(globalThis.__smokeQuery(`[data-item-path="${source}"]`)), sources[0]), false, 'Explorer still shows the old filename');
       if (options.artifacts) {
         fs.mkdirSync(path.resolve(options.artifacts), { recursive: true });
         const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
         fs.writeFileSync(path.join(path.resolve(options.artifacts), 'rename-dirty.png'), Buffer.from(screenshot.data, 'base64'));
       }
+    });
+    await scenario('rename_migrates_clean_editor_when_tree_returns_before_metadata', async () => {
+      await until(() => call((target) => Boolean(document.querySelector(`.tab[title="${target}"]`)), targets[1]), 'Clean source tab follows delayed rename evidence');
+      assert.equal(await call((target) => document.querySelector(`.tab[title="${target}"]`).classList.contains('modified'), targets[1]), false);
+      assert.equal(await call((source) => Boolean(document.querySelector(`.tab[title="${source}"]`)), sources[1]), false);
+      await click('.tab[title="interview/q2 sample/TASK.md"]');
+      const content = await call(async (target) => {
+        const url = performance.getEntriesByType('resource').map((entry) => entry.name).find((name) => /\/monaco-editor\.js(?:\?|$)/.test(name));
+        const monaco = await import(url);
+        return monaco.editor.getEditors().find((item) => item.getModel()?.uri.path.endsWith(target))?.getModel().getValue();
+      }, targets[1]);
+      assert.equal(content, before[1]);
     });
   } else if (options.review) {
     let reviewChangesRoute;
@@ -555,7 +826,7 @@ try {
     let reviewDiskBefore;
     await scenario("review_fixture_run", async () => {
       assert.equal(fs.readFileSync(path.join(safeWorkspace, "review-doc.md"), "utf8").startsWith("请在当前目录"), true, "Review requires a fresh disposable fixture");
-      await click('[data-tree-path="review-doc.md"]');
+      await click('[data-item-path="review-doc.md"]');
       await click('.editor-assistant-composer .model-selector button');
       await markExplicitFixtureModelOption();
       await click('[data-smoke-local-model]');
@@ -587,6 +858,38 @@ try {
       await call(() => [...document.querySelectorAll('.run-review-files > button')].find((button) => button.querySelector('.run-review-file-name')?.textContent === 'review-doc.md').setAttribute('data-smoke-review-file', 'true'));
       await click('[data-smoke-review-file]', true);
       await until(() => call(() => document.querySelector('.run-review-file-heading')?.textContent.includes('review-doc.md')), 'Full Changes review opened');
+      await until(() => call(() => Boolean(document.querySelector('.run-review-canvas diffs-container')?.shadowRoot?.querySelector('[data-line]'))), 'Pierre unified canvas');
+      await click('.run-review-comment > button');
+      for (const [lineType, expectedSide] of [['change-deletion', 'original'], ['change-addition', 'modified']]) {
+        const lineNumber = await call((type) => {
+          const root = document.querySelector('.run-review-canvas diffs-container').shadowRoot;
+          const line = root.querySelector('[data-line][data-line-type="' + type + '"]');
+          if (!line) throw new Error('Missing changed line: ' + type);
+          root.querySelector('[data-smoke-diff-line]')?.removeAttribute('data-smoke-diff-line');
+          line.setAttribute('data-smoke-diff-line', 'true');
+          return Number(line.getAttribute('data-line'));
+        }, lineType);
+        await click('[data-smoke-diff-line]', true);
+        await until(() => call((side, line) => {
+          const form = document.querySelector('.run-review-comment');
+          return form.querySelector('select')?.value === side
+            && [...form.querySelectorAll('input')].every((input) => input.value === String(line));
+        }, expectedSide, lineNumber), 'Diff click maps to ' + expectedSide + ' coordinates');
+      }
+      await call(() => document.querySelector('.run-review-canvas .pierre-diff').focus());
+      await key('ArrowDown', 'ArrowDown', 40, 8);
+      await until(() => call(() => document.querySelectorAll('.run-review-comment input')[1]?.value === '2'), 'Keyboard extends comment range');
+      await call(() => [...document.querySelectorAll('.run-review-comment button')].find((button) => button.textContent === 'Cancel').click());
+      for (const theme of ['light', 'dark']) {
+        await setTheme(theme);
+        await call(() => [...document.querySelectorAll('.run-review-detail > .run-review-actions button')].find((button) => button.textContent === 'Expand diff').setAttribute('data-smoke-expand-diff', 'true'));
+        await click('[data-smoke-expand-diff]', true);
+        await until(() => call(() => Boolean(document.querySelector('.git-diff-dialog diffs-container')?.shadowRoot?.querySelector('[data-line]'))), 'Pierre split modal');
+        await screenshot('diffs-split-' + theme);
+        await key('Escape', 'Escape', 27);
+        await until(() => call(() => !document.querySelector('.git-diff-dialog')), 'Diff modal Escape closes');
+      }
+      await setTheme('light');
       if (options.artifacts) {
         fs.mkdirSync(path.resolve(options.artifacts), { recursive: true });
         const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, pageSession);
@@ -627,9 +930,10 @@ try {
       assert.ok(persisted.files.every((file) => file.reviewState === 'kept'), 'Batch decision did not persist');
       assert.deepEqual(reviewPaths.map((filePath) => fs.readFileSync(path.join(safeWorkspace, filePath), 'utf8')), reviewDiskBefore, 'Bulk review modified file contents');
       await click('.run-details-close-btn');
-      await click('[data-tree-path="calculator.ts"]');
+      await openFilesWorkbench();
+      await click('[data-item-path="calculator.ts"]');
       const reopenedAt = Date.now();
-      await click('[data-tree-path="review-doc.md"]');
+      await click('[data-item-path="review-doc.md"]');
       await until(() => call(() => Boolean(document.querySelector('.tab[title="review-doc.md"][aria-selected="true"]'))), 'Return to reviewed file');
       await until(() => responses.some((entry) => entry.method === 'GET' && entry.time >= reopenedAt
         && entry.result.files?.some((file) => file.path === 'review-doc.md' && typeof file.modified === 'string')), 'Reopened file review reloaded');

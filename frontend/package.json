@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && tsc -p tsconfig.node.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
+    "@pierre/diffs": "1.6.4",
+    "@pierre/trees": "1.0.0-beta.6",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.468.0",

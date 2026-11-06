@@ -194,9 +194,9 @@ for (const drawer of fixture.conditionalModalDrawers) {
 
 {
   const treeSource = read("frontend/src/components/FileTree.tsx", "file-tree-roving");
-  requireTokens(treeSource, ["resolveVisibleTreeIndex", "effectiveRovingPath === node.path", "onRovingPathChange", "data-tree-path", "aria-keyshortcuts=\"Alt+D Control+Space\""], "file-tree-roving");
+  requireTokens(treeSource, ["useFileTree", "model.getFocusedItem", "composedPath", "syncTreeSelection", "aria-keyshortcuts", "Alt+D Control+Space Meta+Space"], "file-tree-roving");
   if (treeSource.includes("hasActiveNode")) fail("file-tree-roving", "collapsed descendants must not remove the visible root tab stop");
-  if ((treeSource.match(/tabIndex=\{-1\}/g) || []).length < 2) fail("file-tree-roving", "nested checkbox and action controls must not add extra tree tab stops");
+  if (treeSource.includes('document.querySelectorAll(\'[role="treeitem"]\')')) fail("file-tree-roving", "keyboard navigation must use the virtualized model instead of enumerating document rows");
 }
 
 {

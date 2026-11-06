@@ -7,6 +7,7 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { listChildRuns, readRunRecord } from "../chat/runHistory.js";
 import { listManagedWorktrees } from "../chat/worktrees.js";
+import { listExternalToolEffects } from "../chat/externalToolEffects.js";
 import { MessageBus } from "./messageBus.js";
 import { clearModelCapabilityCache } from "./modelCapabilities.js";
 import type { PermissionAuthorizer } from "./permissionService.js";
@@ -375,7 +376,28 @@ test("general subagent forwards published tools through parent authorization, pr
   const toolOutputs = requests[1].messages.filter((message) => message.role === "tool").map((message) => String(message.content));
   assert.match(toolOutputs[0], /doing one/);
   assert.match(toolOutputs[1], /No tasks/);
-  assert.equal(toolOutputs[2], "external ok");
+  assert.equal(toolOutputs[2], "external ok\n\n[External tool file effects are outside automatic undo. Direct file edits retain their recorded rollback history.]");
+  const childRunId = listManagedWorktrees(workspaceDir)[0]?.runId;
+  assert.ok(childRunId);
+  const effects = listExternalToolEffects(workspaceDir, {
+    runId: childRunId,
+    requestId: "subagent:general",
+    expectedExecutions: [{ toolCallId: "external-1", requestId: "subagent:general" }],
+  });
+  assert.equal(effects.length, 1);
+  const { startedAt, finishedAt, ...evidence } = effects[0];
+  assert.deepEqual(evidence, {
+    schemaVersion: 1,
+    runId: childRunId,
+    requestId: "subagent:general",
+    toolCallId: "external-1",
+    toolName: "mcp_external__lookup",
+    rollbackCoverage: "untracked",
+    observedPaths: [],
+    observationComplete: false,
+  });
+  assert.ok(Number.isSafeInteger(startedAt) && startedAt >= 0);
+  assert.ok(typeof finishedAt === "number" && Number.isSafeInteger(finishedAt) && finishedAt >= startedAt);
   assert.match(toolOutputs[3], /general subagent does not expose mcp_external__secret/);
   assert.match(toolOutputs[4], /Tool denied: parent denies write/);
   assert.match(output, /^general finished\nChangeSet /);

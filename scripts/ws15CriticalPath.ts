@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { redactSecrets, REDACTED } from "../backend/src/agent/secretRedaction.js";
 import { getMigrationStatus, migrateMaterialJson, rollbackLastMigration } from "../backend/src/persistence/migrations.js";
-import { resolveVisibleTreeIndex } from "../frontend/src/components/fileTreeKeyboardContract.js";
 import { claimModalEscape } from "../frontend/src/components/modalKeyboardContract.js";
 
 export interface CriticalPathEvidence {
@@ -15,7 +14,7 @@ export interface CriticalPathEvidence {
   corruptRecoveryDetected: boolean;
 }
 
-export function runCriticalPathIteration(): CriticalPathEvidence {
+export async function runCriticalPathIteration(): Promise<CriticalPathEvidence> {
   let childClosed = 0; let parentClosed = 0; let immediateStopped = false;
   const event = {
     key: "Escape",
@@ -27,10 +26,42 @@ export function runCriticalPathIteration(): CriticalPathEvidence {
   if (!immediateStopped) claimModalEscape(event, () => { parentClosed += 1; });
   assert.deepEqual({ childClosed, parentClosed, immediateStopped }, { childClosed: 1, parentClosed: 0, immediateStopped: true });
 
-  assert.equal(resolveVisibleTreeIndex(0, 3, "ArrowUp"), 0);
-  assert.equal(resolveVisibleTreeIndex(1, 3, "ArrowDown"), 2);
-  assert.equal(resolveVisibleTreeIndex(1, 3, "Home"), 0);
-  assert.equal(resolveVisibleTreeIndex(1, 3, "End"), 2);
+  // These standalone tests cross a CommonJS tsx boundary. Use native import()
+  // for the ESM-only public Trees entry, just as the navigation tests do.
+  const { FileTree } = await import("../frontend/node_modules/@pierre/trees/dist/index.js");
+  const tree = new FileTree({
+    paths: ["src/first.ts", "src/nested/deep.ts", "a.md", "z.md"],
+    initialExpansion: "closed",
+    flattenEmptyDirectories: false,
+  });
+  try {
+    assert.equal(tree.getVisibleCount(), 3);
+    tree.focusFirstItem();
+    tree.focusPreviousItem();
+    assert.equal(tree.getFocusedPath(), "src/");
+    tree.focusNextItem();
+    assert.equal(tree.getFocusedPath(), "a.md");
+    tree.focusNextItem();
+    tree.focusNextItem();
+    assert.equal(tree.getFocusedPath(), "z.md");
+    tree.focusFirstItem();
+    assert.equal(tree.getFocusedPath(), "src/");
+    const sourceDirectory = tree.getItem("src");
+    assert.ok(sourceDirectory && "expand" in sourceDirectory);
+    sourceDirectory.expand();
+    tree.focusNextItem();
+    assert.equal(tree.getFocusedPath(), "src/nested/");
+    tree.focusParentItem();
+    assert.equal(tree.getFocusedPath(), "src/");
+    sourceDirectory.collapse();
+    tree.focusNextItem();
+    assert.equal(tree.getFocusedPath(), "a.md");
+    tree.focusLastItem();
+    assert.equal(tree.getFocusedPath(), "z.md");
+    assert.equal(tree.getVisibleCount(), 3);
+  } finally {
+    tree.cleanUp();
+  }
 
   const canary = "sk_ws15criticalsecret";
   const redacted = redactSecrets({ authorization: `Bearer ${canary}`, nested: `token=${canary}` });

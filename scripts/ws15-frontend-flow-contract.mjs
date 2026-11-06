@@ -18,7 +18,7 @@ const contracts = [
   { id: "offline-patch-binding", file: "frontend/src/components/OfflineBundlePanel.tsx", tokens: ["changeSetReviewRevision", "currentSelection", "controller.createExport", "controller.verify", "bundle-revision-lock"] },
   { id: "nested-modal-keyboard", file: "frontend/src/components/useModalDialogFocus.ts", tokens: ["claimModalEscape", "querySelectorAll<HTMLElement>", "document.activeElement", ".focus()"] },
   { id: "compact-drawer-background", file: "frontend/src/App.tsx", tokens: ["data-compact-modal-background", "compactModalDrawerOpen", "inert"] },
-  { id: "file-tree-roving", file: "frontend/src/components/FileTree.tsx", tokens: ["resolveVisibleTreeIndex", 'role="tree"', 'role="treeitem"', "ArrowLeft", "ArrowRight", "tabIndex"] },
+  { id: "file-tree-roving", file: "frontend/src/components/FileTree.tsx", tokens: ["useFileTree", "model.getFocusedItem", "composedPath", "ArrowLeft", "ArrowRight", "aria-keyshortcuts"] },
 ];
 
 const failures = [];

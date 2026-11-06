@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef } from "react";
 import { FileNode, OpenFile, FileSelectionRange, getLanguage } from "../types";
 import { FilePreviewMode } from "../plugins/types";
 import { useFileSystem } from "./useFileSystem";
+import { normalizeWorkspaceRelativePath, retainOpenFilesAfterTreeRefresh } from "../editor/fileUpdatePolicy";
 import {
   collectVisiblePaths,
   pruneNestedPaths,
@@ -19,6 +20,8 @@ export interface EditorHighlightTarget extends FileSelectionRange {
 }
 
 export interface UseWorkspaceFilesOptions {
+  workspaceDir: string;
+  openFiles: OpenFile[];
   fs: ReturnType<typeof useFileSystem>;
   showToast: (msg: string) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
@@ -38,6 +41,7 @@ export interface UseWorkspaceFilesReturn {
   setTreeRefreshNonce: React.Dispatch<React.SetStateAction<number>>;
   lastWorkspaceMtimeRef: React.MutableRefObject<number>;
   loadTree: () => Promise<void>;
+  beginPreserveOpenPath: (path: string) => () => void;
   handleCreateEntry: (path: string, isDirectory: boolean) => Promise<void>;
   handleCopyEntry: (sourcePath: string, targetDirectory: string) => Promise<{ sourcePath: string; path: string; type: FileNode["type"] }>;
   handleDeleteEntry: (path: string) => Promise<void>;
@@ -57,6 +61,8 @@ export interface UseWorkspaceFilesReturn {
  */
 export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspaceFilesReturn {
   const {
+    workspaceDir,
+    openFiles,
     fs,
     showToast,
     t,
@@ -72,30 +78,55 @@ export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspa
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
   const lastWorkspaceMtimeRef = useRef(0);
+  const openFilesRef = useRef(openFiles);
+  openFilesRef.current = openFiles;
+  const treeScopeRef = useRef({ workspaceDir, request: 0, pendingPaths: new Map<string, number>() });
+  if (treeScopeRef.current.workspaceDir !== workspaceDir) treeScopeRef.current = { workspaceDir, request: 0, pendingPaths: new Map() };
+
+  const beginPreserveOpenPath = useCallback((rawPath: string) => {
+    const scope = treeScopeRef.current;
+    const path = normalizeWorkspaceRelativePath(rawPath, workspaceDir);
+    if (!path || scope.workspaceDir !== workspaceDir) return () => {};
+    scope.pendingPaths.set(path, (scope.pendingPaths.get(path) || 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (scope.pendingPaths.get(path) || 1) - 1;
+      if (remaining) scope.pendingPaths.set(path, remaining); else scope.pendingPaths.delete(path);
+    };
+  }, [workspaceDir]);
 
   const loadTree = useCallback(async () => {
+    const scope = treeScopeRef.current;
+    if (scope.workspaceDir !== workspaceDir) return;
+    const request = ++scope.request;
+    const isCurrent = () => scope === treeScopeRef.current && request === scope.request;
     try {
       const tree = await fs.fetchTree();
-      setFileTree(tree);
+      if (!isCurrent()) return;
+      setFileTree((previous) => isCurrent() ? tree : previous);
       const visiblePaths = collectVisiblePaths(tree);
-      setOpenFiles((prev) => prev.filter((file) => visiblePaths.has(file.path)));
-      setActiveFilePath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setDiffViewerPath((prev) => (prev && visiblePaths.has(prev) ? prev : null));
-      setPreviewModes((prev) => {
-        const next: Record<string, FilePreviewMode> = {};
-        for (const [path, mode] of Object.entries(prev)) {
-          if (visiblePaths.has(path)) {
-            next[path] = mode;
-          }
-        }
-        return next;
+      const pendingPaths = new Set(scope.pendingPaths.keys());
+      const availablePaths = new Set(visiblePaths);
+      for (const file of retainOpenFilesAfterTreeRefresh(openFilesRef.current, visiblePaths, workspaceDir, pendingPaths)) {
+        availablePaths.add(normalizeWorkspaceRelativePath(file.path, workspaceDir));
+      }
+      const retainPath = (path: string | null) => path && availablePaths.has(normalizeWorkspaceRelativePath(path, workspaceDir)) ? path : null;
+      setOpenFiles((previous) => isCurrent() ? retainOpenFilesAfterTreeRefresh(previous, visiblePaths, workspaceDir, pendingPaths) : previous);
+      // Missing source tabs remain open while rename evidence is pending.
+      setActiveFilePath((path) => isCurrent() ? retainPath(path) : path);
+      setDiffViewerPath((path) => isCurrent() ? retainPath(path) : path);
+      setPreviewModes((previousModes) => {
+        if (!isCurrent()) return previousModes;
+        return Object.fromEntries(Object.entries(previousModes).filter(([path]) => availablePaths.has(normalizeWorkspaceRelativePath(path, workspaceDir))));
       });
       lastWorkspaceMtimeRef.current = Date.now();
       setTreeRefreshNonce((prev) => prev + 1);
     } catch {
-      showToast(t("app.failedToLoadFileTree"));
+      if (isCurrent()) showToast(t("app.failedToLoadFileTree"));
     }
-  }, [fs, setActiveFilePath, setDiffViewerPath, setOpenFiles, setPreviewModes, showToast, t]);
+  }, [fs, setActiveFilePath, setDiffViewerPath, setOpenFiles, setPreviewModes, showToast, t, workspaceDir]);
 
   const handleCreateEntry = useCallback(
     async (path: string, isDirectory: boolean) => {
@@ -237,6 +268,7 @@ export function useWorkspaceFiles(options: UseWorkspaceFilesOptions): UseWorkspa
     setTreeRefreshNonce,
     lastWorkspaceMtimeRef,
     loadTree,
+    beginPreserveOpenPath,
     handleCreateEntry,
     handleCopyEntry,
     handleDeleteEntry,

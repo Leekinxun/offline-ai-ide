@@ -1,8 +1,6 @@
 import { FC, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { OpenFile } from "../types";
 import { useI18n } from "../i18n";
-import { getEditorThemeName } from "../editor/themeNames";
-import { DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import {
   applyHunkSelections,
@@ -12,9 +10,7 @@ import {
 } from "../utils/conflicts";
 import "./DiffViewerModal.css";
 
-const DiffEditor = lazy(() =>
-  import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
-);
+const PierreDiff = lazy(() => import("./PierreDiff"));
 
 export interface DiffViewerModalProps {
   file: OpenFile;
@@ -136,20 +132,12 @@ export const DiffViewerModal: FC<DiffViewerModalProps> = ({
         </div>
         <div className="diff-modal-body">
           <Suspense fallback={<div className="panel-loading">{t("common.loading")}</div>}>
-            <DiffEditor
-              height="100%"
-              original={file.remoteContent}
+            <PierreDiff
+              path={file.path}
+              original={file.remoteContent ?? ""}
               modified={file.content}
-              language={file.language}
-              theme={getEditorThemeName(theme)}
-              options={{
-                readOnly: true,
-                renderSideBySide: true,
-                minimap: { enabled: false },
-                ...DEFAULT_EDITOR_FONT_OPTIONS,
-                fontFamily: editorFont,
-                automaticLayout: true,
-              }}
+              theme={theme}
+              fontFamily={editorFont}
             />
           </Suspense>
         </div>

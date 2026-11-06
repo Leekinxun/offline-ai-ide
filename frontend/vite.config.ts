@@ -10,6 +10,11 @@ function createWorkbenchChunk(id: string): string | undefined {
   if (id.includes("/@monaco-editor/react/")) return "monaco-react";
   if (id.includes("/monaco-editor/")) return "monaco-core";
   if (id.includes("/@xterm/")) return "terminal-vendor";
+  // Preserve the theme catalog's dynamic imports instead of merging all themes
+  // with the optional Highlights backend and its embedded WebAssembly payload.
+  if (/\/node_modules\/@pierre\/highlights\/dist\/(?!themes(?:\/|\.))/.test(id)) return "highlights-vendor";
+  if (id.includes("/node_modules/@pierre/trees/")) return "trees-vendor";
+  if (id.includes("/node_modules/@pierre/diffs/")) return "diffs-vendor";
   if (
     id.includes("/react-markdown/") ||
     id.includes("/remark-") ||
@@ -22,13 +27,7 @@ function createWorkbenchChunk(id: string): string | undefined {
   ) {
     return "markdown-vendor";
   }
-  if (
-    id.includes("/react/") ||
-    id.includes("/react-dom/") ||
-    id.includes("/scheduler/")
-  ) {
-    return "react-vendor";
-  }
+  if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(id)) return "react-vendor";
 
   return undefined;
 }
@@ -60,6 +59,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    chunkSizeWarningLimit: 5000,
     rollupOptions: {
       output: {
         manualChunks: createWorkbenchChunk,

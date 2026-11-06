@@ -4,6 +4,7 @@ import type { OpenFile } from "../frontend/src/types/index.js";
 import {
   applyFileSaveResult,
   applyRemoteFileRename,
+  applyRemoteFileMetadata,
   applyRemoteFileSnapshot,
   beginFileRead,
   buildClearedRemoteState,
@@ -238,4 +239,62 @@ test("rename evidence is invalidated by either file generation or workspace repl
     if (isCurrentFileRead(source, currentScope) && isCurrentFileRead(target, currentScope)) tabs = applyRemoteFileRename(tabs, rename(), "/repo");
     assert.equal(tabs, original, changed);
   }
+});
+
+test("a tree refresh before rename evidence preserves the dirty source for later migration", () => {
+  const dirty = file({ content: "saved\nunsaved reviewer note", modified: true });
+  const refreshed = retainOpenFilesAfterTreeRefresh([dirty], new Set(["src/TASK.md"]), "/repo");
+  assert.equal(refreshed[0], dirty);
+  const migrated = applyRemoteFileRename(refreshed, rename(), "/repo");
+  assert.equal(migrated.length, 1);
+  assert.equal(migrated[0].path, "src/TASK.md");
+  assert.equal(migrated[0].content, dirty.content);
+  assert.equal(migrated[0].modified, true);
+  assert.equal(migrated[0].version, dirty.version);
+});
+
+test("metadata completion never reopens a tab closed while its request was pending", () => {
+  const expected = { path: "src/main.ts", version: "v1" };
+  const closed: OpenFile[] = [];
+  assert.equal(applyRemoteFileMetadata(closed, expected, { content: "old response", version: "v2" }, "/repo"), closed);
+  const otherTabs = [file({ path: "other.ts" })];
+  assert.equal(applyRemoteFileMetadata(otherTabs, expected, { content: "old response", version: "v2" }, "/repo"), otherTabs);
+});
+
+test("metadata completion preserves typing on the expected save baseline", () => {
+  const incoming = applyRemoteFileSnapshot(file(), { content: "agent update", source: "assistant_tool" });
+  const expected = { path: incoming.path, version: incoming.version };
+  const typed = { ...incoming, content: "typed after navigation", modified: true };
+  const [completed] = applyRemoteFileMetadata([typed], expected, { content: "agent update", version: "v2" }, "/repo");
+  assert.equal(completed.content, typed.content);
+  assert.equal(completed.modified, true);
+  assert.equal(completed.version, typed.version);
+  assert.equal(completed.remoteContent, "agent update");
+  assert.equal(completed.remoteVersion, "v2");
+});
+
+test("metadata from before a save or reload cannot replace the newer tab baseline", () => {
+  const saved = file({ content: "saved after request", version: "v2", updatedAt: 2 });
+  const current = [saved];
+  for (const version of ["v1", undefined]) {
+    assert.equal(applyRemoteFileMetadata(current, { path: saved.path, version }, { content: "stale disk", version: "v1" }, "/repo"), current);
+  }
+  assert.equal(saved.content, "saved after request");
+  assert.equal(saved.version, "v2");
+});
+
+test("pending rename evidence preserves a clean source through tree refresh and respects explicit close", () => {
+  const clean = file();
+  const treePaths = new Set(["src/TASK.md"]);
+  const pending = new Set([clean.path]);
+  const refreshed = retainOpenFilesAfterTreeRefresh([clean], treePaths, "/repo", pending);
+  assert.equal(refreshed[0], clean);
+  const [migrated] = applyRemoteFileRename(refreshed, rename(), "/repo");
+  assert.equal(migrated.path, "src/TASK.md");
+  assert.equal(migrated.content, clean.content);
+  assert.equal(migrated.modified, false);
+  assert.deepEqual(retainOpenFilesAfterTreeRefresh([], treePaths, "/repo", pending), []);
+  assert.deepEqual(applyRemoteFileRename([], rename(), "/repo"), []);
+  pending.clear();
+  assert.deepEqual(retainOpenFilesAfterTreeRefresh([clean], treePaths, "/repo", pending), []);
 });

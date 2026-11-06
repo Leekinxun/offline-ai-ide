@@ -1,0 +1,26 @@
+.pierre-diff {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  --diffs-font-features: normal;
+  --diffs-tab-size: 2;
+  --diffs-header-font-family: var(--font-ui, system-ui);
+  --diffs-selection-color-override: var(--accent);
+  --diffs-fg-number-override: var(--ink-muted);
+}
+
+.pierre-diff:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.pierre-diff-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-subtle) transparent;
+}

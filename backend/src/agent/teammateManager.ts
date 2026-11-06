@@ -5,7 +5,6 @@ import { config, resolveModelEndpoint, resolveModelSampling } from "../config.js
 import { DEFAULT_TEAMMATE_CAPABILITIES, TeamConfig, TeamMember, OpenAIMessage, OpenAIToolCall, OpenAIToolDef } from "./types.js";
 import { MessageBus } from "./messageBus.js";
 import { TaskManager } from "./taskManager.js";
-import { safePath } from "../utils/safePath.js";
 import { readAuthorizedWorkspaceFile } from "./contextPolicy.js";
 import { evaluateWorkspaceWrite } from "./toolPolicy.js";
 import {

@@ -20,7 +20,15 @@ import {
   normalizeWorkspaceRelativePath,
   isSameWorkspacePath,
   buildClearedRemoteState,
-} from "../utils/workspacePaths";
+  applyRemoteFileRename,
+  applyRemoteFileMetadata,
+  applyRemoteFileSnapshot,
+  beginFileRead,
+  createFileReadScope,
+  isCurrentFileRead,
+  type FileSnapshot,
+} from "../editor/fileUpdatePolicy";
+import { remapMovedPath } from "../utils/workspacePaths";
 import type { EditorHighlightTarget, EditorNavigationTarget } from "./useWorkspaceFiles";
 
 export type WorkspaceView = "chat" | "files";
@@ -32,7 +40,7 @@ export interface WorkbenchChatOptions {
   activeFilePath: string | null;
   openFiles: OpenFile[];
   setOpenFiles: Dispatch<SetStateAction<OpenFile[]>>;
-  setActiveFilePath: (path: string | null) => void;
+  setActiveFilePath: Dispatch<SetStateAction<string | null>>;
   setWorkspaceView: (view: WorkspaceView) => void;
   setEditorHighlightTarget: Dispatch<SetStateAction<EditorHighlightTarget | null>>;
   setEditorNavigationTarget: Dispatch<SetStateAction<EditorNavigationTarget | null>>;
@@ -50,6 +58,7 @@ export interface WorkbenchChatOptions {
     }>;
   };
   loadTree: () => Promise<void> | void;
+  beginPreserveOpenPath: (path: string) => () => void;
   focusChat: () => void;
   showToast: (msg: string) => void;
   t: (key: string, options?: any) => string;
@@ -75,6 +84,7 @@ export function useWorkbenchChat({
   selectionInfo,
   fs,
   loadTree,
+  beginPreserveOpenPath,
   focusChat,
   showToast,
   t,
@@ -82,35 +92,92 @@ export function useWorkbenchChat({
   setRunDetailsVisible,
   setEditorAssistantVisible,
 }: WorkbenchChatOptions) {
-  const applyFileUpdateToTabs = useCallback(
-    (update: FileUpdate, ensureOpen: boolean) => {
-      const canonicalPath = normalizeWorkspaceRelativePath(update.path, workspaceDir);
-      const name = canonicalPath.split("/").pop() || canonicalPath;
-      const nextFile: OpenFile = {
-        path: canonicalPath,
-        name,
-        content: update.content,
-        language: getLanguage(name),
-        modified: false,
-        version: undefined,
-        updatedAt: undefined,
-        ...buildClearedRemoteState(),
-      };
+  const openFilesRef = useRef(openFiles);
+  openFilesRef.current = openFiles;
+  const fileReadScopeRef = useRef(createFileReadScope(workspaceDir));
+  if (fileReadScopeRef.current.workspaceDir !== workspaceDir) {
+    fileReadScopeRef.current = createFileReadScope(workspaceDir);
+  }
+  useEffect(() => {
+    const scope = fileReadScopeRef.current;
+    return () => {
+      if (fileReadScopeRef.current === scope) fileReadScopeRef.current = createFileReadScope(workspaceDir);
+    };
+  }, [workspaceDir]);
 
-      setOpenFiles((prev) => {
-        const existingIndex = prev.findIndex((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
-        if (existingIndex >= 0) {
-          return prev.map((file, idx) => (idx === existingIndex ? nextFile : file));
+  const applyFileUpdateToTabs = useCallback(
+    async (update: FileUpdate, ensureOpen: boolean): Promise<void> => {
+      const canonicalPath = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      const previousPath = update.previousPath && normalizeWorkspaceRelativePath(update.previousPath, workspaceDir);
+      const scope = fileReadScopeRef.current;
+      if (!canonicalPath || scope.workspaceDir !== workspaceDir) return;
+      const targetRead = beginFileRead(scope, canonicalPath);
+      const sourceRead = previousPath ? beginFileRead(scope, previousPath) : null;
+      const isCurrent = () => isCurrentFileRead(targetRead, fileReadScopeRef.current)
+        && (sourceRead === null || isCurrentFileRead(sourceRead, fileReadScopeRef.current));
+      const name = canonicalPath.split("/").pop() || canonicalPath;
+      const incoming: FileSnapshot = { content: update.content, source: "assistant_tool" };
+      const targetTab = openFilesRef.current.find((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
+      const showsIncoming = !previousPath || ensureOpen;
+      const expectedTarget = targetTab
+        ? { path: canonicalPath, version: showsIncoming ? applyRemoteFileSnapshot(targetTab, incoming).version : targetTab.version }
+        : ensureOpen ? { path: canonicalPath, version: undefined } : null;
+      const releaseSource = previousPath ? beginPreserveOpenPath(previousPath) : null;
+      // Explicit navigation opens immediately. Metadata only completes the tab
+      // that was open for this request, and never reopens or reactivates it.
+      if (showsIncoming) {
+        setOpenFiles((previous) => {
+          if (!isCurrent()) return previous;
+          const index = previous.findIndex((file) => isSameWorkspacePath(file.path, canonicalPath, workspaceDir));
+          if (index >= 0) return previous.map((file, current) => current === index ? applyRemoteFileSnapshot(file, incoming) : file);
+          return ensureOpen ? [...previous, {
+            path: canonicalPath,
+            name,
+            language: getLanguage(name),
+            content: update.content,
+            modified: false,
+            version: undefined,
+            updatedAt: undefined,
+            ...buildClearedRemoteState(),
+          }] : previous;
+        });
+      }
+      const commitSnapshot = (snapshot: FileSnapshot, sourceStatus?: number) => {
+        if (!isCurrent()) return;
+        const rename = previousPath && update.previousVersion
+          ? { previousPath, previousVersion: update.previousVersion, path: canonicalPath, sourceStatus, snapshot }
+          : null;
+        if (rename && applyRemoteFileRename(openFilesRef.current, rename, workspaceDir) !== openFilesRef.current) {
+          setActiveFilePath((path) => isCurrent() && path && isSameWorkspacePath(path, rename.previousPath, workspaceDir) ? canonicalPath : path);
+          setEditorNavigationTarget((target) => isCurrent() && target ? { ...target, path: remapMovedPath(target.path, rename.previousPath, canonicalPath) } : target);
+          setEditorHighlightTarget((target) => isCurrent() && target ? { ...target, path: remapMovedPath(target.path, rename.previousPath, canonicalPath) } : target);
         }
-        return ensureOpen ? [...prev, nextFile] : prev;
-      });
+        setOpenFiles((previous) => {
+          if (!isCurrent()) return previous;
+          const renamed = rename ? applyRemoteFileRename(previous, rename, workspaceDir) : previous;
+          return renamed !== previous ? renamed : applyRemoteFileMetadata(previous, expectedTarget, snapshot, workspaceDir);
+        });
+      };
+      try {
+        const [snapshot, sourceStatus] = await Promise.all([
+          fs.readFileWithMeta(canonicalPath),
+          previousPath ? fs.readFileWithMeta(previousPath).then(() => 200, (error: Error & { status?: number }) => error.status) : undefined,
+        ]);
+        if (!isCurrent()) return;
+        commitSnapshot({ ...snapshot, source: snapshot.source || "assistant_tool" }, sourceStatus);
+      } catch {
+        // Keep the current buffer when authoritative metadata is unavailable.
+      } finally {
+        releaseSource?.();
+        if (previousPath && scope === fileReadScopeRef.current) void loadTree();
+      }
     },
-    [setOpenFiles, workspaceDir]
+    [beginPreserveOpenPath, fs, loadTree, setActiveFilePath, setEditorHighlightTarget, setEditorNavigationTarget, setOpenFiles, workspaceDir]
   );
 
   const handleAiFileUpdate = useCallback(
     (update: FileUpdate) => {
-      applyFileUpdateToTabs(update, false);
+      void applyFileUpdateToTabs(update, false);
       if (update.selection && activeFilePath === update.path) {
         highlightRequestRef.current += 1;
         setEditorHighlightTarget({
@@ -120,66 +187,23 @@ export function useWorkbenchChat({
         });
       }
       void loadTree();
-      void (async () => {
-        try {
-          const next = await fs.readFileWithMeta(update.path);
-          setOpenFiles((prev) =>
-            prev.map((file) =>
-              file.path === update.path
-                ? {
-                    ...file,
-                    content: next.content,
-                    version: next.version,
-                    updatedAt: next.updatedAt,
-                    ...buildClearedRemoteState(),
-                  }
-                : file
-            )
-          );
-        } catch {
-          // best effort only
-        }
-      })();
     },
-    [activeFilePath, applyFileUpdateToTabs, fs, highlightRequestRef, loadTree, setEditorHighlightTarget, setOpenFiles]
+    [activeFilePath, applyFileUpdateToTabs, highlightRequestRef, loadTree, setEditorHighlightTarget]
   );
 
   const handleNavigateToFileUpdate = useCallback(
     (update: FileUpdate) => {
       setWorkspaceView("files");
-      applyFileUpdateToTabs(update, true);
-      setActiveFilePath(update.path);
+      void applyFileUpdateToTabs(update, true);
+      const path = normalizeWorkspaceRelativePath(update.path, workspaceDir);
+      setActiveFilePath(path);
+      if (update.selection) {
+        navigationRequestRef.current += 1;
+        setEditorNavigationTarget({ path, requestId: navigationRequestRef.current, ...update.selection });
+      }
       void loadTree();
-      void (async () => {
-        try {
-          const next = await fs.readFileWithMeta(update.path);
-          setOpenFiles((prev) =>
-            prev.map((file) =>
-              file.path === update.path
-                ? {
-                    ...file,
-                    content: next.content,
-                    version: next.version,
-                    updatedAt: next.updatedAt,
-                    ...buildClearedRemoteState(),
-                  }
-                : file
-            )
-          );
-        } catch {
-          // best effort only
-        }
-      })();
-
-      if (!update.selection) return;
-      navigationRequestRef.current += 1;
-      setEditorNavigationTarget({
-        path: update.path,
-        requestId: navigationRequestRef.current,
-        ...update.selection,
-      });
     },
-    [applyFileUpdateToTabs, fs, loadTree, navigationRequestRef, setActiveFilePath, setEditorNavigationTarget, setOpenFiles, setWorkspaceView]
+    [applyFileUpdateToTabs, loadTree, navigationRequestRef, setActiveFilePath, setEditorNavigationTarget, setWorkspaceView, workspaceDir]
   );
 
   const chatAttachmentDraft = useChatAttachmentDraft(token);

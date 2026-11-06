@@ -1,9 +1,10 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FILE_TREE_TAG_NAME, preparePresortedFileTreeInput } from "@pierre/trees";
+import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react";
 import "./FileTree.css";
 import { FileNode, TeamClaim, TeamPresence } from "../types";
-import { ChevronRight, Download, File, Folder } from "lucide-react";
 import { useI18n } from "../i18n";
-import { resolveVisibleTreeIndex } from "./fileTreeKeyboardContract";
+import { buildTreeInput, fromTreePath, getExpandedTreePaths, restoreTreeExpansion, syncTreeSelection } from "./fileTreeAdapter";
 
 export const FILE_TREE_DRAG_TYPE = "application/x-crewforge-file-path";
 
@@ -16,326 +17,251 @@ interface FileTreeProps {
   onFileSelect: (path: string) => void;
   onToggleSelect: (path: string, selected: boolean) => void;
   onDownload: (path: string, type: FileNode["type"]) => void;
-  onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onContextMenu: (position: { clientX: number; clientY: number }, node: FileNode) => void;
   onDropFiles: (targetPath: string, files: FileList) => void;
   onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
   claims?: TeamClaim[];
   presence?: TeamPresence[];
   filterQuery?: string;
-  depth?: number;
-  rovingPath?: string;
-  onRovingPathChange?: (path: string) => void;
 }
 
-export const FileTree: React.FC<FileTreeProps> = ({
-  nodes,
-  activeFilePath,
-  selectedPaths,
-  multiSelectEnabled,
-  canEditWorkspace = true,
-  onFileSelect,
-  onToggleSelect,
-  onDownload,
-  onContextMenu,
-  onDropFiles,
-  onMoveEntry,
-  claims,
-  presence,
-  filterQuery = "",
-  depth = 0,
-  rovingPath,
-  onRovingPathChange,
-}) => {
-  const { t } = useI18n();
-  const [rootRovingPath, setRootRovingPath] = useState(nodes[0]?.path || "");
-  const treeRef = useRef<HTMLDivElement>(null);
-  const effectiveRovingPath = rovingPath ?? rootRovingPath;
-  const setRovingPath = onRovingPathChange ?? setRootRovingPath;
-  useEffect(() => {
-    if (depth !== 0 || !treeRef.current) return;
-    const visibleItems = Array.from(treeRef.current.querySelectorAll<HTMLElement>('[role="treeitem"]'));
-    if (!visibleItems.length) return;
-    if (!visibleItems.some((item) => item.dataset.treePath === effectiveRovingPath)) setRootRovingPath(visibleItems[0].dataset.treePath || "");
-  }, [depth, effectiveRovingPath, nodes]);
-  return (
-    <div ref={depth === 0 ? treeRef : undefined} role={depth === 0 ? "tree" : "group"} aria-label={depth === 0 ? t("sidebar.explorer") : undefined} aria-multiselectable={depth === 0 || undefined}>
-      {nodes.map((node, index) => (
-        <FileTreeItem
-          key={node.path}
-          node={node}
-          activeFilePath={activeFilePath}
-          selectedPaths={selectedPaths}
-          multiSelectEnabled={multiSelectEnabled}
-          canEditWorkspace={canEditWorkspace}
-          onFileSelect={onFileSelect}
-          onToggleSelect={onToggleSelect}
-          onDownload={onDownload}
-          onContextMenu={onContextMenu}
-          onDropFiles={onDropFiles}
-          onMoveEntry={onMoveEntry}
-          claims={claims}
-          presence={presence}
-          filterQuery={filterQuery}
-          depth={depth}
-          position={index + 1}
-          setSize={nodes.length}
-          tabStop={effectiveRovingPath === node.path}
-          rovingPath={effectiveRovingPath}
-          onRovingPathChange={setRovingPath}
-        />
-      ))}
-    </div>
+/** The beta renderer has text decorations, not interactive React row slots. */
+const TREE_ROW_CSS = `
+  [data-type="item"] { border-radius: 4px; margin: 0; font-size: 12px; }
+  [data-item-section="decoration"] { padding-inline: 2px; }
+  [data-item-section="decoration"] > span { display: flex; align-items: center; gap: 5px; }
+  [data-item-section="decoration"] > span > span:first-child,
+  [data-item-section="decoration"] > span > span:last-child {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 22px; border-radius: 4px; cursor: pointer;
+  }
+  [data-item-section="decoration"] > span > span:first-child { opacity: 0; }
+  [data-item-section="decoration"] > span > span:last-child { font-size: 17px; opacity: 0; }
+  [data-item-section="decoration"] > span > span:nth-child(2) {
+    font-size: 10px; max-width: 80px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--trees-fg-muted);
+  }
+  :host([data-multi-select="true"]) [data-item-section="decoration"] > span > span:first-child,
+  [data-type="item"]:hover [data-item-section="decoration"] > span > span:first-child,
+  [data-item-selected="true"] [data-item-section="decoration"] > span > span:first-child,
+  [data-type="item"]:focus-visible [data-item-section="decoration"] > span > span:first-child,
+  [data-type="item"]:hover [data-item-section="decoration"] > span > span:last-child,
+  [data-type="item"]:focus-visible [data-item-section="decoration"] > span > span:last-child { opacity: 1; }
+  [data-item-section="decoration"] > span > span:first-child:hover,
+  [data-item-section="decoration"] > span > span:last-child:hover { background: var(--trees-bg-muted); }
+  :host([data-read-only="true"]) [data-item-section="decoration"] > span > span:first-child { cursor: default; opacity: .35; }
+`;
+
+function eventRow(event: Event): HTMLElement | undefined {
+  // event.target is the custom element after Shadow DOM retargeting.
+  return event.composedPath().find((entry): entry is HTMLElement =>
+    entry instanceof HTMLElement && entry.dataset.itemPath !== undefined && entry.dataset.type === "item",
   );
-};
-
-interface FileTreeItemProps {
-  node: FileNode;
-  activeFilePath: string | null;
-  selectedPaths: Set<string>;
-  multiSelectEnabled: boolean;
-  canEditWorkspace: boolean;
-  onFileSelect: (path: string) => void;
-  onToggleSelect: (path: string, selected: boolean) => void;
-  onDownload: (path: string, type: FileNode["type"]) => void;
-  onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
-  onDropFiles: (targetPath: string, files: FileList) => void;
-  onMoveEntry: (sourcePath: string, targetDirectory: string) => void;
-  claims?: TeamClaim[];
-  presence?: TeamPresence[];
-  filterQuery: string;
-  depth: number;
-  position: number;
-  setSize: number;
-  tabStop: boolean;
-  rovingPath: string;
-  onRovingPathChange: (path: string) => void;
 }
 
-const FileTreeItem: React.FC<FileTreeItemProps> = ({
-  node,
-  activeFilePath,
-  selectedPaths,
-  multiSelectEnabled,
-  canEditWorkspace,
-  onFileSelect,
-  onToggleSelect,
-  onDownload,
-  onContextMenu,
-  onDropFiles,
-  onMoveEntry,
-  claims,
-  presence,
-  filterQuery,
-  depth,
-  position,
-  setSize,
-  tabStop,
-  rovingPath,
-  onRovingPathChange,
-}) => {
+function decorationAction(event: Event): "select" | "download" | undefined {
+  for (const entry of event.composedPath()) {
+    if (!(entry instanceof HTMLElement)) continue;
+    if (entry.parentElement?.parentElement?.dataset.itemSection !== "decoration") continue;
+    const index = Array.from(entry.parentElement.children).indexOf(entry);
+    if (index === 0) return "select";
+    if (index === 2) return "download";
+  }
+}
+
+export const FileTree: React.FC<FileTreeProps> = (props) => {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  const [dropActive, setDropActive] = useState(false);
+  const latest = useRef(props);
+  latest.current = props;
+  const shellRef = useRef<HTMLDivElement>(null);
+  const input = useMemo(() => buildTreeInput(props.nodes), [props.nodes]);
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const preparedInput = useMemo(() => preparePresortedFileTreeInput(input.paths), [input]);
+  const isFiltering = Boolean(props.filterQuery?.trim());
+  const expansionRef = useRef({ filtering: isFiltering, directoryPaths: input.directoryPaths, saved: [] as string[] });
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const { model } = useFileTree({
+    preparedInput,
+    initialExpansion: "closed",
+    flattenEmptyDirectories: false,
+    itemHeight: 29,
+    overscan: 8,
+    icons: { set: "standard", colored: true },
+    search: false,
+    // Persist through the existing filesystem callbacks before refreshing the
+    // tree. Capture handlers prevent the library's optimistic in-memory move.
+    dragAndDrop: {
+      canDrag: () => latest.current.canEditWorkspace !== false,
+      // Touch gestures can bypass native DragEvents. They must never perform
+      // a model-only move that the filesystem has not acknowledged.
+      canDrop: () => false,
+    },
+    composition: {
+      contextMenu: {
+        enabled: true,
+        triggerMode: "right-click",
+        onOpen: (item, context) => {
+          const node = inputRef.current.nodesByPath.get(fromTreePath(item.path));
+          if (node) latest.current.onContextMenu({ clientX: context.anchorRect.left, clientY: context.anchorRect.top }, node);
+          // Sidebar owns the app menu, permission checks, and dialogs. Avoid
+          // leaving an empty library menu/wash above that surface.
+          context.close({ restoreFocus: false });
+        },
+      },
+    },
+    renderRowDecoration: ({ item }) => {
+      const path = fromTreePath(item.path);
+      const current = latest.current;
+      const claim = current.claims?.find((entry) => entry.path === path);
+      const viewers = current.presence?.filter((entry) => entry.activeFilePath === path).length || 0;
+      return {
+        text: "",
+        parts: [
+          { text: current.selectedPaths.has(path) ? "☑" : "☐", color: "var(--trees-accent)" },
+          { text: claim ? `✋ ${claim.username}` : viewers ? `${viewers} 👀` : "" },
+          { text: "↓" },
+        ],
+      };
+    },
+    unsafeCSS: TREE_ROW_CSS,
+  });
 
-  const activateNode = useCallback((event?: React.MouseEvent) => {
-    onRovingPathChange(node.path);
-    if (multiSelectEnabled || event?.ctrlKey || event?.metaKey) {
-      onToggleSelect(node.path, !selectedPaths.has(node.path));
-      return;
-    }
+  useLayoutEffect(() => {
+    const previous = expansionRef.current;
+    if (!previous.filtering) previous.saved = getExpandedTreePaths(model, previous.directoryPaths);
+    const expandedPaths = isFiltering ? input.directoryPaths : previous.saved;
+    model.resetPaths({ preparedInput, initialExpandedPaths: expandedPaths });
+    restoreTreeExpansion(model, input.directoryPaths, expandedPaths);
+    expansionRef.current = { filtering: isFiltering, directoryPaths: input.directoryPaths, saved: previous.saved };
+  }, [input.directoryPaths, isFiltering, model, preparedInput]);
 
-    if (node.type === "directory") {
-      setExpanded((prev) => !prev);
-    } else {
-      onFileSelect(node.path);
-    }
-  }, [multiSelectEnabled, node, onFileSelect, onRovingPathChange, onToggleSelect, selectedPaths]);
+  useLayoutEffect(() => {
+    syncTreeSelection(model, props.selectedPaths);
+    const host = model.getFileTreeContainer();
+    if (host) model.render({ fileTreeContainer: host });
+  }, [model, preparedInput, props.selectedPaths, props.claims, props.presence]);
 
-  const handleClick = useCallback((event: React.MouseEvent) => {
-    activateNode(event);
-  }, [activateNode]);
+  // App-owned metadata/styles only: navigation and virtualization stay on the
+  // public model. No interactive element is inserted into a treeitem button.
+  useEffect(() => {
+    const host = shellRef.current?.querySelector<HTMLElement>(FILE_TREE_TAG_NAME);
+    const root = host?.shadowRoot;
+    if (!root) return;
+    const labelRows = () => {
+      root.querySelector('[role="tree"]')?.setAttribute("aria-label", t("sidebar.explorer"));
+      for (const row of root.querySelectorAll<HTMLElement>('[role="treeitem"]')) {
+        row.setAttribute("aria-keyshortcuts", "Alt+D Control+Space Meta+Space");
+        const downloadLabel = t(row.dataset.itemType === "folder" ? "sidebar.downloadFolder" : "sidebar.downloadFile");
+        row.setAttribute("aria-description", `${t("sidebar.selectForBatchDelete")} (Control/Command+Space); ${downloadLabel} (Alt+D)`);
+        const parts = row.querySelectorAll<HTMLElement>('[data-item-section="decoration"] > span > span');
+        if (parts[0]) parts[0].title = `${t("sidebar.selectForBatchDelete")} (Control/Command+Space)`;
+        if (parts[2]) parts[2].title = `${downloadLabel} (Alt+D)`;
+      }
+    };
+    labelRows();
+    const observer = new MutationObserver(labelRows);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [model, t]);
 
-  const isActive = node.path === activeFilePath;
-  const isFilterActive = Boolean(filterQuery.trim());
-  const isExpanded = isFilterActive || expanded;
-  const isSelected = selectedPaths.has(node.path);
-  const claim = claims?.find((entry) => entry.path === node.path);
-  const viewers = presence?.filter((entry) => entry.activeFilePath === node.path) || [];
-  const moveFocus = (target: HTMLElement | undefined) => {
-    if (!target) return;
-    if (target.dataset.treePath) onRovingPathChange(target.dataset.treePath);
-    target.focus();
+  useEffect(() => {
+    const host = shellRef.current?.querySelector<HTMLElement>(FILE_TREE_TAG_NAME);
+    const root = host?.shadowRoot;
+    if (!root) return;
+    const style = document.createElement("style");
+    style.dataset.crewforgeTreeState = "true";
+    const activePath = props.activeFilePath;
+    style.textContent = [
+      activePath ? `[data-item-path="${CSS.escape(activePath)}"] { background: color-mix(in srgb, var(--trees-accent) 16%, transparent); box-shadow: inset 2px 0 var(--trees-accent); }
+      [data-item-path="${CSS.escape(activePath)}"] [data-item-section="decoration"] > span > span:last-child { opacity: 1; }` : "",
+      dropTargetPath ? `[data-item-path="${CSS.escape(`${dropTargetPath}/`)}"] { background: color-mix(in srgb, var(--trees-accent) 20%, transparent); box-shadow: inset 0 0 0 1px var(--trees-accent); }` : "",
+    ].join("\n");
+    root.append(style);
+    return () => style.remove();
+  }, [dropTargetPath, model, props.activeFilePath]);
+
+  const nodeForEvent = (event: Event) => {
+    const row = eventRow(event);
+    return row?.dataset.itemPath ? input.nodesByPath.get(fromTreePath(row.dataset.itemPath)) : undefined;
   };
-
-  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const current = event.currentTarget;
-    const tree = current.closest('[role="tree"]');
-    const items = tree ? Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]')) : [];
-    const index = items.indexOf(current);
-    const navigationIndex = resolveVisibleTreeIndex(index, items.length, event.key);
-    if (navigationIndex !== null) { event.preventDefault(); moveFocus(items[navigationIndex]); return; }
-    if (event.key === "ArrowRight" && node.type === "directory") {
-      event.preventDefault();
-      if (!isExpanded) setExpanded(true);
-      else moveFocus(items[index + 1]);
-      return;
-    }
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      if (node.type === "directory" && isExpanded && !isFilterActive) { onRovingPathChange(node.path); setExpanded(false); return; }
-      const wrapper = current.closest<HTMLElement>('[data-tree-node]');
-      const parentWrapper = wrapper?.parentElement?.closest<HTMLElement>('[data-tree-node]');
-      moveFocus(parentWrapper?.querySelector<HTMLElement>(':scope > [role="treeitem"]') || undefined);
-      return;
-    }
-    if (event.altKey && event.key.toLowerCase() === "d") { event.preventDefault(); void onDownload(node.path, node.type); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key === " ") { event.preventDefault(); onToggleSelect(node.path, !isSelected); return; }
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    activateNode();
+  const toggleSelection = (node: FileNode) => props.onToggleSelect(node.path, !props.selectedPaths.has(node.path));
+  const activate = (node: FileNode, toggle: boolean) => {
+    const item = model.getItem(node.path);
+    item?.focus();
+    if (toggle) toggleSelection(node);
+    else if (node.type === "file") props.onFileSelect(node.path);
+    else if (item && "toggle" in item && !isFiltering) item.toggle();
   };
+  const stop = (event: React.SyntheticEvent) => { event.preventDefault(); event.stopPropagation(); };
 
   return (
-    <div data-tree-node={node.path}>
-      <div
-        className={`tree-item${isActive ? " active" : ""}${isSelected ? " selected" : ""}${dropActive ? " drop-target" : ""}`}
-        style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={handleClick}
-        onContextMenu={(e) => onContextMenu(e, node)}
-        draggable={canEditWorkspace}
-        onDragStart={(event) => {
-          if (!canEditWorkspace) {
-            event.preventDefault();
-            return;
-          }
+    <div className="crewforge-file-tree-shell" ref={shellRef}>
+      <PierreFileTree
+        model={model}
+        data-multi-select={props.multiSelectEnabled ? "true" : "false"}
+        data-read-only={props.canEditWorkspace === false ? "true" : "false"}
+        onClickCapture={(event) => {
+          const node = nodeForEvent(event.nativeEvent);
+          if (!node) return;
+          stop(event);
+          const action = decorationAction(event.nativeEvent);
+          if (action === "download") { void props.onDownload(node.path, node.type); return; }
+          if (action === "select") { if (props.canEditWorkspace !== false) toggleSelection(node); return; }
+          activate(node, props.multiSelectEnabled || event.ctrlKey || event.metaKey);
+        }}
+        onKeyDownCapture={(event) => {
+          if (!eventRow(event.nativeEvent)) return;
+          const item = model.getFocusedItem();
+          const node = item && input.nodesByPath.get(fromTreePath(item.getPath()));
+          if (!node) return;
+          if (event.altKey && event.key.toLowerCase() === "d") { stop(event); void props.onDownload(node.path, node.type); }
+          else if ((event.ctrlKey || event.metaKey) && event.key === " ") { stop(event); toggleSelection(node); }
+          else if (event.key === "Enter" || event.key === " ") { stop(event); activate(node, props.multiSelectEnabled || event.ctrlKey || event.metaKey); }
+          else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") stop(event);
+          else if (event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            stop(event);
+            if (event.key === "ArrowDown") model.focusNextItem(); else model.focusPreviousItem();
+          } else if (event.key === "ArrowRight" && node.type === "file") stop(event);
+          else if (event.key === "ArrowLeft" && isFiltering) { stop(event); model.focusParentItem(); }
+        }}
+        onContextMenu={(event) => { if (eventRow(event.nativeEvent)) event.stopPropagation(); }}
+        onTouchStartCapture={(event) => {
+          if (eventRow(event.nativeEvent)) event.stopPropagation();
+        }}
+        onDragStartCapture={(event) => {
+          const node = nodeForEvent(event.nativeEvent);
+          if (!node) return;
           event.stopPropagation();
+          if (props.canEditWorkspace === false) { event.preventDefault(); return; }
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData(FILE_TREE_DRAG_TYPE, node.path);
           event.dataTransfer.setData("text/plain", node.path);
         }}
-        onDragEnd={() => setDropActive(false)}
-        onDragOver={(event) => {
-          const isWorkspaceEntry = event.dataTransfer.types.includes(FILE_TREE_DRAG_TYPE);
-          const isExternalFile = event.dataTransfer.types.includes("Files");
-          if (
-            !canEditWorkspace ||
-            node.type !== "directory" ||
-            (!isWorkspaceEntry && !isExternalFile)
-          ) {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = isWorkspaceEntry ? "move" : "copy";
-          setDropActive(true);
+        onDragEndCapture={(event) => { event.stopPropagation(); setDropTargetPath(null); }}
+        onDragOverCapture={(event) => {
+          const node = nodeForEvent(event.nativeEvent);
+          const internal = event.dataTransfer.types.includes(FILE_TREE_DRAG_TYPE);
+          if (props.canEditWorkspace === false || node?.type !== "directory" || (!internal && !event.dataTransfer.types.includes("Files"))) return;
+          stop(event);
+          event.dataTransfer.dropEffect = internal ? "move" : "copy";
+          setDropTargetPath(node.path);
         }}
-        onDragLeave={(event) => {
-          if (node.type !== "directory") return;
-          if (
-            event.relatedTarget instanceof Node &&
-            event.currentTarget.contains(event.relatedTarget)
-          ) {
-            return;
-          }
-          setDropActive(false);
+        onDragLeaveCapture={(event) => {
+          const row = eventRow(event.nativeEvent);
+          if (!(event.relatedTarget instanceof Node) || !row?.contains(event.relatedTarget)) setDropTargetPath(null);
         }}
-        onDrop={(event) => {
-          if (!canEditWorkspace || node.type !== "directory") {
-            return;
-          }
+        onDropCapture={(event) => {
+          const node = nodeForEvent(event.nativeEvent);
+          if (props.canEditWorkspace === false || node?.type !== "directory") return;
           const sourcePath = event.dataTransfer.getData(FILE_TREE_DRAG_TYPE);
-          if (!sourcePath && event.dataTransfer.files.length === 0) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setDropActive(false);
-          if (sourcePath) {
-            onMoveEntry(sourcePath, node.path);
-          } else {
-            onDropFiles(node.path, event.dataTransfer.files);
-          }
+          if (!sourcePath && !event.dataTransfer.files.length) return;
+          stop(event);
+          setDropTargetPath(null);
+          if (sourcePath) props.onMoveEntry(sourcePath, node.path);
+          else props.onDropFiles(node.path, event.dataTransfer.files);
         }}
-        onKeyDown={handleTreeKeyDown}
-        role="treeitem"
-        data-tree-path={node.path}
-        tabIndex={tabStop ? 0 : -1}
-        onFocus={() => onRovingPathChange(node.path)}
-        aria-selected={isActive || isSelected}
-        aria-expanded={node.type === "directory" ? isExpanded : undefined}
-        aria-level={depth + 1}
-        aria-posinset={position}
-        aria-setsize={setSize}
-        aria-keyshortcuts="Alt+D Control+Space"
-      >
-        {node.type === "directory" && (
-          <ChevronRight
-            className={`tree-chevron${isExpanded ? " open" : ""}`}
-            size={14}
-          />
-        )}
-        <input
-          tabIndex={-1}
-          type="checkbox"
-          className={`tree-item-checkbox${multiSelectEnabled ? " visible" : ""}`}
-          checked={isSelected}
-          disabled={!canEditWorkspace}
-          onChange={(e) => {
-            e.stopPropagation();
-            onToggleSelect(node.path, e.target.checked);
-          }}
-          onClick={(e) => e.stopPropagation()}
-          title={t("sidebar.selectForBatchDelete")}
-        />
-        {node.type === "directory" ? (
-          <Folder className="tree-item-icon folder" size={15} />
-        ) : (
-          <File className="tree-item-icon" size={15} />
-        )}
-        <span className="tree-item-name">{node.name}</span>
-        {(claim || viewers.length > 0) && (
-          <span className="tree-item-collab">
-            {claim ? `✋ ${claim.username}` : `${viewers.length} 👀`}
-          </span>
-        )}
-        <button
-          type="button"
-          tabIndex={-1}
-          className="tree-item-action"
-          title={
-            node.type === "directory"
-              ? t("sidebar.downloadFolder")
-              : t("sidebar.downloadFile")
-          }
-          onClick={(e) => {
-            e.stopPropagation();
-            void onDownload(node.path, node.type);
-          }}
-        >
-          <Download size={13} />
-        </button>
-      </div>
-      {node.type === "directory" && isExpanded && node.children && (
-        <div className="tree-children">
-          <FileTree
-            nodes={node.children}
-            activeFilePath={activeFilePath}
-            selectedPaths={selectedPaths}
-            multiSelectEnabled={multiSelectEnabled}
-            canEditWorkspace={canEditWorkspace}
-            onFileSelect={onFileSelect}
-            onToggleSelect={onToggleSelect}
-            onDownload={onDownload}
-            onContextMenu={onContextMenu}
-            onDropFiles={onDropFiles}
-            onMoveEntry={onMoveEntry}
-            claims={claims}
-            presence={presence}
-            filterQuery={filterQuery}
-            depth={depth + 1}
-            rovingPath={rovingPath}
-            onRovingPathChange={onRovingPathChange}
-          />
-        </div>
-      )}
+      />
     </div>
   );
 };

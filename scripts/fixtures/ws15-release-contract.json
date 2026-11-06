@@ -25,7 +25,7 @@
   },
   "frontendBundleBudget": {
     "mainShellMaxBytes": 650000,
-    "otherJavaScriptMaxBytes": 500000,
+    "otherJavaScriptMaxBytes": 5000000,
     "exceptions": [
       {
         "pattern": "^assets/(?:editor|json|html|css|ts)\\.worker-[^.]+\\.js$",

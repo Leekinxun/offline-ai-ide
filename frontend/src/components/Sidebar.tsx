@@ -391,13 +391,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [visible]);
 
   const handleContextMenu = useCallback(
-    (e: React.MouseEvent, node: FileNode) => {
-      e.preventDefault();
-      e.stopPropagation();
+    (position: { clientX: number; clientY: number }, node: FileNode) => {
       if (selectedPathSet.size > 0 && !selectedPathSet.has(node.path)) {
         setSelectedPaths([node.path]);
       }
-      setContextMenu({ x: e.clientX, y: e.clientY, node });
+      setContextMenu({ x: position.clientX, y: position.clientY, node });
     },
     [selectedPathSet]
   );

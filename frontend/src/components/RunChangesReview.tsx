@@ -1,15 +1,12 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { editor, IDisposable } from "monaco-editor";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Check, ChevronDown, ExternalLink, MessageSquare, RefreshCw, Undo2 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { useRunChanges } from "../hooks/useRunChanges";
-import { getEditorThemeName } from "../editor/themeNames";
-import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
-import { getLanguage } from "../types";
+import type { ReviewLineSelection } from "./pierreDiffPolicy";
 import { binaryEvidenceForFile, bulkReviewPolicy, hasExternalToolEffects, isExternalOnlyReview, reviewActionPolicy, reviewStatus, validReviewComment, type RunReviewComment, type ReviewFile, type ReviewHunk } from "./runReviewPolicy";
 import "./RunChangesReview.css";
 
-const DiffEditor = lazy(() => import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor })));
+const PierreDiff = lazy(() => import("./PierreDiff"));
 export type { RunReviewComment } from "./runReviewPolicy";
 export interface RunChangesReviewProps {
   token: string; workspaceDir?: string; runId?: string; requestId?: string;
@@ -17,7 +14,7 @@ export interface RunChangesReviewProps {
   compact?: boolean; onOpenFile: (path: string) => void; onOpenDiff?: (path: string, runId?: string) => void;
   onComment?: (comment: RunReviewComment) => void; onChanged?: () => void;
 }
-type LineSelection = { side: "original" | "modified"; startLine: number; endLine: number };
+type LineSelection = ReviewLineSelection;
 
 function formatBytes(bytes: number | undefined): string {
   if (typeof bytes !== "number") return "—";
@@ -53,26 +50,11 @@ function BinaryReviewPanel({ file }: { file: ReviewFile }) {
 
 function ReviewCanvas({ file, theme, onSelection }: { file: ReviewFile; theme: "light" | "dark"; onSelection: (selection: LineSelection) => void }) {
   const { t } = useI18n();
-  const subscriptions = useRef<IDisposable[]>([]);
-  useEffect(() => () => { subscriptions.current.forEach((subscription) => subscription.dispose()); }, []);
-  const mount = (diff: editor.IStandaloneDiffEditor) => {
-    subscriptions.current.forEach((subscription) => subscription.dispose());
-    subscriptions.current = (["original", "modified"] as const).map((side) => {
-      const pane = side === "original" ? diff.getOriginalEditor() : diff.getModifiedEditor();
-      return pane.onDidChangeCursorSelection(({ selection }) => {
-        if (!pane.hasTextFocus()) return;
-        onSelection({ side, startLine: selection.startLineNumber, endLine: selection.endLineNumber });
-      });
-    });
-  };
   return <div className="run-review-canvas" aria-label={t("review.diffLabel", { path: file.path })}>
     <Suspense fallback={<div className="run-review-notice">{t("review.loading")}</div>}>
-      <DiffEditor original={file.original} modified={file.modified} language={getLanguage(file.path)}
-        theme={getEditorThemeName(theme)} onMount={mount}
-        options={{ ...DEFAULT_EDITOR_FONT_OPTIONS, fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
-          readOnly: true, originalEditable: false, renderSideBySide: false, automaticLayout: true,
-          minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "on",
-          renderOverviewRuler: true, accessibilitySupport: "auto" }} />
+      <PierreDiff path={file.path} original={file.original!} modified={file.modified!}
+        originalExists={file.originalExists} modifiedExists={file.modifiedExists}
+        theme={theme} layout="unified" onSelection={onSelection} />
     </Suspense>
   </div>;
 }

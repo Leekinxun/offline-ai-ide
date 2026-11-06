@@ -75,6 +75,19 @@ export function applyRemoteFileSnapshot(file: OpenFile, snapshot: FileSnapshot):
   };
 }
 
+/** Metadata completes a read; it cannot reopen a tab or cross a save/reload baseline. */
+export function applyRemoteFileMetadata(
+  files: OpenFile[],
+  expected: Pick<OpenFile, "path" | "version"> | null,
+  snapshot: FileSnapshot,
+  workspaceDir: string,
+): OpenFile[] {
+  if (!expected) return files;
+  const index = files.findIndex((file) => isSameWorkspacePath(file.path, expected.path, workspaceDir));
+  if (index < 0 || files[index].version !== expected.version) return files;
+  return files.map((file, current) => current === index ? applyRemoteFileSnapshot(file, snapshot) : file);
+}
+
 export interface RemoteFileRename {
   previousPath: string;
   previousVersion: string;
@@ -148,6 +161,10 @@ export function retainOpenFilesAfterTreeRefresh(
   files: OpenFile[],
   visiblePaths: ReadonlySet<string>,
   workspaceDir: string,
+  pendingPaths?: ReadonlySet<string>,
 ): OpenFile[] {
-  return files.filter((file) => file.modified || visiblePaths.has(normalizeWorkspaceRelativePath(file.path, workspaceDir)));
+  return files.filter((file) => {
+    const path = normalizeWorkspaceRelativePath(file.path, workspaceDir);
+    return file.modified || visiblePaths.has(path) || pendingPaths?.has(path);
+  });
 }

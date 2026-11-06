@@ -36,12 +36,12 @@
     {
       "id": "file-tree-keyboard",
       "file": "frontend/src/components/FileTree.tsx",
-      "required": ["role=\"tree\"", "role=\"treeitem\"", "resolveVisibleTreeIndex", "ArrowLeft", "ArrowRight", "aria-expanded", "aria-selected"]
+      "required": ["useFileTree", "PierreFileTree", "initialExpansion", "ArrowLeft", "ArrowRight", "getExpandedTreePaths", "syncTreeSelection"]
     },
     {
       "id": "file-tree-navigation-contract",
-      "file": "frontend/src/components/fileTreeKeyboardContract.ts",
-      "required": ["ArrowDown", "ArrowUp", "Home", "End", "Math.min", "Math.max"]
+      "file": "frontend/src/components/fileTreeAdapter.ts",
+      "required": ["toTreePath", "fromTreePath", "getExpandedTreePaths", "syncTreeSelection", "directoryPaths"]
     },
     {
       "id": "task-list-semantics",

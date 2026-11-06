@@ -1,16 +1,12 @@
 import React, { lazy, Suspense, useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, ExternalLink, FileWarning, GitCompare, RefreshCw, X } from "lucide-react";
-import { getEditorThemeName } from "../editor/themeNames";
-import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_OPTIONS } from "../editor/fontDefaults";
 import { useI18n } from "../i18n";
-import { getLanguage, GitDiffPayload, GitStatusEntry } from "../types";
+import type { GitDiffPayload, GitStatusEntry } from "../types";
 import { useModalDialogFocus } from "./useModalDialogFocus";
 import "./ChangeDiffDialog.css";
 
-const DiffEditor = lazy(() =>
-  import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor }))
-);
+const PierreDiff = lazy(() => import("./PierreDiff"));
 
 interface ChangeDiffDialogProps {
   path: string;
@@ -117,23 +113,13 @@ export const ChangeDiffDialog: React.FC<ChangeDiffDialogProps> = ({
             <div className="git-diff-state"><FileWarning size={18} />{unavailableReason}</div>
           ) : payload ? (
             <Suspense fallback={<div className="git-diff-state">{t("git.loadingDiff")}</div>}>
-              <DiffEditor
+              <PierreDiff
+                path={path}
                 original={payload.original}
                 modified={payload.modified}
-                language={getLanguage(path)}
-                theme={getEditorThemeName(theme)}
-                options={{
-                  ...DEFAULT_EDITOR_FONT_OPTIONS,
-                  fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
-                  readOnly: true,
-                  originalEditable: false,
-                  renderSideBySide: true,
-                  automaticLayout: true,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                  renderOverviewRuler: true,
-                }}
+                originalExists={kind !== "added" && kind !== "untracked"}
+                modifiedExists={kind !== "deleted"}
+                theme={theme}
               />
             </Suspense>
           ) : null}
