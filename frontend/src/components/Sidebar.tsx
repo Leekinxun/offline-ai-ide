@@ -7,6 +7,7 @@ import {
   FilePlus,
   FileUp,
   FolderPlus,
+  FolderOpen,
   FolderUp,
   RefreshCw,
   Trash2,
@@ -1095,16 +1096,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
       />
 
-      {/* 现代紧凑单行整合顶栏 */}
+      {/* 文件操作栏 */}
       <div className="sidebar-compact-header">
-        <div
-          className="sidebar-compact-title-group"
-          onClick={openFolderBrowser}
-          title={`${t("sidebar.openFolder")}: ${workspaceDir}`}
-        >
+        <div className="sidebar-compact-title-group">
           <span className="sidebar-compact-badge">{t("sidebar.explorer")}</span>
-          <span className="sidebar-compact-workspace-name">{workspaceName}</span>
-          {!workspaceLocked && <ChevronRight size={13} style={{ opacity: 0.5, flexShrink: 0 }} />}
         </div>
         <div className="sidebar-compact-actions">
           <button
@@ -1197,6 +1192,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
       </div>
+
+      <button
+        type="button"
+        className="sidebar-open-folder"
+        data-workspace-open-folder="true"
+        onClick={openFolderBrowser}
+        disabled={workspaceLocked || folderPickerBusy}
+        aria-label={t("sidebar.openFolder")}
+        title={workspaceDir}
+      >
+        <span className="sidebar-open-folder-label">
+          <FolderOpen size={16} aria-hidden="true" />
+          <span>{t("sidebar.openFolder")}</span>
+          <ChevronRight size={14} aria-hidden="true" />
+        </span>
+        <span className="sidebar-open-folder-current">
+          <strong className="sidebar-compact-workspace-name">{workspaceName}</strong>
+          <span>{workspaceDir}</span>
+        </span>
+      </button>
 
       {/* 紧凑微型过滤胶囊栏 */}
       {(filterOpen || treeQuery) && (

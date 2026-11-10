@@ -12,24 +12,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "backend/package.json"));
 const { WebSocket } = require("ws");
 const args = process.argv.slice(2);
-const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false, approval: false, explorer: false, highlighting: false, production: false };
+const options = { url: "http://127.0.0.1:45173", cdp: "http://127.0.0.1:9222", workspace: undefined, artifacts: undefined, launch: false, review: false, rename: false, approval: false, fullAccess: false, explorer: false, highlighting: false, production: false };
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (key === "--launch") options.launch = true;
   else if (key === "--review") options.review = true;
   else if (key === "--rename") options.rename = true;
   else if (key === "--approval") options.approval = true;
+  else if (key === "--full-access") options.fullAccess = true;
   else if (key === "--explorer") options.explorer = true;
   else if (key === "--highlighting") options.highlighting = true;
   else if (key === "--production") options.production = true;
   else if (["--url", "--cdp", "--workspace", "--artifacts"].includes(key) && args[index + 1]) options[key.slice(2)] = args[++index];
   else if (key === "--help") {
-    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename|--approval|--explorer|--highlighting] [--production] [--artifacts /tmp/review-screenshots]");
+    console.log("node scripts/web-agent-browser-smoke.mjs [--url http://127.0.0.1:45173] [--cdp http://127.0.0.1:9222] [--workspace /tmp/crownforge-browser-fixture-.../workspace] [--launch] [--review|--rename|--approval|--full-access|--explorer|--highlighting] [--production] [--artifacts /tmp/review-screenshots]");
     process.exit(0);
   } else throw new Error("Unknown or incomplete option: " + key);
 }
-assert.ok([options.rename, options.review, options.approval, options.explorer, options.highlighting].filter(Boolean).length <= 1, 'Choose one fixture scenario per run');
-assert.ok(!options.production || options.explorer || options.review || options.highlighting, 'Production QA supports Explorer, review or highlighting scenarios without dev-only Monaco inspection');
+assert.ok([options.rename, options.review, options.approval, options.fullAccess, options.explorer, options.highlighting].filter(Boolean).length <= 1, 'Choose one fixture scenario per run');
+assert.ok(!options.production || options.explorer || options.review || options.highlighting || options.fullAccess, 'Production QA supports Explorer, review, full access or highlighting scenarios without dev-only Monaco inspection');
 assert.ok(!options.highlighting || options.production, '--highlighting requires --production to exercise the built Diffs canvas');
 function localUrl(value, protocols = ["http:", "https:"]) {
   const url = new URL(value);
@@ -378,9 +379,10 @@ async function connect() {
       const review=globalThis.__smokeReviewAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_REVIEW: format the interview document";
       const rename=globalThis.__smokeRenameAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_RENAME: rename all interview files";
       const approval=globalThis.__smokeApprovalAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&value?.message==="FIXTURE_APPROVAL: approve the fixture note and run its check";
-      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&!rename&&!approval&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
-      if(review||rename||approval){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
-      if(approval&&!this.__smokeApprovalObserver){this.__smokeApprovalObserver=true;this.addEventListener("message",event=>{let frame;try{frame=JSON.parse(event.data)}catch{return}
+      const fullAccess=${options.fullAccess}&&globalThis.__smokeFullAccessAllowed&&value?.mode==="code"&&value?.modelName==="local-fixture"&&["FIXTURE_FULL_ACCESS: run three local checks","FIXTURE_FULL_ACCESS: verify revocation"].includes(value?.message);
+      if(value?.requestId&&typeof value.message==="string"&&(!globalThis.__smokeAllowed||(!review&&!rename&&!approval&&!fullAccess&&value.mode!=="ask")||(value.modelName&&value.modelName!=="local-fixture")||value.message.includes("FIXTURE_EDIT"))){globalThis.__smokeBlocked.push("Unsafe Agent request");throw new Error("Smoke safety gate blocked Agent request")}
+      if(review||rename||approval||fullAccess){globalThis.__smokeReviewRequest=value;globalThis.__smokeReviewSocket=this;}
+      if((approval||fullAccess)&&!this.__smokeApprovalObserver){this.__smokeApprovalObserver=true;this.addEventListener("message",event=>{let frame;try{frame=JSON.parse(event.data)}catch{return}
         if(frame.type==="request_accepted"&&frame.requestId===globalThis.__smokeReviewRequest?.requestId)globalThis.__smokeReviewRequest={...globalThis.__smokeReviewRequest,conversationId:frame.conversationId,runId:frame.runId};
         if(["request_accepted","tool_approval_request","tool_approval_all_result","tool_result","done","error","stopped"].includes(frame.type)){globalThis.__smokeApprovalEvents.push(frame);if(globalThis.__smokeApprovalEvents.length>150)globalThis.__smokeApprovalEvents.shift()}
       });}
@@ -431,7 +433,7 @@ try {
     if (options.workspace) assert.equal(safeWorkspace, fs.realpathSync(options.workspace), "--workspace does not match the authenticated fixture");
     const [runtime, settings] = await Promise.all([uiApi("/api/chat/runtime-options"), uiApi("/api/admin/settings")]);
     assert.equal(runtime.defaultModelName, "local-fixture"); assert.equal(runtime.modeModels.ask, "local-fixture");
-    if (options.review || options.rename || options.approval) assert.equal(runtime.modeModels.code, "local-fixture");
+    if (options.review || options.rename || options.approval || options.fullAccess) assert.equal(runtime.modeModels.code, "local-fixture");
     assert.equal(settings.llm.modelName, "local-fixture"); localUrl(settings.llm.vllmApiUrl);
     for (const model of settings.llm.models || []) if (model.modelName === 'local-fixture') localUrl(model.apiUrl);
     for (const fallback of settings.llm.fallbacks || []) localUrl(fallback.apiUrl);
@@ -457,7 +459,88 @@ try {
       await until(() => call(() => document.querySelector('.monaco-editor .view-lines')?.textContent.replace(/\u00a0/g, ' ').includes('return a - b;')), 'Production editor renders fixture code');
     }
   }, true);
-  if (options.approval) {
+  if (options.fullAccess) {
+    let firstPending;
+    const permissionControl = '.editor-assistant-panel .chat-approval-mode';
+    const events = (type) => call((type) => globalThis.__smokeApprovalEvents.filter((event) => event.type === type), type);
+    const completedCheck = async (step) => {
+      const result = await until(async () => (await events('tool_result')).find((event) => event.toolCallId === `full-access-${step}`), `Full access ${step} result`, 45_000);
+      assert.equal(result.isError, false, String(result.result));
+      assert.match(result.result, new RegExp(`full access fixture ${step}`));
+      return result;
+    };
+    const sendPrompt = async (prompt) => {
+      await markVisibleEditorAssistantComposer();
+      await fill('[data-smoke-visible-editor-composer]', prompt);
+      await click('.editor-assistant-send-btn', true);
+    };
+    await scenario('approval_full_access_editor_enable_keeps_pending', async () => {
+      await click('.editor-assistant-composer-mode .workbench-select-trigger', true);
+      await call(() => [...document.querySelectorAll('.workbench-select-option')].find((node) => node.querySelector('strong')?.textContent === 'Code').setAttribute('data-smoke-code-mode', 'true'));
+      await click('[data-smoke-code-mode]', true);
+      await click('.editor-assistant-composer .model-selector button', true);
+      await markExplicitFixtureModelOption();
+      await click('[data-smoke-local-model]', true);
+      await call(() => { globalThis.__smokeFullAccessAllowed = true; });
+      await sendPrompt('FIXTURE_FULL_ACCESS: run three local checks');
+      firstPending = await until(async () => (await events('tool_approval_request')).find((event) => event.toolCallId === 'full-access-first'), 'Initial high-risk approval');
+      assert.equal(firstPending.risk, 'high');
+      assert.equal(firstPending.canAllowSession, false);
+      assert.equal(firstPending.input.command, 'npm run full-access-first');
+      await until(() => call((selector) => document.querySelector(selector)?.dataset.approvalMode === 'ask' && !document.querySelector(selector + ' .chat-approval-mode-action')?.disabled, permissionControl), 'Editor permission control ready');
+      const route = '/api/chat/conversations/' + encodeURIComponent(firstPending.conversationId) + '/approval-mode';
+      assert.equal((await uiApi(route)).mode, 'ask');
+      await click(permissionControl + ' .chat-approval-mode-action', true);
+      await until(() => call(() => document.querySelector('[role="alertdialog"]')?.textContent.includes('Enable full access')), 'Full access risk confirmation');
+      assert.equal((await uiApi(route)).mode, 'ask', 'Opening the risk dialog enabled full access');
+      await click('[role="alertdialog"] .dialog-btn.danger', true);
+      await until(() => call((selector) => document.querySelector(selector)?.dataset.approvalMode === 'full_access', permissionControl), 'Editor shows verified full access');
+      assert.equal((await uiApi(route)).mode, 'full_access');
+      assert.equal((await events('tool_result')).some((event) => event.toolCallId === 'full-access-first'), false, 'Enabling full access approved a previously pending command');
+      await until(() => call(() => document.querySelector('.editor-assistant-panel .tool-approval-card.risk-high')?.textContent.includes('npm run full-access-first')), 'Original approval remains visible');
+      await screenshot('full-access-enabled-with-pending');
+      await click('.editor-assistant-panel .tool-approval-card.risk-high .tool-approval-allow', true);
+      await completedCheck('first');
+    }, true);
+    await scenario('approval_full_access_two_high_commands_execute_without_prompts', async () => {
+      await completedCheck('second');
+      await completedCheck('third');
+      await until(() => call(() => globalThis.__smokeApprovalEvents.some((event) => event.type === 'done' && event.requestId === globalThis.__smokeReviewRequest.requestId)), 'Automatic checks run completion');
+      assert.deepEqual((await events('tool_approval_request')).map((event) => event.toolCallId), ['full-access-first']);
+      const audit = fs.readFileSync(path.join(safeWorkspace, '.crewforge/policy-audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      for (const step of ['second', 'third']) {
+        const decisions = audit.filter((entry) => entry.toolName === 'bash' && entry.toolCallId === `full-access-${step}`);
+        assert.equal(decisions.length, 1);
+        assert.equal(decisions[0].allowed, true);
+        assert.equal(decisions[0].input._authorization?.decision, 'full_access');
+        assert.equal(decisions[0].input._authorization?.source, 'user-authorized');
+      }
+      await screenshot('full-access-two-automatic-commands');
+    }, true);
+    await scenario('approval_full_access_revocation_restores_next_turn_prompt', async () => {
+      await until(() => call(() => !document.querySelector('.editor-assistant-composer .editor-assistant-stop-btn')), 'Editor run finished');
+      await click(permissionControl + ' .chat-approval-mode-action', true);
+      await until(() => call((selector) => document.querySelector(selector)?.dataset.approvalMode === 'ask', permissionControl), 'Full access disabled in editor');
+      const route = '/api/chat/conversations/' + encodeURIComponent(firstPending.conversationId) + '/approval-mode';
+      assert.equal((await uiApi(route)).mode, 'ask');
+      await sendPrompt('FIXTURE_FULL_ACCESS: verify revocation');
+      const pending = await until(async () => (await events('tool_approval_request')).find((event) => event.toolCallId === 'full-access-revoked'), 'Revoked command requires approval');
+      assert.equal(pending.risk, 'high');
+      assert.equal(pending.input.command, 'npm run full-access-revoked');
+      assert.equal(pending.conversationId, firstPending.conversationId);
+      assert.notEqual(pending.runId, firstPending.runId, 'Expected a continuation run in the same conversation');
+      assert.equal((await events('tool_result')).some((event) => event.toolCallId === 'full-access-revoked'), false);
+      await until(() => call(() => document.querySelector('.editor-assistant-panel .tool-approval-card.risk-high')?.textContent.includes('npm run full-access-revoked')), 'Revoked command visible in editor');
+      await screenshot('full-access-revoked-approval');
+      await click('.editor-assistant-panel .tool-approval-card.risk-high .tool-approval-allow', true);
+      await completedCheck('revoked');
+      await until(() => call(() => globalThis.__smokeApprovalEvents.some((event) => event.type === 'done' && event.requestId === globalThis.__smokeReviewRequest.requestId)), 'Revocation run completion');
+      assert.deepEqual((await events('tool_approval_request')).map((event) => event.toolCallId), ['full-access-first', 'full-access-revoked']);
+      const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: safeWorkspace, encoding: 'utf8' });
+      assert.equal(status.status, 0); assert.equal(status.stdout.trim(), '', 'Console-only checks changed fixture files');
+      await screenshot('full-access-completed');
+    }, true);
+  } else if (options.approval) {
     let trackedBefore, pendingShell;
     await scenario('approval_medium_bulk_ack', async () => {
       assert.equal(fs.readFileSync(path.join(safeWorkspace, 'approval-note.md'), 'utf8'), 'Approval fixture draft\n', 'Approval requires a fresh fixture');
@@ -743,6 +826,32 @@ try {
       await until(() => call(() => Boolean(document.querySelector('.tab[title="explorer-large/file-1199.txt"][aria-selected="true"]'))), 'Virtualized file opens');
       assert.ok(await call(() => globalThis.__smokeQueryAll('[role="treeitem"]').length < 100));
       await screenshot('trees-large-directory');
+    });
+    await scenario('trees_open_folder_entry_is_visible_and_opens_existing_dialog', async () => {
+      await call(() => document.querySelector('.sidebar-resize-handle').focus());
+      await key('Home', 'Home', 36);
+      await until(() => call(() => {
+        const handle = document.querySelector('.sidebar-resize-handle');
+        return handle?.getAttribute('aria-valuenow') === handle?.getAttribute('aria-valuemin');
+      }), 'Narrow sidebar keyboard resize');
+      const geometry = await call(() => {
+        const button = document.querySelector('[data-workspace-open-folder]');
+        const label = button?.querySelector('.sidebar-open-folder-label > span');
+        return { text: label?.textContent, disabled: button?.disabled, button: button?.getBoundingClientRect().toJSON(), label: label?.getBoundingClientRect().toJSON(), sidebar: document.querySelector('.sidebar')?.getBoundingClientRect().toJSON() };
+      });
+      assert.equal(geometry.text, 'Open Folder'); assert.equal(geometry.disabled, false);
+      assert.ok(geometry.label.width > 0 && geometry.label.left >= geometry.button.left && geometry.label.right <= geometry.button.right, 'Open Folder label is clipped: ' + JSON.stringify(geometry));
+      assert.ok(geometry.button.left >= geometry.sidebar.left && geometry.button.right <= geometry.sidebar.right, 'Open Folder button overflows the narrow sidebar');
+      await screenshot('trees-open-folder-narrow-entry');
+      await click('[data-workspace-open-folder]', true);
+      await until(() => call(() => Boolean(document.querySelector('.folder-browser[role="dialog"]') && !document.querySelector('.folder-browser-loading') && document.querySelector('.folder-browser-path')?.value)), 'Existing workspace folder browser');
+      assert.equal(await call(() => document.querySelector('.folder-browser-path').value), safeWorkspace);
+      assert.equal(await call(() => Boolean(document.querySelector('.folder-browser-error'))), false);
+      assert.ok(await call(() => [...document.querySelectorAll('.folder-browser-item')].some((node) => node.textContent.includes('interview'))), 'Allowed workspace subdirectories are missing');
+      await screenshot('trees-open-folder-dialog');
+      await key('Escape', 'Escape', 27);
+      await until(() => call(() => !document.querySelector('.folder-browser')), 'Folder browser Escape dismissal');
+      assert.equal((await uiApi('/api/auth/me')).workspaceDir, safeWorkspace, 'Opening and cancelling switched the workspace');
     });
   } else if (options.rename) {
     const sources = Array.from({ length: 10 }, (_, index) => `interview/q${index + 1} sample/题目.md`);

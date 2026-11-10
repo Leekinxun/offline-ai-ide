@@ -26,6 +26,8 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
 
   const bulkRequest = requests.find((request) => request.conversationId && canApproveToolInConversation(request));
   const hasIndividualRequests = requests.some((request) => !canApproveToolInConversation(request));
+  const hasIndividualShellRequests = requests.some((request) =>
+    (request.name === "bash" || request.name === "process_start") && !canApproveToolInConversation(request));
   const pendingLabel = t("chat.approval.pendingCount", { count: requests.length });
 
   return (
@@ -47,6 +49,7 @@ export const ToolApprovalStack = forwardRef<HTMLElement, ToolApprovalStackProps>
           </button>}
       </div>
       {(bulkRequest || hasIndividualRequests) && <p className="tool-approval-individual-note">{t(bulkRequest ? "chat.approval.bulkScope" : "chat.approval.individualRequired")}</p>}
+      {hasIndividualShellRequests && <p className="tool-approval-individual-note tool-approval-mode-hint">{t("chat.approval.shellModeHint")}</p>}
       {requests.map((request) => (
         <ToolApprovalCard key={request.approvalId} request={request} onRespond={onRespond} onRequestRevision={onRequestRevision} />
       ))}

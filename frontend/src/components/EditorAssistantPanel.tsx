@@ -47,6 +47,7 @@ import type { ChatRuntimeOptions } from "../hooks/useChat";
 import { useI18n } from "../i18n";
 import { renderChatTextPart } from "../plugins/runtime";
 import { ToolApprovalStack } from "./ToolApprovalStack";
+import { ApprovalModeControl } from "./ApprovalModeControl";
 import { approvalTaskAction } from "../utils/toolApprovalPolicy";
 import { AgentQuestionStack } from "./AgentQuestionStack";
 import { inlineInstructionLabel } from "../editor/inlineAssistantPolicy";
@@ -202,6 +203,7 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
     ? Math.min(100, Math.max(0, (contextState.estimatedTokens / Math.max(contextState.threshold, 1)) * 100))
     : 0;
   const fileName = activeFilePath?.split("/").pop() || null;
+  const taskTitle = conversations.find((conversation) => conversation.id === currentConversationId)?.title || t("workbench.newTask");
   const visibleMessages = useMemo(
     () => messages.filter(isAssistantMessageVisible),
     [messages]
@@ -682,6 +684,11 @@ export const EditorAssistantPanel: React.FC<EditorAssistantPanelProps> = ({
         }}
         className="editor-assistant-approvals"
       />
+
+      <div className="editor-assistant-permissions">
+        <ApprovalModeControl key={JSON.stringify([token, workspaceDir, currentConversationId])}
+          token={token} workspaceDir={workspaceDir} conversationId={currentConversationId ?? null} taskTitle={taskTitle} connected={connected} />
+      </div>
 
       <div className="editor-assistant-composer">
         <AgentQuestionStack token={token} conversationId={runState?.conversationId} />

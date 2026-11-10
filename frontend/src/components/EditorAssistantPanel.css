@@ -657,8 +657,19 @@
 }
 .editor-assistant-stop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.editor-assistant-approvals + .editor-assistant-composer {
-  margin-top: 10px;
+.editor-assistant-permissions {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 10px 8px;
+}
+
+.editor-assistant-permissions .chat-approval-mode {
+  margin: 0;
+  font-size: 11px;
+}
+
+.editor-assistant-approvals + .editor-assistant-permissions {
+  padding-top: 10px;
 }
 
 /* ==========================================================================

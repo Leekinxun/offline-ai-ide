@@ -44,7 +44,10 @@ const referenceRoot = path.join(fixture, "references");
 fs.mkdirSync(referenceRoot);
 fs.writeFileSync(path.join(referenceRoot, "ordinary.txt"), "External ordinary reference, read only.\n");
 fs.writeFileSync(path.join(workspace, ".gitignore"), ".history/\n.checkpoints/\n.team/\n.codex/\n.crewforge/\nnode_modules/\n");
-fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", "approval-check": "node approval-verify.cjs", wait: "node wait.cjs" } }));
+fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "disposable-browser-fixture", private: true, scripts: { check: "node verify.cjs", "approval-check": "node approval-verify.cjs", wait: "node wait.cjs",
+  ...Object.fromEntries(["first", "second", "third", "revoked"].map((step) => [`full-access-${step}`, `node full-access-check.cjs ${step}`])),
+} }));
+fs.writeFileSync(path.join(workspace, "full-access-check.cjs"), "console.log('full access fixture ' + process.argv[2]);\n");
 fs.writeFileSync(path.join(workspace, "approval-verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').equal(fs.readFileSync('approval-note.md', 'utf8'), 'Approval fixture approved\\n'); console.log('approval check passed');\n");
 fs.writeFileSync(path.join(workspace, "verify.cjs"), "const fs = require('node:fs'); require('node:assert/strict').ok(fs.readFileSync('calculator.ts', 'utf8').includes('return a + b;')); console.log('calculator check passed');\n");
 fs.writeFileSync(path.join(workspace, "wait.cjs"), "console.log('session ready'); const timer = setInterval(() => console.log('heartbeat'), 1000); process.stdin.on('data', value => { console.log('input: ' + value); if (String(value).trim() === 'exit') { clearInterval(timer); process.exit(0); } });\n");
@@ -67,8 +70,15 @@ const model = http.createServer(async (req, res) => {
     const reviewRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_REVIEW"));
     const renameRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_RENAME"));
     const approvalRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_APPROVAL: approve the fixture note and run its check"));
+    const fullAccessRequested = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_FULL_ACCESS: run three local checks"));
+    const fullAccessRevoked = messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes("FIXTURE_FULL_ACCESS: verify revocation"));
     let message = { role: "assistant", content: "Local browser fixture ready." };
-    if (approvalRequested) {
+    if (fullAccessRevoked || fullAccessRequested) {
+      const next = (fullAccessRevoked ? ["revoked"] : ["first", "second", "third"])
+        .find((step) => !toolResults.some((entry) => entry.tool_call_id === `full-access-${step}`));
+      message = next ? tool("bash", { command: `npm run full-access-${next}` }, `full-access-${next}`)
+        : { role: "assistant", content: fullAccessRevoked ? "Full access revocation fixture complete." : "Full access fixture completed three local checks." };
+    } else if (approvalRequested) {
       if (!toolResults.some((entry) => entry.tool_call_id === "approval-read")) message = tool("read_file", { path: "approval-note.md" }, "approval-read");
       else if (!toolResults.some((entry) => entry.tool_call_id === "approval-edit")) message = tool("edit_file", { path: "approval-note.md", old_text: "Approval fixture draft", new_text: "Approval fixture approved" }, "approval-edit");
       else if (!toolResults.some((entry) => entry.tool_call_id === "approval-check")) message = tool("bash", { command: "npm run approval-check" }, "approval-check");

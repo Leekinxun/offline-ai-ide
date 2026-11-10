@@ -95,14 +95,16 @@
   background: transparent;
 }
 
-/* 紧凑单行整合顶栏 */
+/* 文件操作栏随面板宽度换行，工作区入口独占下一行。 */
 .sidebar-compact-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  height: 38px;
+  gap: 4px 8px;
   min-height: 38px;
-  padding: 0 10px;
+  padding: 5px 10px;
+  flex-shrink: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
   background: color-mix(in srgb, var(--surface-panel) 50%, var(--surface-workbench));
   user-select: none;
@@ -141,9 +143,10 @@
 
 .sidebar-compact-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .sidebar-compact-btn {
@@ -174,6 +177,81 @@
 .sidebar-compact-btn.active {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
+}
+
+.sidebar-open-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-shrink: 0;
+  gap: 5px;
+  width: calc(100% - 20px);
+  min-width: 0;
+  margin: 8px 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-panel-strong));
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.sidebar-open-folder:hover,
+.sidebar-open-folder:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-panel-strong));
+}
+
+.sidebar-open-folder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sidebar-open-folder:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
+
+.sidebar-open-folder-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sidebar-open-folder-label svg {
+  flex-shrink: 0;
+}
+
+.sidebar-open-folder-label svg:last-child {
+  margin-left: auto;
+}
+
+.sidebar-open-folder-label > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-open-folder-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-open-folder-current > span {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 紧凑微型过滤胶囊栏 */

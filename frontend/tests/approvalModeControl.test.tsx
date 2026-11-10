@@ -83,3 +83,20 @@ test("control binds its lifecycle to login, workspace and task and uses server i
   assert.ok(control.includes('onDisable={() => { setConfirmOpen(false); void mode.setMode("ask"); }}'), "Turning off needs no second confirmation");
   assert.ok(control.includes("confirmDisabled={!connected || !mode.verified || !mode.snapshot?.canEnable}"));
 });
+
+test("editor collaboration keeps the same scoped approval-mode control beside the composer outside folded messages", () => {
+  const editor = fs.readFileSync(path.join(root, "frontend/src/components/EditorAssistantPanel.tsx"), "utf8");
+  assert.match(editor, /<ToolApprovalStack[\s\S]*?\/>\s*<div className="editor-assistant-permissions">\s*<ApprovalModeControl/,
+    "The permission control must remain an unconditional sibling of approvals, outside the message and history regions");
+  const permissionIndex = editor.indexOf('<div className="editor-assistant-permissions">');
+  const composerIndex = editor.indexOf('<div className="editor-assistant-composer">');
+  assert.ok(permissionIndex >= 0 && composerIndex > permissionIndex);
+  const permissions = editor.slice(permissionIndex, composerIndex);
+  assert.ok(permissions.includes("key={JSON.stringify([token, workspaceDir, currentConversationId])}"),
+    "Switching the login, workspace or task must discard any open permission dialog");
+  assert.ok(permissions.includes("token={token} workspaceDir={workspaceDir} conversationId={currentConversationId ?? null} taskTitle={taskTitle} connected={connected}"));
+  assert.doesNotMatch(permissions, /hidden=|detailsCollapsed|historyOpen|isStreaming|pendingApprovals\.length/);
+  assert.ok(editor.includes('conversations.find((conversation) => conversation.id === currentConversationId)?.title || t("workbench.newTask")'),
+    "The confirmation names the current task rather than the active editor file");
+  assert.doesNotMatch(editor, /useApprovalMode|new ApprovalModeClient|setMode\(/, "The editor must reuse the existing server-backed control");
+});

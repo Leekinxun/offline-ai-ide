@@ -64,7 +64,7 @@ test("pending approval takes priority over both streaming and recovery actions",
 
 test("approval navigation and individual-action boundaries have complete English and Chinese copy", () => {
   for (const messages of [EN_MESSAGES, ZH_CN_MESSAGES]) {
-    for (const key of ["chat.approval.allowConversation", "chat.approval.view", "chat.approval.waiting", "chat.approval.individualRequired", "chat.approval.bulkScope"]) {
+    for (const key of ["chat.approval.allowConversation", "chat.approval.view", "chat.approval.waiting", "chat.approval.individualRequired", "chat.approval.bulkScope", "chat.approval.shellModeHint"]) {
       assert.ok(messages[key]?.trim(), key);
     }
   }
