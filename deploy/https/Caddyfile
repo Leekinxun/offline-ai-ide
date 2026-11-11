@@ -1,0 +1,10 @@
+{
+	# Clients connecting by IP can omit SNI. Select the IP certificate in that case.
+	default_sni {$CROWNFORGE_HTTPS_IP}
+	skip_install_trust
+}
+
+https://{$CROWNFORGE_HTTPS_IP} {
+	tls internal
+	reverse_proxy ai-ide:3000
+}

@@ -268,8 +268,10 @@ docker compose up -d
 都可以解析。构建默认复用本地已有的基础镜像；只有明确需要更新时，
 才运行 `docker compose build --pull`（或 `docker-compose build --pull`）。
 
-然后打开 http://localhost:3000 并登录。
+用仓库中的 Compose 启动后，打开 http://localhost:9798 并登录。使用上面的 `docker run` 示例时，打开 http://localhost:3000。
 使用管理员账号登录后，可以通过右上角 **Settings** 按钮管理用户并配置 LLM。
+
+从另一台设备通过内网 IP 访问时，可使用仓库提供的 Caddy 配置启用 HTTPS。 [内网 IP 的 HTTPS 部署](docs/operations/https-lan.md)
 
 ### Docker Compose
 

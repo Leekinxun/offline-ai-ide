@@ -1,0 +1,23 @@
+# LAN HTTPS with a local CA. See docs/operations/https-lan.md.
+services:
+  ai-ide:
+    ports: !override []
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    depends_on:
+      - ai-ide
+    environment:
+      CROWNFORGE_HTTPS_IP: "${CROWNFORGE_HTTPS_IP:?Set CROWNFORGE_HTTPS_IP to the server LAN IPv4 address}"
+    ports:
+      - "${CROWNFORGE_HTTPS_IP}:80:80"
+      - "${CROWNFORGE_HTTPS_IP}:443:443"
+    volumes:
+      - ./deploy/https/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

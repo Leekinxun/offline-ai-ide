@@ -320,8 +320,10 @@ The checked-in Compose file intentionally avoids v2-only `build.pull` and
 run `docker compose build --pull` (or `docker-compose build --pull`) only when
 you explicitly want to refresh them.
 
-Then open http://localhost:3000 and log in.
+Open http://localhost:9798 after starting the repository's Compose configuration, or http://localhost:3000 when using the `docker run` example above.
 Sign in as an admin user and use the top-right **Settings** button to manage users and configure the LLM endpoint.
+
+For HTTPS access from another device on your LAN, use the supplied Caddy configuration with the server's IP address. [LAN HTTPS setup](docs/operations/https-lan.md)
 
 ### Docker Compose
 
