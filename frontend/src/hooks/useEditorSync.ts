@@ -4,12 +4,7 @@ import { OpenFile, SelectionInfo } from "../types";
 import { FilePreviewMode } from "../plugins/types";
 import { useTeam } from "./useTeam";
 import { useChat } from "./useChat";
-
-async function sha256Text(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+import { sha256Text } from "../utils/sha256";
 
 export interface UseEditorSyncOptions {
   activeFile: OpenFile | null;

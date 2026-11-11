@@ -43,7 +43,7 @@ requireText(sources.providerHook, "expectedVersion: operation.version", "provide
 requireText(sources.providerHook, '"Idempotency-Key": idempotencyKey', "provider preflight is idempotent");
 requireText(sources.providerHook, "publicationRequestDigest(input, serverBindingHint)", "publication fields and immutable binding select the idempotency ledger entry");
 requireText(sources.providerHook, "reusablePending", "pending publication retries keep a stable key");
-requireText(sources.providerHook, "crypto.randomUUID()", "changed or terminal publication requests receive a new key");
+requireText(sources.providerHook, "createBrowserUuid()", "changed or terminal publication requests receive a new key");
 requireText(sources.providerHook, 'normalized.code === "idempotency_conflict"', "server digest changes invalidate the stale idempotency key");
 requireText(sources.providerHook, "/follow-ups/${encodeURIComponent(item.id)}/approve", "provider feedback approval uses the durable route");
 requireText(sources.providerHook, "!body.feedback.taskId || !body.feedback.followUpRunId", "incomplete follow-up lineage is rejected");

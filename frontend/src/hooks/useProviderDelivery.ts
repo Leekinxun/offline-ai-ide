@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeliveryFeedback, ProviderCapability, ProviderConfigSummary, ProviderDelivery, ProviderDeliveryOperation, ProviderDeliveryPrepareInput } from "../types";
+import { createBrowserUuid } from "../utils/browserUuid";
+import { sha256Text } from "../utils/sha256";
 
 const API = "/api/delivery";
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -27,8 +29,7 @@ function canonical(value: unknown): string {
 }
 
 export async function publicationRequestDigest(input: ProviderDeliveryPrepareInput, serverBindingHint = ""): Promise<string> {
-  const bytes = new TextEncoder().encode(canonical({ input, serverBindingHint }));
-  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return sha256Text(canonical({ input, serverBindingHint }));
 }
 
 export function useProviderDelivery(token: string, workspaceDir: string, enabled: boolean) {
@@ -87,20 +88,29 @@ export function useProviderDelivery(token: string, workspaceDir: string, enabled
 
   const prepare = useCallback(async (input: ProviderDeliveryPrepareInput, serverBindingHint = "") => {
     setBusyId("prepare"); setError(null); setConflict(null);
-    const requestDigest = await publicationRequestDigest(input, serverBindingHint);
-    const pending = publicationKeysRef.current.get(requestDigest);
-    const knownOperation = pending?.operationId ? operations.find((operation) => operation.id === pending.operationId) : undefined;
-    const reusablePending = !knownOperation || ["awaiting_approval", "approved", "in_flight", "ambiguous"].includes(knownOperation.status);
-    const idempotencyKey = pending && reusablePending ? pending.key : `${input.providerConfigId}:${crypto.randomUUID()}`;
-    publicationKeysRef.current.set(requestDigest, { key: idempotencyKey, operationId: pending?.operationId });
+    let requestDigest: string | undefined;
     try {
+      requestDigest = await publicationRequestDigest(input, serverBindingHint);
+      const pending = publicationKeysRef.current.get(requestDigest);
+      const knownOperation = pending?.operationId ? operations.find((operation) => operation.id === pending.operationId) : undefined;
+      const reusablePending = !knownOperation || ["awaiting_approval", "approved", "in_flight", "ambiguous"].includes(knownOperation.status);
+      const idempotencyKey = pending && reusablePending ? pending.key : `${input.providerConfigId}:${createBrowserUuid()}`;
+      publicationKeysRef.current.set(requestDigest, { key: idempotencyKey, operationId: pending?.operationId });
       const response = await fetch(`${API}/operations`, { method: "POST", headers: { ...auth(token), "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) });
       if (!response.ok) throw await errorFrom(response);
       const { operation } = await response.json() as { operation: ProviderDeliveryOperation };
       publicationKeysRef.current.set(requestDigest, { key: idempotencyKey, operationId: operation.id });
       setOperations((current) => [operation, ...current.filter((item) => item.id !== operation.id)]);
       return operation;
-    } catch (nextError) { const normalized = nextError instanceof Error ? nextError : new Error("Provider delivery preflight failed"); if (normalized instanceof ProviderDeliveryConflictError) { setConflict(normalized); if (normalized.code === "idempotency_conflict") publicationKeysRef.current.delete(requestDigest); } setError(normalized.message); throw normalized; }
+    } catch (nextError) {
+      const normalized = nextError instanceof Error ? nextError : new Error("Provider delivery preflight failed");
+      if (normalized instanceof ProviderDeliveryConflictError) {
+        setConflict(normalized);
+        if (normalized.code === "idempotency_conflict" && requestDigest) publicationKeysRef.current.delete(requestDigest);
+      }
+      setError(normalized.message);
+      throw normalized;
+    }
     finally { setBusyId(null); }
   }, [operations, token]);
 
